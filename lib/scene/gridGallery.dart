@@ -79,7 +79,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                               builder: (_) => ImageDetailPage(
                                 repo: widget.repo,
                                 items: _items,
-                                index: i,
+                                initialIndex: i,
                               ),
                             ));
                           },

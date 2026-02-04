@@ -1,6 +1,6 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:pdfx/pdfx.dart';
 
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
@@ -26,235 +26,150 @@ class ImageViewerPage extends StatefulWidget {
 class _ImageViewerPageState extends State<ImageViewerPage> {
   late int _index;
 
-  PdfController? _pdfController;
-  int? _pdfTotalPages; // ★総ページ
+  int _page = 1;       // PDF: 1-based page, 画像: 常に1
+  int _totalPages = 1; // PDF: pagesCount, 画像: 1
+
+  Future<Uint8List>? _futureBytes;
+
+  MediaItem get _item => widget.items[_index];
+  bool get _isPdf => _item.kind == MediaKind.pdf;
 
   @override
   void initState() {
     super.initState();
     _index = widget.initialIndex;
-    _setupPdfIfNeeded();
+    _page = widget.initialPdfPage ?? 1;
+    _loadCurrent();
   }
 
-  @override
-  void dispose() {
-    _pdfController?.dispose();
-    super.dispose();
+  Future<void> _loadCurrent() async {
+    final item = _item;
+
+    // 総ページ数取得（画像は1が返る想定）
+    final total = await widget.repo.getPageCount(item);
+
+    if (!mounted) return;
+
+    setState(() {
+      _totalPages = total;
+      // 画像は常に page=1 にする（PDFから画像に切り替わっても安全）
+      _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
+
+      _futureBytes = widget.repo.renderPageBytes(
+        item,
+        _page,
+        maxWidth: 1600,
+      );
+    });
   }
 
-  Future<void> _setupPdfIfNeeded() async {
-    _pdfController?.dispose();
-    _pdfController = null;
-    _pdfTotalPages = null;
-
-    final item = widget.items[_index];
-    if (item.kind != MediaKind.pdf) {
-      if (mounted) setState(() {});
-      return;
-    }
-
-    final controller = PdfController(
-      document: PdfDocument.openFile(item.id), // Future<PdfDocument>
-    );
-
-    final p = widget.initialPdfPage;
-    if (p != null && p >= 1) {
-      // controllerが ready になる前に呼んでも効く版/効かない版があるので
-     // 念のため microtask で一段遅らせる
-      Future.microtask(() {
-        controller.jumpToPage(p);
-      });
-    }
-    // ★総ページ数を取得
-    // pdfxでは controller.document（Future<PdfDocument>）が取れる版があります。
-    // 取れない版の場合は下の fallback を使ってください。
-    try {
-      final doc = await controller.document;
-      final total = doc.pagesCount;
-      if (!mounted) {
-        controller.dispose();
-        return;
+  Future<void> _next() async {
+    if (_isPdf) {
+      if (_page < _totalPages) {
+        _page++;
+        await _loadCurrent();
       }
-      setState(() {
-        _pdfController = controller;
-        _pdfTotalPages = total;
-      });
-    } catch (_) {
-      // fallback: 別でopenして総ページ取得（最短で確実）
-      final doc = await PdfDocument.openFile(item.id);
-      final total = doc.pagesCount;
-      await doc.close();
-
-      if (!mounted) {
-        controller.dispose();
-        return;
+    } else {
+      if (_index < widget.items.length - 1) {
+        _index++;
+        _page = 1;
+        await _loadCurrent();
       }
-      setState(() {
-        _pdfController = controller;
-        _pdfTotalPages = total;
-      });
     }
   }
 
-  void _handleKey(KeyEvent e) {
-    if (e is! KeyDownEvent) return;
-    final item = widget.items[_index];
-
-    if (item.kind == MediaKind.pdf && _pdfController != null) {
-      if (e.logicalKey == LogicalKeyboardKey.arrowRight) {
-        _pdfController!.nextPage(
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-        );
-      } else if (e.logicalKey == LogicalKeyboardKey.arrowLeft) {
-        _pdfController!.previousPage(
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-        );
+  Future<void> _prev() async {
+    if (_isPdf) {
+      if (_page > 1) {
+        _page--;
+        await _loadCurrent();
+      }
+    } else {
+      if (_index > 0) {
+        _index--;
+        _page = 1;
+        await _loadCurrent();
       }
     }
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    // Hitomi風: ←/k 前, →/j 次（好みで入替OK）
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.keyJ) {
+      _next();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.keyK) {
+      _prev();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
   Widget build(BuildContext context) {
-    final item = widget.items[_index];
-
     return Scaffold(
-      backgroundColor: Colors.black, // ★背景黒
       appBar: AppBar(
-        title: const Text('拡大表示'),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
+        title: Text(_isPdf ? 'PDF $_page / $_totalPages' : '画像'),
       ),
       body: Focus(
         autofocus: true,
-        onKeyEvent: (_, e) {
-          _handleKey(e);
-          return KeyEventResult.handled;
-        },
-        child: Stack(
+        onKeyEvent: _onKey,
+        child: Column(
           children: [
-            Positioned.fill(
-              child: item.kind == MediaKind.pdf
-                  ? _buildPdfViewer()
-                  : _buildImageViewer(),
+            Expanded(
+              child: Center(
+                child: FutureBuilder<Uint8List>(
+                  future: _futureBytes,
+                  builder: (context, snap) {
+                    if (snap.connectionState != ConnectionState.done) {
+                      return const CircularProgressIndicator();
+                    }
+                    if (!snap.hasData) {
+                      return const Icon(Icons.broken_image, size: 48);
+                    }
+                    return InteractiveViewer(
+                      minScale: 1.0,
+                      maxScale: 5.0,
+                      child: Image.memory(
+                        snap.data!,
+                        fit: BoxFit.contain,
+                        gaplessPlayback: true,
+                      ),
+                    );
+                  },
+                ),
+              ),
             ),
-
-            // ★ページ数表示（右下）
-            Positioned(
-              right: 12,
-              bottom: 12,
-              child: item.kind == MediaKind.pdf
-                  ? _PdfPageCounter(controller: _pdfController, total: _pdfTotalPages)
-                  : _SimpleCounter(text: '${_index + 1} / ${widget.items.length}'),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: (_isPdf ? _page > 1 : _index > 0) ? _prev : null,
+                    icon: const Icon(Icons.chevron_left),
+                    tooltip: '前へ',
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: (_isPdf
+                            ? _page < _totalPages
+                            : _index < widget.items.length - 1)
+                        ? _next
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
+                    tooltip: '次へ',
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildPdfViewer() {
-  final c = _pdfController;
-  if (c == null) {
-    return const Center(child: CircularProgressIndicator());
-  }
-
-  return Stack(
-    children: [
-      Positioned.fill(
-        child: PdfView(controller: c),
-      ),
-
-      // ★PDFページ（画像）の上にページ数を重ねる
-      Positioned(
-        top: 12,
-        left: 0,
-        right: 0,
-        child: Align(
-          alignment: Alignment.topCenter,
-        child: IgnorePointer(
-          ignoring: true, // ←タップ/スワイプを邪魔しない
-          child: _PdfPageCounter(controller: c, total: _pdfTotalPages),
-        ),
-        ),
-      ),
-      ],
-    );
-  }
-
-  Widget _buildImageViewer() {
-    return PhotoViewGallery.builder(
-      itemCount: widget.items.length,
-      pageController: PageController(initialPage: _index),
-      onPageChanged: (i) async {
-        setState(() => _index = i);
-        await _setupPdfIfNeeded();
-      },
-      backgroundDecoration: const BoxDecoration(color: Colors.black), // ★黒
-      builder: (context, index) {
-        final it = widget.items[index];
-        if (it.kind == MediaKind.pdf) {
-          return PhotoViewGalleryPageOptions.customChild(
-            child: const Center(
-              child: Text('PDFはPDFビューで表示します', style: TextStyle(color: Colors.white)),
-            ),
-          );
-        }
-
-        return PhotoViewGalleryPageOptions.customChild(
-          child: FutureBuilder<Uint8List>(
-            future: widget.repo.readBytes(it),
-            builder: (context, snap) {
-              if (!snap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              return Image.memory(snap.data!, fit: BoxFit.contain);
-            },
-          ),
-          minScale: PhotoViewComputedScale.contained,
-          maxScale: PhotoViewComputedScale.covered * 3.0,
-        );
-      },
-    );
-  }
-}
-
-class _SimpleCounter extends StatelessWidget {
-  final String text;
-  const _SimpleCounter({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.65),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 13)),
-    );
-  }
-}
-
-class _PdfPageCounter extends StatelessWidget {
-  final PdfController? controller;
-  final int? total;
-  const _PdfPageCounter({required this.controller, required this.total});
-
-  @override
-  Widget build(BuildContext context) {
-    final c = controller;
-    if (c == null) return const _SimpleCounter(text: '...');
-
-    // pdfxには pageListenable がある版が多い
-    return ValueListenableBuilder<int>(
-      valueListenable: c.pageListenable,
-      builder: (context, page, _) {
-        final t = total;
-        final txt = (t == null) ? '$page / ?' : '$page / $t';
-        return _SimpleCounter(text: txt);
-      },
     );
   }
 }

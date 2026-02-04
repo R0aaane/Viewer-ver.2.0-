@@ -3,8 +3,8 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 
 class ThumbPair {
-  final Uint8List front;       // 表紙
-  final Uint8List? back;       // 背後（PDFは中間ページ、画像は任意）
+  final Uint8List front;
+  final Uint8List? back;
   const ThumbPair({required this.front, this.back});
 }
 
@@ -12,9 +12,22 @@ abstract class MediaRepository {
   Future<FolderHandle?> pickFolder();
   Future<List<MediaItem>> listMedia(FolderHandle folder);
 
-  /// 一覧用サムネ（表紙＋背後）
+  /// 一覧用サムネ
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360});
 
-  /// 詳細/拡大用（元データ）
+  /// 元データ（画像用）
   Future<Uint8List> readBytes(MediaItem item);
+
+  // ---- 追加 ----
+
+  /// PDF: 総ページ数 / 画像: 1
+  Future<int> getPageCount(MediaItem item);
+
+  /// page(1-based) を画像として返す
+  /// 画像は page 無視でOK
+  Future<Uint8List> renderPageBytes(
+    MediaItem item,
+    int page, {
+    int maxWidth = 1600,
+  });
 }
