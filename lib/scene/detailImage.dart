@@ -216,6 +216,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
+
+    // ESCでフルスクリーン解除
+    if (key == LogicalKeyboardKey.escape) {
+      if (_fullscreen) {
+        _toggleFullscreen();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
     if (key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.keyJ) {
       _next();
@@ -607,8 +617,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Widget build(BuildContext context) {
     // フルスクリーン時は「閲覧のみ」
     if (_fullscreen) {
-      return Scaffold(
-        body: Focus(autofocus: true, onKeyEvent: _onKey, child: _buildBody()),
+      return PopScope(
+        canPop: false,
+        onPopInvoked: (didPop) {
+          if (_fullscreen) _toggleFullscreen();
+        },
+        child: Scaffold(
+          body: Focus(autofocus: true, onKeyEvent: _onKey, child: _buildBody()),
+        ),
       );
     }
 
