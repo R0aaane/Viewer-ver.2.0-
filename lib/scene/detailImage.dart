@@ -5,23 +5,13 @@ import 'package:flutter/services.dart';
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 
-/// 画像／PDFの表示フィット方式
-/// vertical   : 高さ基準（縦読み向け）
-/// horizontal : 幅基準（横長画像向け）
-/// contain    : 全体収め
 enum ReaderFitMode { vertical, horizontal, contain }
 
-/// ===============================================
-/// 画像・PDF 詳細閲覧ページ
-/// - 画像：1枚表示
-/// - PDF  ：単ページ／見開き表示対応
-/// - キーボード／タップ操作対応
-/// ===============================================
 class ImageDetailPage extends StatefulWidget {
-  final MediaRepository repo; // 画像・PDF読み込み用リポジトリ
-  final List<MediaItem> items; // 表示対象のメディア一覧
-  final int initialIndex; // 初期表示インデックス
-  final int? initialPdfPage; // PDF初期ページ（画像の場合は無視）
+  final MediaRepository repo;
+  final List<MediaItem> items;
+  final int initialIndex;
+  final int? initialPdfPage;
 
   const ImageDetailPage({
     super.key,
@@ -35,60 +25,59 @@ class ImageDetailPage extends StatefulWidget {
   State<ImageDetailPage> createState() => _ImageDetailPageState();
 }
 
-class _ImageDetailPageState extends State<ImageDetailPage> {
-  // 現在表示中の MediaItem インデックス
+class _ImageDetailPageState extends State<ImageDetailPage>
+    with SingleTickerProviderStateMixin {
+  // ----------------
+  // state
   late int _index;
 
-  // ページ管理（PDFは複数、画像は常に1）
-  int _page = 1; // 1-based
-  int _totalPages = 1; // PDF: 総ページ数 / 画像: 1
+  late final TabController _tab;
 
-  // 表示状態
-  bool _twoPage = false; // PDF見開き表示フラグ
+  int _page = 1; // 1-based
+  int _totalPages = 1; // PDF: pagesCount, 画像: 1
+
+  bool _twoPage = false; // Full Spread
   bool _fullscreen = false;
 
-  // 表示フィットモード
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
-  // 左右ページの描画データ（Futureで遅延ロード）
   Future<Uint8List>? _leftFuture;
   Future<Uint8List>? _rightFuture;
 
-  /// 現在の MediaItem
-  MediaItem get _item => widget.items[_index];
+  // ★フリーズ対策：同じページの再レンダリングを避けるキャッシュ
+  final Map<int, Future<Uint8List>> _readerFutureCache = {};
+  final Map<int, Future<Uint8List>> _thumbFutureCache = {};
 
-  /// PDFかどうか
+  MediaItem get _item => widget.items[_index];
   bool get _isPdf => _item.kind == MediaKind.pdf;
 
-  // -----------------------------------------------
-  // 初期化
-  // -----------------------------------------------
+  // ----------------
+  // theme (HTMLっぽい黒基調)
+  static const _uiBg = Color(0xFF0F0F10);
+  static const _uiBar = Color(0xFF1F1F1F);
+  static const _uiChip = Color(0xFF2B2B2B);
+
   @override
   void initState() {
     super.initState();
-
-    // 初期インデックス・ページ設定
     _index = widget.initialIndex;
     _page = widget.initialPdfPage ?? 1;
 
-    // 現在アイテムを読み込み
+    _tab = TabController(length: 2, vsync: this);
     _reloadForCurrent();
   }
 
-  // -----------------------------------------------
-  // 終了処理（フルスクリーン解除）
-  // -----------------------------------------------
   @override
   void dispose() {
+    _tab.dispose();
     if (_fullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
     super.dispose();
   }
 
-  // -----------------------------------------------
-  // ReaderFitMode → BoxFit 変換
-  // -----------------------------------------------
+  // ----------------
+  // helpers
   BoxFit get _boxFit {
     switch (_fitMode) {
       case ReaderFitMode.vertical:
@@ -100,42 +89,41 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     }
   }
 
-  // -----------------------------------------------
-  // 指定ページの画像データを生成（PDF/画像共通）
-  // -----------------------------------------------
-  Future<Uint8List> _loadPageBytes(MediaItem item, int page) {
-    // ★ PDFでも画像でも「page指定」でレンダリング
-    return widget.repo.renderPageBytes(
-      item,
-      page,
-      maxWidth: 1600, // 表示品質とパフォーマンスのバランス
-    );
+  Future<Uint8List> _loadReaderBytes(MediaItem item, int page) {
+    // 閲覧用：高解像度
+    return _readerFutureCache.putIfAbsent(page, () {
+      return widget.repo.renderPageBytes(item, page, maxWidth: 1600);
+    });
   }
 
-  // -----------------------------------------------
-  // 現在の MediaItem / ページに応じて再読み込み
-  // -----------------------------------------------
+  Future<Uint8List> _loadThumbBytes(MediaItem item, int page) {
+    // ★サムネ用：低解像度（フリーズ最大要因を潰す）
+    return _thumbFutureCache.putIfAbsent(page, () {
+      return widget.repo.renderPageBytes(item, page, maxWidth: 320);
+    });
+  }
+
   Future<void> _reloadForCurrent() async {
     final item = _item;
 
-    // ★ 総ページ数取得（画像は1を返す想定）
+    // ★アイテムが変わったらキャッシュをクリア（別PDFのページが混ざるのを防ぐ）
+    _readerFutureCache.clear();
+    _thumbFutureCache.clear();
+
     final total = await widget.repo.getPageCount(item);
     if (!mounted) return;
 
     setState(() {
       _totalPages = total;
 
-      // 画像は常に page=1、PDFは範囲内に補正
       _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
 
-      // 左ページ
-      _leftFuture = _loadPageBytes(item, _page);
+      _leftFuture = _loadReaderBytes(item, _page);
 
-      // 見開き時は右ページも生成
       if (_twoPage && _isPdf) {
         final next = _page + 1;
         _rightFuture = (next <= _totalPages)
-            ? _loadPageBytes(item, next)
+            ? _loadReaderBytes(item, next)
             : null;
       } else {
         _rightFuture = null;
@@ -143,61 +131,64 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     });
   }
 
-  // -----------------------------------------------
-  // 次へ
-  // - PDF : ページ送り
-  // - 画像: 次アイテム
-  // -----------------------------------------------
   void _next() {
     if (_isPdf) {
       final step = _twoPage ? 2 : 1;
       final next = _page + step;
       if (next <= _totalPages) {
-        _page = next;
-        _reloadForCurrent();
+        setState(() => _page = next);
+        _leftFuture = _loadReaderBytes(_item, _page);
+        if (_twoPage) {
+          final p2 = _page + 1;
+          _rightFuture = (p2 <= _totalPages)
+              ? _loadReaderBytes(_item, p2)
+              : null;
+        } else {
+          _rightFuture = null;
+        }
       }
     } else {
       if (_index < widget.items.length - 1) {
-        _index++;
-        _page = 1;
+        setState(() {
+          _index++;
+          _page = 1;
+        });
         _reloadForCurrent();
       }
     }
   }
 
-  // -----------------------------------------------
-  // 前へ
-  // -----------------------------------------------
   void _prev() {
     if (_isPdf) {
       final step = _twoPage ? 2 : 1;
       final prev = _page - step;
       if (prev >= 1) {
-        _page = prev;
-        _reloadForCurrent();
+        setState(() => _page = prev);
+        _leftFuture = _loadReaderBytes(_item, _page);
+        if (_twoPage) {
+          final p2 = _page + 1;
+          _rightFuture = (p2 <= _totalPages)
+              ? _loadReaderBytes(_item, p2)
+              : null;
+        } else {
+          _rightFuture = null;
+        }
       }
     } else {
       if (_index > 0) {
-        _index--;
-        _page = 1;
+        setState(() {
+          _index--;
+          _page = 1;
+        });
         _reloadForCurrent();
       }
     }
   }
 
-  // -----------------------------------------------
-  // 表示フィット切替
-  // -----------------------------------------------
-  void _setFit(ReaderFitMode mode) {
-    setState(() => _fitMode = mode);
-  }
+  void _setFit(ReaderFitMode mode) => setState(() => _fitMode = mode);
 
-  // -----------------------------------------------
-  // フルスクリーン切替
-  // -----------------------------------------------
   Future<void> _toggleFullscreen() async {
     _fullscreen = !_fullscreen;
-
     if (_fullscreen) {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
@@ -207,29 +198,24 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     setState(() {});
   }
 
-  // -----------------------------------------------
-  // 見開き切替（PDFのみ）
-  // -----------------------------------------------
   void _toggleSpread() {
     if (!_isPdf) return;
     setState(() => _twoPage = !_twoPage);
-    _reloadForCurrent();
+    // 見開きの有無で右ページfutureを更新
+    _leftFuture = _loadReaderBytes(_item, _page);
+    if (_twoPage) {
+      final p2 = _page + 1;
+      _rightFuture = (p2 <= _totalPages) ? _loadReaderBytes(_item, p2) : null;
+    } else {
+      _rightFuture = null;
+    }
   }
 
-  // -----------------------------------------------
-  // キーボード操作
-  // ← / k : 前
-  // → / j : 次
-  // v     : 縦フィット
-  // h     : 横フィット
-  // f     : フルスクリーン
-  // space : 見開き
-  // -----------------------------------------------
+  // キーボード：←/k 前、→/j 次
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
-
     if (key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.keyJ) {
       _next();
@@ -247,6 +233,10 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
       _setFit(ReaderFitMode.horizontal);
       return KeyEventResult.handled;
     }
+    if (key == LogicalKeyboardKey.keyC) {
+      _setFit(ReaderFitMode.contain);
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.keyF) {
       _toggleFullscreen();
       return KeyEventResult.handled;
@@ -258,9 +248,6 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     return KeyEventResult.ignored;
   }
 
-  // -----------------------------------------------
-  // 上部ナビゲーションボタン共通UI
-  // -----------------------------------------------
   Widget _navButton({
     required IconData icon,
     required String label,
@@ -277,14 +264,11 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     );
   }
 
-  // -----------------------------------------------
-  // 上部バー（ページ操作・モード切替）
-  // -----------------------------------------------
   Widget _buildTopBar() {
     final pageItems = List<int>.generate(_totalPages, (i) => i + 1);
 
     return Material(
-      color: const Color(0xFF1F1F1F),
+      color: _uiBar,
       child: SafeArea(
         bottom: false,
         child: SizedBox(
@@ -292,7 +276,6 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
           child: Row(
             children: [
               const SizedBox(width: 8),
-
               _navButton(
                 icon: Icons.chevron_left,
                 label: 'Prev',
@@ -307,9 +290,7 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
                     ? (_page < _totalPages)
                     : (_index < widget.items.length - 1),
               ),
-
               const SizedBox(width: 12),
-
               _navButton(
                 icon: Icons.height,
                 label: 'Fit V',
@@ -319,6 +300,11 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
                 icon: Icons.width_normal,
                 label: 'Fit H',
                 onPressed: () => _setFit(ReaderFitMode.horizontal),
+              ),
+              _navButton(
+                icon: Icons.crop_free,
+                label: 'Contain',
+                onPressed: () => _setFit(ReaderFitMode.contain),
               ),
               _navButton(
                 icon: _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
@@ -331,23 +317,20 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
                 onPressed: _toggleSpread,
                 active: _isPdf,
               ),
-
               const Spacer(),
-
-              // PDFのみページジャンプ
               if (_isPdf)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2B2B2B),
+                      color: _uiChip,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: DropdownButtonHideUnderline(
                       child: DropdownButton<int>(
                         value: _page,
-                        dropdownColor: const Color(0xFF2B2B2B),
+                        dropdownColor: _uiChip,
                         iconEnabledColor: Colors.white,
                         items: pageItems
                             .map(
@@ -362,8 +345,16 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
                             .toList(),
                         onChanged: (p) {
                           if (p == null) return;
-                          _page = p;
-                          _reloadForCurrent();
+                          setState(() => _page = p);
+                          _leftFuture = _loadReaderBytes(_item, _page);
+                          if (_twoPage) {
+                            final p2 = _page + 1;
+                            _rightFuture = (p2 <= _totalPages)
+                                ? _loadReaderBytes(_item, p2)
+                                : null;
+                          } else {
+                            _rightFuture = null;
+                          }
                         },
                       ),
                     ),
@@ -376,9 +367,6 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     );
   }
 
-  // -----------------------------------------------
-  // 単一ページ描画（拡大縮小対応）
-  // -----------------------------------------------
   Widget _buildImagePane(Future<Uint8List> future) {
     return FutureBuilder<Uint8List>(
       future: future,
@@ -389,20 +377,15 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
         if (!snap.hasData) {
           return const Center(child: Icon(Icons.broken_image, size: 48));
         }
-
         return InteractiveViewer(
           minScale: 1.0,
-          maxScale: 5.0,
+          maxScale: 6.0,
           child: Image.memory(snap.data!, fit: _boxFit, gaplessPlayback: true),
         );
       },
     );
   }
 
-  // -----------------------------------------------
-  // メイン表示領域
-  // - タップ左右で前後移動（モバイル）
-  // -----------------------------------------------
   Widget _buildBody() {
     if (_leftFuture == null) {
       return const Center(child: CircularProgressIndicator());
@@ -419,7 +402,7 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
         }
       },
       child: Container(
-        color: Colors.black,
+        color: _uiBg,
         child: Center(
           child: _twoPage && _isPdf
               ? Row(
@@ -438,20 +421,319 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     );
   }
 
-  // -----------------------------------------------
-  // 画面構築
-  // -----------------------------------------------
+  Widget _infoChip(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: _uiChip,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.white, fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _buildDetailsTab() {
+    final item = _item;
+
+    return FutureBuilder<int>(
+      future: widget.repo.getPageCount(item),
+      builder: (context, snap) {
+        final total = snap.data ?? 1;
+
+        final w = MediaQuery.of(context).size.width;
+        // 画面幅で列数を調整（PCで増える / モバイルで減る）
+        final crossAxisCount = w >= 1200
+            ? 10
+            : w >= 900
+            ? 8
+            : w >= 600
+            ? 6
+            : 3;
+
+        return CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // カバー（軽いサムネ）
+                        SizedBox(
+                          width: 170,
+                          child: AspectRatio(
+                            aspectRatio: 0.72,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: FutureBuilder<Uint8List>(
+                                future: _loadThumbBytes(item, 1),
+                                builder: (context, s) {
+                                  if (s.connectionState !=
+                                      ConnectionState.done) {
+                                    return Container(
+                                      color: _uiChip,
+                                      child: const Center(
+                                        child: CircularProgressIndicator(),
+                                      ),
+                                    );
+                                  }
+                                  if (!s.hasData) {
+                                    return Container(
+                                      color: _uiChip,
+                                      child: const Center(
+                                        child: Icon(Icons.broken_image),
+                                      ),
+                                    );
+                                  }
+                                  return Image.memory(
+                                    s.data!,
+                                    fit: BoxFit.cover,
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+
+                        // 情報
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.displayName,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                    ),
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _infoChip(_isPdf ? 'PDF' : 'IMAGE'),
+                                  _infoChip('Pages: $total'),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              FilledButton.icon(
+                                onPressed: () {
+                                  setState(() => _page = 1);
+                                  _leftFuture = _loadReaderBytes(item, _page);
+                                  if (_twoPage && _isPdf) {
+                                    final p2 = _page + 1;
+                                    _rightFuture = (p2 <= _totalPages)
+                                        ? _loadReaderBytes(item, p2)
+                                        : null;
+                                  } else {
+                                    _rightFuture = null;
+                                  }
+                                  _tab.animateTo(0);
+                                },
+                                icon: const Icon(Icons.chrome_reader_mode),
+                                label: const Text('閲覧する'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const Divider(height: 1, color: Colors.white12),
+                    const SizedBox(height: 10),
+                    Text(
+                      'サムネイル',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossAxisCount,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                  childAspectRatio: 0.72,
+                ),
+                delegate: SliverChildBuilderDelegate((context, i) {
+                  final page = i + 1;
+                  return _ThumbCell(
+                    futureBytes: _loadThumbBytes(item, page),
+                    label: '$page',
+                    selected: page == _page,
+                    onTap: () {
+                      setState(() => _page = page);
+                      _leftFuture = _loadReaderBytes(item, _page);
+                      if (_twoPage && _isPdf) {
+                        final p2 = _page + 1;
+                        _rightFuture = (p2 <= _totalPages)
+                            ? _loadReaderBytes(item, p2)
+                            : null;
+                      } else {
+                        _rightFuture = null;
+                      }
+                      _tab.animateTo(0);
+                    },
+                  );
+                }, childCount: total),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // フルスクリーン時は「閲覧のみ」
+    if (_fullscreen) {
+      return Scaffold(
+        body: Focus(autofocus: true, onKeyEvent: _onKey, child: _buildBody()),
+      );
+    }
+
     return Scaffold(
-      body: Focus(
-        autofocus: true,
-        onKeyEvent: _onKey,
-        child: Column(
-          children: [
-            if (!_fullscreen) _buildTopBar(),
-            Expanded(child: _buildBody()),
+      backgroundColor: _uiBg,
+      appBar: AppBar(
+        backgroundColor: _uiBar,
+        foregroundColor: Colors.white,
+        title: Text(
+          _item.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        bottom: TabBar(
+          controller: _tab,
+          tabs: const [
+            Tab(text: '閲覧'),
+            Tab(text: '詳細'),
           ],
+        ),
+      ),
+
+      // ★ここがフリーズ対策の核：TabBarViewを使わず「選択タブだけ build」
+      body: AnimatedBuilder(
+        animation: _tab,
+        builder: (context, _) {
+          if (_tab.index == 0) {
+            return Focus(
+              autofocus: true,
+              onKeyEvent: _onKey,
+              child: Column(
+                children: [
+                  _buildTopBar(),
+                  Expanded(child: _buildBody()),
+                ],
+              ),
+            );
+          }
+          return _buildDetailsTab();
+        },
+      ),
+    );
+  }
+}
+
+class _ThumbCell extends StatelessWidget {
+  final Future<Uint8List> futureBytes;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ThumbCell({
+    required this.futureBytes,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? Colors.white : Colors.white24,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(9),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              FutureBuilder<Uint8List>(
+                future: futureBytes,
+                builder: (context, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const ColoredBox(
+                      color: Color(0xFF2B2B2B),
+                      child: Center(
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(),
+                        ),
+                      ),
+                    );
+                  }
+                  if (!snap.hasData) {
+                    return const ColoredBox(
+                      color: Color(0xFF2B2B2B),
+                      child: Center(
+                        child: Icon(Icons.broken_image, color: Colors.white70),
+                      ),
+                    );
+                  }
+                  return Image.memory(
+                    snap.data!,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  );
+                },
+              ),
+              Align(
+                alignment: Alignment.bottomRight,
+                child: Container(
+                  margin: const EdgeInsets.all(4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.55),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    label,
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
