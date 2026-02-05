@@ -5,13 +5,23 @@ import 'package:flutter/services.dart';
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 
+/// 画像／PDFの表示フィット方式
+/// vertical   : 高さ基準（縦読み向け）
+/// horizontal : 幅基準（横長画像向け）
+/// contain    : 全体収め
 enum ReaderFitMode { vertical, horizontal, contain }
 
+/// ===============================================
+/// 画像・PDF 詳細閲覧ページ
+/// - 画像：1枚表示
+/// - PDF  ：単ページ／見開き表示対応
+/// - キーボード／タップ操作対応
+/// ===============================================
 class ImageDetailPage extends StatefulWidget {
-  final MediaRepository repo;
-  final List<MediaItem> items;
-  final int initialIndex;
-  final int? initialPdfPage;
+  final MediaRepository repo; // 画像・PDF読み込み用リポジトリ
+  final List<MediaItem> items; // 表示対象のメディア一覧
+  final int initialIndex; // 初期表示インデックス
+  final int? initialPdfPage; // PDF初期ページ（画像の場合は無視）
 
   const ImageDetailPage({
     super.key,
@@ -26,30 +36,48 @@ class ImageDetailPage extends StatefulWidget {
 }
 
 class _ImageDetailPageState extends State<ImageDetailPage> {
+  // 現在表示中の MediaItem インデックス
   late int _index;
 
-  int _page = 1;        // 1-based
-  int _totalPages = 1;  // PDF: pagesCount, 画像: 1
+  // ページ管理（PDFは複数、画像は常に1）
+  int _page = 1; // 1-based
+  int _totalPages = 1; // PDF: 総ページ数 / 画像: 1
 
-  bool _twoPage = false; // Full Spread
+  // 表示状態
+  bool _twoPage = false; // PDF見開き表示フラグ
   bool _fullscreen = false;
 
+  // 表示フィットモード
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
+  // 左右ページの描画データ（Futureで遅延ロード）
   Future<Uint8List>? _leftFuture;
   Future<Uint8List>? _rightFuture;
 
+  /// 現在の MediaItem
   MediaItem get _item => widget.items[_index];
+
+  /// PDFかどうか
   bool get _isPdf => _item.kind == MediaKind.pdf;
 
+  // -----------------------------------------------
+  // 初期化
+  // -----------------------------------------------
   @override
   void initState() {
     super.initState();
+
+    // 初期インデックス・ページ設定
     _index = widget.initialIndex;
     _page = widget.initialPdfPage ?? 1;
+
+    // 現在アイテムを読み込み
     _reloadForCurrent();
   }
 
+  // -----------------------------------------------
+  // 終了処理（フルスクリーン解除）
+  // -----------------------------------------------
   @override
   void dispose() {
     if (_fullscreen) {
@@ -58,6 +86,9 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     super.dispose();
   }
 
+  // -----------------------------------------------
+  // ReaderFitMode → BoxFit 変換
+  // -----------------------------------------------
   BoxFit get _boxFit {
     switch (_fitMode) {
       case ReaderFitMode.vertical:
@@ -69,36 +100,54 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     }
   }
 
+  // -----------------------------------------------
+  // 指定ページの画像データを生成（PDF/画像共通）
+  // -----------------------------------------------
   Future<Uint8List> _loadPageBytes(MediaItem item, int page) {
-    // ★ここが重要：PDFも含め「page指定で描画」する
-    return widget.repo.renderPageBytes(item, page, maxWidth: 1600);
+    // ★ PDFでも画像でも「page指定」でレンダリング
+    return widget.repo.renderPageBytes(
+      item,
+      page,
+      maxWidth: 1600, // 表示品質とパフォーマンスのバランス
+    );
   }
 
+  // -----------------------------------------------
+  // 現在の MediaItem / ページに応じて再読み込み
+  // -----------------------------------------------
   Future<void> _reloadForCurrent() async {
     final item = _item;
 
-    // ★総ページ数を取得（画像は1が返る想定）
+    // ★ 総ページ数取得（画像は1を返す想定）
     final total = await widget.repo.getPageCount(item);
-
     if (!mounted) return;
 
     setState(() {
       _totalPages = total;
 
-      // 画像は常に page=1、PDFは範囲内に丸める
+      // 画像は常に page=1、PDFは範囲内に補正
       _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
 
+      // 左ページ
       _leftFuture = _loadPageBytes(item, _page);
 
+      // 見開き時は右ページも生成
       if (_twoPage && _isPdf) {
         final next = _page + 1;
-        _rightFuture = (next <= _totalPages) ? _loadPageBytes(item, next) : null;
+        _rightFuture = (next <= _totalPages)
+            ? _loadPageBytes(item, next)
+            : null;
       } else {
         _rightFuture = null;
       }
     });
   }
 
+  // -----------------------------------------------
+  // 次へ
+  // - PDF : ページ送り
+  // - 画像: 次アイテム
+  // -----------------------------------------------
   void _next() {
     if (_isPdf) {
       final step = _twoPage ? 2 : 1;
@@ -116,6 +165,9 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     }
   }
 
+  // -----------------------------------------------
+  // 前へ
+  // -----------------------------------------------
   void _prev() {
     if (_isPdf) {
       final step = _twoPage ? 2 : 1;
@@ -133,12 +185,19 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     }
   }
 
+  // -----------------------------------------------
+  // 表示フィット切替
+  // -----------------------------------------------
   void _setFit(ReaderFitMode mode) {
     setState(() => _fitMode = mode);
   }
 
+  // -----------------------------------------------
+  // フルスクリーン切替
+  // -----------------------------------------------
   Future<void> _toggleFullscreen() async {
     _fullscreen = !_fullscreen;
+
     if (_fullscreen) {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
@@ -148,19 +207,31 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     setState(() {});
   }
 
+  // -----------------------------------------------
+  // 見開き切替（PDFのみ）
+  // -----------------------------------------------
   void _toggleSpread() {
-    if (!_isPdf) return; // 画像は見開き不要
+    if (!_isPdf) return;
     setState(() => _twoPage = !_twoPage);
     _reloadForCurrent();
   }
 
-  // キーボード：←/k 前、→/j 次（Hitomi風）
+  // -----------------------------------------------
+  // キーボード操作
+  // ← / k : 前
+  // → / j : 次
+  // v     : 縦フィット
+  // h     : 横フィット
+  // f     : フルスクリーン
+  // space : 見開き
+  // -----------------------------------------------
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
 
-    if (key == LogicalKeyboardKey.arrowRight || key == LogicalKeyboardKey.keyJ) {
+    if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.keyJ) {
       _next();
       return KeyEventResult.handled;
     }
@@ -187,6 +258,9 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     return KeyEventResult.ignored;
   }
 
+  // -----------------------------------------------
+  // 上部ナビゲーションボタン共通UI
+  // -----------------------------------------------
   Widget _navButton({
     required IconData icon,
     required String label,
@@ -196,10 +270,16 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     return TextButton.icon(
       onPressed: active ? onPressed : null,
       icon: Icon(icon, color: active ? Colors.white : Colors.white38),
-      label: Text(label, style: TextStyle(color: active ? Colors.white : Colors.white38)),
+      label: Text(
+        label,
+        style: TextStyle(color: active ? Colors.white : Colors.white38),
+      ),
     );
   }
 
+  // -----------------------------------------------
+  // 上部バー（ページ操作・モード切替）
+  // -----------------------------------------------
   Widget _buildTopBar() {
     final pageItems = List<int>.generate(_totalPages, (i) => i + 1);
 
@@ -223,7 +303,9 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
                 icon: Icons.chevron_right,
                 label: 'Next',
                 onPressed: _next,
-                active: _isPdf ? (_page < _totalPages) : (_index < widget.items.length - 1),
+                active: _isPdf
+                    ? (_page < _totalPages)
+                    : (_index < widget.items.length - 1),
               ),
 
               const SizedBox(width: 12),
@@ -252,6 +334,7 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
 
               const Spacer(),
 
+              // PDFのみページジャンプ
               if (_isPdf)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
@@ -267,10 +350,15 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
                         dropdownColor: const Color(0xFF2B2B2B),
                         iconEnabledColor: Colors.white,
                         items: pageItems
-                            .map((p) => DropdownMenuItem(
-                                  value: p,
-                                  child: Text('Page $p', style: const TextStyle(color: Colors.white)),
-                                ))
+                            .map(
+                              (p) => DropdownMenuItem(
+                                value: p,
+                                child: Text(
+                                  'Page $p',
+                                  style: const TextStyle(color: Colors.white),
+                                ),
+                              ),
+                            )
                             .toList(),
                         onChanged: (p) {
                           if (p == null) return;
@@ -288,6 +376,9 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
     );
   }
 
+  // -----------------------------------------------
+  // 単一ページ描画（拡大縮小対応）
+  // -----------------------------------------------
   Widget _buildImagePane(Future<Uint8List> future) {
     return FutureBuilder<Uint8List>(
       future: future,
@@ -298,26 +389,25 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
         if (!snap.hasData) {
           return const Center(child: Icon(Icons.broken_image, size: 48));
         }
+
         return InteractiveViewer(
           minScale: 1.0,
           maxScale: 5.0,
-          child: Image.memory(
-            snap.data!,
-            fit: _boxFit,
-            gaplessPlayback: true,
-          ),
+          child: Image.memory(snap.data!, fit: _boxFit, gaplessPlayback: true),
         );
       },
     );
   }
 
+  // -----------------------------------------------
+  // メイン表示領域
+  // - タップ左右で前後移動（モバイル）
+  // -----------------------------------------------
   Widget _buildBody() {
-    // Future がセットされてない（初回ロード中）
     if (_leftFuture == null) {
-    return const Center(child: CircularProgressIndicator());
-  }
+      return const Center(child: CircularProgressIndicator());
+    }
 
-    // 左右タップで前後（モバイル用）
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapUp: (d) {
@@ -331,23 +421,26 @@ class _ImageDetailPageState extends State<ImageDetailPage> {
       child: Container(
         color: Colors.black,
         child: Center(
-           child: _twoPage && _isPdf
-            ? Row(
-                children: [
-                  Expanded(child: _buildImagePane(_leftFuture!)),
-                  Expanded(
-                    child: _rightFuture == null
-                        ? const SizedBox.shrink()
-                        : _buildImagePane(_rightFuture!),
-                  ),
-                ],
-              )
-            : _buildImagePane(_leftFuture!),
+          child: _twoPage && _isPdf
+              ? Row(
+                  children: [
+                    Expanded(child: _buildImagePane(_leftFuture!)),
+                    Expanded(
+                      child: _rightFuture == null
+                          ? const SizedBox.shrink()
+                          : _buildImagePane(_rightFuture!),
+                    ),
+                  ],
+                )
+              : _buildImagePane(_leftFuture!),
         ),
       ),
     );
   }
 
+  // -----------------------------------------------
+  // 画面構築
+  // -----------------------------------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
