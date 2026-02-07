@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -24,6 +25,8 @@ class _PrefsKeys {
   static const String twoPage = 'prefs.readerTwoPage'; // bool
 
   static const String favorites = 'prefs.favorites'; // List<String>
+
+  static const String folderAliasesJson = 'prefs.folderAliasesJson';
 }
 
 class GalleryGridPage extends StatefulWidget {
@@ -54,6 +57,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   _SortMode _sortMode = _SortMode.name;
 
+  // raw -> 表示名
+  Map<String, String> _folderAliases = <String, String>{};
+
+  // 全フォルダ横断★表示用
+  final Map<String, List<MediaItem>> _folderItemsCache = {};
+  List<MediaItem> _favoriteItemsAll = const [];
+  bool _loadingFavAll = false;
+
+  // TabController listenerを二重登録しないため
+  bool _tabListenerInstalled = false;
+
   @override
   void initState() {
     super.initState();
@@ -62,6 +76,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _loadPrefsAndAutoOpenFolder() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // folder aliases restore
+    Map<String, String> aliases = <String, String>{};
+    final aliasesJson = prefs.getString(_PrefsKeys.folderAliasesJson);
+    if (aliasesJson != null && aliasesJson.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(aliasesJson);
+        if (decoded is Map) {
+          for (final e in decoded.entries) {
+            final k = e.key?.toString();
+            final v = e.value?.toString();
+            if (k != null && v != null) aliases[k] = v;
+          }
+        }
+      } catch (_) {}
+    }
 
     // favorites
     final favList =
@@ -114,12 +144,81 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _favorites = favList.toSet();
       _foldersRaw = existsFolders.toList(growable: false);
       _currentFolderRaw = current;
+      _folderAliases = aliases;
     });
 
     if (current == null) return;
 
     // 選択中フォルダをロード（保存処理はここでは不要）
     await _loadFolder(FolderHandle(current), saveAsLast: false);
+  }
+
+  // --------------------
+  // フォルダ表示名設定
+  // --------------------
+  String _basename(String path) {
+    final p = path.replaceAll('\\', '/');
+    final idx = p.lastIndexOf('/');
+    return (idx >= 0) ? p.substring(idx + 1) : p;
+  }
+
+  String _folderLabel(String raw) {
+    final a = _folderAliases[raw];
+    if (a != null && a.trim().isNotEmpty) return a.trim();
+    return _basename(raw);
+  }
+
+  Future<void> _persistFolderAliases() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _PrefsKeys.folderAliasesJson,
+      jsonEncode(_folderAliases),
+    );
+  }
+
+  Future<void> _renameFolder(String raw) async {
+    final controller = TextEditingController(
+      text: _folderAliases[raw] ?? _basename(raw),
+    );
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('フォルダ名を変更'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: '表示名（タイトル）',
+              hintText: '例：漫画 / 資料 / 仕事 など',
+            ),
+            onSubmitted: (_) => Navigator.of(ctx).pop(controller.text),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('キャンセル'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text),
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result == null) return;
+
+    final name = result.trim();
+    setState(() {
+      if (name.isEmpty) {
+        _folderAliases.remove(raw);
+      } else {
+        _folderAliases[raw] = name;
+      }
+    });
+    await _persistFolderAliases();
   }
 
   // --------------------
@@ -165,6 +264,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _PrefsKeys.favorites,
       next.toList(growable: false),
     );
+    await _refreshAllFavoritesItems();
   }
 
   Future<void> _saveLastFolder(FolderHandle folder) async {
@@ -192,6 +292,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _items = items;
       _loading = false;
     });
+    _folderItemsCache[folder.raw] = _items;
+    await _refreshAllFavoritesItems();
   }
 
   Future<void> _persistFolders() async {
@@ -249,6 +351,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _items = const [];
     });
 
+    _folderItemsCache.remove(raw);
+    await _refreshAllFavoritesItems();
+
     await _persistFolders();
 
     if (nextCurrent == null) return;
@@ -259,6 +364,38 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final folder = await widget.repo.pickFolder();
     if (folder == null) return;
     await _loadFolder(folder, saveAsLast: true);
+  }
+
+  Future<void> _refreshAllFavoritesItems() async {
+    if (_loadingFavAll) return;
+    if (_foldersRaw.isEmpty) {
+      if (!mounted) return;
+      setState(() => _favoriteItemsAll = const []);
+      return;
+    }
+
+    setState(() => _loadingFavAll = true);
+
+    try {
+      // 未キャッシュのフォルダだけ読み込む
+      for (final raw in _foldersRaw) {
+        if (_folderItemsCache.containsKey(raw)) continue;
+        final items = await widget.repo.listMedia(FolderHandle(raw));
+        _folderItemsCache[raw] = items;
+      }
+
+      // 全フォルダ分から★だけ抽出
+      final all = <MediaItem>[];
+      for (final raw in _foldersRaw) {
+        final items = _folderItemsCache[raw] ?? const <MediaItem>[];
+        all.addAll(items.where((e) => _favorites.contains(e.id)));
+      }
+
+      if (!mounted) return;
+      setState(() => _favoriteItemsAll = all.toList(growable: false));
+    } finally {
+      if (mounted) setState(() => _loadingFavAll = false);
+    }
   }
 
   @override
@@ -438,20 +575,38 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         : Icons.folder_outlined,
                   ),
                   title: Text(
+                    _folderLabel(raw),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
                     raw,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                   selected: raw == _currentFolderRaw,
-                  trailing: IconButton(
-                    tooltip: 'このフォルダを削除',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () async {
-                      // Drawerを閉じずに消すと見た目が崩れやすいので一旦閉じる
-                      Navigator.pop(context);
-                      await _removeFolder(raw);
-                    },
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '名前を変更',
+                        icon: const Icon(Icons.edit_outlined),
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await _renameFolder(raw);
+                        },
+                      ),
+                      IconButton(
+                        tooltip: 'このフォルダを削除',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await _removeFolder(raw);
+                        },
+                      ),
+                    ],
                   ),
+
                   onTap: () async {
                     Navigator.pop(context);
                     await _switchFolder(raw);
@@ -476,134 +631,146 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 4,
-      child: Scaffold(
-        drawer: _buildSidebar(),
-        appBar: AppBar(
-          title: Text(
-            _currentFolderRaw == null ? '一覧表示' : '一覧表示: $_currentFolderRaw',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+      child: Builder(
+        builder: (context) {
+          final tc = DefaultTabController.of(context);
 
-          actions: [
-            IconButton(
-              tooltip: 'フォルダ追加',
-              onPressed: _addFolder,
-              icon: const Icon(Icons.create_new_folder_outlined),
-            ),
-          ],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(112),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _searchCtrl,
-                          textInputAction: TextInputAction.search,
-                          decoration: InputDecoration(
-                            hintText: 'タイトルで検索',
-                            prefixIcon: const Icon(Icons.search),
-                            suffixIcon: _query.isEmpty
-                                ? null
-                                : IconButton(
-                                    tooltip: 'クリア',
-                                    icon: const Icon(Icons.clear),
-                                    onPressed: () {
-                                      _searchCtrl.clear();
-                                      setState(() => _query = '');
-                                    },
-                                  ),
-                            border: const OutlineInputBorder(),
-                            isDense: true,
-                            filled: true,
-                          ),
-                          onChanged: (v) => setState(() => _query = v),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 140,
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 8,
-                            ),
-                          ),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<_SortMode>(
-                              value: _sortMode,
-                              isDense: true,
-                              icon: const Icon(Icons.sort),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: _SortMode.name,
-                                  child: Text('名前順'),
-                                ),
-                                DropdownMenuItem(
-                                  value: _SortMode.updatedAt,
-                                  child: Text('更新日時'),
-                                ),
-                                DropdownMenuItem(
-                                  value: _SortMode.addedAt,
-                                  child: Text('追加日時'),
-                                ),
-                              ],
-                              onChanged: (v) {
-                                if (v == null) return;
-                                setState(() => _sortMode = v);
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const TabBar(
-                  tabs: [
-                    Tab(text: 'すべて'),
-                    Tab(text: '画像'),
-                    Tab(text: 'PDF'),
-                    Tab(text: 'お気に入り'),
-                  ],
+          // ★ 1回だけ listener を登録（お気に入りタブを開いたら更新）
+          if (!_tabListenerInstalled && tc != null) {
+            _tabListenerInstalled = true;
+            tc.addListener(() {
+              if (!tc.indexIsChanging && tc.index == 3) {
+                _refreshAllFavoritesItems();
+              }
+            });
+          }
+
+          return Scaffold(
+            drawer: _buildSidebar(),
+            appBar: AppBar(
+              title: Text(
+                _currentFolderRaw == null
+                    ? '一覧表示'
+                    : '一覧表示: ${_folderLabel(_currentFolderRaw!)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              actions: [
+                IconButton(
+                  tooltip: 'フォルダ追加',
+                  onPressed: _addFolder,
+                  icon: const Icon(Icons.create_new_folder_outlined),
                 ),
               ],
-            ),
-          ),
-        ),
-        body: _folder == null
-            ? Center(
-                child: ElevatedButton(
-                  onPressed: _pickFolderAndLoad,
-                  child: const Text('フォルダ選択'),
-                ),
-              )
-            : _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _items.isEmpty
-            ? const Center(child: Text('画像/PDFがありません'))
-            : TabBarView(
-                children: [
-                  _buildGrid(_applyFilter(_items, pdfOnly: null)),
-                  _buildGrid(_applyFilter(_items, pdfOnly: false)),
-                  _buildGrid(_applyFilter(_items, pdfOnly: true)),
-                  _buildGrid(
-                    _applyFilter(
-                      _items
-                          .where((e) => _favorites.contains(e.id))
-                          .toList(growable: false),
-                      pdfOnly: null,
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(112),
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _searchCtrl,
+                              textInputAction: TextInputAction.search,
+                              decoration: InputDecoration(
+                                hintText: 'タイトルで検索',
+                                prefixIcon: const Icon(Icons.search),
+                                suffixIcon: _query.isEmpty
+                                    ? null
+                                    : IconButton(
+                                        tooltip: 'クリア',
+                                        icon: const Icon(Icons.clear),
+                                        onPressed: () {
+                                          _searchCtrl.clear();
+                                          setState(() => _query = '');
+                                        },
+                                      ),
+                                border: const OutlineInputBorder(),
+                                isDense: true,
+                                filled: true,
+                              ),
+                              onChanged: (v) => setState(() => _query = v),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 140,
+                            child: InputDecorator(
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 8,
+                                ),
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<_SortMode>(
+                                  value: _sortMode,
+                                  isDense: true,
+                                  icon: const Icon(Icons.sort),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: _SortMode.name,
+                                      child: Text('名前順'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: _SortMode.updatedAt,
+                                      child: Text('更新日時'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: _SortMode.addedAt,
+                                      child: Text('追加日時'),
+                                    ),
+                                  ],
+                                  onChanged: (v) {
+                                    if (v == null) return;
+                                    setState(() => _sortMode = v);
+                                  },
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                    const TabBar(
+                      tabs: [
+                        Tab(text: 'すべて'),
+                        Tab(text: '画像'),
+                        Tab(text: 'PDF'),
+                        Tab(text: 'お気に入り'),
+                      ],
+                    ),
+                  ],
+                ),
               ),
+            ),
+            body: _folder == null
+                ? Center(
+                    child: ElevatedButton(
+                      onPressed: _pickFolderAndLoad,
+                      child: const Text('フォルダ選択'),
+                    ),
+                  )
+                : _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _items.isEmpty
+                ? const Center(child: Text('画像/PDFがありません'))
+                : TabBarView(
+                    children: [
+                      _buildGrid(_applyFilter(_items, pdfOnly: null)),
+                      _buildGrid(_applyFilter(_items, pdfOnly: false)),
+                      _buildGrid(_applyFilter(_items, pdfOnly: true)),
+                      _loadingFavAll
+                          ? const Center(child: CircularProgressIndicator())
+                          : _buildGrid(_favoriteItemsAll),
+                    ],
+                  ),
+          );
+        },
       ),
     );
   }
