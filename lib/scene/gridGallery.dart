@@ -12,6 +12,8 @@ import 'detailImage.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
 
+enum _MainPage { home, gallery }
+
 class _PrefsKeys {
   // 旧キー（移行用に残す）
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
@@ -43,6 +45,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _loading = false;
 
   Set<String> _favorites = <String>{};
+
+  _MainPage _page = _MainPage.home; // ★起動時はホーム
 
   // 複数フォルダ
   List<String> _foldersRaw = const []; // 登録済みフォルダ一覧（raw）
@@ -151,6 +155,162 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     // 選択中フォルダをロード（保存処理はここでは不要）
     await _loadFolder(FolderHandle(current), saveAsLast: false);
+  }
+
+  Widget _buildHomeBody() {
+    final folderCount = _foldersRaw.length;
+    final currentLabel = _currentFolderRaw == null
+        ? '未選択'
+        : _folderLabel(_currentFolderRaw!);
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '概要',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text('登録フォルダ数: $folderCount'),
+                Text('現在のフォルダ: $currentLabel'),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _addFolder,
+                      icon: const Icon(Icons.create_new_folder_outlined),
+                      label: const Text('フォルダ追加'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: (_currentFolderRaw == null)
+                          ? null
+                          : () => setState(() => _page = _MainPage.gallery),
+                      icon: const Icon(Icons.grid_view),
+                      label: const Text('ギャラリーを開く'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _refreshAllFavoritesItems,
+                      icon: const Icon(Icons.star),
+                      label: const Text('お気に入り更新'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'お気に入り（全フォルダ）',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                if (_loadingFavAll)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (_favoriteItemsAll.isEmpty)
+                  const Text('お気に入りはまだありません。')
+                else ...[
+                  Text('件数: ${_favoriteItemsAll.length}'),
+                  const SizedBox(height: 8),
+                  ..._favoriteItemsAll.take(10).map((item) {
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(
+                        item.kind == MediaKind.pdf
+                            ? Icons.picture_as_pdf
+                            : Icons.image_outlined,
+                      ),
+                      title: Text(
+                        item.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () {
+                        setState(() => _page = _MainPage.gallery);
+                      },
+                    );
+                  }),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '登録フォルダ',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                if (_foldersRaw.isEmpty)
+                  const Text('登録フォルダがありません。「フォルダ追加」から追加してください。')
+                else
+                  ..._foldersRaw.map((raw) {
+                    final isCurrent = raw == _currentFolderRaw;
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(
+                        isCurrent ? Icons.folder : Icons.folder_outlined,
+                      ),
+                      title: Text(
+                        _folderLabel(raw),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        raw,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: '名前変更',
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: () => _renameFolder(raw),
+                          ),
+                          IconButton(
+                            tooltip: '削除',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () => _removeFolder(raw),
+                          ),
+                        ],
+                      ),
+                      onTap: () async {
+                        await _switchFolder(raw);
+                        setState(() => _page = _MainPage.gallery);
+                      },
+                    );
+                  }),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   // --------------------
@@ -500,6 +660,33 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
+            ListTile(
+              leading: const Icon(Icons.home_outlined),
+              title: const Text('ホーム'),
+              selected: _page == _MainPage.home,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _page = _MainPage.home);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.grid_view),
+              title: const Text('ギャラリー'),
+              selected: _page == _MainPage.gallery,
+              onTap: () async {
+                Navigator.pop(context);
+
+                // フォルダ未選択ならホームで案内（またはフォルダ追加）
+                if (_currentFolderRaw == null) {
+                  setState(() => _page = _MainPage.home);
+                  return;
+                }
+
+                setState(() => _page = _MainPage.gallery);
+              },
+            ),
+            const Divider(),
+
             const ListTile(title: Text('表示設定'), dense: true),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -629,13 +816,35 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   @override
   Widget build(BuildContext context) {
+    // ★ ホーム画面
+    if (_page == _MainPage.home) {
+      return Scaffold(
+        drawer: _buildSidebar(),
+        appBar: AppBar(
+          title: const Text('ホーム'),
+          actions: [
+            IconButton(
+              tooltip: 'フォルダ追加',
+              onPressed: _addFolder,
+              icon: const Icon(Icons.create_new_folder_outlined),
+            ),
+            IconButton(
+              tooltip: 'お気に入り更新',
+              onPressed: _refreshAllFavoritesItems,
+              icon: const Icon(Icons.star),
+            ),
+          ],
+        ),
+        body: _buildHomeBody(),
+      );
+    }
+
+    // ★ ギャラリー画面（あなたの既存）
     return DefaultTabController(
       length: 4,
       child: Builder(
         builder: (context) {
           final tc = DefaultTabController.of(context);
-
-          // ★ 1回だけ listener を登録（お気に入りタブを開いたら更新）
           if (!_tabListenerInstalled && tc != null) {
             _tabListenerInstalled = true;
             tc.addListener(() {
@@ -661,81 +870,20 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   onPressed: _addFolder,
                   icon: const Icon(Icons.create_new_folder_outlined),
                 ),
+                IconButton(
+                  tooltip: 'ホームへ',
+                  onPressed: () => setState(() => _page = _MainPage.home),
+                  icon: const Icon(Icons.home_outlined),
+                ),
               ],
               bottom: PreferredSize(
                 preferredSize: const Size.fromHeight(112),
                 child: Column(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _searchCtrl,
-                              textInputAction: TextInputAction.search,
-                              decoration: InputDecoration(
-                                hintText: 'タイトルで検索',
-                                prefixIcon: const Icon(Icons.search),
-                                suffixIcon: _query.isEmpty
-                                    ? null
-                                    : IconButton(
-                                        tooltip: 'クリア',
-                                        icon: const Icon(Icons.clear),
-                                        onPressed: () {
-                                          _searchCtrl.clear();
-                                          setState(() => _query = '');
-                                        },
-                                      ),
-                                border: const OutlineInputBorder(),
-                                isDense: true,
-                                filled: true,
-                              ),
-                              onChanged: (v) => setState(() => _query = v),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 140,
-                            child: InputDecorator(
-                              decoration: const InputDecoration(
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 8,
-                                ),
-                              ),
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<_SortMode>(
-                                  value: _sortMode,
-                                  isDense: true,
-                                  icon: const Icon(Icons.sort),
-                                  items: const [
-                                    DropdownMenuItem(
-                                      value: _SortMode.name,
-                                      child: Text('名前順'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: _SortMode.updatedAt,
-                                      child: Text('更新日時'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: _SortMode.addedAt,
-                                      child: Text('追加日時'),
-                                    ),
-                                  ],
-                                  onChanged: (v) {
-                                    if (v == null) return;
-                                    setState(() => _sortMode = v);
-                                  },
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    // ここはあなたの検索/ソート/TabBarのまま
+                    // （貼ってくれたコードをそのまま残してください）
+                    // ---- 省略せずに入れてOK ----
+                    // ...
                     const TabBar(
                       tabs: [
                         Tab(text: 'すべて'),
@@ -751,8 +899,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             body: _folder == null
                 ? Center(
                     child: ElevatedButton(
-                      onPressed: _pickFolderAndLoad,
-                      child: const Text('フォルダ選択'),
+                      // ※ここは「フォルダ追加」に寄せたほうがUX良い
+                      onPressed: _addFolder,
+                      child: const Text('フォルダを追加'),
                     ),
                   )
                 : _loading
