@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +19,9 @@ class _PrefsKeys {
   static const String twoPage = 'prefs.readerTwoPage'; // bool
 
   static const String favorites = 'prefs.favorites'; // List<String>
+
+  /// json map: { "<MediaItem.id>": ["tag1","tag2", ...] }
+  static const String tagsJson = 'prefs.tagsJson';
 }
 
 class ImageDetailPage extends StatefulWidget {
@@ -57,6 +61,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _isFavorite = false;
   bool _favChanged = false;
 
+  // tags
+  Map<String, List<String>> _tagsById = <String, List<String>>{};
+  bool _tagsChanged = false;
+
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
   Future<Uint8List>? _leftFuture;
@@ -69,7 +77,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool get _isPdf => _item.kind == MediaKind.pdf;
 
   void _popWithResult() {
-    Navigator.of(context).pop(_favChanged);
+    Navigator.of(context).pop(_favChanged || _tagsChanged);
   }
 
   static const _uiBg = Color(0xFF0F0F10);
@@ -100,6 +108,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final prefs = await SharedPreferences.getInstance();
     final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
     final two = prefs.getBool(_PrefsKeys.twoPage);
+
+    // tags
+    _tagsById = _decodeTags(prefs.getString(_PrefsKeys.tagsJson));
 
     if (fitIndex != null &&
         fitIndex >= 0 &&
@@ -174,6 +185,105 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Future<void> _saveLastFolder(FolderHandle folder) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_PrefsKeys.lastFolderRaw, folder.raw);
+  }
+
+  // ----------------
+  // Tags (SharedPreferences)
+
+  Map<String, List<String>> _decodeTags(String? raw) {
+    if (raw == null || raw.isEmpty) return <String, List<String>>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final Map<String, List<String>> map = <String, List<String>>{};
+        for (final entry in decoded.entries) {
+          final key = entry.key?.toString();
+          final val = entry.value;
+          if (key == null) continue;
+          if (val is List) {
+            map[key] = val.map((e) => e.toString()).toList(growable: false);
+          }
+        }
+        return map;
+      }
+    } catch (_) {}
+    return <String, List<String>>{};
+  }
+
+  List<String> _currentTags() => _tagsById[_item.id] ?? const <String>[];
+
+  String? _normalizeTag(String input) {
+    var t = input.trim();
+    if (t.isEmpty) return null;
+    if (t.startsWith('#')) t = t.substring(1);
+    t = t.trim();
+    if (t.isEmpty) return null;
+    // 空白は不可（検索トークン崩れ防止）
+    if (t.contains(RegExp(r'\s'))) return null;
+    return t;
+  }
+
+  Future<void> _saveTagsToPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_PrefsKeys.tagsJson, jsonEncode(_tagsById));
+  }
+
+  Future<void> _promptAddTag() async {
+    final ctrl = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('タグ追加'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(hintText: '例: tag（#不要 / 空白なし）'),
+          autofocus: true,
+          onSubmitted: (v) => Navigator.pop(context, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, ctrl.text),
+            child: const Text('追加'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null) return;
+    final tag = _normalizeTag(result);
+    if (tag == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('タグが無効です（空白なしで入力してください）')));
+      return;
+    }
+
+    final tags = (_tagsById[_item.id] ?? <String>[]).toList(growable: true);
+    if (!tags.any((e) => e.toLowerCase() == tag.toLowerCase())) {
+      tags.add(tag);
+      _tagsById[_item.id] = tags.toList(growable: false);
+      await _saveTagsToPrefs();
+      _tagsChanged = true;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _removeTag(String tag) async {
+    final tags = (_tagsById[_item.id] ?? <String>[]).toList(growable: true);
+    tags.removeWhere((e) => e.toLowerCase() == tag.toLowerCase());
+    if (tags.isEmpty) {
+      _tagsById.remove(_item.id);
+    } else {
+      _tagsById[_item.id] = tags.toList(growable: false);
+    }
+    await _saveTagsToPrefs();
+    _tagsChanged = true;
+    if (mounted) setState(() {});
   }
 
   BoxFit get _boxFit {
@@ -586,6 +696,33 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           if (_isPdf) _infoRow('ページ', '$_totalPages'),
           const SizedBox(height: 8),
           _infoRow('ID', item.id),
+          // --- Tags ---
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final t in _currentTags())
+                InputChip(
+                  label: Text(
+                    '#$t',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  backgroundColor: _uiChip,
+                  deleteIconColor: Colors.white70,
+                  onDeleted: () => _removeTag(t),
+                ),
+              ActionChip(
+                label: const Text(
+                  '+ タグ追加',
+                  style: TextStyle(color: Colors.white),
+                ),
+                backgroundColor: _uiChip,
+                onPressed: _promptAddTag,
+              ),
+            ],
+          ),
+
           const SizedBox(height: 12),
           if (_isPdf)
             Expanded(child: _buildPdfThumbGrid(item))

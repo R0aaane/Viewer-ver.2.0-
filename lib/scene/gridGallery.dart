@@ -29,6 +29,9 @@ class _PrefsKeys {
   static const String favorites = 'prefs.favorites'; // List<String>
 
   static const String folderAliasesJson = 'prefs.folderAliasesJson';
+
+  /// json map: { "<MediaItem.id>": ["tag1","tag2", ...] }
+  static const String tagsJson = 'prefs.tagsJson';
 }
 
 class GalleryGridPage extends StatefulWidget {
@@ -53,6 +56,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Set<String> _favorites = <String>{};
+
+  // tags
+  Map<String, List<String>> _tagsById = <String, List<String>>{};
 
   _MainPage _page = _MainPage.home; // ★起動時はホーム
 
@@ -109,6 +115,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final favList =
         prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
 
+    // tags
+    _tagsById = _decodeTags(prefs.getString(_PrefsKeys.tagsJson));
+
     // view settings
     final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
     final two = prefs.getBool(_PrefsKeys.twoPage);
@@ -163,6 +172,40 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     // 選択中フォルダをロード（保存処理はここでは不要）
     await _loadFolder(FolderHandle(current), saveAsLast: false);
+  }
+
+  // ----------------
+  // Tags (SharedPreferences)
+
+  Map<String, List<String>> _decodeTags(String? raw) {
+    if (raw == null || raw.isEmpty) return <String, List<String>>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final Map<String, List<String>> map = <String, List<String>>{};
+        for (final entry in decoded.entries) {
+          final key = entry.key?.toString();
+          final val = entry.value;
+          if (key == null) continue;
+          if (val is List) {
+            map[key] = val.map((e) => e.toString()).toList(growable: false);
+          }
+        }
+        return map;
+      }
+    } catch (_) {}
+    return <String, List<String>>{};
+  }
+
+  List<String> _tagsFor(MediaItem item) =>
+      _tagsById[item.id] ?? const <String>[];
+
+  Future<void> _reloadTags() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(
+      () => _tagsById = _decodeTags(prefs.getString(_PrefsKeys.tagsJson)),
+    );
   }
 
   Widget _homeFavThumb(MediaItem item) {
@@ -805,9 +848,36 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
-    final q = _query.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      out = out.where((e) => e.displayName.toLowerCase().contains(q));
+    final qRaw = _query.trim().toLowerCase();
+    if (qRaw.isNotEmpty) {
+      // 空白区切りで複数条件:
+      // - "#tag" : タグ一致（部分一致）
+      // - "word" : ファイル名 or タグに部分一致
+      final tokens = qRaw
+          .split(RegExp(r'\s+'))
+          .where((e) => e.isNotEmpty)
+          .toList();
+
+      out = out.where((item) {
+        final name = item.displayName.toLowerCase();
+        final tags = _tagsFor(
+          item,
+        ).map((e) => e.toLowerCase()).toList(growable: false);
+
+        bool matchToken(String t) {
+          if (t.startsWith('#')) {
+            final needle = t.substring(1);
+            if (needle.isEmpty) return true;
+            return tags.any((x) => x.contains(needle));
+          }
+          return name.contains(t) || tags.any((x) => x.contains(t));
+        }
+
+        for (final t in tokens) {
+          if (!matchToken(t)) return false;
+        }
+        return true;
+      });
     }
 
     final list = out.toList(growable: true);
@@ -1141,6 +1211,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             // 詳細側で★が変わった場合、同期
             if (changed == true) {
               await _reloadFavorites();
+              await _reloadTags();
             }
           },
           child: _ThumbTile(
