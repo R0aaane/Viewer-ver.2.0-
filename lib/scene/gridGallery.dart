@@ -157,6 +157,33 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _loadFolder(FolderHandle(current), saveAsLast: false);
   }
 
+  Widget _homeFavThumb(MediaItem item) {
+    return AspectRatio(
+      aspectRatio: 3 / 4, // ★ 縦長（漫画・PDF向け）
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: FutureBuilder<ThumbPair>(
+          future: widget.repo.readThumbPair(item, maxWidth: 240),
+          builder: (context, snap) {
+            if (!snap.hasData) {
+              return Container(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                alignment: Alignment.center,
+                child: const CircularProgressIndicator(strokeWidth: 2),
+              );
+            }
+
+            return Image.memory(
+              snap.data!.front,
+              fit: BoxFit.cover, // ★縦横比を保ったまま枠いっぱい
+              gaplessPlayback: true,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _buildHomeBody() {
     final folderCount = _foldersRaw.length;
     final currentLabel = _currentFolderRaw == null
@@ -230,21 +257,52 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   Text('件数: ${_favoriteItemsAll.length}'),
                   const SizedBox(height: 8),
                   ..._favoriteItemsAll.take(10).map((item) {
-                    return ListTile(
-                      dense: true,
-                      leading: Icon(
-                        item.kind == MediaKind.pdf
-                            ? Icons.picture_as_pdf
-                            : Icons.image_outlined,
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      child: InkWell(
+                        onTap: () {
+                          setState(() => _page = _MainPage.gallery);
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // ★ サムネ（高さを明示）
+                              SizedBox(
+                                height: 120, // ← ここを変えると「大きさ」が変わる
+                                child: _homeFavThumb(item),
+                              ),
+
+                              const SizedBox(width: 12),
+
+                              // ★ テキスト領域
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.displayName,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleMedium,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      item.kind == MediaKind.pdf ? 'PDF' : '画像',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      title: Text(
-                        item.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: () {
-                        setState(() => _page = _MainPage.gallery);
-                      },
                     );
                   }),
                 ],
