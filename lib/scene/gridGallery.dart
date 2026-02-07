@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -146,13 +147,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     // --- 実在チェック（消えているフォルダを除外）---
-    final existsFolders = <String>[];
-    for (final p in folders) {
-      if (p.isEmpty) continue;
-      try {
-        final d = Directory(p);
-        if (await d.exists()) existsFolders.add(p);
-      } catch (_) {}
+    final existsFolders = <String>{};
+    for (final p in _foldersRaw) {
+      if (Platform.isWindows) {
+        try {
+          final d = Directory(p);
+          if (await d.exists()) existsFolders.add(p);
+        } catch (_) {}
+      } else {
+        // Android: treeUri は exists 判定できないので「残す」
+        existsFolders.add(p);
+      }
     }
 
     // current の整合性
@@ -746,16 +751,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _openDetailFromHome(MediaItem item) async {
-    final folderRaw = _parentDirOfFullPath(item.id);
+    final folderRaw = item.folderRaw;
 
     // 1) フォルダが未登録なら登録（ユーザー体験的にここで登録するのが自然）
     if (!_foldersRaw.contains(folderRaw)) {
       final next = List<String>.from(_foldersRaw)..add(folderRaw);
       setState(() {
-        _foldersRaw = next.toList(growable: false);
+        _foldersRaw = next;
         _currentFolderRaw = folderRaw;
-        _folder = FolderHandle(folderRaw);
       });
+
       await _persistFolders();
     } else {
       // 登録済みなら current を合わせる

@@ -121,10 +121,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     final raw = prefs.getString(_PrefsKeys.lastFolderRaw);
     if (raw != null && raw.isNotEmpty) {
-      final dir = Directory(raw);
-      if (await dir.exists()) {
-        _folder = FolderHandle(raw);
-      }
+      _folder = FolderHandle(raw);
     }
 
     if (!mounted) return;

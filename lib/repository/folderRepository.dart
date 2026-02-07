@@ -120,6 +120,7 @@ class WindowsFolderRepository implements MediaRepository {
           id: e.path, // ★フルパス
           displayName: _fileName(e.path),
           kind: kind,
+          folderRaw: folder.raw,
           modified: stat.modified,
         ),
       );
