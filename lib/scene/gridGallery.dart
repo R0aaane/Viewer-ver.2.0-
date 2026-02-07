@@ -302,6 +302,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                         context,
                                       ).textTheme.bodySmall,
                                     ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'フォルダ: ${_folderLabelForItem(item)}',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ],
                                 ),
                               ),
@@ -555,6 +564,46 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _reloadFavorites();
       await _refreshAllFavoritesItems();
     }
+  }
+
+  /// お気に入り一覧などで「このアイテムが属するフォルダの表示名」を返す
+  String _folderLabelForItem(MediaItem item) {
+    // お気に入りは「全フォルダ横断」なので、
+    // 登録済みフォルダ（_foldersRaw）のどれに属するかを推定して表示する。
+    final itemNorm = _normalizePath(item.id);
+
+    String? bestMatchRaw;
+    var bestLen = -1;
+
+    for (final raw in _foldersRaw) {
+      final folderNorm = _normalizePath(raw);
+
+      // "C:\pics" と "C:\pics2" の誤一致を避けるため、区切りまで見る
+      final ok = itemNorm == folderNorm || itemNorm.startsWith('$folderNorm\\');
+      if (!ok) continue;
+
+      if (folderNorm.length > bestLen) {
+        bestLen = folderNorm.length;
+        bestMatchRaw = raw; // 元のraw（エイリアス用）
+      }
+    }
+
+    if (bestMatchRaw != null) {
+      return _folderLabel(bestMatchRaw); // alias があれば alias、無ければ basename
+    }
+
+    // 登録外のフォルダから来た場合は「直上フォルダ名」を表示
+    final parentRaw = _parentDirOfFullPath(item.id);
+    return _basename(parentRaw);
+  }
+
+  String _normalizePath(String p) {
+    // Windows: 大文字小文字・スラッシュ揺れを吸収
+    var s = p.replaceAll('/', '\\');
+    while (s.endsWith('\\')) {
+      s = s.substring(0, s.length - 1);
+    }
+    return s.toLowerCase();
   }
 
   // --------------------
@@ -1048,7 +1097,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       _buildGrid(_applyFilter(_items, pdfOnly: true)),
                       _loadingFavAll
                           ? const Center(child: CircularProgressIndicator())
-                          : _buildGrid(_favoriteItemsAll),
+                          : _buildGrid(
+                              _favoriteItemsAll,
+                              showFolderLabel: true,
+                            ),
                     ],
                   ),
           );
@@ -1057,7 +1109,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
-  Widget _buildGrid(List<MediaItem> items) {
+  Widget _buildGrid(List<MediaItem> items, {bool showFolderLabel = false}) {
     if (items.isEmpty) {
       return const Center(child: Text('該当するアイテムがありません'));
     }
@@ -1101,6 +1153,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             repo: widget.repo,
             item: item,
             isFavorite: isFav,
+            subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
             onToggleFavorite: () => _toggleFavorite(item),
           ),
         );
@@ -1112,6 +1165,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 class _ThumbTile extends StatelessWidget {
   final MediaRepository repo;
   final MediaItem item;
+  final String? subtitle;
 
   final bool isFavorite;
   final VoidCallback onToggleFavorite;
@@ -1119,6 +1173,7 @@ class _ThumbTile extends StatelessWidget {
   const _ThumbTile({
     required this.repo,
     required this.item,
+    this.subtitle,
     required this.isFavorite,
     required this.onToggleFavorite,
   });
@@ -1150,7 +1205,7 @@ class _ThumbTile extends StatelessWidget {
                 left: 8,
                 right: 8,
                 bottom: 8,
-                child: _TitleChip(text: item.displayName),
+                child: _TitleChip(title: item.displayName, subtitle: subtitle),
               ),
               if (item.kind == MediaKind.pdf)
                 const Positioned(top: 8, right: 8, child: _PdfBadge()),
@@ -1215,8 +1270,10 @@ class _PdfBadge extends StatelessWidget {
 }
 
 class _TitleChip extends StatelessWidget {
-  final String text;
-  const _TitleChip({required this.text});
+  final String title;
+  final String? subtitle;
+
+  const _TitleChip({required this.title, this.subtitle});
 
   @override
   Widget build(BuildContext context) {
@@ -1227,11 +1284,26 @@ class _TitleChip extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Text(
-          text,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: Colors.white, fontSize: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              maxLines: subtitle == null ? 2 : 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                subtitle!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+            ],
+          ],
         ),
       ),
     );
