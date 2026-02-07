@@ -16,6 +16,8 @@ class _PrefsKeys {
   static const String fitMode =
       'prefs.readerFitMode'; // int (ReaderFitMode.index)
   static const String twoPage = 'prefs.readerTwoPage'; // bool
+
+  static const String favorites = 'prefs.favorites'; // List<String>
 }
 
 class ImageDetailPage extends StatefulWidget {
@@ -52,6 +54,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _fullscreen = false;
   bool _inReader = true; // Tabが「閲覧」ならtrue
 
+  bool _isFavorite = false;
+  bool _favChanged = false;
+
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
   Future<Uint8List>? _leftFuture;
@@ -62,6 +67,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   MediaItem get _item => _items[_index];
   bool get _isPdf => _item.kind == MediaKind.pdf;
+
+  void _popWithResult() {
+    Navigator.of(context).pop(_favChanged);
+  }
 
   static const _uiBg = Color(0xFF0F0F10);
   static const _uiBar = Color(0xFF1F1F1F);
@@ -109,6 +118,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     if (!mounted) return;
     setState(() {});
+    await _loadFavoriteForCurrent();
     _reloadForCurrent();
   }
 
@@ -129,6 +139,36 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Future<void> _saveTwoPage(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_PrefsKeys.twoPage, v);
+  }
+
+  Future<void> _loadFavoriteForCurrent() async {
+    final prefs = await SharedPreferences.getInstance();
+    final favList =
+        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    final fav = favList.contains(_item.id);
+    if (!mounted) return;
+    setState(() => _isFavorite = fav);
+  }
+
+  Future<void> _toggleFavorite() async {
+    final prefs = await SharedPreferences.getInstance();
+    final favList =
+        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    final next = favList.toSet();
+
+    if (next.contains(_item.id)) {
+      next.remove(_item.id);
+      setState(() => _isFavorite = false);
+    } else {
+      next.add(_item.id);
+      setState(() => _isFavorite = true);
+    }
+
+    _favChanged = true;
+    await prefs.setStringList(
+      _PrefsKeys.favorites,
+      next.toList(growable: false),
+    );
   }
 
   Future<void> _saveLastFolder(FolderHandle folder) async {
@@ -161,6 +201,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   Future<void> _reloadForCurrent() async {
     final item = _item;
+
+    await _loadFavoriteForCurrent();
 
     _readerFutureCache.clear();
     _thumbFutureCache.clear();
@@ -333,100 +375,116 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      drawer: _buildSidebar(),
-      backgroundColor: _uiBg,
-      appBar: AppBar(
-        backgroundColor: _uiBar,
-        foregroundColor: Colors.white,
+    return WillPopScope(
+      onWillPop: () async {
+        _popWithResult();
+        return false;
+      },
+      child: Scaffold(
+        drawer: _buildSidebar(),
+        backgroundColor: _uiBg,
+        appBar: AppBar(
+          backgroundColor: _uiBar,
+          foregroundColor: Colors.white,
 
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _item.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _item.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            if (_inReader) ...[const SizedBox(width: 8), _topReaderControls()],
-          ],
-        ),
-
-        leadingWidth: 96,
-        leading: Row(
-          children: [
-            IconButton(
-              tooltip: '戻る',
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.of(context).maybePop(),
-            ),
-            Builder(
-              builder: (ctx) => IconButton(
-                tooltip: 'メニュー',
-                icon: const Icon(Icons.menu),
-                onPressed: () => Scaffold.of(ctx).openDrawer(),
-              ),
-            ),
-          ],
-        ),
-
-        actions: [
-          IconButton(
-            tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
-            onPressed: _toggleFullscreen,
-            icon: Icon(_fullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
+              if (_inReader) ...[
+                const SizedBox(width: 8),
+                _topReaderControls(),
+              ],
+            ],
           ),
-        ],
-        bottom: TabBar(
-          controller: _tab,
-          tabs: const [
-            Tab(text: '閲覧'),
-            Tab(text: '詳細'),
-          ],
-        ),
-      ),
 
-      body: Shortcuts(
-        shortcuts: const <ShortcutActivator, Intent>{
-          SingleActivator(LogicalKeyboardKey.arrowLeft): _PrevIntent(),
-          SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
-          SingleActivator(LogicalKeyboardKey.escape): _EscapeIntent(),
-        },
-        child: Actions(
-          actions: <Type, Action<Intent>>{
-            _PrevIntent: CallbackAction<_PrevIntent>(
-              onInvoke: (intent) {
-                // 「閲覧」タブのときだけページ移動
-                if (_tab.index == 0) _prev();
-                return null;
-              },
+          leadingWidth: 96,
+          leading: Row(
+            children: [
+              IconButton(
+                tooltip: '戻る',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _popWithResult,
+              ),
+              Builder(
+                builder: (ctx) => IconButton(
+                  tooltip: 'メニュー',
+                  icon: const Icon(Icons.menu),
+                  onPressed: () => Scaffold.of(ctx).openDrawer(),
+                ),
+              ),
+            ],
+          ),
+
+          actions: [
+            IconButton(
+              tooltip: _isFavorite ? 'お気に入り解除' : 'お気に入り追加',
+              onPressed: _toggleFavorite,
+              icon: Icon(_isFavorite ? Icons.star : Icons.star_border),
             ),
-            _NextIntent: CallbackAction<_NextIntent>(
-              onInvoke: (intent) {
-                if (_tab.index == 0) _next();
-                return null;
-              },
+            IconButton(
+              tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
+              onPressed: _toggleFullscreen,
+              icon: Icon(
+                _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              ),
             ),
-            _EscapeIntent: CallbackAction<_EscapeIntent>(
-              onInvoke: (intent) {
-                if (_fullscreen) {
-                  _toggleFullscreen();
-                } else {
-                  Navigator.of(context).maybePop(); // Gridへ戻る
-                }
-                return null;
-              },
-            ),
+          ],
+          bottom: TabBar(
+            controller: _tab,
+            tabs: const [
+              Tab(text: '閲覧'),
+              Tab(text: '詳細'),
+            ],
+          ),
+        ),
+
+        body: Shortcuts(
+          shortcuts: const <ShortcutActivator, Intent>{
+            SingleActivator(LogicalKeyboardKey.arrowLeft): _PrevIntent(),
+            SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
+            SingleActivator(LogicalKeyboardKey.escape): _EscapeIntent(),
           },
-          child: Focus(
-            autofocus: true,
-            child: AnimatedBuilder(
-              animation: _tab,
-              builder: (context, _) {
-                if (_tab.index == 0) return _buildReader();
-                return _buildDetail();
-              },
+          child: Actions(
+            actions: <Type, Action<Intent>>{
+              _PrevIntent: CallbackAction<_PrevIntent>(
+                onInvoke: (intent) {
+                  // 「閲覧」タブのときだけページ移動
+                  if (_tab.index == 0) _prev();
+                  return null;
+                },
+              ),
+              _NextIntent: CallbackAction<_NextIntent>(
+                onInvoke: (intent) {
+                  if (_tab.index == 0) _next();
+                  return null;
+                },
+              ),
+              _EscapeIntent: CallbackAction<_EscapeIntent>(
+                onInvoke: (intent) {
+                  if (_fullscreen) {
+                    _toggleFullscreen();
+                  } else {
+                    _popWithResult(); // Gridへ戻る
+                  }
+                  return null;
+                },
+              ),
+            },
+            child: Focus(
+              autofocus: true,
+              child: AnimatedBuilder(
+                animation: _tab,
+                builder: (context, _) {
+                  if (_tab.index == 0) return _buildReader();
+                  return _buildDetail();
+                },
+              ),
             ),
           ),
         ),

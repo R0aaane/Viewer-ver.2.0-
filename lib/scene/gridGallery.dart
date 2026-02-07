@@ -12,10 +12,18 @@ import 'detailImage.dart';
 enum _SortMode { name, updatedAt, addedAt }
 
 class _PrefsKeys {
+  // 旧キー（移行用に残す）
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
+
+  // ★ 複数フォルダ管理
+  static const String folders = 'prefs.folders'; // List<String>（raw path）
+  static const String currentFolder = 'prefs.currentFolder'; // String（raw path）
+
   static const String fitMode =
       'prefs.readerFitMode'; // int (ReaderFitMode.index)
   static const String twoPage = 'prefs.readerTwoPage'; // bool
+
+  static const String favorites = 'prefs.favorites'; // List<String>
 }
 
 class GalleryGridPage extends StatefulWidget {
@@ -30,6 +38,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   FolderHandle? _folder;
   List<MediaItem> _items = const [];
   bool _loading = false;
+
+  Set<String> _favorites = <String>{};
+
+  // 複数フォルダ
+  List<String> _foldersRaw = const []; // 登録済みフォルダ一覧（raw）
+  String? _currentFolderRaw; // 現在選択（raw）
 
   // ---- 表示設定（永続化）----
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
@@ -49,10 +63,46 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _loadPrefsAndAutoOpenFolder() async {
     final prefs = await SharedPreferences.getInstance();
 
+    // favorites
+    final favList =
+        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+
+    // view settings
     final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
     final two = prefs.getBool(_PrefsKeys.twoPage);
-    final raw = prefs.getString(_PrefsKeys.lastFolderRaw);
 
+    // ★ folders restore
+    List<String> folders =
+        prefs.getStringList(_PrefsKeys.folders) ?? const <String>[];
+    String? current = prefs.getString(_PrefsKeys.currentFolder);
+
+    // --- 旧仕様からの移行（lastFolderRaw が残っていたら folders に入れる）---
+    if (folders.isEmpty) {
+      final legacy = prefs.getString(_PrefsKeys.lastFolderRaw);
+      if (legacy != null && legacy.isNotEmpty) {
+        folders = <String>[legacy];
+        current = legacy;
+        await prefs.setStringList(_PrefsKeys.folders, folders);
+        await prefs.setString(_PrefsKeys.currentFolder, legacy);
+      }
+    }
+
+    // --- 実在チェック（消えているフォルダを除外）---
+    final existsFolders = <String>[];
+    for (final p in folders) {
+      if (p.isEmpty) continue;
+      try {
+        final d = Directory(p);
+        if (await d.exists()) existsFolders.add(p);
+      } catch (_) {}
+    }
+
+    // current の整合性
+    if (current == null || !existsFolders.contains(current)) {
+      current = existsFolders.isNotEmpty ? existsFolders.first : null;
+    }
+
+    // 反映
     setState(() {
       if (fitIndex != null &&
           fitIndex >= 0 &&
@@ -60,24 +110,61 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _fitMode = ReaderFitMode.values[fitIndex];
       }
       if (two != null) _twoPage = two;
+
+      _favorites = favList.toSet();
+      _foldersRaw = existsFolders.toList(growable: false);
+      _currentFolderRaw = current;
     });
 
-    if (raw == null || raw.isEmpty) return;
+    if (current == null) return;
 
-    final dir = Directory(raw);
-    if (!await dir.exists()) return;
-
-    await _loadFolder(FolderHandle(raw), saveAsLast: false);
+    // 選択中フォルダをロード（保存処理はここでは不要）
+    await _loadFolder(FolderHandle(current), saveAsLast: false);
   }
 
-  Future<void> _saveFitMode(ReaderFitMode v) async {
+  // --------------------
+  // 永続化：表示設定
+  // --------------------
+  Future<void> _saveFitMode(ReaderFitMode mode) async {
+    setState(() => _fitMode = mode);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_PrefsKeys.fitMode, v.index);
+    await prefs.setInt(_PrefsKeys.fitMode, mode.index);
   }
 
-  Future<void> _saveTwoPage(bool v) async {
+  Future<void> _saveTwoPage(bool value) async {
+    setState(() => _twoPage = value);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_PrefsKeys.twoPage, v);
+    await prefs.setBool(_PrefsKeys.twoPage, value);
+  }
+
+  // --------------------
+  // お気に入り（★）
+  // --------------------
+  Future<void> _reloadFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    final favList =
+        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    if (!mounted) return;
+    setState(() => _favorites = favList.toSet());
+  }
+
+  Future<void> _toggleFavorite(MediaItem item) async {
+    final id = item.id;
+
+    final next = Set<String>.from(_favorites);
+    if (next.contains(id)) {
+      next.remove(id);
+    } else {
+      next.add(id);
+    }
+
+    setState(() => _favorites = next);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _PrefsKeys.favorites,
+      next.toList(growable: false),
+    );
   }
 
   Future<void> _saveLastFolder(FolderHandle folder) async {
@@ -105,6 +192,67 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _items = items;
       _loading = false;
     });
+  }
+
+  Future<void> _persistFolders() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_PrefsKeys.folders, _foldersRaw);
+    if (_currentFolderRaw == null) {
+      await prefs.remove(_PrefsKeys.currentFolder);
+    } else {
+      await prefs.setString(_PrefsKeys.currentFolder, _currentFolderRaw!);
+    }
+  }
+
+  Future<void> _addFolder() async {
+    final folder = await widget.repo.pickFolder();
+    if (folder == null) return;
+
+    final raw = folder.raw;
+    final next = List<String>.from(_foldersRaw);
+    if (!next.contains(raw)) {
+      next.add(raw);
+    }
+
+    setState(() {
+      _foldersRaw = next.toList(growable: false);
+      _currentFolderRaw = raw;
+    });
+
+    await _persistFolders();
+    await _loadFolder(folder, saveAsLast: false);
+  }
+
+  Future<void> _switchFolder(String raw) async {
+    if (_currentFolderRaw == raw) return;
+
+    setState(() {
+      _currentFolderRaw = raw;
+    });
+
+    await _persistFolders();
+    await _loadFolder(FolderHandle(raw), saveAsLast: false);
+  }
+
+  Future<void> _removeFolder(String raw) async {
+    final next = List<String>.from(_foldersRaw)..remove(raw);
+
+    String? nextCurrent = _currentFolderRaw;
+    if (nextCurrent == raw) {
+      nextCurrent = next.isNotEmpty ? next.first : null;
+    }
+
+    setState(() {
+      _foldersRaw = next.toList(growable: false);
+      _currentFolderRaw = nextCurrent;
+      _folder = nextCurrent == null ? null : FolderHandle(nextCurrent);
+      _items = const [];
+    });
+
+    await _persistFolders();
+
+    if (nextCurrent == null) return;
+    await _loadFolder(FolderHandle(nextCurrent), saveAsLast: false);
   }
 
   Future<void> _pickFolderAndLoad() async {
@@ -261,23 +409,63 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
             const Divider(),
             const ListTile(title: Text('フォルダ'), dense: true),
+
+            // 追加ボタン
             ListTile(
-              title: Text(_folder?.raw ?? '未選択'),
-              subtitle: const Text('表示するフォルダ'),
-              trailing: const Icon(Icons.folder_open),
+              leading: const Icon(Icons.create_new_folder_outlined),
+              title: const Text('フォルダを追加'),
               onTap: () async {
                 Navigator.pop(context);
-                await _pickFolderAndLoad();
+                await _addFolder();
               },
             ),
-            if (_folder != null)
+
+            if (_foldersRaw.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Text('登録フォルダがありません。上の「フォルダを追加」から追加してください。'),
+              )
+            else ...[
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 6, 16, 6),
+                child: Text('タップで切替 / ゴミ箱で削除'),
+              ),
+              for (final raw in _foldersRaw)
+                ListTile(
+                  leading: Icon(
+                    raw == _currentFolderRaw
+                        ? Icons.folder
+                        : Icons.folder_outlined,
+                  ),
+                  title: Text(
+                    raw,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  selected: raw == _currentFolderRaw,
+                  trailing: IconButton(
+                    tooltip: 'このフォルダを削除',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () async {
+                      // Drawerを閉じずに消すと見た目が崩れやすいので一旦閉じる
+                      Navigator.pop(context);
+                      await _removeFolder(raw);
+                    },
+                  ),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await _switchFolder(raw);
+                  },
+                ),
+
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: Text(
-                  '※フォルダはアプリ再起動後も自動で復元します（存在する場合）。',
+                  '※登録フォルダと選択中フォルダは再起動後も復元します（存在する場合）。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
+            ],
           ],
         ),
       ),
@@ -287,20 +475,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         drawer: _buildSidebar(),
         appBar: AppBar(
           title: Text(
-            _folder == null ? '一覧表示' : '一覧表示: ${_folder!.raw}',
+            _currentFolderRaw == null ? '一覧表示' : '一覧表示: $_currentFolderRaw',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
+
           actions: [
             IconButton(
-              tooltip: 'フォルダ選択',
-              onPressed: _pickFolderAndLoad,
-              icon: const Icon(Icons.folder_open),
+              tooltip: 'フォルダ追加',
+              onPressed: _addFolder,
+              icon: const Icon(Icons.create_new_folder_outlined),
             ),
           ],
           bottom: PreferredSize(
@@ -382,6 +571,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     Tab(text: 'すべて'),
                     Tab(text: '画像'),
                     Tab(text: 'PDF'),
+                    Tab(text: 'お気に入り'),
                   ],
                 ),
               ],
@@ -404,6 +594,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   _buildGrid(_applyFilter(_items, pdfOnly: null)),
                   _buildGrid(_applyFilter(_items, pdfOnly: false)),
                   _buildGrid(_applyFilter(_items, pdfOnly: true)),
+                  _buildGrid(
+                    _applyFilter(
+                      _items
+                          .where((e) => _favorites.contains(e.id))
+                          .toList(growable: false),
+                      pdfOnly: null,
+                    ),
+                  ),
                 ],
               ),
       ),
@@ -426,12 +624,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       itemCount: items.length,
       itemBuilder: (context, i) {
         final item = items[i];
+        final isFav = _favorites.contains(item.id);
 
         return InkWell(
-          onTap: () {
+          onTap: () async {
             // 表示自体は「全アイテム基準」で前後移動できるようにする
             final index = _items.indexOf(item);
-            Navigator.push(
+
+            final changed = await Navigator.push<bool>(
               context,
               MaterialPageRoute(
                 builder: (_) => ImageDetailPage(
@@ -442,8 +642,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
               ),
             );
+
+            // 詳細側で★が変わった場合、同期
+            if (changed == true) {
+              await _reloadFavorites();
+            }
           },
-          child: _ThumbTile(repo: widget.repo, item: item),
+          child: _ThumbTile(
+            repo: widget.repo,
+            item: item,
+            isFavorite: isFav,
+            onToggleFavorite: () => _toggleFavorite(item),
+          ),
         );
       },
     );
@@ -454,7 +664,15 @@ class _ThumbTile extends StatelessWidget {
   final MediaRepository repo;
   final MediaItem item;
 
-  const _ThumbTile({required this.repo, required this.item});
+  final bool isFavorite;
+  final VoidCallback onToggleFavorite;
+
+  const _ThumbTile({
+    required this.repo,
+    required this.item,
+    required this.isFavorite,
+    required this.onToggleFavorite,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -470,6 +688,14 @@ class _ThumbTile extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           child: Stack(
             children: [
+              Positioned(
+                top: 6,
+                left: 6,
+                child: _FavButton(
+                  isFavorite: isFavorite,
+                  onPressed: onToggleFavorite,
+                ),
+              ),
               Positioned.fill(child: _ThumbImage(bytes: bytes)),
               Positioned(
                 left: 8,
@@ -483,6 +709,33 @@ class _ThumbTile extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _FavButton extends StatelessWidget {
+  final bool isFavorite;
+  final VoidCallback onPressed;
+
+  const _FavButton({required this.isFavorite, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withOpacity(0.55),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            isFavorite ? Icons.star : Icons.star_border,
+            size: 18,
+            color: Colors.white,
+          ),
+        ),
+      ),
     );
   }
 }
