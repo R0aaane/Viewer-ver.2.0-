@@ -1123,14 +1123,89 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
               ],
               bottom: PreferredSize(
-                preferredSize: const Size.fromHeight(112),
+                // 検索(約56) + ソート(約40) + TabBar(約48) + 余白 = 160前後は必要
+                preferredSize: const Size.fromHeight(160),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // ここはあなたの検索/ソート/TabBarのまま
-                    // （貼ってくれたコードをそのまま残してください）
-                    // ---- 省略せずに入れてOK ----
-                    // ...
+                    // ---- 検索バー ----
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                      child: SizedBox(
+                        height: 44, // 高さを固定して「つぶれ」を防止
+                        child: TextField(
+                          controller: _searchCtrl,
+                          decoration: InputDecoration(
+                            prefixIcon: const Icon(Icons.search),
+                            hintText: 'タイトルで検索',
+                            border: const OutlineInputBorder(),
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 10,
+                            ),
+                            suffixIcon: (_query.trim().isEmpty)
+                                ? null
+                                : IconButton(
+                                    tooltip: 'クリア',
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      _searchCtrl.clear();
+                                      setState(() => _query = '');
+                                    },
+                                  ),
+                          ),
+                          onChanged: (v) => setState(() => _query = v),
+                        ),
+                      ),
+                    ),
+
+                    // ---- ソート行 ----
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: SizedBox(
+                        height: 36,
+                        child: Row(
+                          children: [
+                            const Text('ソート: '),
+                            const SizedBox(width: 8),
+                            DropdownButton<_SortMode>(
+                              value: _sortMode,
+                              items: const [
+                                DropdownMenuItem(
+                                  value: _SortMode.name,
+                                  child: Text('名前'),
+                                ),
+                                DropdownMenuItem(
+                                  value: _SortMode.updatedAt,
+                                  child: Text('更新日'),
+                                ),
+                                DropdownMenuItem(
+                                  value: _SortMode.addedAt,
+                                  child: Text('追加日'),
+                                ),
+                              ],
+                              onChanged: (v) {
+                                if (v == null) return;
+                                setState(() => _sortMode = v);
+                              },
+                            ),
+                            const Spacer(),
+                            if (_loading)
+                              const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    // ---- タブ ----
                     const TabBar(
+                      isScrollable: true, // 画面幅が広い時の “間延び” も防げる
                       tabs: [
                         Tab(text: 'すべて'),
                         Tab(text: '画像'),
