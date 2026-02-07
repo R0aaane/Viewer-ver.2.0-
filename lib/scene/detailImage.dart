@@ -50,6 +50,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   bool _twoPage = false; // Full Spread
   bool _fullscreen = false;
+  bool _inReader = true; // Tabが「閲覧」ならtrue
 
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
@@ -75,6 +76,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     _page = widget.initialPdfPage ?? 1;
 
     _tab = TabController(length: 2, vsync: this);
+
+    _tab.addListener(() {
+      if (!_tab.indexIsChanging) {
+        final v = _tab.index == 0;
+        if (v != _inReader) setState(() => _inReader = v);
+      }
+    });
 
     _initAsync();
   }
@@ -331,11 +339,20 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       appBar: AppBar(
         backgroundColor: _uiBar,
         foregroundColor: Colors.white,
-        title: Text(
-          _item.displayName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                _item.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (_inReader) ...[const SizedBox(width: 8), _topReaderControls()],
+          ],
         ),
+
         actions: [
           IconButton(
             tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
@@ -351,6 +368,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ],
         ),
       ),
+
       body: AnimatedBuilder(
         animation: _tab,
         builder: (context, _) {
@@ -384,57 +402,41 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       child: Stack(
         children: [
           Center(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Expanded(child: _pageImage(_leftFuture)),
-                if (_twoPage && _isPdf)
-                  Expanded(child: _pageImage(_rightFuture)),
-              ],
-            ),
-          ),
-          Positioned(
-            left: 12,
-            right: 12,
-            top: 12,
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: [
-                _chipButton(icon: Icons.chevron_left, label: '前', onTap: _prev),
-                _chipButton(
-                  icon: Icons.chevron_right,
-                  label: '次',
-                  onTap: _next,
-                ),
-                if (_isPdf) _chipText('$_page / $_totalPages'),
-                _chipButton(
-                  icon: Icons.swap_horiz,
-                  label: _twoPage ? '見開きON' : '見開きOFF',
-                  onTap: () async {
-                    final v = !_twoPage;
-                    setState(() => _twoPage = v);
-                    await _saveTwoPage(v);
-                    _reloadForCurrent();
-                  },
-                ),
-                _chipButton(
-                  icon: Icons.aspect_ratio,
-                  label: switch (_fitMode) {
-                    ReaderFitMode.vertical => '縦',
-                    ReaderFitMode.horizontal => '横',
-                    ReaderFitMode.contain => '全体',
-                  },
-                  onTap: () async {
-                    final next =
-                        ReaderFitMode.values[(_fitMode.index + 1) %
-                            ReaderFitMode.values.length];
-                    setState(() => _fitMode = next);
-                    await _saveFitMode(next);
-                  },
-                ),
-              ],
+            child: LayoutBuilder(
+              builder: (context, c) {
+                const gap = 0.0; // gapは0でOK（真ん中余白は “寄せ” で消す）
+
+                final isSpread = _twoPage && _isPdf;
+                final pageW = isSpread ? (c.maxWidth - gap) / 2.0 : c.maxWidth;
+
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: pageW,
+                      child: _pageImage(
+                        _leftFuture,
+                        align: isSpread
+                            ? Alignment.centerRight
+                            : Alignment.center,
+                        isSpread: isSpread,
+                      ),
+                    ),
+                    if (isSpread) ...[
+                      const SizedBox(width: gap),
+                      SizedBox(
+                        width: pageW,
+                        child: _pageImage(
+                          _rightFuture,
+                          align: Alignment.centerLeft,
+                          isSpread: isSpread,
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -442,22 +444,36 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     );
   }
 
-  Widget _pageImage(Future<Uint8List>? future) {
+  Widget _pageImage(
+    Future<Uint8List>? future, {
+    required Alignment align,
+    required bool isSpread,
+  }) {
     if (future == null) return const SizedBox.shrink();
+
     return FutureBuilder<Uint8List>(
       future: future,
       builder: (context, snap) {
         if (!snap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
+
+        // ★見開きは「縦合わせ」＋「綴じ側寄せ」が一番安定しやすい
+        final fit = isSpread ? BoxFit.fitHeight : _boxFit;
+
         return InteractiveViewer(
           minScale: 0.5,
           maxScale: 6,
-          child: Image.memory(
-            snap.data!,
-            fit: _boxFit,
-            gaplessPlayback: true,
-            filterQuality: FilterQuality.high,
+          alignment: align, // ★重要：Viewer の基準点を綴じ側に寄せる
+          child: Align(
+            alignment: align, // ★重要：画像自体も綴じ側に寄せる
+            child: Image.memory(
+              snap.data!,
+              fit: fit,
+              alignment: align, // ★重要：Image の余白も綴じ側に寄せる
+              gaplessPlayback: true,
+              filterQuality: FilterQuality.high,
+            ),
           ),
         );
       },
@@ -493,6 +509,118 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             ),
         ],
       ),
+    );
+  }
+
+  Widget _topReaderControls() {
+    final canPrev = _isPdf ? (_page > 1) : (_index > 0);
+    final canNext = _isPdf
+        ? (_page + (_twoPage ? 2 : 1) <= _totalPages)
+        : (_index < _items.length - 1);
+
+    final pageText = _isPdf
+        ? '$_page/$_totalPages'
+        : '${_index + 1}/${_items.length}';
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: '前',
+          onPressed: canPrev ? _prev : null,
+          icon: const Icon(Icons.chevron_left),
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        ),
+        IconButton(
+          tooltip: '次',
+          onPressed: canNext ? _next : null,
+          icon: const Icon(Icons.chevron_right),
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          margin: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            color: _uiChip,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            pageText,
+            style: const TextStyle(color: Colors.white, fontSize: 12),
+          ),
+        ),
+
+        // 見開きはPDFだけ
+        if (_isPdf)
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              backgroundColor: _uiChip,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              visualDensity: VisualDensity.compact,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            icon: const Icon(Icons.swap_horiz, size: 18),
+            label: Text(
+              _twoPage ? '見開きON' : '見開きOFF',
+              style: const TextStyle(fontSize: 12),
+            ),
+            onPressed: () async {
+              final v = !_twoPage;
+              setState(() => _twoPage = v);
+              await _saveTwoPage(v);
+              _reloadForCurrent();
+            },
+          ),
+
+        const SizedBox(width: 6),
+
+        // Fit モード（メニュー）
+        PopupMenuButton<ReaderFitMode>(
+          tooltip: 'Fit',
+          initialValue: _fitMode,
+          onSelected: (v) async {
+            setState(() => _fitMode = v);
+            await _saveFitMode(v);
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: ReaderFitMode.vertical, child: Text('縦フィット')),
+            PopupMenuItem(
+              value: ReaderFitMode.horizontal,
+              child: Text('横フィット'),
+            ),
+            PopupMenuItem(
+              value: ReaderFitMode.contain,
+              child: Text('全体表示(Contain)'),
+            ),
+          ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: _uiChip,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.aspect_ratio, size: 18, color: Colors.white),
+                const SizedBox(width: 6),
+                Text(switch (_fitMode) {
+                  ReaderFitMode.vertical => '縦',
+                  ReaderFitMode.horizontal => '横',
+                  ReaderFitMode.contain => '全体',
+                }, style: const TextStyle(color: Colors.white, fontSize: 12)),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -567,47 +695,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           child: SelectableText(v, style: const TextStyle(color: Colors.white)),
         ),
       ],
-    );
-  }
-
-  Widget _chipText(String text) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: _uiChip,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Text(text, style: const TextStyle(color: Colors.white)),
-      ),
-    );
-  }
-
-  Widget _chipButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: _uiChip,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 18, color: Colors.white),
-              const SizedBox(width: 6),
-              Text(label, style: const TextStyle(color: Colors.white)),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
