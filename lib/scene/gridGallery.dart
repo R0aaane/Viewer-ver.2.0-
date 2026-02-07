@@ -6,6 +6,8 @@ import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 import 'detailImage.dart';
 
+enum _SortMode { name, updatedAt, addedAt }
+
 class GalleryGridPage extends StatefulWidget {
   final MediaRepository repo;
   const GalleryGridPage({super.key, required this.repo});
@@ -21,6 +23,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
+
+  // 並び替え（検索バー横のドロップダウン）
+  _SortMode _sortMode = _SortMode.name;
 
   Future<void> _pickFolderAndLoad() async {
     final folder = await widget.repo.pickFolder();
@@ -46,6 +51,59 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     super.dispose();
   }
 
+  DateTime _safeDateFromDynamic(dynamic v) {
+    if (v == null) return DateTime.fromMillisecondsSinceEpoch(0);
+    if (v is DateTime) return v;
+    if (v is int) {
+      // ms / sec どちらでもある程度耐える
+      if (v < 2000000000) return DateTime.fromMillisecondsSinceEpoch(v * 1000);
+      return DateTime.fromMillisecondsSinceEpoch(v);
+    }
+    if (v is String) {
+      final parsed = DateTime.tryParse(v);
+      return parsed ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _getUpdatedAt(MediaItem item) {
+    final o = item as dynamic;
+    // できるだけ "それっぽい" フィールド名を拾う
+    try {
+      return _safeDateFromDynamic(o.updatedAt);
+    } catch (_) {}
+    try {
+      return _safeDateFromDynamic(o.modifiedAt);
+    } catch (_) {}
+    try {
+      return _safeDateFromDynamic(o.lastModified);
+    } catch (_) {}
+    try {
+      return _safeDateFromDynamic(o.mtime);
+    } catch (_) {}
+    try {
+      return _safeDateFromDynamic(o.dateModified);
+    } catch (_) {}
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _getAddedAt(MediaItem item) {
+    final o = item as dynamic;
+    try {
+      return _safeDateFromDynamic(o.addedAt);
+    } catch (_) {}
+    try {
+      return _safeDateFromDynamic(o.createdAt);
+    } catch (_) {}
+    try {
+      return _safeDateFromDynamic(o.ctime);
+    } catch (_) {}
+    try {
+      return _safeDateFromDynamic(o.dateAdded);
+    } catch (_) {}
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
   List<MediaItem> _applyFilter(
     List<MediaItem> input, {
     required bool? pdfOnly,
@@ -67,7 +125,27 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       out = out.where((e) => e.displayName.toLowerCase().contains(q));
     }
 
-    return out.toList(growable: false);
+    // 並び替え（既存フィルタ結果に sort を足すだけ）
+    final list = out.toList(growable: true);
+    switch (_sortMode) {
+      case _SortMode.name:
+        list.sort(
+          (a, b) => a.displayName.toLowerCase().compareTo(
+            b.displayName.toLowerCase(),
+          ),
+        );
+        break;
+      case _SortMode.updatedAt:
+        // 新しい順
+        list.sort((a, b) => _getUpdatedAt(b).compareTo(_getUpdatedAt(a)));
+        break;
+      case _SortMode.addedAt:
+        // 新しい順
+        list.sort((a, b) => _getAddedAt(b).compareTo(_getAddedAt(a)));
+        break;
+    }
+
+    return list.toList(growable: false);
   }
 
   @override
@@ -89,33 +167,78 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
           ],
           bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(104),
+            preferredSize: const Size.fromHeight(112),
             child: Column(
               children: [
-                // 検索バー（タイトル/作品名）
+                // 検索バー（タイトル/作品名） + 並び替えドロップダウン
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  child: TextField(
-                    controller: _searchCtrl,
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      hintText: 'タイトルで検索',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _query.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: 'クリア',
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                _searchCtrl.clear();
-                                setState(() => _query = '');
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchCtrl,
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(
+                            hintText: 'タイトルで検索',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: _query.isEmpty
+                                ? null
+                                : IconButton(
+                                    tooltip: 'クリア',
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      _searchCtrl.clear();
+                                      setState(() => _query = '');
+                                    },
+                                  ),
+                            border: const OutlineInputBorder(),
+                            isDense: true,
+                            filled: true,
+                          ),
+                          onChanged: (v) => setState(() => _query = v),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 140,
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<_SortMode>(
+                              value: _sortMode,
+                              isDense: true,
+                              icon: const Icon(Icons.sort),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: _SortMode.name,
+                                  child: Text('名前順'),
+                                ),
+                                DropdownMenuItem(
+                                  value: _SortMode.updatedAt,
+                                  child: Text('更新日時'),
+                                ),
+                                DropdownMenuItem(
+                                  value: _SortMode.addedAt,
+                                  child: Text('追加日時'),
+                                ),
+                              ],
+                              onChanged: (v) {
+                                if (v == null) return;
+                                setState(() => _sortMode = v);
                               },
                             ),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                      filled: true,
-                    ),
-                    onChanged: (v) => setState(() => _query = v),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
 
