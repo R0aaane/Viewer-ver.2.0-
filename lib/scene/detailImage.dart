@@ -353,6 +353,24 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ],
         ),
 
+        leadingWidth: 96,
+        leading: Row(
+          children: [
+            IconButton(
+              tooltip: '戻る',
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.of(context).maybePop(),
+            ),
+            Builder(
+              builder: (ctx) => IconButton(
+                tooltip: 'メニュー',
+                icon: const Icon(Icons.menu),
+                onPressed: () => Scaffold.of(ctx).openDrawer(),
+              ),
+            ),
+          ],
+        ),
+
         actions: [
           IconButton(
             tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
@@ -369,78 +387,95 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         ),
       ),
 
-      body: AnimatedBuilder(
-        animation: _tab,
-        builder: (context, _) {
-          if (_tab.index == 0) return _buildReader();
-          return _buildDetail();
+      body: Shortcuts(
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.arrowLeft): _PrevIntent(),
+          SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
+          SingleActivator(LogicalKeyboardKey.escape): _EscapeIntent(),
         },
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            _PrevIntent: CallbackAction<_PrevIntent>(
+              onInvoke: (intent) {
+                // 「閲覧」タブのときだけページ移動
+                if (_tab.index == 0) _prev();
+                return null;
+              },
+            ),
+            _NextIntent: CallbackAction<_NextIntent>(
+              onInvoke: (intent) {
+                if (_tab.index == 0) _next();
+                return null;
+              },
+            ),
+            _EscapeIntent: CallbackAction<_EscapeIntent>(
+              onInvoke: (intent) {
+                if (_fullscreen) {
+                  _toggleFullscreen();
+                } else {
+                  Navigator.of(context).maybePop(); // Gridへ戻る
+                }
+                return null;
+              },
+            ),
+          },
+          child: Focus(
+            autofocus: true,
+            child: AnimatedBuilder(
+              animation: _tab,
+              builder: (context, _) {
+                if (_tab.index == 0) return _buildReader();
+                return _buildDetail();
+              },
+            ),
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildReader() {
-    return Focus(
-      autofocus: true,
-      onKeyEvent: (node, e) {
-        if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    return Stack(
+      children: [
+        Center(
+          child: LayoutBuilder(
+            builder: (context, c) {
+              const gap = 0.0; // gapは0でOK（真ん中余白は “寄せ” で消す）
 
-        if (e.logicalKey == LogicalKeyboardKey.escape && _fullscreen) {
-          _toggleFullscreen();
-          return KeyEventResult.handled;
-        }
-        if (e.logicalKey == LogicalKeyboardKey.arrowRight) {
-          _next();
-          return KeyEventResult.handled;
-        }
-        if (e.logicalKey == LogicalKeyboardKey.arrowLeft) {
-          _prev();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Stack(
-        children: [
-          Center(
-            child: LayoutBuilder(
-              builder: (context, c) {
-                const gap = 0.0; // gapは0でOK（真ん中余白は “寄せ” で消す）
+              final isSpread = _twoPage && _isPdf;
+              final pageW = isSpread ? (c.maxWidth - gap) / 2.0 : c.maxWidth;
 
-                final isSpread = _twoPage && _isPdf;
-                final pageW = isSpread ? (c.maxWidth - gap) / 2.0 : c.maxWidth;
-
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: pageW,
+                    child: _pageImage(
+                      _leftFuture,
+                      align: isSpread
+                          ? Alignment.centerRight
+                          : Alignment.center,
+                      isSpread: isSpread,
+                    ),
+                  ),
+                  if (isSpread) ...[
+                    const SizedBox(width: gap),
                     SizedBox(
                       width: pageW,
                       child: _pageImage(
-                        _leftFuture,
-                        align: isSpread
-                            ? Alignment.centerRight
-                            : Alignment.center,
+                        _rightFuture,
+                        align: Alignment.centerLeft,
                         isSpread: isSpread,
                       ),
                     ),
-                    if (isSpread) ...[
-                      const SizedBox(width: gap),
-                      SizedBox(
-                        width: pageW,
-                        child: _pageImage(
-                          _rightFuture,
-                          align: Alignment.centerLeft,
-                          isSpread: isSpread,
-                        ),
-                      ),
-                    ],
                   ],
-                );
-              },
-            ),
+                ],
+              );
+            },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -697,4 +732,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       ],
     );
   }
+}
+
+class _PrevIntent extends Intent {
+  const _PrevIntent();
+}
+
+class _NextIntent extends Intent {
+  const _NextIntent();
+}
+
+class _EscapeIntent extends Intent {
+  const _EscapeIntent();
 }

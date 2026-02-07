@@ -579,8 +579,7 @@ class _ThumbImage extends StatelessWidget {
 
 class _TileShell extends StatelessWidget {
   final bool loading;
-  final bool error;
-  const _TileShell({this.loading = false, this.error = false});
+  const _TileShell({this.loading = false});
 
   @override
   Widget build(BuildContext context) {
@@ -590,9 +589,7 @@ class _TileShell extends StatelessWidget {
       child: Center(
         child: loading
             ? const CircularProgressIndicator()
-            : error
-            ? const Icon(Icons.broken_image_outlined)
-            : const SizedBox.shrink(),
+            : const Icon(Icons.broken_image_outlined),
       ),
     );
   }
