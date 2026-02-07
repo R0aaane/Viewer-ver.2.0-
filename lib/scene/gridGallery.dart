@@ -1,5 +1,8 @@
+import 'dart:io';
 import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
@@ -7,6 +10,13 @@ import '../repository/mediaRepository.dart';
 import 'detailImage.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
+
+class _PrefsKeys {
+  static const String lastFolderRaw = 'prefs.lastFolderRaw';
+  static const String fitMode =
+      'prefs.readerFitMode'; // int (ReaderFitMode.index)
+  static const String twoPage = 'prefs.readerTwoPage'; // bool
+}
 
 class GalleryGridPage extends StatefulWidget {
   final MediaRepository repo;
@@ -21,21 +31,73 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _items = const [];
   bool _loading = false;
 
+  // ---- 表示設定（永続化）----
+  ReaderFitMode _fitMode = ReaderFitMode.vertical;
+  bool _twoPage = false;
+
   final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
 
-  // 並び替え（検索バー横のドロップダウン）
   _SortMode _sortMode = _SortMode.name;
 
-  Future<void> _pickFolderAndLoad() async {
-    final folder = await widget.repo.pickFolder();
-    if (folder == null) return;
+  @override
+  void initState() {
+    super.initState();
+    _loadPrefsAndAutoOpenFolder();
+  }
 
+  Future<void> _loadPrefsAndAutoOpenFolder() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
+    final two = prefs.getBool(_PrefsKeys.twoPage);
+    final raw = prefs.getString(_PrefsKeys.lastFolderRaw);
+
+    setState(() {
+      if (fitIndex != null &&
+          fitIndex >= 0 &&
+          fitIndex < ReaderFitMode.values.length) {
+        _fitMode = ReaderFitMode.values[fitIndex];
+      }
+      if (two != null) _twoPage = two;
+    });
+
+    if (raw == null || raw.isEmpty) return;
+
+    final dir = Directory(raw);
+    if (!await dir.exists()) return;
+
+    await _loadFolder(FolderHandle(raw), saveAsLast: false);
+  }
+
+  Future<void> _saveFitMode(ReaderFitMode v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_PrefsKeys.fitMode, v.index);
+  }
+
+  Future<void> _saveTwoPage(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_PrefsKeys.twoPage, v);
+  }
+
+  Future<void> _saveLastFolder(FolderHandle folder) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_PrefsKeys.lastFolderRaw, folder.raw);
+  }
+
+  Future<void> _loadFolder(
+    FolderHandle folder, {
+    required bool saveAsLast,
+  }) async {
     setState(() {
       _folder = folder;
       _loading = true;
       _items = const [];
     });
+
+    if (saveAsLast) {
+      await _saveLastFolder(folder);
+    }
 
     final items = await widget.repo.listMedia(folder);
     if (!mounted) return;
@@ -43,6 +105,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _items = items;
       _loading = false;
     });
+  }
+
+  Future<void> _pickFolderAndLoad() async {
+    final folder = await widget.repo.pickFolder();
+    if (folder == null) return;
+    await _loadFolder(folder, saveAsLast: true);
   }
 
   @override
@@ -55,7 +123,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (v == null) return DateTime.fromMillisecondsSinceEpoch(0);
     if (v is DateTime) return v;
     if (v is int) {
-      // ms / sec どちらでもある程度耐える
       if (v < 2000000000) return DateTime.fromMillisecondsSinceEpoch(v * 1000);
       return DateTime.fromMillisecondsSinceEpoch(v);
     }
@@ -68,7 +135,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   DateTime _getUpdatedAt(MediaItem item) {
     final o = item as dynamic;
-    // できるだけ "それっぽい" フィールド名を拾う
     try {
       return _safeDateFromDynamic(o.updatedAt);
     } catch (_) {}
@@ -110,7 +176,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }) {
     Iterable<MediaItem> out = input;
 
-    // タブフィルタ: null=全て, true=PDFのみ, false=画像のみ
     if (pdfOnly != null) {
       if (pdfOnly) {
         out = out.where((e) => e.kind == MediaKind.pdf);
@@ -119,13 +184,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
-    // 検索（作品名/タイトル）: displayName を部分一致
     final q = _query.trim().toLowerCase();
     if (q.isNotEmpty) {
       out = out.where((e) => e.displayName.toLowerCase().contains(q));
     }
 
-    // 並び替え（既存フィルタ結果に sort を足すだけ）
     final list = out.toList(growable: true);
     switch (_sortMode) {
       case _SortMode.name:
@@ -136,11 +199,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         );
         break;
       case _SortMode.updatedAt:
-        // 新しい順
         list.sort((a, b) => _getUpdatedAt(b).compareTo(_getUpdatedAt(a)));
         break;
       case _SortMode.addedAt:
-        // 新しい順
         list.sort((a, b) => _getAddedAt(b).compareTo(_getAddedAt(a)));
         break;
     }
@@ -148,11 +209,87 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return list.toList(growable: false);
   }
 
+  Drawer _buildSidebar() {
+    return Drawer(
+      child: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            const ListTile(title: Text('表示設定'), dense: true),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Fitモード',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<ReaderFitMode>(
+                    value: _fitMode,
+                    isDense: true,
+                    items: const [
+                      DropdownMenuItem(
+                        value: ReaderFitMode.vertical,
+                        child: Text('縦フィット'),
+                      ),
+                      DropdownMenuItem(
+                        value: ReaderFitMode.horizontal,
+                        child: Text('横フィット'),
+                      ),
+                      DropdownMenuItem(
+                        value: ReaderFitMode.contain,
+                        child: Text('全体表示(Contain)'),
+                      ),
+                    ],
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      setState(() => _fitMode = v);
+                      await _saveFitMode(v);
+                    },
+                  ),
+                ),
+              ),
+            ),
+            SwitchListTile(
+              title: const Text('見開き (ON/OFF)'),
+              value: _twoPage,
+              onChanged: (v) async {
+                setState(() => _twoPage = v);
+                await _saveTwoPage(v);
+              },
+            ),
+            const Divider(),
+            const ListTile(title: Text('フォルダ'), dense: true),
+            ListTile(
+              title: Text(_folder?.raw ?? '未選択'),
+              subtitle: const Text('表示するフォルダ'),
+              trailing: const Icon(Icons.folder_open),
+              onTap: () async {
+                Navigator.pop(context);
+                await _pickFolderAndLoad();
+              },
+            ),
+            if (_folder != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Text(
+                  '※フォルダはアプリ再起動後も自動で復元します（存在する場合）。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 3,
       child: Scaffold(
+        drawer: _buildSidebar(),
         appBar: AppBar(
           title: Text(
             _folder == null ? '一覧表示' : '一覧表示: ${_folder!.raw}',
@@ -170,7 +307,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             preferredSize: const Size.fromHeight(112),
             child: Column(
               children: [
-                // 検索バー（タイトル/作品名） + 並び替えドロップダウン
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                   child: Row(
@@ -241,8 +377,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     ],
                   ),
                 ),
-
-                // タブ
                 const TabBar(
                   tabs: [
                     Tab(text: 'すべて'),
@@ -282,149 +416,162 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     return GridView.builder(
-      padding: const EdgeInsets.all(10),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-        childAspectRatio: 0.72, // 縦長の本っぽさ
+      padding: const EdgeInsets.all(12),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 220,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        childAspectRatio: 0.75,
       ),
       itemCount: items.length,
       itemBuilder: (context, i) {
         final item = items[i];
+
         return InkWell(
           onTap: () {
+            // 表示自体は「全アイテム基準」で前後移動できるようにする
+            final index = _items.indexOf(item);
             Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (_) => ImageDetailPage(
                   repo: widget.repo,
-                  items: items,
-                  initialIndex: i,
+                  items: _items,
+                  initialIndex: index < 0 ? 0 : index,
+                  initialPdfPage: 1,
                 ),
               ),
             );
           },
-          child: _StackedThumbTile(repo: widget.repo, item: item),
+          child: _ThumbTile(repo: widget.repo, item: item),
         );
       },
     );
   }
 }
 
-class _StackedThumbTile extends StatelessWidget {
+class _ThumbTile extends StatelessWidget {
   final MediaRepository repo;
   final MediaItem item;
-  const _StackedThumbTile({required this.repo, required this.item});
+
+  const _ThumbTile({required this.repo, required this.item});
 
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<ThumbPair>(
       future: repo.readThumbPair(item, maxWidth: 360),
       builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
-          return const _TileShell(loading: true);
-        }
-        if (!snap.hasData) {
-          return const _TileShell(error: true);
-        }
+        if (!snap.hasData) return const _TileShell(loading: true);
+        final bytes = snap.data!.front;
 
-        final pair = snap.data!;
-        final front = pair.front;
-        final back = pair.back;
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: _BookStack(front: front, back: back),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              item.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
-            ),
-          ],
+        return Material(
+          elevation: 2,
+          borderRadius: BorderRadius.circular(10),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            children: [
+              Positioned.fill(child: _ThumbImage(bytes: bytes)),
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 8,
+                child: _TitleChip(text: item.displayName),
+              ),
+              if (item.kind == MediaKind.pdf)
+                const Positioned(top: 8, right: 8, child: _PdfBadge()),
+            ],
+          ),
         );
       },
     );
   }
 }
 
-class _BookStack extends StatelessWidget {
-  final Uint8List front;
-  final Uint8List? back;
-  const _BookStack({required this.front, this.back});
+class _PdfBadge extends StatelessWidget {
+  const _PdfBadge();
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        if (back != null)
-          Positioned(
-            left: 10,
-            top: 6,
-            right: 0,
-            bottom: 0,
-            child: _ThumbCard(bytes: back!, elevation: 2, dim: true),
-          ),
-        Positioned(
-          left: 0,
-          top: 0,
-          right: 10,
-          bottom: 6,
-          child: _ThumbCard(bytes: front, elevation: 6),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.65),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.picture_as_pdf, size: 16, color: Colors.white),
+            SizedBox(width: 4),
+            Text('PDF', style: TextStyle(color: Colors.white)),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
 
-class _ThumbCard extends StatelessWidget {
-  final Uint8List bytes;
-  final double elevation;
-  final bool dim;
-  const _ThumbCard({required this.bytes, this.elevation = 4, this.dim = false});
+class _TitleChip extends StatelessWidget {
+  final String text;
+  const _TitleChip({required this.text});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      elevation: elevation,
-      borderRadius: BorderRadius.circular(10),
-      clipBehavior: Clip.antiAlias,
-      child: ColorFiltered(
-        colorFilter: dim
-            ? const ColorFilter.matrix(<double>[
-                0.85,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0.85,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0.85,
-                0,
-                0,
-                0,
-                0,
-                0,
-                1,
-                0,
-              ])
-            : const ColorFilter.mode(Colors.transparent, BlendMode.dst),
-        child: Image.memory(
-          bytes,
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.low,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.65),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Text(
+          text,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
         ),
+      ),
+    );
+  }
+}
+
+class _ThumbImage extends StatelessWidget {
+  final Uint8List bytes;
+  const _ThumbImage({required this.bytes});
+
+  @override
+  Widget build(BuildContext context) {
+    return ColorFiltered(
+      colorFilter: Theme.of(context).brightness == Brightness.dark
+          ? const ColorFilter.matrix(<double>[
+              0.85,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0.85,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0.85,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1,
+              0,
+            ])
+          : const ColorFilter.mode(Colors.transparent, BlendMode.dst),
+      child: Image.memory(
+        bytes,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.low,
       ),
     );
   }
