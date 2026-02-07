@@ -147,8 +147,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     // --- 実在チェック（消えているフォルダを除外）---
-    final existsFolders = <String>{};
-    for (final p in _foldersRaw) {
+    final existsFolders = <String>[];
+    for (final p in folders) {
+      // ← ★復元した folders を使う
       if (Platform.isWindows) {
         try {
           final d = Directory(p);
@@ -163,6 +164,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     // current の整合性
     if (current == null || !existsFolders.contains(current)) {
       current = existsFolders.isNotEmpty ? existsFolders.first : null;
+    }
+
+    // ★ 実在しないフォルダが消えた場合は prefs も更新しておく（重要）
+    await prefs.setStringList(_PrefsKeys.folders, existsFolders);
+    if (current != null) {
+      await prefs.setString(_PrefsKeys.currentFolder, current);
+    } else {
+      await prefs.remove(_PrefsKeys.currentFolder);
     }
 
     // 反映
