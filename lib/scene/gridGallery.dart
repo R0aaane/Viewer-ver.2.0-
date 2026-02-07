@@ -702,12 +702,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _loadFolder(FolderHandle(nextCurrent), saveAsLast: false);
   }
 
-  Future<void> _pickFolderAndLoad() async {
-    final folder = await widget.repo.pickFolder();
-    if (folder == null) return;
-    await _loadFolder(folder, saveAsLast: true);
-  }
-
   Future<void> _refreshAllFavoritesItems() async {
     if (_loadingFavAll) return;
     if (_foldersRaw.isEmpty) {
@@ -1026,8 +1020,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       length: 4,
       child: Builder(
         builder: (context) {
-          final tc = DefaultTabController.of(context);
-          if (!_tabListenerInstalled && tc != null) {
+          final TabController tc = DefaultTabController.of(context);
+          if (!_tabListenerInstalled) {
             _tabListenerInstalled = true;
             tc.addListener(() {
               if (!tc.indexIsChanging && tc.index == 3) {
