@@ -71,6 +71,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _twoPage = false;
 
   final TextEditingController _searchCtrl = TextEditingController();
+
+  // --- ホーム画面検索 (すべてのフォルダを参照) ---
+  final TextEditingController _homeSearchCtrl = TextEditingController();
+  String _homeQuery = '';
+  bool _homeSearching = false;
+  List<MediaItem> _homeSearchResults = const [];
+
   String _query = '';
 
   _SortMode _sortMode = _SortMode.name;
@@ -208,6 +215,90 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  bool _matchHomeQuery(MediaItem item, String qRaw) {
+    final q = qRaw.trim().toLowerCase();
+    if (q.isEmpty) return true;
+
+    // 空白区切りAND
+    final tokens = q.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
+    final name = item.displayName.toLowerCase();
+    final tags = _tagsFor(
+      item,
+    ).map((e) => e.toLowerCase()).toList(growable: false);
+
+    bool matchToken(String t) {
+      if (t.startsWith('#')) {
+        final needle = t.substring(1);
+        if (needle.isEmpty) return true;
+        return tags.any((x) => x.contains(needle));
+      }
+      return name.contains(t) || tags.any((x) => x.contains(t));
+    }
+
+    for (final t in tokens) {
+      if (!matchToken(t)) return false;
+    }
+    return true;
+  }
+
+  Future<void> _runHomeSearch() async {
+    final q = _homeQuery.trim();
+    if (q.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _homeSearching = false;
+        _homeSearchResults = const [];
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() => _homeSearching = true);
+
+    try {
+      // 全フォルダの items を cache へ（未ロード分だけ）
+      for (final raw in _foldersRaw) {
+        if (_folderItemsCache.containsKey(raw)) continue;
+        try {
+          final list = await widget.repo.listMedia(FolderHandle(raw));
+          _folderItemsCache[raw] = list;
+        } catch (_) {
+          _folderItemsCache[raw] = const <MediaItem>[];
+        }
+      }
+
+      final all = <MediaItem>[];
+      for (final raw in _foldersRaw) {
+        final list = _folderItemsCache[raw] ?? const <MediaItem>[];
+        all.addAll(list);
+      }
+
+      final filtered = all
+          .where((e) => _matchHomeQuery(e, q))
+          .toList(growable: false);
+
+      // 見やすさ優先で名前順（必要なら _sortMode を使ってもOK）
+      final sorted = filtered.toList(growable: true)
+        ..sort(
+          (a, b) => a.displayName.toLowerCase().compareTo(
+            b.displayName.toLowerCase(),
+          ),
+        );
+
+      if (!mounted) return;
+      setState(() {
+        _homeSearching = false;
+        _homeSearchResults = sorted.take(50).toList(growable: false); // 上限
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _homeSearching = false;
+        _homeSearchResults = const [];
+      });
+    }
+  }
+
   Widget _homeFavThumb(MediaItem item) {
     return AspectRatio(
       aspectRatio: 3 / 4, // ★ 縦長（漫画・PDF向け）
@@ -244,6 +335,117 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        // --- Home: Global search ---
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '検索（全フォルダ）',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 44,
+                  child: TextField(
+                    controller: _homeSearchCtrl,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search),
+                      hintText: 'タイトル / タグ / #tag で検索',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                      suffixIcon: (_homeQuery.trim().isEmpty)
+                          ? null
+                          : IconButton(
+                              tooltip: 'クリア',
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _homeSearchCtrl.clear();
+                                setState(() => _homeQuery = '');
+                                _runHomeSearch();
+                              },
+                            ),
+                    ),
+                    onChanged: (v) {
+                      setState(() => _homeQuery = v);
+                      _runHomeSearch();
+                    },
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                if (_homeSearching)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: CircularProgressIndicator(),
+                    ),
+                  )
+                else if (_homeQuery.trim().isEmpty)
+                  const Text('検索ワードを入力してください。')
+                else if (_homeSearchResults.isEmpty)
+                  const Text('該当なし')
+                else ...[
+                  Text('件数: ${_homeSearchResults.length}（最大50件表示）'),
+                  const SizedBox(height: 8),
+                  ..._homeSearchResults.map((item) {
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      child: InkWell(
+                        onTap: () => _openDetailFromHome(item),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(height: 96, child: _homeFavThumb(item)),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.displayName,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleMedium,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      item.kind == MediaKind.pdf ? 'PDF' : '画像',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'フォルダ: ${_folderLabelForItem(item)}',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -780,6 +982,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _homeSearchCtrl.dispose();
     super.dispose();
   }
 
