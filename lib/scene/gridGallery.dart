@@ -44,6 +44,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _items = const [];
   bool _loading = false;
 
+  String _parentDirOfFullPath(String fullPath) {
+    // Windows: "C:\a\b\c.jpg" / "C:/a/b/c.jpg" どちらも対応
+    final p = fullPath.replaceAll('/', '\\');
+    final idx = p.lastIndexOf('\\');
+    if (idx <= 0) return p; // 念のため
+    return p.substring(0, idx);
+  }
+
   Set<String> _favorites = <String>{};
 
   _MainPage _page = _MainPage.home; // ★起動時はホーム
@@ -260,9 +268,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     return Card(
                       margin: const EdgeInsets.symmetric(vertical: 6),
                       child: InkWell(
-                        onTap: () {
-                          setState(() => _page = _MainPage.gallery);
-                        },
+                        onTap: () => _openDetailFromHome(item),
                         child: Padding(
                           padding: const EdgeInsets.all(8),
                           child: Row(
@@ -485,6 +491,75 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _refreshAllFavoritesItems();
   }
 
+  Future<void> _openDetailFromHome(MediaItem item) async {
+    final folderRaw = _parentDirOfFullPath(item.id);
+
+    // 1) フォルダが未登録なら登録（ユーザー体験的にここで登録するのが自然）
+    if (!_foldersRaw.contains(folderRaw)) {
+      final next = List<String>.from(_foldersRaw)..add(folderRaw);
+      setState(() {
+        _foldersRaw = next.toList(growable: false);
+        _currentFolderRaw = folderRaw;
+        _folder = FolderHandle(folderRaw);
+      });
+      await _persistFolders();
+    } else {
+      // 登録済みなら current を合わせる
+      if (_currentFolderRaw != folderRaw) {
+        setState(() {
+          _currentFolderRaw = folderRaw;
+          _folder = FolderHandle(folderRaw);
+        });
+        await _persistFolders();
+      }
+    }
+
+    // 2) 対象フォルダをロード（キャッシュがあればそれを使う）
+    if (_folderItemsCache.containsKey(folderRaw)) {
+      setState(() {
+        _items = _folderItemsCache[folderRaw] ?? const [];
+        _folder = FolderHandle(folderRaw);
+      });
+    } else {
+      await _loadFolder(FolderHandle(folderRaw), saveAsLast: false);
+      // _loadFolder が _items を更新する前提。キャッシュにも入れておく
+      _folderItemsCache[folderRaw] = _items;
+    }
+
+    // 3) index を探す
+    final idx = _items.indexWhere((e) => e.id == item.id);
+    if (idx < 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ファイルが見つかりません（移動/削除された可能性）')),
+      );
+      return;
+    }
+
+    // 4) 詳細へ一発で遷移
+    // ※ あなたの detailImage.dart のコンストラクタに合わせています
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ImageDetailPage(
+          repo: widget.repo,
+          items: _items,
+          initialIndex: idx,
+          initialPdfPage: 1,
+        ),
+      ),
+    );
+
+    // detailで★が変わった場合、ホームの一覧も更新
+    if (changed == true) {
+      await _reloadFavorites();
+      await _refreshAllFavoritesItems();
+    }
+  }
+
+  // --------------------
+  // フォルダー管理
+  // --------------------
   Future<void> _saveLastFolder(FolderHandle folder) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_PrefsKeys.lastFolderRaw, folder.raw);
