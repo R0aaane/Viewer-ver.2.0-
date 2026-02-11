@@ -1,24 +1,18 @@
 import 'dart:collection';
 import 'dart:typed_data';
-
-import 'package:shared_storage/shared_storage.dart' as ss;
 import 'dart:ui' as ui;
+
+import 'package:docman/docman.dart';
 import 'package:pdfx/pdfx.dart';
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import 'mediaRepository.dart';
 
-/// NOTE:
-/// SAF（Storage Access Framework）経由で treeUri 配下を読む Repository。
-/// 実際の SAF API は採用パッケージに合わせて差し替えてください。
 class AndroidFolderRepository implements MediaRepository {
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
 
-  // ------------------------------
-  // サムネLRU（Windows版と同等）
-  // ------------------------------
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
     maxBytes: 64 * 1024 * 1024,
     maxEntries: 400,
@@ -27,79 +21,82 @@ class AndroidFolderRepository implements MediaRepository {
   );
 
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
-
-  // PDF: bytes→doc キャッシュ（同一PDFのページ送りを高速化）
   final Map<String, PdfDocument> _pdfCache = {};
 
   // ==============================
-  // SAF アダプタ（ここだけパッケージ依存）
+  // SAF アダプタ（docman）
   // ==============================
-  // 例：treeUri をユーザーが選択
+
   Future<String?> _safPickTreeUri() async {
-    // TODO: SAFパッケージの「フォルダ選択」を呼ぶ
-    // return await Saf.openDocumentTree();
-    return null;
+    // ディレクトリ選択（SAF UI）
+    final dir = await DocMan.pick.directory();
+    return dir?.uri; // content://.../tree/...
   }
 
   Future<List<_SafEntry>> _safListRecursive(String treeUri) async {
-  final root = Uri.parse(treeUri);
+    final root = await DocumentFile.fromUri(treeUri);
+    if (root == null) return const [];
+    if (root.isDirectory != true) return const [];
 
-  // 権限が無い/切れてると列挙が空になります
-  final canRead = await ss.canRead(root);
-  if (canRead != true) return const [];
+    final out = <_SafEntry>[];
+    final queue = <DocumentFile>[root];
 
-  const cols = <ss.DocumentFileColumn>[
-    ss.DocumentFileColumn.uri,
-    ss.DocumentFileColumn.name,
-    ss.DocumentFileColumn.isDirectory,
-    ss.DocumentFileColumn.lastModified,
-    // size/type は重いことがあるので最小限に（必要なら後で足す）
-  ];
+    while (queue.isNotEmpty) {
+      final dir = queue.removeLast();
 
-  final out = <_SafEntry>[];
-  final queue = <Uri>[root];
+      // 直下を列挙（大量なら listDocumentsStream の方が良い）
+      final children = await dir.listDocuments();
+      for (final f in children) {
+        final name = f.name ?? '';
+        if (name.isEmpty) continue;
 
-  // BFS でサブフォルダも掘る
-  while (queue.isNotEmpty) {
-    final dir = queue.removeLast();
+        final isDir = f.isDirectory == true;
+        if (isDir) {
+          queue.add(f);
+          continue;
+        }
+        final lm = f.lastModified; // int? の想定（epoch millis）
+        final modified = (lm == null)
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(lm);
 
-    // listFiles は Stream で返る（直下を列挙する想定）
-    await for (final f in ss.listFiles(dir, columns: cols)) {
-      final name = f.name ?? '';
-      if (name.isEmpty) continue;
-
-      final isDir = f.isDirectory == true;
-
-      if (isDir) {
-        // サブフォルダを掘る
-        queue.add(Uri.parse(f.uri.toString()));
-        continue;
+        out.add(
+          _SafEntry(
+            documentUri: f.uri,
+            name: name,
+            modified: modified,
+            isDir: false,
+          ),
+        );
       }
 
-      out.add(_SafEntry(
-        documentUri: f.uri.toString(),
-        name: name,
-        modified: f.lastModified,
-        isDir: false,
-      ));
+      // UI固まり対策
+      await Future<void>.delayed(Duration.zero);
     }
 
-    // UI 固まり対策：イベントループに一瞬譲る（大量フォルダで効く）
-    await Future<void>.delayed(Duration.zero);
+    return out;
   }
 
-  return out;
-}
-
-  // 例：documentUri から bytes を読む
   Future<Uint8List> _safReadBytes(String documentUri) async {
-    // TODO: SAFパッケージに合わせて実装
-    throw UnimplementedError('SAF readBytes not implemented');
+    final doc = await DocumentFile.fromUri(documentUri);
+    if (doc == null) {
+      throw Exception('DocumentFile.fromUri failed: $documentUri');
+    }
+    if (doc.isDirectory == true) {
+      throw Exception('Tried to read directory as file: $documentUri');
+    }
+
+    final bytes = await doc.read(); // Uint8List?
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('read() returned null/empty: $documentUri');
+    }
+    return bytes;
   }
 
   // ==============================
   // MediaRepository
   // ==============================
+
   @override
   Future<FolderHandle?> pickFolder() async {
     final treeUri = await _safPickTreeUri();
@@ -108,44 +105,40 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   @override
-Future<List<MediaItem>> listMedia(FolderHandle folder) async {
-  final entries = await _safListRecursive(folder.raw);
+  Future<List<MediaItem>> listMedia(FolderHandle folder) async {
+    final entries = await _safListRecursive(folder.raw);
 
-  // まず列挙数が取れているか確認（実機の logcat に出ます）
-  // ignore: avoid_print
-  print('[SAF] entries=${entries.length} first=${entries.isNotEmpty ? entries.first.name : "-"}');
+    // ignore: avoid_print
+    print('[SAF/docman] entries=${entries.length}');
 
-  final items = <MediaItem>[];
-  for (final e in entries) {
-    final lower = e.name.toLowerCase();
+    final items = <MediaItem>[];
+    for (final e in entries) {
+      final ext = _lowerExt(e.name);
 
-    MediaKind? kind;
-    if (lower.endsWith('.pdf')) {
-      kind = MediaKind.pdf;
-    } else if (lower.endsWith('.png') ||
-        lower.endsWith('.jpg') ||
-        lower.endsWith('.jpeg') ||
-        lower.endsWith('.webp')) {
-      kind = MediaKind.image;
-    } else {
-      continue;
+      MediaKind? kind;
+      if (ext == _pdfExt) {
+        kind = MediaKind.pdf;
+      } else if (_imageExt.contains(ext)) {
+        kind = MediaKind.image;
+      } else {
+        continue;
+      }
+
+      items.add(
+        MediaItem(
+          id: e.documentUri, // content://...
+          displayName: e.name,
+          kind: kind,
+          folderRaw: folder.raw, // treeUri
+          modified: e.modified,
+        ),
+      );
     }
 
-    items.add(MediaItem(
-      id: e.documentUri,
-      displayName: e.name,
-      kind: kind,
-      folderRaw: folder.raw,
-      modified: e.modified,
-    ));
+    // ignore: avoid_print
+    print('[SAF/docman] mediaItems=${items.length}');
+    return items;
   }
-
-  // ignore: avoid_print
-  print('[SAF] mediaItems=${items.length}');
-  return items;
-}
-
-
 
   @override
   Future<Uint8List> readBytes(MediaItem item) => _safReadBytes(item.id);
@@ -196,9 +189,8 @@ Future<List<MediaItem>> listMedia(FolderHandle folder) async {
   Future<ThumbPair> _buildThumbPair(MediaItem item, int maxWidth) async {
     if (item.kind == MediaKind.image) {
       final bytes = await readBytes(item);
-
       final thumb = await _makeImageThumb(bytes, maxWidth);
-      return ThumbPair(front: bytes, back: null);
+      return ThumbPair(front: thumb, back: null);
     }
 
     final doc = await _openPdf(item.id);
@@ -217,7 +209,6 @@ Future<List<MediaItem>> listMedia(FolderHandle folder) async {
     final cached = _pdfCache[documentUri];
     if (cached != null) return cached;
 
-    // Android は openFile が使えないため、bytes→openData
     final bytes = await _safReadBytes(documentUri);
     final doc = await PdfDocument.openData(bytes);
 
@@ -225,7 +216,11 @@ Future<List<MediaItem>> listMedia(FolderHandle folder) async {
     return doc;
   }
 
-  Future<Uint8List> _renderPage(PdfDocument doc, int pageNumber, int maxWidth) async {
+  Future<Uint8List> _renderPage(
+    PdfDocument doc,
+    int pageNumber,
+    int maxWidth,
+  ) async {
     final page = await doc.getPage(pageNumber);
 
     final scale = maxWidth / page.width;
@@ -260,7 +255,8 @@ Future<List<MediaItem>> listMedia(FolderHandle folder) async {
   }
 }
 
-/// SAF から返ってくる1ファイル分の情報（パッケージ依存部分を隔離）
+// ---- 以下はあなたの既存そのまま ----
+
 class _SafEntry {
   final String documentUri;
   final String name;
@@ -274,7 +270,6 @@ class _SafEntry {
   });
 }
 
-/// Windows版から移植（同じ挙動にする）
 class _LruCache<K, V> {
   final int maxBytes;
   final int maxEntries;
@@ -320,13 +315,8 @@ class _LruCache<K, V> {
 }
 
 Future<Uint8List> _makeImageThumb(Uint8List src, int targetWidth) async {
-  // 0バイト対策
   if (src.isEmpty) return src;
-
-  final codec = await ui.instantiateImageCodec(
-    src,
-    targetWidth: targetWidth,
-  );
+  final codec = await ui.instantiateImageCodec(src, targetWidth: targetWidth);
   final frame = await codec.getNextFrame();
   final ui.Image image = frame.image;
 

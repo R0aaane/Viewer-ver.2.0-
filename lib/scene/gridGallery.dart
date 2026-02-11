@@ -139,25 +139,33 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (folders.isEmpty) {
       final legacy = prefs.getString(_PrefsKeys.lastFolderRaw);
       if (legacy != null && legacy.isNotEmpty) {
-        folders = <String>[legacy];
-        current = legacy;
-        await prefs.setStringList(_PrefsKeys.folders, folders);
-        await prefs.setString(_PrefsKeys.currentFolder, legacy);
+        if (Platform.isWindows) {
+          folders = <String>[legacy];
+          current = legacy;
+          await prefs.setStringList(_PrefsKeys.folders, folders);
+          await prefs.setString(_PrefsKeys.currentFolder, legacy);
+        } else {
+          // Android: 旧仕様の「実パス」は無効なので捨てる
+          await prefs.remove(_PrefsKeys.lastFolderRaw);
+        }
       }
     }
 
     // --- 実在チェック（消えているフォルダを除外）---
-    final existsFolders = <String>[];
+    final existsFolders = <String>{};
+
     for (final p in folders) {
-      // ← ★復元した folders を使う
+      // ★ _foldersRaw ではなく prefs から読んだ folders
       if (Platform.isWindows) {
         try {
           final d = Directory(p);
           if (await d.exists()) existsFolders.add(p);
         } catch (_) {}
       } else {
-        // Android: treeUri は exists 判定できないので「残す」
-        existsFolders.add(p);
+        // Android: SAFの treeUri（content://...）だけ有効
+        if (p.startsWith('content://')) {
+          existsFolders.add(p);
+        }
       }
     }
 
@@ -167,7 +175,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     // ★ 実在しないフォルダが消えた場合は prefs も更新しておく（重要）
-    await prefs.setStringList(_PrefsKeys.folders, existsFolders);
+    await prefs.setStringList(_PrefsKeys.folders, existsFolders.toList());
+
     if (current != null) {
       await prefs.setString(_PrefsKeys.currentFolder, current);
     } else {
@@ -888,6 +897,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     final items = await widget.repo.listMedia(folder);
+    // ignore: avoid_print
+    print('[UI] loaded items=${items.length} folder=${folder.raw}');
     if (!mounted) return;
     setState(() {
       _items = items;
@@ -1703,6 +1714,25 @@ class _ThumbImage extends StatelessWidget {
         fit: BoxFit.cover,
         gaplessPlayback: true,
         filterQuality: FilterQuality.low,
+        errorBuilder: (context, error, stack) {
+          // ここで「デコード失敗」が見える
+          return Container(
+            alignment: Alignment.center,
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.broken_image_outlined),
+                const SizedBox(height: 6),
+                Text(
+                  'decode failed\nlen=${bytes.length}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
