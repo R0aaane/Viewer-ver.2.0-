@@ -1,6 +1,8 @@
 import 'dart:collection';
 import 'dart:typed_data';
 
+import 'package:shared_storage/shared_storage.dart' as ss;
+import 'dart:ui' as ui;
 import 'package:pdfx/pdfx.dart';
 
 import '../models/folder.dart';
@@ -39,11 +41,55 @@ class AndroidFolderRepository implements MediaRepository {
     return null;
   }
 
-  // 例：treeUri 配下を再帰列挙して「documentUri + name + lastModified(任意)」を返す
   Future<List<_SafEntry>> _safListRecursive(String treeUri) async {
-    // TODO: SAFパッケージに合わせて実装
-    return const [];
+  final root = Uri.parse(treeUri);
+
+  // 権限が無い/切れてると列挙が空になります
+  final canRead = await ss.canRead(root);
+  if (canRead != true) return const [];
+
+  const cols = <ss.DocumentFileColumn>[
+    ss.DocumentFileColumn.uri,
+    ss.DocumentFileColumn.name,
+    ss.DocumentFileColumn.isDirectory,
+    ss.DocumentFileColumn.lastModified,
+    // size/type は重いことがあるので最小限に（必要なら後で足す）
+  ];
+
+  final out = <_SafEntry>[];
+  final queue = <Uri>[root];
+
+  // BFS でサブフォルダも掘る
+  while (queue.isNotEmpty) {
+    final dir = queue.removeLast();
+
+    // listFiles は Stream で返る（直下を列挙する想定）
+    await for (final f in ss.listFiles(dir, columns: cols)) {
+      final name = f.name ?? '';
+      if (name.isEmpty) continue;
+
+      final isDir = f.isDirectory == true;
+
+      if (isDir) {
+        // サブフォルダを掘る
+        queue.add(Uri.parse(f.uri.toString()));
+        continue;
+      }
+
+      out.add(_SafEntry(
+        documentUri: f.uri.toString(),
+        name: name,
+        modified: f.lastModified,
+        isDir: false,
+      ));
+    }
+
+    // UI 固まり対策：イベントループに一瞬譲る（大量フォルダで効く）
+    await Future<void>.delayed(Duration.zero);
   }
+
+  return out;
+}
 
   // 例：documentUri から bytes を読む
   Future<Uint8List> _safReadBytes(String documentUri) async {
@@ -62,41 +108,44 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   @override
-  Future<List<MediaItem>> listMedia(FolderHandle folder) async {
-    final entries = await _safListRecursive(folder.raw);
+Future<List<MediaItem>> listMedia(FolderHandle folder) async {
+  final entries = await _safListRecursive(folder.raw);
 
-    final items = <MediaItem>[];
-    for (final e in entries) {
-      final ext = _lowerExt(e.name);
-      MediaKind? kind;
-      if (_imageExt.contains(ext)) {
-        kind = MediaKind.image;
-      } else if (ext == _pdfExt) {
-        kind = MediaKind.pdf;
-      } else {
-        continue;
-      }
+  // まず列挙数が取れているか確認（実機の logcat に出ます）
+  // ignore: avoid_print
+  print('[SAF] entries=${entries.length} first=${entries.isNotEmpty ? entries.first.name : "-"}');
 
-      items.add(
-        MediaItem(
-          id: e.documentUri,
-          displayName: e.name,
-          kind: kind,
-          folderRaw: folder.raw, // ★重要：親フォルダは treeUri
-          modified: e.modified,
-        ),
-      );
+  final items = <MediaItem>[];
+  for (final e in entries) {
+    final lower = e.name.toLowerCase();
+
+    MediaKind? kind;
+    if (lower.endsWith('.pdf')) {
+      kind = MediaKind.pdf;
+    } else if (lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.webp')) {
+      kind = MediaKind.image;
+    } else {
+      continue;
     }
 
-    // modified が取れない場合もあるので null-safe でソート
-    items.sort((a, b) {
-      final am = a.modified?.millisecondsSinceEpoch ?? 0;
-      final bm = b.modified?.millisecondsSinceEpoch ?? 0;
-      return bm.compareTo(am);
-    });
-
-    return items;
+    items.add(MediaItem(
+      id: e.documentUri,
+      displayName: e.name,
+      kind: kind,
+      folderRaw: folder.raw,
+      modified: e.modified,
+    ));
   }
+
+  // ignore: avoid_print
+  print('[SAF] mediaItems=${items.length}');
+  return items;
+}
+
+
 
   @override
   Future<Uint8List> readBytes(MediaItem item) => _safReadBytes(item.id);
@@ -147,6 +196,8 @@ class AndroidFolderRepository implements MediaRepository {
   Future<ThumbPair> _buildThumbPair(MediaItem item, int maxWidth) async {
     if (item.kind == MediaKind.image) {
       final bytes = await readBytes(item);
+
+      final thumb = await _makeImageThumb(bytes, maxWidth);
       return ThumbPair(front: bytes, back: null);
     }
 
@@ -214,10 +265,12 @@ class _SafEntry {
   final String documentUri;
   final String name;
   final DateTime? modified;
-  const _SafEntry({
+  final bool isDir;
+  _SafEntry({
     required this.documentUri,
     required this.name,
-    this.modified,
+    required this.modified,
+    required this.isDir,
   });
 }
 
@@ -264,4 +317,21 @@ class _LruCache<K, V> {
     _map.clear();
     _bytes = 0;
   }
+}
+
+Future<Uint8List> _makeImageThumb(Uint8List src, int targetWidth) async {
+  // 0バイト対策
+  if (src.isEmpty) return src;
+
+  final codec = await ui.instantiateImageCodec(
+    src,
+    targetWidth: targetWidth,
+  );
+  final frame = await codec.getNextFrame();
+  final ui.Image image = frame.image;
+
+  final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+  if (byteData == null) return src;
+
+  return byteData.buffer.asUint8List();
 }
