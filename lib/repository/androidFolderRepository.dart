@@ -1,7 +1,6 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
-import 'dart:async';
-
 import 'dart:ui' as ui;
 
 import 'package:docman/docman.dart';
@@ -22,13 +21,16 @@ class AndroidFolderRepository implements MediaRepository {
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
 
+  // PDF操作は並列不可なのでURI単位でロック
   final Map<String, _AsyncMutex> _pdfLocks = {};
-
   _AsyncMutex _lockOf(String uri) =>
       _pdfLocks.putIfAbsent(uri, () => _AsyncMutex());
 
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
-  final Map<String, PdfDocument> _pdfCache = {};
+
+  // ★ PDFキャッシュ（無限に増えるのを防ぐ）
+  final LinkedHashMap<String, PdfDocument> _pdfCache = LinkedHashMap();
+  static const int _pdfCacheMaxEntries = 6;
 
   // ==============================
   // SAF アダプタ（docman）
@@ -37,6 +39,15 @@ class AndroidFolderRepository implements MediaRepository {
   Future<String?> _safPickTreeUri() async {
     final dir = await DocMan.pick.directory();
     return dir?.uri;
+  }
+
+  DateTime? _toDateTimeSafe(Object? lm) {
+    // docman / provider 差を吸収（int / int? / null どれでもOK）
+    if (lm is int) {
+      if (lm <= 0) return null;
+      return DateTime.fromMillisecondsSinceEpoch(lm);
+    }
+    return null;
   }
 
   Future<List<_SafEntry>> _safListRecursive(String treeUri) async {
@@ -50,7 +61,6 @@ class AndroidFolderRepository implements MediaRepository {
     while (queue.isNotEmpty) {
       final dir = queue.removeLast();
 
-      // 直下を列挙（大量なら listDocumentsStream の方が良い）
       final children = await dir.listDocuments();
       for (final f in children) {
         final name = f.name ?? '';
@@ -61,10 +71,9 @@ class AndroidFolderRepository implements MediaRepository {
           queue.add(f);
           continue;
         }
-        final lm = f.lastModified; // int? の想定（epoch millis）
-        final modified = (lm == null)
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(lm);
+
+        // ここ：lm==null の比較を消し、型差は _toDateTimeSafe で吸収
+        final modified = _toDateTimeSafe(f.lastModified);
 
         out.add(
           _SafEntry(
@@ -76,7 +85,6 @@ class AndroidFolderRepository implements MediaRepository {
         );
       }
 
-      // UI固まり対策
       await Future<void>.delayed(Duration.zero);
     }
 
@@ -88,9 +96,12 @@ class AndroidFolderRepository implements MediaRepository {
     if (doc == null) {
       throw Exception('DocumentFile.fromUri failed: $documentUri');
     }
+    if (doc.isDirectory == true) {
+      throw Exception('Tried to read directory as file: $documentUri');
+    }
 
     // 1) まず read()
-    final bytes = await doc.read(); // Uint8List?
+    final bytes = await doc.read();
     if (bytes != null && bytes.isNotEmpty) return bytes;
 
     // 2) ダメなら cache() → File.readAsBytes()
@@ -119,7 +130,6 @@ class AndroidFolderRepository implements MediaRepository {
   @override
   Future<List<MediaItem>> listMedia(FolderHandle folder) async {
     final entries = await _safListRecursive(folder.raw);
-
     // ignore: avoid_print
     print('[SAF/docman] entries=${entries.length}');
 
@@ -138,10 +148,10 @@ class AndroidFolderRepository implements MediaRepository {
 
       items.add(
         MediaItem(
-          id: e.documentUri, // content://...
+          id: e.documentUri,
           displayName: e.name,
           kind: kind,
-          folderRaw: folder.raw, // treeUri
+          folderRaw: folder.raw,
           modified: e.modified,
         ),
       );
@@ -219,13 +229,27 @@ class AndroidFolderRepository implements MediaRepository {
 
   Future<PdfDocument> _openPdf(String documentUri) {
     return _lockOf(documentUri).synchronized(() async {
-      final cached = _pdfCache[documentUri];
-      if (cached != null) return cached;
+      final cached = _pdfCache.remove(documentUri);
+      if (cached != null) {
+        // LRU更新（末尾に戻す）
+        _pdfCache[documentUri] = cached;
+        return cached;
+      }
 
       final bytes = await _safReadBytes(documentUri);
       final doc = await PdfDocument.openData(bytes);
 
       _pdfCache[documentUri] = doc;
+
+      // ★ LRUエビクション
+      while (_pdfCache.length > _pdfCacheMaxEntries) {
+        final oldestKey = _pdfCache.keys.first;
+        final oldest = _pdfCache.remove(oldestKey);
+        if (oldest != null) {
+          await oldest.close();
+        }
+      }
+
       return doc;
     });
   }
@@ -259,6 +283,7 @@ class AndroidFolderRepository implements MediaRepository {
   Future<void> dispose() async {
     _thumbInFlight.clear();
     _thumbCache.clear();
+
     for (final doc in _pdfCache.values) {
       await doc.close();
     }
@@ -271,8 +296,6 @@ class AndroidFolderRepository implements MediaRepository {
     return name.substring(dot).toLowerCase();
   }
 }
-
-// ---- 以下はあなたの既存そのまま ----
 
 class _SafEntry {
   final String documentUri;

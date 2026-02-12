@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
 
@@ -614,7 +613,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         Center(
           child: LayoutBuilder(
             builder: (context, c) {
-              const gap = 0.0; // gapは0でOK（真ん中余白は “寄せ” で消す）
+              const gap = 0.0;
 
               final isSpread = _twoPage && _isPdf;
               final pageW = isSpread ? (c.maxWidth - gap) / 2.0 : c.maxWidth;
@@ -649,6 +648,34 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             },
           ),
         ),
+
+        // 端末タップでページ遷移（左=前 / 右=次）
+        Positioned.fill(
+          child: LayoutBuilder(
+            builder: (context, c) {
+              return GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTapUp: (details) {
+                  // 「閲覧」タブ以外は無視
+                  if (_tab.index != 0) return;
+
+                  final dx = details.localPosition.dx;
+                  final w = c.maxWidth;
+
+                  // 中央は無反応（必要ならUI表示切替などに）
+                  final leftEdge = w * 0.35;
+                  final rightEdge = w * 0.65;
+
+                  if (dx < leftEdge) {
+                    _prev(); // 左タップ → 前
+                  } else if (dx > rightEdge) {
+                    _next(); // 右タップ → 次
+                  }
+                },
+              );
+            },
+          ),
+        ),
       ],
     );
   }
@@ -670,19 +697,28 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         // ★見開きは「縦合わせ」＋「綴じ側寄せ」が一番安定しやすい
         final fit = isSpread ? BoxFit.fitHeight : _boxFit;
 
+        //pdfの背景に白を追加
+        final img = Image.memory(
+          snap.data!,
+          fit: fit,
+          alignment: align,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.high,
+        );
+
+        final widgetToShow = _isPdf
+            ? DecoratedBox(
+                decoration: const BoxDecoration(color: Colors.white),
+                child: img,
+              )
+            : img;
         return InteractiveViewer(
           minScale: 0.5,
           maxScale: 6,
           alignment: align, // ★重要：Viewer の基準点を綴じ側に寄せる
           child: Align(
             alignment: align, // ★重要：画像自体も綴じ側に寄せる
-            child: Image.memory(
-              snap.data!,
-              fit: fit,
-              alignment: align, // ★重要：Image の余白も綴じ側に寄せる
-              gaplessPlayback: true,
-              filterQuality: FilterQuality.high,
-            ),
+            child: widgetToShow,
           ),
         );
       },

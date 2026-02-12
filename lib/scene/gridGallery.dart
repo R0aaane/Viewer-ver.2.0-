@@ -657,10 +657,54 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   // --------------------
   // フォルダ表示名設定
   // --------------------
-  String _basename(String path) {
-    final p = path.replaceAll('\\', '/');
-    final idx = p.lastIndexOf('/');
-    return (idx >= 0) ? p.substring(idx + 1) : p;
+  String _basename(String raw) {
+    String s = raw;
+
+    // 1) SAFの content://... の場合は tree/document の次のセグメントを取り出す
+    if (s.startsWith('content://')) {
+      try {
+        final u = Uri.parse(s);
+        final segs = u.pathSegments;
+
+        String? encoded;
+        final ti = segs.indexOf('tree');
+        if (ti >= 0 && ti + 1 < segs.length) {
+          encoded = segs[ti + 1];
+        } else {
+          final di = segs.indexOf('document');
+          if (di >= 0 && di + 1 < segs.length) {
+            encoded = segs[di + 1];
+          }
+        }
+        if (encoded != null && encoded.isNotEmpty) {
+          s = encoded; // 例: primary%3ADocuments%2Fexperiment
+        }
+      } catch (_) {
+        // 失敗したら s=raw のままフォールバック
+      }
+    }
+
+    // 2) 「primary%3A...」みたいにエンコード文字列だけ保存されているケースにも対応
+    //    二重エンコードもあり得るので最大2回 decode
+    for (int i = 0; i < 2; i++) {
+      if (!s.contains('%')) break;
+      try {
+        s = Uri.decodeComponent(s);
+      } catch (_) {
+        break;
+      }
+    }
+
+    // 3) "primary:" などボリューム名を落とす → 最後のパス要素だけにする
+    final colon = s.indexOf(':');
+    if (colon >= 0) s = s.substring(colon + 1);
+
+    s = s.replaceAll('\\', '/');
+    final slash = s.lastIndexOf('/');
+    if (slash >= 0) s = s.substring(slash + 1);
+
+    // 4) 空なら元の raw を返す
+    return s.trim().isEmpty ? raw : s.trim();
   }
 
   String _folderLabel(String raw) {
