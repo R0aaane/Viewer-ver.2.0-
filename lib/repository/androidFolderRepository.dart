@@ -1,5 +1,7 @@
 import 'dart:collection';
 import 'dart:typed_data';
+import 'dart:async';
+
 import 'dart:ui' as ui;
 
 import 'package:docman/docman.dart';
@@ -20,6 +22,11 @@ class AndroidFolderRepository implements MediaRepository {
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
 
+  final Map<String, _AsyncMutex> _pdfLocks = {};
+
+  _AsyncMutex _lockOf(String uri) =>
+      _pdfLocks.putIfAbsent(uri, () => _AsyncMutex());
+
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
   final Map<String, PdfDocument> _pdfCache = {};
 
@@ -28,9 +35,8 @@ class AndroidFolderRepository implements MediaRepository {
   // ==============================
 
   Future<String?> _safPickTreeUri() async {
-    // ディレクトリ選択（SAF UI）
     final dir = await DocMan.pick.directory();
-    return dir?.uri; // content://.../tree/...
+    return dir?.uri;
   }
 
   Future<List<_SafEntry>> _safListRecursive(String treeUri) async {
@@ -82,15 +88,21 @@ class AndroidFolderRepository implements MediaRepository {
     if (doc == null) {
       throw Exception('DocumentFile.fromUri failed: $documentUri');
     }
-    if (doc.isDirectory == true) {
-      throw Exception('Tried to read directory as file: $documentUri');
-    }
 
+    // 1) まず read()
     final bytes = await doc.read(); // Uint8List?
-    if (bytes == null || bytes.isEmpty) {
-      throw Exception('read() returned null/empty: $documentUri');
+    if (bytes != null && bytes.isNotEmpty) return bytes;
+
+    // 2) ダメなら cache() → File.readAsBytes()
+    final cached = await doc.cache();
+    if (cached == null) {
+      throw Exception('read() empty and cache() failed: $documentUri');
     }
-    return bytes;
+    final fb = await cached.readAsBytes();
+    if (fb.isEmpty) {
+      throw Exception('cached file is empty: $documentUri');
+    }
+    return fb;
   }
 
   // ==============================
@@ -160,7 +172,7 @@ class AndroidFolderRepository implements MediaRepository {
     final doc = await _openPdf(item.id);
     final total = doc.pagesCount;
     final p = page.clamp(1, total);
-    return _renderPage(doc, p, maxWidth);
+    return _renderPage(item.id, doc, p, maxWidth);
   }
 
   @override
@@ -197,46 +209,51 @@ class AndroidFolderRepository implements MediaRepository {
     final pageCount = doc.pagesCount;
     final mid = (pageCount / 2).ceil().clamp(1, pageCount);
 
-    final front = await _renderPage(doc, 1, maxWidth);
+    final front = await _renderPage(item.id, doc, 1, maxWidth);
     Uint8List? back;
     if (pageCount >= 2) {
-      back = await _renderPage(doc, mid, maxWidth);
+      back = await _renderPage(item.id, doc, mid, maxWidth);
     }
     return ThumbPair(front: front, back: back);
   }
 
-  Future<PdfDocument> _openPdf(String documentUri) async {
-    final cached = _pdfCache[documentUri];
-    if (cached != null) return cached;
+  Future<PdfDocument> _openPdf(String documentUri) {
+    return _lockOf(documentUri).synchronized(() async {
+      final cached = _pdfCache[documentUri];
+      if (cached != null) return cached;
 
-    final bytes = await _safReadBytes(documentUri);
-    final doc = await PdfDocument.openData(bytes);
+      final bytes = await _safReadBytes(documentUri);
+      final doc = await PdfDocument.openData(bytes);
 
-    _pdfCache[documentUri] = doc;
-    return doc;
+      _pdfCache[documentUri] = doc;
+      return doc;
+    });
   }
 
   Future<Uint8List> _renderPage(
+    String documentUri,
     PdfDocument doc,
     int pageNumber,
     int maxWidth,
-  ) async {
-    final page = await doc.getPage(pageNumber);
+  ) {
+    return _lockOf(documentUri).synchronized(() async {
+      final page = await doc.getPage(pageNumber);
 
-    final scale = maxWidth / page.width;
-    final double w = maxWidth.toDouble();
-    final double h = (page.height * scale);
+      final scale = maxWidth / page.width;
+      final double w = maxWidth.toDouble();
+      final double h = (page.height * scale);
 
-    final img = await page.render(
-      width: w,
-      height: h,
-      format: PdfPageImageFormat.png,
-    );
+      final img = await page.render(
+        width: w,
+        height: h,
+        format: PdfPageImageFormat.png,
+      );
 
-    await page.close();
+      await page.close();
 
-    if (img == null) throw Exception('PDF render failed (page=$pageNumber)');
-    return img.bytes;
+      if (img == null) throw Exception('PDF render failed (page=$pageNumber)');
+      return img.bytes;
+    });
   }
 
   Future<void> dispose() async {
@@ -324,4 +341,22 @@ Future<Uint8List> _makeImageThumb(Uint8List src, int targetWidth) async {
   if (byteData == null) return src;
 
   return byteData.buffer.asUint8List();
+}
+
+class _AsyncMutex {
+  Future<void> _last = Future.value();
+
+  Future<T> synchronized<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+
+    _last = _last.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+
+    return completer.future;
+  }
 }

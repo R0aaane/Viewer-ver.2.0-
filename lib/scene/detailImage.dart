@@ -505,7 +505,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               ),
               if (_inReader) ...[
                 const SizedBox(width: 8),
-                _topReaderControls(),
+                Flexible(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      reverse: true, // 右端（操作側）を見せやすくする
+                      child: _topReaderControls(),
+                    ),
+                  ),
+                ),
               ],
             ],
           ),

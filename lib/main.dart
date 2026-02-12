@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'scene/gridGallery.dart';
-import 'repository/folderRepository.dart';
+import 'repository/repositoryFactory.dart'; // ★追加
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
 }
 
@@ -12,10 +13,10 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = WindowsFolderRepository();
+    final repo = createRepository(); // ★WindowsFolderRepository() をやめる
 
     return MaterialApp(
-      title: 'Media Viewer (Windows)',
+      title: 'Media Viewer',
       theme: ThemeData(
         brightness: Brightness.dark,
         useMaterial3: true,
