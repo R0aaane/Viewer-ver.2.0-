@@ -22,8 +22,6 @@ class _PrefsKeys {
 
   static const String favorites = 'prefs.favorites'; // List<String>
 
-  /// json map: { "<MediaItem.id>": ["tag1","tag2", ...] }
-  static const String tagsJson = 'prefs.tagsJson';
 }
 
 class ImageDetailPage extends StatefulWidget {
