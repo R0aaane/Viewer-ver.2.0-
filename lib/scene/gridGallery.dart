@@ -107,6 +107,58 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _favoriteItemsAll = const [];
   bool _loadingFavAll = false;
 
+    // ---- 複数選択モード ----
+  bool _selectMode = false;
+  final Set<String> _selectedIds = <String>{};
+
+  void _exitSelectMode() {
+    setState(() {
+      _selectMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelect(MediaItem item) {
+    setState(() {
+      if (_selectedIds.contains(item.id)) {
+        _selectedIds.remove(item.id);
+        if (_selectedIds.isEmpty) _selectMode = false;
+      } else {
+        _selectedIds.add(item.id);
+        _selectMode = true;
+      }
+    });
+  }
+
+  void _enterSelectMode(MediaItem item) {
+    setState(() {
+      _selectMode = true;
+      _selectedIds.add(item.id);
+    });
+  }
+
+  void _selectAll(List<MediaItem> view) {
+    setState(() {
+      _selectMode = true;
+      _selectedIds
+        ..clear()
+        ..addAll(view.map((e) => e.id));
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedIds.clear();
+      _selectMode = false;
+    });
+  }
+
+  List<MediaItem> _selectedFrom(List<MediaItem> view) {
+    if (_selectedIds.isEmpty) return const [];
+    return view.where((e) => _selectedIds.contains(e.id)).toList(growable: false);
+  }
+
+
   // TabController listenerを二重登録しないため
   bool _tabListenerInstalled = false;
 
@@ -775,6 +827,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       ),
                       onTap: () async {
                         await _switchFolder(raw);
+                        _exitSelectMode();
                         setState(() => _page = _MainPage.gallery);
                       },
                     );
@@ -1343,6 +1396,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               selected: _page == _MainPage.home,
               onTap: () {
                 Navigator.pop(context);
+                _exitSelectMode();
                 setState(() => _page = _MainPage.home);
               },
             ),
@@ -1355,10 +1409,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
                 // フォルダ未選択ならホームで案内（またはフォルダ追加）
                 if (_currentFolderRaw == null) {
+                  _exitSelectMode();
                   setState(() => _page = _MainPage.home);
                   return;
                 }
-
+                _exitSelectMode();
                 setState(() => _page = _MainPage.gallery);
               },
             ),
@@ -1512,7 +1567,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
             IconButton(
               tooltip: '検索結果(ギャラリー)',
-              onPressed: () => setState(() => _page = _MainPage.search),
+              onPressed: () {
+                _exitSelectMode();
+                setState(() => _page = _MainPage.search);
+              },
               icon: const Icon(Icons.grid_view),
             ),
           ],
@@ -1527,23 +1585,50 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         drawer: _buildSidebar(),
         appBar: AppBar(
           title: const Text('検索結果'),
-          actions: [
-            IconButton(
-              tooltip: 'ホームへ',
-              onPressed: () => setState(() => _page = _MainPage.home),
-              icon: const Icon(Icons.home_outlined),
-            ),
-            IconButton(
-              tooltip: 'ギャラリーへ',
-              onPressed: () => setState(() => _page = _MainPage.gallery),
-              icon: const Icon(Icons.photo_library_outlined),
-            ),
-            IconButton(
-              tooltip: '検索結果に一括タグ付与',
-              onPressed: () => _bulkAddTagToItems(_homeSearchResults),
-              icon: const Icon(Icons.label_outline),
-            ),
-          ],
+          actions: _selectMode
+              ? [
+                  IconButton(
+                    tooltip: '選択解除',
+                    onPressed: _exitSelectMode,
+                    icon: const Icon(Icons.close),
+                  ),
+                  IconButton(
+                    tooltip: '全選択',
+                    onPressed: () => _selectAll(_homeSearchResults),
+                    icon: const Icon(Icons.select_all),
+                  ),
+                  IconButton(
+                    tooltip: 'クリア',
+                    onPressed: _clearSelection,
+                    icon: const Icon(Icons.clear_all),
+                  ),
+                  IconButton(
+                    tooltip: '選択に一括タグ付与',
+                    onPressed: () {
+                      final targets = _selectedFrom(_homeSearchResults);
+                      _bulkAddTagToItems(targets);
+                    },
+                    icon: const Icon(Icons.label_outline),
+                  ),
+                ]
+              : [
+                  IconButton(
+                    tooltip: 'ホームへ',
+                    onPressed: () {
+                      _exitSelectMode();
+                      setState(() => _page = _MainPage.home);
+                    },
+                    icon: const Icon(Icons.home_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'ギャラリーへ',
+                    onPressed: () {
+                      _exitSelectMode();
+                      setState(() => _page = _MainPage.gallery);
+                    },
+                    icon: const Icon(Icons.photo_library_outlined),
+                  ),
+                ],
         ),
         body: _buildHomeSearchGalleryBody(),
       );
@@ -1575,37 +1660,71 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              actions: [
-                IconButton(
-                  tooltip: 'フォルダ追加',
-                  onPressed: _addFolder,
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                ),
-                IconButton(
-                  tooltip: 'ホームへ',
-                  onPressed: () => setState(() => _page = _MainPage.home),
-                  icon: const Icon(Icons.home_outlined),
-                ),
-                IconButton(
-                  tooltip: '表示中に一括タグ付与',
-                  onPressed: () {
-                    // タブの表示内容と同じ対象に付与する
-                    final idx = tc.index;
-                    final List<MediaItem> targets;
-                    if (idx == 0) {
-                      targets = _applyFilter(_items, pdfOnly: null);
-                    } else if (idx == 1) {
-                      targets = _applyFilter(_items, pdfOnly: false);
-                    } else if (idx == 2) {
-                      targets = _applyFilter(_items, pdfOnly: true);
-                    } else {
-                      targets = _favoriteItemsAll;
-                    }
-                    _bulkAddTagToItems(targets);
-                  },
-                  icon: const Icon(Icons.label_outline),
-                ),
-              ],
+              actions: _selectMode
+                  ? [
+                      IconButton(
+                        tooltip: '選択解除',
+                        onPressed: _exitSelectMode,
+                        icon: const Icon(Icons.close),
+                      ),
+                      IconButton(
+                        tooltip: '全選択（現在タブ）',
+                        onPressed: () {
+                          final idx = tc.index;
+                          final List<MediaItem> view;
+                          if (idx == 0) {
+                            view = _applyFilter(_items, pdfOnly: null);
+                          } else if (idx == 1) {
+                            view = _applyFilter(_items, pdfOnly: false);
+                          } else if (idx == 2) {
+                            view = _applyFilter(_items, pdfOnly: true);
+                          } else {
+                            view = _favoriteItemsAll;
+                          }
+                          _selectAll(view);
+                        },
+                        icon: const Icon(Icons.select_all),
+                      ),
+                      IconButton(
+                        tooltip: 'クリア',
+                        onPressed: _clearSelection,
+                        icon: const Icon(Icons.clear_all),
+                      ),
+                      IconButton(
+                        tooltip: '選択に一括タグ付与',
+                        onPressed: () {
+                          final idx = tc.index;
+                          final List<MediaItem> view;
+                          if (idx == 0) {
+                            view = _applyFilter(_items, pdfOnly: null);
+                          } else if (idx == 1) {
+                            view = _applyFilter(_items, pdfOnly: false);
+                          } else if (idx == 2) {
+                            view = _applyFilter(_items, pdfOnly: true);
+                          } else {
+                            view = _favoriteItemsAll;
+                          }
+                          final targets = _selectedFrom(view);
+                          _bulkAddTagToItems(targets);
+                        },
+                        icon: const Icon(Icons.label_outline),
+                      ),
+                    ]
+                  : [
+                      IconButton(
+                        tooltip: 'フォルダ追加',
+                        onPressed: _addFolder,
+                        icon: const Icon(Icons.create_new_folder_outlined),
+                      ),
+                      IconButton(
+                        tooltip: 'ホームへ',
+                        onPressed: () {
+                          _exitSelectMode();
+                          setState(() => _page = _MainPage.home);
+                        },
+                        icon: const Icon(Icons.home_outlined),
+                      ),
+                    ],
               bottom: PreferredSize(
                 // 検索(約56) + ソート(約40) + TabBar(約48) + 余白 = 160前後は必要
                 preferredSize: const Size.fromHeight(160),
@@ -1887,10 +2006,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       itemBuilder: (context, i) {
         final item = items[i];
         final isFav = _favorites.contains(item.id);
+        final selected = _selectedIds.contains(item.id);
 
         return InkWell(
+          onLongPress: () {
+            if (!_selectMode) {
+              _enterSelectMode(item);
+            } else {
+              _toggleSelect(item);
+            }
+          },
           onTap: () async {
-            // 表示自体は「全アイテム基準」で前後移動できるようにする
+            if (_selectMode) {
+              _toggleSelect(item);
+              return;
+            }
+
+            // 通常タップ：詳細へ
             final index = _items.indexOf(item);
 
             final changed = await Navigator.push<bool>(
@@ -1906,7 +2038,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               ),
             );
 
-            // 詳細側で★が変わった場合、同期
             if (changed == true) {
               await _reloadFavorites();
               await _reloadTags();
@@ -1918,6 +2049,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             isFavorite: isFav,
             subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
             onToggleFavorite: () => _toggleFavorite(item),
+            selected: selected,
           ),
         );
       },
@@ -1942,15 +2074,29 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         final item = items[i];
         final isFav = _favorites.contains(item.id);
 
+                final selected = _selectedIds.contains(item.id);
+
         return InkWell(
+          onLongPress: () {
+            if (!_selectMode) {
+              _enterSelectMode(item);
+            } else {
+              _toggleSelect(item);
+            }
+          },
           onTap: () async {
+            if (_selectMode) {
+              _toggleSelect(item);
+              return;
+            }
+
             final changed = await Navigator.push<bool>(
               context,
               MaterialPageRoute(
                 builder: (_) => ImageDetailPage(
                   repo: widget.repo,
                   tagService: widget.tagService,
-                  items: items,          // ★ここが重要：検索結果リスト基準
+                  items: items,
                   initialIndex: i,
                   initialPdfPage: 1,
                 ),
@@ -1968,6 +2114,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             isFavorite: isFav,
             subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
             onToggleFavorite: () => _toggleFavorite(item),
+            selected: selected,
           ),
         );
       },
@@ -1982,9 +2129,9 @@ class _ThumbTile extends StatelessWidget {
   final MediaRepository repo;
   final MediaItem item;
   final String? subtitle;
-
   final bool isFavorite;
   final VoidCallback onToggleFavorite;
+  final bool selected;
 
   const _ThumbTile({
     required this.repo,
@@ -1992,6 +2139,7 @@ class _ThumbTile extends StatelessWidget {
     this.subtitle,
     required this.isFavorite,
     required this.onToggleFavorite,
+    this.selected = false,
   });
 
   @override
@@ -2025,6 +2173,15 @@ class _ThumbTile extends StatelessWidget {
               ),
               if (item.kind == MediaKind.pdf)
                 const Positioned(top: 8, right: 8, child: _PdfBadge()),
+              if (selected)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black.withOpacity(0.35),
+                  alignment: Alignment.topRight,
+                  padding: const EdgeInsets.all(8),
+                  child: const Icon(Icons.check_circle, size: 26),
+                ),
+              ),
             ],
           ),
         );
