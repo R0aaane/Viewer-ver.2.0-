@@ -18,7 +18,7 @@ import 'detailImage.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
 
-enum _MainPage { home, gallery }
+enum _MainPage { home, gallery, search }
 
 class _PrefsKeys {
   // 旧キー（移行用に残す）
@@ -787,6 +787,26 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  Widget _buildHomeSearchGalleryBody() {
+    if (_homeSearching) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final q = _homeQuery.trim();
+    if (q.isEmpty) {
+      return const Center(child: Text('Homeの検索欄にキーワード（タイトル/タグ/#tag）を入力してください。'));
+    }
+
+    if (_homeSearchResults.isEmpty) {
+      return const Center(child: Text('該当するアイテムがありません'));
+    }
+
+    // ★ Home検索結果は「全フォルダ」なので、_items（現在フォルダ）を使わず
+    // 検索結果リストをそのまま渡して詳細で前後移動できるようにする
+    return _buildGridFromList(_homeSearchResults, showFolderLabel: true);
+  }
+
+
   // --------------------
   // フォルダ表示名設定
   // --------------------
@@ -1490,11 +1510,40 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               onPressed: _refreshAllFavoritesItems,
               icon: const Icon(Icons.star),
             ),
+            IconButton(
+              tooltip: '検索結果(ギャラリー)',
+              onPressed: () => setState(() => _page = _MainPage.search),
+              icon: const Icon(Icons.grid_view),
+            ),
           ],
         ),
         body: _buildHomeBody(),
       );
     }
+
+    // ★ 検索結果（Home検索のギャラリー表示）
+    if (_page == _MainPage.search) {
+      return Scaffold(
+        drawer: _buildSidebar(),
+        appBar: AppBar(
+          title: const Text('検索結果'),
+          actions: [
+            IconButton(
+              tooltip: 'ホームへ',
+              onPressed: () => setState(() => _page = _MainPage.home),
+              icon: const Icon(Icons.home_outlined),
+            ),
+            IconButton(
+              tooltip: 'ギャラリーへ',
+              onPressed: () => setState(() => _page = _MainPage.gallery),
+              icon: const Icon(Icons.photo_library_outlined),
+            ),
+          ],
+        ),
+        body: _buildHomeSearchGalleryBody(),
+      );
+    }
+
 
     // ★ ギャラリー画面（あなたの既存）
     return DefaultTabController(
@@ -1713,7 +1762,60 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       },
     );
   }
+
+  Widget _buildGridFromList(List<MediaItem> items, {bool showFolderLabel = false}) {
+    if (items.isEmpty) {
+      return const Center(child: Text('該当するアイテムがありません'));
+    }
+  
+    return GridView.builder(
+      padding: const EdgeInsets.all(12),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 220,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        childAspectRatio: 0.75,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, i) {
+        final item = items[i];
+        final isFav = _favorites.contains(item.id);
+  
+        return InkWell(
+          onTap: () async {
+            final changed = await Navigator.push<bool>(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ImageDetailPage(
+                  repo: widget.repo,
+                  tagService: widget.tagService,
+                  items: items,          // ★ここが重要：検索結果リスト基準
+                  initialIndex: i,
+                  initialPdfPage: 1,
+                ),
+              ),
+            );
+  
+            if (changed == true) {
+              await _reloadFavorites();
+              await _reloadTags();
+            }
+          },
+          child: _ThumbTile(
+            repo: widget.repo,
+            item: item,
+            isFavorite: isFav,
+            subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+            onToggleFavorite: () => _toggleFavorite(item),
+          ),
+        );
+      },
+    );
+  }
+
 }
+
+
 
 class _ThumbTile extends StatelessWidget {
   final MediaRepository repo;
