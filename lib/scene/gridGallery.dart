@@ -10,6 +10,7 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 import '../database/tag_service.dart';
+import '../models/tag.dart';
 
 import 'detailImage.dart';
 
@@ -75,15 +76,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
   bool _twoPage = false;
 
-  final TextEditingController _searchCtrl = TextEditingController();
-
+  
   // --- ホーム画面検索 (すべてのフォルダを参照) ---
   final TextEditingController _homeSearchCtrl = TextEditingController();
   String _homeQuery = '';
   bool _homeSearching = false;
   List<MediaItem> _homeSearchResults = const [];
 
+
+  final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
+  List<MediaItem> _filteredItems = const [];
 
   _SortMode _sortMode = _SortMode.name;
 
@@ -97,12 +100,62 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   // TabController listenerを二重登録しないため
   bool _tabListenerInstalled = false;
-
+  
   @override
   void initState() {
     super.initState();
     _loadPrefsAndAutoOpenFolder();
   }
+  
+  Future<void> _applySearchFilterDb() async {
+  final q = _query.trim();
+
+  if (q.isEmpty) {
+    setState(() => _filteredItems = _items);
+    return;
+  }
+
+  // 形式: key:value
+  final idx = q.indexOf(':');
+  if (idx > 0) {
+    final key = q.substring(0, idx).trim().toLowerCase();
+    final value = q.substring(idx + 1).trim();
+    if (value.isNotEmpty) {
+      TagCategory? cat;
+      if (key == 'artist') cat = TagCategory.artist;
+      if (key == 'type') cat = TagCategory.mediaType;
+      if (key == 'series') cat = TagCategory.series;
+      if (key == 'character') cat = TagCategory.character;
+
+      if (cat != null) {
+        // folderRaw は現在表示中フォルダの値に合わせてください
+        // _currentFolderRaw などがあるならそれを使う
+        final folderRaw = _currentFolderRaw!;
+        final ids = await widget.tagService.findItemIdsByTag(
+          folderRaw: folderRaw,
+          category: cat,
+          name: value,
+          partial: true,
+        );
+
+        final idSet = ids.toSet();
+        final filtered = _items.where((it) => idSet.contains(it.id)).toList();
+        if (!mounted) return;
+        setState(() => _filteredItems = filtered);
+        return;
+      }
+    }
+  }
+
+  // fallback: ファイル名部分一致
+  final lower = q.toLowerCase();
+  final filtered = _items
+      .where((it) => it.displayName.toLowerCase().contains(lower))
+      .toList();
+
+  setState(() => _filteredItems = filtered);
+}
+
 
   Future<void> _loadPrefsAndAutoOpenFolder() async {
     final prefs = await SharedPreferences.getInstance();
@@ -397,8 +450,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                             ),
                     ),
                     onChanged: (v) {
-                      setState(() => _homeQuery = v);
-                      _runHomeSearch();
+                      setState(() => _query = v);
+                      _applySearchFilterDb();
                     },
                   ),
                 ),
@@ -950,8 +1003,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (!mounted) return;
     setState(() {
       _items = items;
+     _filteredItems = items; // ★追加
       _loading = false;
     });
+    _applySearchFilterDb(); // ★検索中なら反映
     _folderItemsCache[folder.raw] = _items;
     await _refreshAllFavoritesItems();
   }
@@ -1427,6 +1482,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                     onPressed: () {
                                       _searchCtrl.clear();
                                       setState(() => _query = '');
+                                      _applySearchFilterDb();
                                     },
                                   ),
                           ),
