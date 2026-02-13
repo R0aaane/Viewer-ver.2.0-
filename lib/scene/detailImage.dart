@@ -67,6 +67,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   List<TagWithId> _tags = const [];
   bool _tagsChanged = false;
 
+  // master tagのキャッシュ
+  List<TagWithId> _masterTags = const [];
+  bool _masterLoading = false;
+
+
   TagCategory _selectedCategory = TagCategory.free;
   final TextEditingController _tagCtrl = TextEditingController();
   bool _tagsLoading = false;
@@ -203,6 +208,18 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     return t;
   }
 
+  Future<void> _loadMasterTags() async {
+  setState(() => _masterLoading = true);
+  try {
+    final list = await widget.tagService.listTagMasterByCategory(_selectedCategory);
+    if (!mounted) return;
+    setState(() => _masterTags = list);
+  } finally {
+    if (mounted) setState(() => _masterLoading = false);
+  }
+  }
+
+
   Future<void> _loadTagsForCurrent() async {
     setState(() => _tagsLoading = true);
     try {
@@ -213,6 +230,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       if (mounted) setState(() => _tagsLoading = false);
     }
   }
+
+  Future<void> _addExistingMasterTag(TagWithId t) async {
+  await widget.tagService.addTagToItem(_item, t.tag);
+  _tagsChanged = true;
+  await _loadTagsForCurrent();    
+  }
+
 
   Future<void> _addTagFromUi() async {
     final raw = _tagCtrl.text;
@@ -290,6 +314,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       }
     });
     await _loadTagsForCurrent();
+    await _loadMasterTags();
   }
 
   void _next() {
@@ -699,56 +724,79 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           _infoRow('ID', item.id),
           // --- Tags ---
           const SizedBox(height: 10),
-         Row ( 
-          children: [
-            DropdownButton<TagCategory>(
-              value: _selectedCategory,
-              items: const [
-                DropdownMenuItem(
-                  value: TagCategory.artist,
-                  child: Text('作者'),
-                ),
-                DropdownMenuItem(
-                  value: TagCategory.series,
-                  child: Text('オリジナル/二次'),
-                ),
-                DropdownMenuItem(
-                  value: TagCategory.mediaType,
-                  child: Text('形式'),
-                ),
-                DropdownMenuItem(
-                  value: TagCategory.character,
-                  child: Text('キャラ'),
-                ),
-                DropdownMenuItem(
-                  value: TagCategory.free,
-                  child: Text('自動'),
-                ),
-              ],
-              onChanged: (v) {
+         LayoutBuilder(
+          builder: (context, c) {
+            final narrow = c.maxWidth < 520;
+        
+            final categoryField = DropdownButtonHideUnderline(
+              child: DropdownButton<TagCategory>(
+                value: _selectedCategory,
+                isDense: true,
+                items: const [
+                  DropdownMenuItem(value: TagCategory.artist, child: Text('作者')),
+                  DropdownMenuItem(value: TagCategory.series, child: Text('オリジナル/二次')),
+                  DropdownMenuItem(value: TagCategory.mediaType, child: Text('形式(漫画/イラスト)')),
+                  DropdownMenuItem(value: TagCategory.character, child: Text('キャラ')),
+                  DropdownMenuItem(value: TagCategory.free, child: Text('自由')),
+                ],
+                onChanged: (v) async {
                   if (v == null) return;
                   setState(() => _selectedCategory = v);
+                  await _loadMasterTags(); // ★候補をカテゴリごとに更新
                 },
-            ),
-            const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  controller: _tagCtrl,
-                  decoration: const InputDecoration(
-                    hintText: 'タグ（#不要 / 空白なし）',
-                    isDense: true,
-                    border: OutlineInputBorder(),
+              ),
+            );
+        
+            final inputField = TextField(
+              controller: _tagCtrl,
+              decoration: const InputDecoration(
+                hintText: 'タグ（#不要 / 空白なし）',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _addTagFromUi(),
+            );
+        
+            final addButton = FilledButton.icon(
+              onPressed: _addTagFromUi,
+              icon: const Icon(Icons.add),
+              label: const Text('追加'),
+            );
+        
+            if (!narrow) {
+              // 広い画面：横並び
+              return Row(
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 180),
+                    child: categoryField,
                   ),
-                  onSubmitted: (_) => _addTagFromUi(),
+                  const SizedBox(width: 8),
+                  Expanded(child: inputField),
+                  const SizedBox(width: 8),
+                  addButton,
+                ],
+              );
+            }
+        
+            // 狭い画面（Android想定）：縦積みで overflow 回避
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                categoryField,
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: inputField),
+                    const SizedBox(width: 8),
+                    addButton,
+                  ],
                 ),
-              ),
-               const SizedBox(width: 8),
-              FilledButton(
-                onPressed: _addTagFromUi,
-                child: const Text('追加'),
-              ),
-          ],
-         ),
+              ],
+            );
+          },
+        ),
+
          const SizedBox(height: 10),
 
          if (_tagsLoading)

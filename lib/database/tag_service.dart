@@ -138,7 +138,38 @@ class TagService {
   await (_db.delete(_db.mediaItemTags)
         ..where((x) => x.itemId.equals(itemId) & x.tagId.equals(tagId)))
       .go();
-}
+  }
+  /// カテゴリ内のタグ候補（マスター）を一覧取得
+  Future<List<TagWithId>> listTagMasterByCategory(
+    model.TagCategory category, {
+    String? contains, // 絞り込み用（任意）
+    int limit = 200,
+  }) async {
+    final cat = _categoryToInt(category);
+  
+    final q = _db.select(_db.tags)
+      ..where((t) => t.category.equals(cat))
+      ..orderBy([(t) => OrderingTerm.asc(t.name)])
+      ..limit(limit);
+  
+    if (contains != null && contains.trim().isNotEmpty) {
+      final s = contains.trim();
+      q.where((t) => t.name.like('%$s%'));
+    }
+  
+    final rows = await q.get();
+    return rows
+        .map((t) => TagWithId(tagId: t.tagId, tag: model.Tag(name: t.name, category: _intToCategory(t.category))))
+        .toList(growable: false);
+  }
+  
+  /// マスタータグを削除（使っているアイテムがあっても消したい場合用）
+  Future<void> deleteTagMaster(int tagId) async {
+    await _db.transaction(() async {
+      await (_db.delete(_db.mediaItemTags)..where((x) => x.tagId.equals(tagId))).go();
+      await (_db.delete(_db.tags)..where((x) => x.tagId.equals(tagId))).go();
+    });
+  }
 
 
 }
