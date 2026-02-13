@@ -96,6 +96,42 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   static const _uiBar = Color(0xFF1F1F1F);
   static const _uiChip = Color(0xFF2B2B2B);
 
+  String _basename(String raw) {
+    if (raw.trim().isEmpty) return raw;
+  
+    // Windowsパスなら最後の要素
+    if (raw.contains('\\') || raw.contains('/')) {
+      var s = raw.replaceAll('\\', '/');
+      final slash = s.lastIndexOf('/');
+      if (slash >= 0 && slash + 1 < s.length) return s.substring(slash + 1);
+      return s;
+    }
+  
+    // Android treeUri / documentUri など content:// の場合
+    try {
+      var s = raw;
+  
+      // 1) %デコード（複数回されてるケースもあるので最大3回）
+      for (int i = 0; i < 3; i++) {
+        if (!s.contains('%')) break;
+        s = Uri.decodeComponent(s);
+      }
+  
+      // 2) primary: などのボリューム名を落とす
+      final colon = s.indexOf(':');
+      if (colon >= 0) s = s.substring(colon + 1);
+  
+      // 3) 最後のパス要素だけ
+      s = s.replaceAll('\\', '/');
+      final slash = s.lastIndexOf('/');
+      if (slash >= 0) s = s.substring(slash + 1);
+  
+      return s.trim().isEmpty ? raw : s.trim();
+    } catch (_) {
+      return raw;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -733,7 +769,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             const SizedBox(height: 8),
             if (_isPdf) _infoRow('ページ', '$_totalPages'),
             const SizedBox(height: 8),
-            _infoRow('ID', item.id),
+            _infoRow('フォルダ', _basename(item.folderRaw)),
 
             // --- Tags ---
             const SizedBox(height: 10),

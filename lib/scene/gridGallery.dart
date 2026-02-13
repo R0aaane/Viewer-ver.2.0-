@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
+
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -83,6 +85,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _homeSearching = false;
   List<MediaItem> _homeSearchResults = const [];
 
+  // 入力のたびに重い全フォルダ検索が走るのを防ぐ
+  Timer? _homeSearchDebounce;
+
+  // Home検索用：DBから引いたタグキャッシュ（itemId -> tagNames）
+  Map<String, List<String>> _dbTagsByItemId = <String, List<String>>{};
+
+
 
   final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
@@ -100,6 +109,25 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   // TabController listenerを二重登録しないため
   bool _tabListenerInstalled = false;
+
+
+  //ID 変種生成
+  Set<String> _idVariants(String id) {
+  final s = <String>{id};
+
+  // slash 揺れ（Windowsで頻出）
+  s.add(id.replaceAll('/', '\\'));
+  s.add(id.replaceAll('\\', '/'));
+
+  // Windowsはケース無視が多いので lower も混ぜる（DB側がどっちで保存されていても拾える）
+  final lower = id.toLowerCase();
+  s.add(lower);
+  s.add(lower.replaceAll('/', '\\'));
+  s.add(lower.replaceAll('\\', '/'));
+
+  return s;
+}
+
   
   @override
   void initState() {
@@ -302,16 +330,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     // 空白区切りAND
     final tokens = q.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
     final name = item.displayName.toLowerCase();
-    final tags = _tagsFor(
-      item,
-    ).map((e) => e.toLowerCase()).toList(growable: false);
+
+    final tags = (_dbTagsByItemId[item.id] ??
+        _dbTagsByItemId[item.id.toLowerCase()] ??
+        _dbTagsByItemId[item.id.replaceAll('/', '\\')] ??
+        _dbTagsByItemId[item.id.replaceAll('\\', '/')] ??
+        const <String>[])
+        .map((e) => e.toLowerCase())
+        .toList(growable: false);
 
     bool matchToken(String t) {
+      // #tag はタグのみ対象
       if (t.startsWith('#')) {
         final needle = t.substring(1);
         if (needle.isEmpty) return true;
         return tags.any((x) => x.contains(needle));
       }
+
+      // 通常は ファイル名 or タグ
       return name.contains(t) || tags.any((x) => x.contains(t));
     }
 
@@ -320,6 +356,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
     return true;
   }
+
 
   Future<void> _runHomeSearch() async {
     final q = _homeQuery.trim();
@@ -353,9 +390,29 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         all.addAll(list);
       }
 
+      // ★ IDの揺れに強いように variants も含めてDBへ問い合わせる
+      final idSet = <String>{};
+      for (final it in all) {
+        idSet.addAll(_idVariants(it.id));
+      }
+      final ids = idSet.toList(growable: false);
+
+      final rawMap = await widget.tagService.getTagNamesByItemIds(ids);
+
+      // ★ 取得結果も variants へ展開しておく（lookup時に確実に当てる）
+      final expanded = <String, List<String>>{};
+      rawMap.forEach((k, v) {
+        for (final vv in _idVariants(k)) {
+          expanded[vv] = v;
+        }
+      });
+
+      _dbTagsByItemId = expanded;
+
       final filtered = all
           .where((e) => _matchHomeQuery(e, q))
           .toList(growable: false);
+
 
       // 見やすさ優先で名前順（必要なら _sortMode を使ってもOK）
       final sorted = filtered.toList(growable: true)
@@ -370,13 +427,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _homeSearching = false;
         _homeSearchResults = sorted.take(50).toList(growable: false); // 上限
       });
-    } catch (_) {
+    } catch (e, st) {
+      // ここが見えないと原因が永遠に分からないのでログに出す
+      // ignore: avoid_print
+      print('[HOME SEARCH] error: $e\n$st');
+    
       if (!mounted) return;
       setState(() {
         _homeSearching = false;
         _homeSearchResults = const [];
       });
+    
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Home検索でエラー: $e')),
+      );
     }
+
   }
 
   Widget _homeFavThumb(MediaItem item) {
@@ -450,9 +516,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                             ),
                     ),
                     onChanged: (v) {
-                      setState(() => _query = v);
-                      _applySearchFilterDb();
-                    },
+                    // ★ Home検索は _homeQuery を更新して Home検索を走らせる
+                    setState(() => _homeQuery = v);
+                  
+                    _homeSearchDebounce?.cancel();
+                    _homeSearchDebounce = Timer(
+                      const Duration(milliseconds: 250),
+                      () {
+                        if (!mounted) return;
+                        _runHomeSearch();
+                      },
+                    );
+                  },
+
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -932,6 +1008,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (changed == true) {
       await _reloadFavorites();
       await _refreshAllFavoritesItems();
+      if (_homeQuery.trim().isNotEmpty) {
+        await _runHomeSearch(); // ★タグ変更をHome検索に反映
+      }
     }
   }
 
@@ -1109,6 +1188,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   @override
   void dispose() {
+    _homeSearchDebounce?.cancel();
     _searchCtrl.dispose();
     _homeSearchCtrl.dispose();
     super.dispose();

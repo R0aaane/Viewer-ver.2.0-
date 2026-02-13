@@ -98,6 +98,35 @@ class TagService {
     }).toList(growable: false);
   }
 
+  /// 複数 itemId のタグ名一覧をまとめて取得（Home検索用）
+  Future<Map<String, List<String>>> getTagNamesByItemIds(List<String> itemIds) async {
+    final result = <String, List<String>>{};
+    if (itemIds.isEmpty) return result;
+
+    // SQLite の IN 句の上限対策（だいたい 900 くらいで刻む）
+    const chunkSize = 800;
+
+    for (int i = 0; i < itemIds.length; i += chunkSize) {
+      final chunk = itemIds.sublist(i, (i + chunkSize) > itemIds.length ? itemIds.length : (i + chunkSize));
+
+      final q = _db.select(_db.mediaItemTags).join([
+        innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
+      ])
+        ..where(_db.mediaItemTags.itemId.isIn(chunk));
+
+      final rows = await q.get();
+
+      for (final r in rows) {
+        final link = r.readTable(_db.mediaItemTags);
+        final t = r.readTable(_db.tags);
+        (result[link.itemId] ??= <String>[]).add(t.name);
+     }
+   }
+
+    return result;
+  }
+
+
   Future<List<String>> findItemIdsByTag({
     required String folderRaw,
     required model.TagCategory category,
@@ -139,7 +168,7 @@ class TagService {
         ..where((x) => x.itemId.equals(itemId) & x.tagId.equals(tagId)))
       .go();
   }
-  
+
   /// カテゴリ内のタグ候補（マスター）を一覧取得
   Future<List<TagWithId>> listTagMasterByCategory(
     model.TagCategory category, {
