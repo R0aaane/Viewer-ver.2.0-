@@ -126,7 +126,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   s.add(lower.replaceAll('\\', '/'));
 
   return s;
-}
+  }
 
   
   @override
@@ -182,7 +182,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       .toList();
 
   setState(() => _filteredItems = filtered);
-}
+  }
 
 
   Future<void> _loadPrefsAndAutoOpenFolder() async {
@@ -1538,6 +1538,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               onPressed: () => setState(() => _page = _MainPage.gallery),
               icon: const Icon(Icons.photo_library_outlined),
             ),
+            IconButton(
+              tooltip: '検索結果に一括タグ付与',
+              onPressed: () => _bulkAddTagToItems(_homeSearchResults),
+              icon: const Icon(Icons.label_outline),
+            ),
           ],
         ),
         body: _buildHomeSearchGalleryBody(),
@@ -1580,6 +1585,25 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   tooltip: 'ホームへ',
                   onPressed: () => setState(() => _page = _MainPage.home),
                   icon: const Icon(Icons.home_outlined),
+                ),
+                IconButton(
+                  tooltip: '表示中に一括タグ付与',
+                  onPressed: () {
+                    // タブの表示内容と同じ対象に付与する
+                    final idx = tc.index;
+                    final List<MediaItem> targets;
+                    if (idx == 0) {
+                      targets = _applyFilter(_items, pdfOnly: null);
+                    } else if (idx == 1) {
+                      targets = _applyFilter(_items, pdfOnly: false);
+                    } else if (idx == 2) {
+                      targets = _applyFilter(_items, pdfOnly: true);
+                    } else {
+                      targets = _favoriteItemsAll;
+                    }
+                    _bulkAddTagToItems(targets);
+                  },
+                  icon: const Icon(Icons.label_outline),
                 ),
               ],
               bottom: PreferredSize(
@@ -1709,6 +1733,143 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  String? _normalizeTagName(String raw) {
+    var t = raw.trim();
+    if (t.isEmpty) return null;
+    if (t.startsWith('#')) t = t.substring(1).trim();
+    if (t.isEmpty) return null;
+    // 空白は不可（検索トークン崩れ防止）
+    if (t.contains(RegExp(r'\s'))) return null;
+    return t;
+  }
+
+  String _categoryLabel(TagCategory c) {
+    switch (c) {
+      case TagCategory.artist:
+        return '作者';
+      case TagCategory.series:
+        return 'シリーズ';
+      case TagCategory.mediaType:
+        return '種別';
+      case TagCategory.character:
+        return 'キャラ';
+      case TagCategory.free:
+        return '自由';
+    }
+  }
+
+  Future<void> _bulkAddTagToItems(List<MediaItem> targets) async {
+    if (targets.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('対象がありません')),
+      );
+      return;
+    }
+
+    TagCategory cat = TagCategory.free;
+    final ctrl = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Text('一括タグ付与（${targets.length}件）'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<TagCategory>(
+                value: cat,
+                items: TagCategory.values
+                    .map((c) => DropdownMenuItem(
+                          value: c,
+                          child: Text(_categoryLabel(c)),
+                        ))
+                    .toList(growable: false),
+                onChanged: (v) => cat = v ?? TagCategory.free,
+                decoration: const InputDecoration(
+                  labelText: 'カテゴリ',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'タグ名',
+                  hintText: '例: #夏 / artist:xxx の「xxx」など',
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => Navigator.of(ctx).pop(true),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '※空白を含むタグは不可（検索の分解が崩れるため）',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('付与'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (ok != true) return;
+
+    final name = _normalizeTagName(ctrl.text);
+    if (name == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('タグが無効です（空白なしで入力してください）')),
+      );
+      return;
+    }
+
+    // 進捗ダイアログ
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      await widget.tagService.addTagToItems(
+        targets,
+        Tag(name: name, category: cat),
+      );
+
+      // Home検索用のタグキャッシュを更新（対象IDだけ取り直し）
+      final ids = targets.map((e) => e.id).toList(growable: false);
+      final got = await widget.tagService.getTagNamesByItemIds(ids);
+      if (!mounted) return;
+      setState(() {
+        for (final e in got.entries) {
+          _dbTagsByItemId[e.key] = e.value;
+        }
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('「$name」を${targets.length}件に付与しました')),
+      );
+    } finally {
+      // 進捗ダイアログを閉じる
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+  }
+
+
   Widget _buildGrid(List<MediaItem> items, {bool showFolderLabel = false}) {
     if (items.isEmpty) {
       return const Center(child: Text('該当するアイテムがありません'));
@@ -1767,7 +1928,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (items.isEmpty) {
       return const Center(child: Text('該当するアイテムがありません'));
     }
-  
+
     return GridView.builder(
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -1780,7 +1941,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       itemBuilder: (context, i) {
         final item = items[i];
         final isFav = _favorites.contains(item.id);
-  
+
         return InkWell(
           onTap: () async {
             final changed = await Navigator.push<bool>(
@@ -1795,7 +1956,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
               ),
             );
-  
+
             if (changed == true) {
               await _reloadFavorites();
               await _reloadTags();

@@ -201,6 +201,39 @@ class TagService {
     });
   }
 
+  /// 表示中など「複数アイテムに同じタグを一括付与」する（高速）
+  Future<void> addTagToItems(List<m.MediaItem> items, model.Tag tag) async {
+    if (items.isEmpty) return;
+
+    final tagId = await ensureTagId(tag);
+
+    // drift batch で高速に upsert + link insert(orIgnore)
+    await _db.batch((b) {
+      // media_items upsert
+      b.insertAllOnConflictUpdate(
+        _db.mediaItems,
+        items.map((it) {
+          return db.MediaItemsCompanion.insert(
+            id: it.id,
+            folderRaw: it.folderRaw,
+            displayName: it.displayName,
+            kind: _kindToInt(it.kind),
+            modifiedEpochMs: Value(it.modified?.millisecondsSinceEpoch),
+          );
+        }).toList(growable: false),
+      );
+
+      // link insert (ignore duplicates)
+      b.insertAll(
+        _db.mediaItemTags,
+        items.map((it) {
+          return db.MediaItemTagsCompanion.insert(itemId: it.id, tagId: tagId);
+        }).toList(growable: false),
+        mode: InsertMode.insertOrIgnore,
+      );
+    });
+  }
+
 
 }
 
