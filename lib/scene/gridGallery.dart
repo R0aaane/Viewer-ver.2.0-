@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
+import '../database/tag_service.dart';
+
 import 'detailImage.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
@@ -37,7 +39,9 @@ class _PrefsKeys {
 
 class GalleryGridPage extends StatefulWidget {
   final MediaRepository repo;
-  const GalleryGridPage({super.key, required this.repo});
+  final TagService tagService;
+  
+  const GalleryGridPage({super.key, required this.repo, required this.tagService});
 
   @override
   State<GalleryGridPage> createState() => _GalleryGridPageState();

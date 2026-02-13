@@ -1,19 +1,26 @@
 import 'package:flutter/material.dart';
 
 import 'scene/gridGallery.dart';
-import 'repository/repositoryFactory.dart'; // ★追加
+import 'repository/repositoryFactory.dart';
+
+import 'database/app_db.dart';
+import 'database/tag_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  final appDb = AppDb();
+  final tagService = TagService(appDb);
+
+  runApp(MyApp(tagService: tagService));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final TagService tagService;
+  const MyApp({super.key, required this.tagService});
 
   @override
   Widget build(BuildContext context) {
-    final repo = createRepository(); // ★WindowsFolderRepository() をやめる
+    final repo = createRepository(); 
 
     return MaterialApp(
       title: 'Media Viewer',
@@ -26,7 +33,7 @@ class MyApp extends StatelessWidget {
           foregroundColor: Colors.white,
         ),
       ),
-      home: GalleryGridPage(repo: repo),
+      home: GalleryGridPage(repo: repo, tagService: tagService),
     );
   }
 }
