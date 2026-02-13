@@ -180,11 +180,63 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   return s;
   }
 
+  // ---- サイドバー：作者タグ一覧 ----
+  bool _loadingArtistTags = false;
+  List<TagWithId> _artistTagMasters = const [];
+  Map<String, int> _tagCountCache = const {}; // tagName(lower) -> count
+
+  Future<void> _reloadArtistTagMasters() async {
+    setState(() => _loadingArtistTags = true);
+    try {
+      final list = await widget.tagService.listTagMasterByCategory(TagCategory.artist);
+      if (!mounted) return;
+      setState(() => _artistTagMasters = list);
+      _rebuildTagCountCache(); // 件数更新
+    } finally {
+      if (mounted) setState(() => _loadingArtistTags = false);
+    }
+  }
+
+  void _rebuildTagCountCache() {
+    // 既に読み込んだフォルダ分だけで件数を作る（未ロード分は0になる）
+    final map = <String, int>{};
+
+    for (final raw in _foldersRaw) {
+      final items = _folderItemsCache[raw] ?? const <MediaItem>[];
+      for (final it in items) {
+        final tags = _dbTagsByItemId[it.id] ?? const <String>[];
+        for (final t in tags) {
+          final key = t.toLowerCase();
+          map[key] = (map[key] ?? 0) + 1;
+        }
+      }
+    }
+
+    setState(() => _tagCountCache = map);
+  }
+
+  Future<void> _openTagGalleryFromDrawer(String tagName) async {
+    Navigator.pop(context); // Drawer close
+
+    // タグ検索として検索結果ページへ（既存の検索グリッドを再利用）
+    _exitSelectMode();
+    setState(() {
+      _page = _MainPage.search;
+      _homeQuery = '#$tagName';
+      _homeSearchCtrl.text = '#$tagName';
+    });
+
+    await _runHomeSearch();
+  }
+
   
   @override
   void initState() {
     super.initState();
     _loadPrefsAndAutoOpenFolder();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reloadArtistTagMasters();
+    });
   }
   
   Future<void> _applySearchFilterDb() async {
@@ -1418,6 +1470,39 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               },
             ),
             const Divider(),
+            const ListTile(
+              title: Text('作者タグ'),
+              dense: true,
+            ),
+            if (_loadingArtistTags)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: LinearProgressIndicator(),
+              )
+            else
+              ExpansionTile(
+                leading: const Icon(Icons.person_outline),
+                title: const Text('作者（カテゴリ）'),
+                children: [
+                  if (_artistTagMasters.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      child: Text('作者タグがまだありません'),
+                    )
+                  else
+                    ..._artistTagMasters.map((tw) {
+                      final name = tw.tag.name;
+                      final count = _tagCountCache[name.toLowerCase()] ?? 0;
+
+                      return ListTile(
+                        leading: const Icon(Icons.label_outline),
+                        title: Text(name),
+                        trailing: Text('$count'),
+                        onTap: () => _openTagGalleryFromDrawer(name),
+                      );
+                    }),
+                ],
+              ),
 
             const ListTile(title: Text('表示設定'), dense: true),
             Padding(
