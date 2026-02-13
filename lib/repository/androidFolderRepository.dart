@@ -63,7 +63,7 @@ class AndroidFolderRepository implements MediaRepository {
 
       final children = await dir.listDocuments();
       for (final f in children) {
-        final name = f.name ?? '';
+        final name = f.name;
         if (name.isEmpty) continue;
 
         final isDir = f.isDirectory == true;

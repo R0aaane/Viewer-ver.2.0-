@@ -3,6 +3,12 @@ import '../models/mediaItem.dart' as m;
 import '../models/tag.dart' as model;
 import 'app_db.dart' as db;
 
+class TagWithId { 
+  final int tagId;
+  final model.Tag tag;
+  const TagWithId({required this.tagId, required this.tag});
+}
+
 class TagService {
   final db.AppDb _db;
   TagService(this._db);
@@ -76,7 +82,7 @@ class TagService {
         );
   }
 
-  Future<List<model.Tag>> listTagsForItem(String itemId) async {
+  Future<List<TagWithId>> listTagsForItem(String itemId) async {
     final rows = await (_db.select(_db.mediaItemTags).join([
       innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
     ])
@@ -85,8 +91,11 @@ class TagService {
 
     return rows.map((r) {
       final t = r.readTable(_db.tags);
-      return model.Tag(name: t.name, category: _intToCategory(t.category));
-    }).toList();
+      return TagWithId(
+        tagId: t.tagId,
+        tag: model.Tag(name: t.name, category: _intToCategory(t.category)),
+      );
+    }).toList(growable: false);
   }
 
   Future<List<String>> findItemIdsByTag({
@@ -125,5 +134,13 @@ class TagService {
     return ids.toList(growable: false);
   }
 
+  Future<void> removeTagFromItem(String itemId, int tagId) async {
+  await (_db.delete(_db.mediaItemTags)
+        ..where((x) => x.itemId.equals(itemId) & x.tagId.equals(tagId)))
+      .go();
 }
+
+
+}
+
 

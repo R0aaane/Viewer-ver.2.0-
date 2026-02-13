@@ -9,11 +9,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pdf_viewer/main.dart';
+import 'package:pdf_viewer/database/tag_service.dart';
+import 'package:pdf_viewer/database/app_db.dart';
 
 void main() {
   testWidgets('Counter increments smoke test', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+    final db = AppDb();
+    final tagService = TagService(db);
+
+    await tester.pumpWidget(
+      MyApp(tagService: tagService),
+    );
 
     // Verify that our counter starts at 0.
     expect(find.text('0'), findsOneWidget);

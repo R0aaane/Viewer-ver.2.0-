@@ -862,12 +862,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     // 4) 詳細へ一発で遷移
-    // ※ あなたの detailImage.dart のコンストラクタに合わせています
     final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (_) => ImageDetailPage(
           repo: widget.repo,
+          tagService: widget.tagService,
           items: _items,
           initialIndex: idx,
           initialPdfPage: 1,
@@ -1552,6 +1552,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               MaterialPageRoute(
                 builder: (_) => ImageDetailPage(
                   repo: widget.repo,
+                  tagService: widget.tagService,
                   items: _items,
                   initialIndex: index < 0 ? 0 : index,
                   initialPdfPage: 1,

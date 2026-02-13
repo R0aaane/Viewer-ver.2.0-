@@ -1,5 +1,4 @@
 import 'dart:typed_data';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +7,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
+
+import '../database/tag_service.dart';
+import '../models/tag.dart';
+
 
 enum ReaderFitMode { vertical, horizontal, contain }
 
@@ -25,6 +28,7 @@ class _PrefsKeys {
 
 class ImageDetailPage extends StatefulWidget {
   final MediaRepository repo;
+  final TagService tagService;
   final List<MediaItem> items;
   final int initialIndex;
   final int? initialPdfPage;
@@ -32,6 +36,7 @@ class ImageDetailPage extends StatefulWidget {
   const ImageDetailPage({
     super.key,
     required this.repo,
+    required this.tagService,
     required this.items,
     required this.initialIndex,
     this.initialPdfPage,
@@ -61,8 +66,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _favChanged = false;
 
   // tags
-  Map<String, List<String>> _tagsById = <String, List<String>>{};
+  List<TagWithId> _tags = const [];
   bool _tagsChanged = false;
+
+  TagCategory _selectedCategory = TagCategory.free;
+  final TextEditingController _tagCtrl = TextEditingController();
+  bool _tagsLoading = false;
 
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
@@ -108,9 +117,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
     final two = prefs.getBool(_PrefsKeys.twoPage);
 
-    // tags
-    _tagsById = _decodeTags(prefs.getString(_PrefsKeys.tagsJson));
-
     if (fitIndex != null &&
         fitIndex >= 0 &&
         fitIndex < ReaderFitMode.values.length) {
@@ -131,6 +137,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   @override
   void dispose() {
+    _tagCtrl.dispose();
     _tab.dispose();
     if (_fullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -186,27 +193,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   // ----------------
   // Tags (SharedPreferences)
 
-  Map<String, List<String>> _decodeTags(String? raw) {
-    if (raw == null || raw.isEmpty) return <String, List<String>>{};
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        final Map<String, List<String>> map = <String, List<String>>{};
-        for (final entry in decoded.entries) {
-          final key = entry.key?.toString();
-          final val = entry.value;
-          if (key == null) continue;
-          if (val is List) {
-            map[key] = val.map((e) => e.toString()).toList(growable: false);
-          }
-        }
-        return map;
-      }
-    } catch (_) {}
-    return <String, List<String>>{};
-  }
-
-  List<String> _currentTags() => _tagsById[_item.id] ?? const <String>[];
 
   String? _normalizeTag(String input) {
     var t = input.trim();
@@ -219,69 +205,43 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     return t;
   }
 
-  Future<void> _saveTagsToPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_PrefsKeys.tagsJson, jsonEncode(_tagsById));
+  Future<void> _loadTagsForCurrent() async {
+    setState(() => _tagsLoading = true);
+    try {
+      final list = await widget.tagService.listTagsForItem(_item.id);
+      if (!mounted) return;
+      setState(() => _tags = list);
+    } finally {
+      if (mounted) setState(() => _tagsLoading = false);
+    }
   }
 
-  Future<void> _promptAddTag() async {
-    final ctrl = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('タグ追加'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(hintText: '例: tag（#不要 / 空白なし）'),
-          autofocus: true,
-          onSubmitted: (v) => Navigator.pop(context, v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('キャンセル'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, ctrl.text),
-            child: const Text('追加'),
-          ),
-        ],
-      ),
-    );
-
-    if (result == null) return;
-    final tag = _normalizeTag(result);
-    if (tag == null) {
+  Future<void> _addTagFromUi() async {
+    final raw = _tagCtrl.text;
+    final name = _normalizeTag(raw);
+    if (name == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('タグが無効です（空白なしで入力してください）')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('タグが無効です（空白なしで入力してください)')),
+      );
       return;
     }
 
-    final tags = (_tagsById[_item.id] ?? <String>[]).toList(growable: true);
-    if (!tags.any((e) => e.toLowerCase() == tag.toLowerCase())) {
-      tags.add(tag);
-      _tagsById[_item.id] = tags.toList(growable: false);
-      await _saveTagsToPrefs();
-      _tagsChanged = true;
-      if (mounted) setState(() {});
-    }
-  }
+    final tag = Tag(name: name, category: _selectedCategory);
 
-  Future<void> _removeTag(String tag) async {
-    final tags = (_tagsById[_item.id] ?? <String>[]).toList(growable: true);
-    tags.removeWhere((e) => e.toLowerCase() == tag.toLowerCase());
-    if (tags.isEmpty) {
-      _tagsById.remove(_item.id);
-    } else {
-      _tagsById[_item.id] = tags.toList(growable: false);
-    }
-    await _saveTagsToPrefs();
+    await widget.tagService.addTagToItem(_item, tag);
+
     _tagsChanged = true;
-    if (mounted) setState(() {});
+    _tagCtrl.clear();
+    await _loadTagsForCurrent();
   }
 
+  Future<void> _removeTagFromUi(TagWithId t) async {
+    await widget.tagService.removeTagFromItem(_item.id, t.tagId);
+    _tagsChanged = true;
+    await _loadTagsForCurrent();
+  }
+  
   BoxFit get _boxFit {
     switch (_fitMode) {
       case ReaderFitMode.vertical:
@@ -331,6 +291,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         _rightFuture = null;
       }
     });
+    await _loadTagsForCurrent();
   }
 
   void _next() {
@@ -740,31 +701,80 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           _infoRow('ID', item.id),
           // --- Tags ---
           const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final t in _currentTags())
-                InputChip(
-                  label: Text(
-                    '#$t',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  backgroundColor: _uiChip,
-                  deleteIconColor: Colors.white70,
-                  onDeleted: () => _removeTag(t),
+         Row ( 
+          children: [
+            DropdownButton<TagCategory>(
+              value: _selectedCategory,
+              items: const [
+                DropdownMenuItem(
+                  value: TagCategory.artist,
+                  child: Text('作者'),
                 ),
-              ActionChip(
-                label: const Text(
-                  '+ タグ追加',
-                  style: TextStyle(color: Colors.white),
+                DropdownMenuItem(
+                  value: TagCategory.series,
+                  child: Text('オリジナル/二次'),
+                ),
+                DropdownMenuItem(
+                  value: TagCategory.mediaType,
+                  child: Text('形式'),
+                ),
+                DropdownMenuItem(
+                  value: TagCategory.character,
+                  child: Text('キャラ'),
+                ),
+                DropdownMenuItem(
+                  value: TagCategory.free,
+                  child: Text('自動'),
+                ),
+              ],
+              onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _selectedCategory = v);
+                },
+            ),
+            const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _tagCtrl,
+                  decoration: const InputDecoration(
+                    hintText: 'タグ（#不要 / 空白なし）',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => _addTagFromUi(),
+                ),
+              ),
+               const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _addTagFromUi,
+                child: const Text('追加'),
+              ),
+          ],
+         ),
+         const SizedBox(height: 10),
+
+         if (_tagsLoading)
+         const Padding(
+          padding: EdgeInsets.symmetric(vertical: 8),
+          child: LinearProgressIndicator()
+         ),
+
+         Wrap (
+          spacing: 8,
+          runSpacing: 8,
+          children: [ 
+            for (final t in _tags)
+              InputChip(
+                label: Text(
+                  '#${t.tag.name}',
+                  style: const TextStyle(color: Colors.white),
                 ),
                 backgroundColor: _uiChip,
-                onPressed: _promptAddTag,
+                deleteIconColor: Colors.white70,
+                onDeleted: () => _removeTagFromUi(t),
               ),
-            ],
-          ),
-
+          ],
+         ),
           const SizedBox(height: 12),
           if (_isPdf)
             Expanded(child: _buildPdfThumbGrid(item))
