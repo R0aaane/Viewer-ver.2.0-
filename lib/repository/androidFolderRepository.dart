@@ -50,46 +50,30 @@ class AndroidFolderRepository implements MediaRepository {
     return null;
   }
 
-  Future<List<_SafEntry>> _safListRecursive(String treeUri) async {
-    final root = await DocumentFile.fromUri(treeUri);
-    if (root == null) return const [];
-    if (root.isDirectory != true) return const [];
+  Future<List<_SafEntry>> _safListShallow(String dirUri) async {
+    final dir = await DocumentFile.fromUri(dirUri);
+    if (dir == null) return const [];
+    if (dir.isDirectory != true) return const [];
+
+    final children = await dir.listDocuments();
 
     final out = <_SafEntry>[];
-    final queue = <DocumentFile>[root];
+    for (final f in children) {
+      final name = f.name;
+      if (name.isEmpty) continue;
 
-    while (queue.isNotEmpty) {
-      final dir = queue.removeLast();
-
-      final children = await dir.listDocuments();
-      for (final f in children) {
-        final name = f.name;
-        if (name.isEmpty) continue;
-
-        final isDir = f.isDirectory == true;
-        if (isDir) {
-          queue.add(f);
-          continue;
-        }
-
-        // ここ：lm==null の比較を消し、型差は _toDateTimeSafe で吸収
-        final modified = _toDateTimeSafe(f.lastModified);
-
-        out.add(
-          _SafEntry(
-            documentUri: f.uri,
-            name: name,
-            modified: modified,
-            isDir: false,
-          ),
-        );
-      }
-
-      await Future<void>.delayed(Duration.zero);
+      out.add(
+        _SafEntry(
+          documentUri: f.uri,
+          name: name,
+          modified: _toDateTimeSafe(f.lastModified),
+          isDir: f.isDirectory == true,
+        ),
+      );
     }
-
     return out;
   }
+
 
   Future<Uint8List> _safReadBytes(String documentUri) async {
     final doc = await DocumentFile.fromUri(documentUri);
@@ -129,14 +113,29 @@ class AndroidFolderRepository implements MediaRepository {
 
   @override
   Future<List<MediaItem>> listMedia(FolderHandle folder) async {
-    final entries = await _safListRecursive(folder.raw);
+    final entries = await _safListShallow(folder.raw);
     // ignore: avoid_print
-    print('[SAF/docman] entries=${entries.length}');
+    print('[SAF/docman] shallow entries=${entries.length} uri=${folder.raw}');
 
-    final items = <MediaItem>[];
+    final folders = <MediaItem>[];
+    final files = <MediaItem>[];
+
     for (final e in entries) {
-      final ext = _lowerExt(e.name);
+      if (e.isDir) {
+        // フォルダをフォルダとして返す（後でタップして中へ）
+        folders.add(
+          MediaItem(
+            id: e.documentUri,          // サブフォルダのURI
+            displayName: e.name,
+            kind: MediaKind.folder,     
+            folderRaw: folder.raw,
+            modified: e.modified,
+          ),
+        );
+        continue;
+      }
 
+      final ext = _lowerExt(e.name);
       MediaKind? kind;
       if (ext == _pdfExt) {
         kind = MediaKind.pdf;
@@ -146,7 +145,7 @@ class AndroidFolderRepository implements MediaRepository {
         continue;
       }
 
-      items.add(
+      files.add(
         MediaItem(
           id: e.documentUri,
           displayName: e.name,
@@ -157,10 +156,14 @@ class AndroidFolderRepository implements MediaRepository {
       );
     }
 
+    // フォルダ→ファイルの順で返す（見やすい）
+    final items = <MediaItem>[...folders, ...files];
+
     // ignore: avoid_print
-    print('[SAF/docman] mediaItems=${items.length}');
+    print('[SAF/docman] items=${items.length} folders=${folders.length} files=${files.length}');
     return items;
   }
+
 
   @override
   Future<Uint8List> readBytes(MediaItem item) => _safReadBytes(item.id);

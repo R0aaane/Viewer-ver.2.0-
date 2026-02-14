@@ -10,7 +10,10 @@ import '../database/tag_service.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/tag.dart';
+import '../database/pdf_export_service.dart';
+
 import '../repository/mediaRepository.dart';
+
 
 import 'detailImage.dart';
 
@@ -90,6 +93,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   // Home検索用：DBから引いたタグキャッシュ（itemId -> tagNames）
   Map<String, List<String>> _dbTagsByItemId = <String, List<String>>{};
 
+  // ---- フォルダ階層ナビ（ギャラリー内）----
+  final List<FolderHandle> _dirStack = <FolderHandle>[];
+
+  bool get _canGoUp => _dirStack.isNotEmpty;
+
+  Future<void> _enterFolder(MediaItem folderItem) async {
+    if (_folder == null) return;
+    _dirStack.add(_folder!);
+    await _loadFolder(FolderHandle(folderItem.id), saveAsLast: false);
+  }
+
+  Future<void> _goUpFolder() async {
+    if (_dirStack.isEmpty) return;
+    final prev = _dirStack.removeLast();
+    await _loadFolder(prev, saveAsLast: false);
+  }
 
 
   final TextEditingController _searchCtrl = TextEditingController();
@@ -1230,6 +1249,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     final raw = folder.raw;
     final next = List<String>.from(_foldersRaw);
+    _dirStack.clear();
     if (!next.contains(raw)) {
       next.add(raw);
     }
@@ -1245,6 +1265,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _switchFolder(String raw) async {
     if (_currentFolderRaw == raw) return;
+    _dirStack.clear();
 
     setState(() {
       _currentFolderRaw = raw;
@@ -1379,7 +1400,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (pdfOnly) {
         out = out.where((e) => e.kind == MediaKind.pdf);
       } else {
-        out = out.where((e) => e.kind != MediaKind.pdf);
+        out = out.where((e) => e.kind == MediaKind.image);
       }
     }
 
@@ -1737,6 +1758,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           return Scaffold(
             drawer: _buildSidebar(),
             appBar: AppBar(
+              leading: _canGoUp
+                  ? IconButton(
+                      tooltip: '上のフォルダへ',
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () {
+                        _exitSelectMode();
+                        _goUpFolder();
+                      },
+                    )
+                  : null,
               title: Text(
                 _currentFolderRaw == null
                     ? '一覧表示'
@@ -1807,6 +1838,49 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           setState(() => _page = _MainPage.home);
                         },
                         icon: const Icon(Icons.home_outlined),
+                      ),
+                      IconButton(
+                        tooltip: 'このフォルダの画像をPDFにまとめる',
+                        icon: const Icon(Icons.picture_as_pdf_outlined),
+                        onPressed: () async {
+                          if (_loading) return;
+
+                          // フォルダ内の「画像だけ」を対象に（PDFは除外）
+                          final images = _applyFilter(_items, pdfOnly: false);
+
+                          if (images.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('画像がありません')),
+                            );
+                            return;
+                          }
+
+                          final folderName = _currentFolderRaw == null
+                              ? 'export'
+                              : _folderLabel(_currentFolderRaw!);
+
+                          try {
+                            setState(() => _loading = true);
+
+                            final file = await PdfExportService.exportFolderToPdf(
+                              widget.repo,
+                              images,
+                              folderName,
+                            );
+
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('PDF保存完了: ${file.path}')),
+                            );
+                          } catch (e) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('PDF出力に失敗: $e')),
+                            );
+                          } finally {
+                            if (mounted) setState(() => _loading = false);
+                          }
+                        },
                       ),
                     ],
               bottom: PreferredSize(
@@ -2094,6 +2168,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
         return InkWell(
           onLongPress: () {
+            if (item.kind == MediaKind.folder) return;
             if (!_selectMode) {
               _enterSelectMode(item);
             } else {
@@ -2101,32 +2176,43 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             }
           },
           onTap: () async {
+            // フォルダは「潜る」
+            if (item.kind == MediaKind.folder) {
+              if (_selectMode) return;
+              _exitSelectMode();
+              await _enterFolder(item);
+              return;
+            }
+          
+            // 選択モード
             if (_selectMode) {
               _toggleSelect(item);
               return;
             }
-
-            // 通常タップ：詳細へ
-            final index = _items.indexOf(item);
-
+          
+            // Detailへ：folder を除外したリストで開く（超重要）
+            final mediaOnly = _items.where((e) => e.kind != MediaKind.folder).toList(growable: false);
+            final index = mediaOnly.indexWhere((e) => e.id == item.id);
+          
             final changed = await Navigator.push<bool>(
               context,
               MaterialPageRoute(
                 builder: (_) => ImageDetailPage(
                   repo: widget.repo,
                   tagService: widget.tagService,
-                  items: _items,
+                  items: mediaOnly,
                   initialIndex: index < 0 ? 0 : index,
                   initialPdfPage: 1,
                 ),
               ),
             );
-
+          
             if (changed == true) {
               await _reloadFavorites();
               await _reloadTags();
             }
           },
+
           child: _ThumbTile(
             repo: widget.repo,
             item: item,
@@ -2162,6 +2248,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
         return InkWell(
           onLongPress: () {
+            if (item.kind == MediaKind.folder) return;
             if (!_selectMode) {
               _enterSelectMode(item);
             } else {
@@ -2169,10 +2256,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             }
           },
           onTap: () async {
+            if (item.kind == MediaKind.folder) {
+              if (_selectMode) return;
+              _exitSelectMode();
+              await _enterFolder(item);
+              return;
+            }
+
             if (_selectMode) {
               _toggleSelect(item);
               return;
             }
+
+            // folder除外でDetail
+            final mediaOnly = items.where((e) => e.kind != MediaKind.folder).toList(growable: false);
+            final index = mediaOnly.indexWhere((e) => e.id == item.id);
 
             final changed = await Navigator.push<bool>(
               context,
@@ -2180,8 +2278,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 builder: (_) => ImageDetailPage(
                   repo: widget.repo,
                   tagService: widget.tagService,
-                  items: items,
-                  initialIndex: i,
+                  items: mediaOnly,
+                  initialIndex: index < 0 ? 0 : index,
                   initialPdfPage: 1,
                 ),
               ),
@@ -2228,6 +2326,41 @@ class _ThumbTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ★ folder はサムネ生成しない
+    if (item.kind == MediaKind.folder) {
+      return Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Container(
+                alignment: Alignment.center,
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: const Icon(Icons.folder, size: 56),
+              ),
+            ),
+            Positioned(
+              left: 8,
+              right: 8,
+              bottom: 8,
+              child: _TitleChip(title: item.displayName, subtitle: subtitle),
+            ),
+            if (selected)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black.withOpacity(0.35),
+                  alignment: Alignment.topRight,
+                  padding: const EdgeInsets.all(8),
+                  child: const Icon(Icons.check_circle, size: 26),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
     return FutureBuilder<ThumbPair>(
       future: repo.readThumbPair(item, maxWidth: 360),
       builder: (context, snap) {
