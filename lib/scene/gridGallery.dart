@@ -1,20 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-import 'dart:io' show Platform;
+import 'dart:io' show Directory, Platform;
 import 'dart:typed_data';
-
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../database/tag_service.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
-import '../repository/mediaRepository.dart';
-import '../database/tag_service.dart';
 import '../models/tag.dart';
+import '../repository/mediaRepository.dart';
 
 import 'detailImage.dart';
+
 
 enum _SortMode { name, updatedAt, addedAt }
 
