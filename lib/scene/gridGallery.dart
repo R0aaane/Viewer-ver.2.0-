@@ -1840,40 +1840,76 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         icon: const Icon(Icons.home_outlined),
                       ),
                       IconButton(
-                        tooltip: 'このフォルダの画像をPDFにまとめる',
+                        tooltip: 'このフォルダの画像をPDFにまとめる（保存先選択）',
                         icon: const Icon(Icons.picture_as_pdf_outlined),
                         onPressed: () async {
                           if (_loading) return;
-
-                          // フォルダ内の「画像だけ」を対象に（PDFは除外）
+                      
                           final images = _applyFilter(_items, pdfOnly: false);
-
                           if (images.isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(content: Text('画像がありません')),
                             );
                             return;
                           }
-
+                      
                           final folderName = _currentFolderRaw == null
                               ? 'export'
                               : _folderLabel(_currentFolderRaw!);
-
+                      
+                          int done = 0;
+                          final total = images.length;
+                      
+                          // 進捗ダイアログ（キャンセルは不可：SAF選択と生成が途中で壊れるのを避ける）
+                          showDialog(
+                            context: context,
+                            barrierDismissible: false,
+                            builder: (_) => StatefulBuilder(
+                              builder: (context, setD) => AlertDialog(
+                                title: const Text('PDFを生成中...'),
+                                content: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    LinearProgressIndicator(value: total == 0 ? null : done / total),
+                                    const SizedBox(height: 12),
+                                    Text('$done / $total'),
+                                    const SizedBox(height: 8),
+                                    const Text('保存先フォルダを選択後、生成を開始します'),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                      
                           try {
                             setState(() => _loading = true);
-
-                            final file = await PdfExportService.exportFolderToPdf(
+                      
+                            final created = await PdfExportService.exportFolderToPdfPickLocation(
                               widget.repo,
                               images,
                               folderName,
+                              onProgress: (d, t) {
+                                done = d;
+                                // ダイアログの表示更新（setStateで十分）
+                                if (mounted) setState(() {});
+                              },
                             );
-
+                      
                             if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('PDF保存完了: ${file.path}')),
-                            );
+                            Navigator.pop(context); // 進捗ダイアログ閉じる
+                      
+                            if (created == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('保存をキャンセルしました')),
+                              );
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('PDF保存完了: ${created.name}')),
+                              );
+                            }
                           } catch (e) {
                             if (!mounted) return;
+                            Navigator.pop(context);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('PDF出力に失敗: $e')),
                             );
@@ -1882,6 +1918,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           }
                         },
                       ),
+
                     ],
               bottom: PreferredSize(
                 // 検索(約56) + ソート(約40) + TabBar(約48) + 余白 = 160前後は必要
