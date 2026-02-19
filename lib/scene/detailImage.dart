@@ -412,6 +412,64 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       }
     }
   }
+  
+  Future<void> _renameCurrentPdf() async {
+    final item = _item;
+    if (item.kind != MediaKind.pdf) return;
+
+    final base = item.displayName.toLowerCase().endsWith('.pdf')
+        ? item.displayName.substring(0, item.displayName.length - 4)
+        : item.displayName;
+
+    final ctrl = TextEditingController(text: base);
+
+    final newBase = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('PDFの名前を変更'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '拡張子 .pdf は不要',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+            child: const Text('変更'),
+          ),
+        ],
+      ),
+    );
+
+    if (newBase == null || newBase.isEmpty) return;
+
+    try {
+      final updated = await widget.repo.rename(item, newBase); // .pdf付与はrepo側
+      if (!mounted) return;
+
+      setState(() {
+        _items[_index] = updated; // AppBar title も更新される
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('名前を変更しました: ${updated.displayName}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('名前変更に失敗: $e')),
+      );
+    } finally {
+      ctrl.dispose();
+    }
+  }
 
   Future<void> _toggleFullscreen() async {
     setState(() => _fullscreen = !_fullscreen);
@@ -770,6 +828,29 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             if (_isPdf) _infoRow('ページ', '$_totalPages'),
             const SizedBox(height: 8),
             _infoRow('フォルダ', _basename(item.folderRaw)),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(
+                  width: 64,
+                  child: Text('名前', style: TextStyle(color: Colors.white70)),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SelectableText(
+                    item.displayName,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+                if (_isPdf)
+                  IconButton(
+                    tooltip: 'PDF名を変更',
+                    icon: const Icon(Icons.edit, color: Colors.white),
+                    onPressed: _renameCurrentPdf,
+                  ),
+              ],
+            ),
 
             // --- Tags ---
             const SizedBox(height: 10),

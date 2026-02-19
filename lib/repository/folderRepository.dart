@@ -248,7 +248,7 @@ class WindowsFolderRepository implements MediaRepository {
     return img.bytes;
   }
 
-  /// 任意：フォルダ切替・アプリ終了時に呼ぶとメモリリークしにくい
+  /// フォルダ切替・アプリ終了時に呼ぶとメモリリークしにくい
   Future<void> dispose() async {
     _thumbInFlight.clear();
     _thumbCache.clear();
@@ -268,5 +268,50 @@ class WindowsFolderRepository implements MediaRepository {
     final dot = path.lastIndexOf('.');
     if (dot < 0) return '';
     return path.substring(dot).toLowerCase();
+  }
+
+  @override
+  Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
+    final oldPath = item.id;
+    final oldFile = File(oldPath);
+    if (!await oldFile.exists()) {
+      throw Exception('File not found: $oldPath');
+    }
+  
+    final fixedName = _ensureExtensionForFs(item, newDisplayName);
+  
+    final parent = oldFile.parent.path;
+    final newPath = '$parent${Platform.pathSeparator}$fixedName';
+  
+    final renamed = await oldFile.rename(newPath);
+  
+    // ファイルパスは変わるので id も更新する
+    return MediaItem(
+      id: renamed.path,
+      displayName: fixedName,
+      kind: item.kind,
+      folderRaw: item.folderRaw,
+      modified: item.modified,
+      tags: item.tags,
+    );
+  }
+  
+  String _ensureExtensionForFs(MediaItem item, String name) {
+    final n = name.trim();
+    if (n.isEmpty) return item.displayName;
+  
+    if (item.kind == MediaKind.pdf) {
+      return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
+    }
+  
+    final ext = _extLowerFs(item.displayName);
+    if (ext.isEmpty) return n;
+    return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
+  }
+  
+  String _extLowerFs(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    if (dot < 0 || dot == fileName.length - 1) return '';
+    return fileName.substring(dot).toLowerCase();
   }
 }

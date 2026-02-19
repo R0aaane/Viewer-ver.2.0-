@@ -30,4 +30,8 @@ abstract class MediaRepository {
     int page, {
     int maxWidth = 1600,
   });
+
+  /// ファイル名変更（displayName のみ変更。id(uri/path)は基本維持）
+  Future<MediaItem> rename(MediaItem item, String newDisplayName);
+
 }

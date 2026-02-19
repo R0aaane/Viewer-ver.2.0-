@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:collection';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -85,14 +86,11 @@ class AndroidFolderRepository implements MediaRepository {
     }
 
     // 1) まず read()
-    final bytes = await doc.read();
-    if (bytes != null && bytes.isNotEmpty) return bytes;
-
-    // 2) ダメなら cache() → File.readAsBytes()
     final cached = await doc.cache();
     if (cached == null) {
-      throw Exception('read() empty and cache() failed: $documentUri');
+      throw Exception('cache() failed: $documentUri');
     }
+
     final fb = await cached.readAsBytes();
     if (fb.isEmpty) {
       throw Exception('cached file is empty: $documentUri');
@@ -234,17 +232,24 @@ class AndroidFolderRepository implements MediaRepository {
     return _lockOf(documentUri).synchronized(() async {
       final cached = _pdfCache.remove(documentUri);
       if (cached != null) {
-        // LRU更新（末尾に戻す）
-        _pdfCache[documentUri] = cached;
+        _pdfCache[documentUri] = cached; // LRU更新
         return cached;
       }
 
-      final bytes = await _safReadBytes(documentUri);
-      final doc = await PdfDocument.openData(bytes);
+      // ★PDFは bytes で開かない（巨大PDFでOOMの原因）
+      final docFile = await DocumentFile.fromUri(documentUri);
+      if (docFile == null) {
+        throw Exception('DocumentFile.fromUri failed: $documentUri');
+      }
+      final cachedFile = await docFile.cache();
+      if (cachedFile == null) {
+        throw Exception('cache() failed: $documentUri');
+      }
+
+      final doc = await PdfDocument.openFile(cachedFile.path);
 
       _pdfCache[documentUri] = doc;
 
-      // ★ LRUエビクション
       while (_pdfCache.length > _pdfCacheMaxEntries) {
         final oldestKey = _pdfCache.keys.first;
         final oldest = _pdfCache.remove(oldestKey);
@@ -297,6 +302,76 @@ class AndroidFolderRepository implements MediaRepository {
     final dot = name.lastIndexOf('.');
     if (dot < 0) return '';
     return name.substring(dot).toLowerCase();
+  }
+
+  @override
+  Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
+    // docman のあなたの版は fromUri(String) っぽい
+    final doc = await DocumentFile.fromUri(item.id);
+    if (doc == null) {
+      throw Exception('DocumentFile.fromUri failed: ${item.id}');
+    }
+
+    final fixedName = _ensureExtension(item, newDisplayName);
+
+    // docman の版差分吸収：renameTo / rename などを順に試す
+    final d = doc as dynamic;
+    bool ok = false;
+
+    // 1) renameTo(name)
+    try {
+      final r = await d.renameTo(fixedName);
+      ok = (r == true) || (r == null);
+    } catch (_) {}
+
+    // 2) rename(name)
+    if (!ok) {
+      try {
+        final r = await d.rename(fixedName);
+        ok = (r == true) || (r == null);
+      } catch (_) {}
+    }
+
+    // 3) renameToName(name) など、もし別名だった場合（保険）
+    if (!ok) {
+      try {
+        final r = await d.renameToName(fixedName);
+        ok = (r == true) || (r == null);
+      } catch (_) {}
+    }
+
+    if (!ok) {
+      throw Exception('Rename API not supported by your docman DocumentFile');
+    }
+
+    // SAFでは基本 uri(id) は変わらない想定なので displayName だけ更新
+    return MediaItem(
+      id: item.id,
+      displayName: fixedName,
+      kind: item.kind,
+      folderRaw: item.folderRaw,
+      modified: item.modified,
+      tags: item.tags,
+    );
+  }
+
+  String _ensureExtension(MediaItem item, String name) {
+    final n = name.trim();
+    if (n.isEmpty) return item.displayName;
+
+    if (item.kind == MediaKind.pdf) {
+      return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
+    }
+
+    final ext = _extLower(item.displayName); // 例 ".jpg"
+    if (ext.isEmpty) return n;
+    return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
+  }
+
+  String _extLower(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    if (dot < 0 || dot == fileName.length - 1) return '';
+    return fileName.substring(dot).toLowerCase();
   }
 }
 
