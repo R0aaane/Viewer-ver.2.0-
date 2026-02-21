@@ -12,6 +12,10 @@ abstract class MediaRepository {
   Future<FolderHandle?> pickFolder();
   Future<List<MediaItem>> listMedia(FolderHandle folder);
 
+  // 外部から画像/PDFを取り込んで、指定フォルダに追加する。
+  // 戻り値は追加に成功した件数（ユーザーキャンセルは 0）
+  Future<int> importIntoFolder(FolderHandle folder);
+
   /// 一覧用サムネ
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360});
 

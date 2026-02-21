@@ -306,53 +306,214 @@ class AndroidFolderRepository implements MediaRepository {
 
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
-    // docman のあなたの版は fromUri(String) っぽい
-    final doc = await DocumentFile.fromUri(item.id);
-    if (doc == null) {
-      throw Exception('DocumentFile.fromUri failed: ${item.id}');
+    if (item.kind != MediaKind.pdf) {
+      throw Exception('rename: only pdf is supported now');
     }
 
-    final fixedName = _ensureExtension(item, newDisplayName);
+    final src = await DocumentFile.fromUri(item.id);
+    if (src == null) {
+      throw Exception('rename: src not found: ${item.id}');
+    }
 
-    // docman の版差分吸収：renameTo / rename などを順に試す
-    final d = doc as dynamic;
-    bool ok = false;
+    final dir = await DocumentFile.fromUri(item.folderRaw);
+    if (dir == null || dir.isDirectory != true) {
+      throw Exception('rename: parent dir not found: ${item.folderRaw}');
+    }
 
-    // 1) renameTo(name)
+    final fixedName = _ensurePdfName(newDisplayName);
+
+    // ✅ moveTo で同一フォルダに移動（=リネーム）
+    // docmanのバージョン差を吸収するため dynamic で呼ぶ
+    final d = src as dynamic;
+
+    DocumentFile? moved;
+
+    // パターン1: moveTo(DocumentFile dir, {String? newName})
     try {
-      final r = await d.renameTo(fixedName);
-      ok = (r == true) || (r == null);
+      final r = await d.moveTo(dir, newName: fixedName);
+      if (r is DocumentFile) moved = r;
     } catch (_) {}
 
-    // 2) rename(name)
-    if (!ok) {
+    // パターン2: moveTo(DocumentFile dir, {String? name})
+    if (moved == null) {
       try {
-        final r = await d.rename(fixedName);
-        ok = (r == true) || (r == null);
+        final r = await d.moveTo(dir, name: fixedName);
+        if (r is DocumentFile) moved = r;
       } catch (_) {}
     }
 
-    // 3) renameToName(name) など、もし別名だった場合（保険）
-    if (!ok) {
+    // パターン3: moveTo({required DocumentFile dir, required String newName})
+    if (moved == null) {
       try {
-        final r = await d.renameToName(fixedName);
-        ok = (r == true) || (r == null);
+        final r = await d.moveTo(dir: dir, newName: fixedName);
+        if (r is DocumentFile) moved = r;
       } catch (_) {}
     }
 
-    if (!ok) {
-      throw Exception('Rename API not supported by your docman DocumentFile');
+    if (moved == null) {
+      throw Exception('rename: moveTo not supported or permission denied');
     }
 
-    // SAFでは基本 uri(id) は変わらない想定なので displayName だけ更新
+    // id(uri)は変わる可能性あり（今は気にしないとのことなのでここでは反映のみ）
     return MediaItem(
-      id: item.id,
+      id: moved.uri,
       displayName: fixedName,
       kind: item.kind,
       folderRaw: item.folderRaw,
-      modified: item.modified,
+      modified: DateTime.now(),
       tags: item.tags,
     );
+  }
+
+  String _ensurePdfName(String name) {
+    final n = name.trim();
+    if (n.isEmpty) return 'export.pdf';
+    return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
+  }
+
+  
+
+  // -------------------------
+  // SAF: 親フォルダとファイルを探す
+  // -------------------------
+  Future<(DocumentFile, DocumentFile)?> _findParentAndDoc(
+      String treeUri,
+      String documentUri,
+      ) async {
+    final root = await DocumentFile.fromUri(treeUri);
+    if (root == null) return null;
+    if (root.isDirectory != true) return null;
+
+    final queue = <DocumentFile>[root];
+
+    while (queue.isNotEmpty) {
+      final dir = queue.removeLast();
+      final children = await dir.listDocuments();
+
+      for (final c in children) {
+        if (c.isDirectory == true) {
+          queue.add(c);
+          continue;
+        }
+        if (c.uri == documentUri) {
+          return (dir, c);
+        }
+      }
+
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    return null;
+  }
+
+  @override
+  Future<int> importIntoFolder(FolderHandle folder) async {
+    final picked = await DocMan.pick.files(
+      extensions: const ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'pdf'],
+      limit: 200,
+    );
+    if (picked.isEmpty) return 0;
+
+    final dir = await DocumentFile.fromUri(folder.raw);
+    if (dir == null) {
+      throw Exception('DocumentFile.fromUri failed: ${folder.raw}');
+    }
+    if (dir.isDirectory != true) {
+      throw Exception('Target is not a directory: ${folder.raw}');
+    }
+    if (dir.canCreate != true) {
+      throw Exception('This folder cannot create files (canCreate=false).');
+    }
+
+    int ok = 0;
+    for (final f in picked) {
+      try {
+        final name = f.path.split('/').last;
+        final bytes = await f.readAsBytes();
+        if (bytes.isEmpty) continue;
+
+        final unique = await _uniqueName(dir, name);
+        final created = await dir.createFile(name: unique, bytes: bytes);
+        if (created != null) ok++;
+      } catch (_) {
+        // 1件失敗しても続行
+      }
+    }
+    return ok;
+  }
+
+  Future<String> _uniqueName(DocumentFile dir, String name) async {
+    final dot = name.lastIndexOf('.');
+    final base = dot >= 0 ? name.substring(0, dot) : name;
+    final ext = dot >= 0 ? name.substring(dot) : '';
+
+    String candidate = name;
+    int n = 1;
+    while (true) {
+      final found = await dir.find(candidate);
+      if (found == null || found.exists != true) return candidate;
+      candidate = '$base ($n)$ext';
+      n++;
+      if (n > 999) return '${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
+    }
+  }
+
+  // -------------------------
+  // docman の createFile/delete シグネチャ差を吸収
+  // -------------------------
+  Future<DocumentFile?> _createFile(
+      DocumentFile dir,
+      String name,
+      Uint8List bytes,
+      ) async {
+    final d = dir as dynamic;
+
+    // パターン1: createFile(name: ..., bytes: ...)
+    try {
+      final r = await d.createFile(name: name, bytes: bytes);
+      if (r is DocumentFile) return r;
+    } catch (_) {}
+
+    // パターン2: createFile(name, bytes)
+    try {
+      final r = await d.createFile(name, bytes);
+      if (r is DocumentFile) return r;
+    } catch (_) {}
+
+    // パターン3: createFile(name: ..., mimeType: ..., bytes: ...)
+    try {
+      final mime = _mimeFor(itemExt: _lowerExt(name));
+      final r = await d.createFile(name: name, mimeType: mime, bytes: bytes);
+      if (r is DocumentFile) return r;
+    } catch (_) {}
+
+    return null;
+  }
+
+  Future<void> _deleteDoc(DocumentFile doc) async {
+    final d = doc as dynamic;
+
+    // パターン1: delete()
+    try {
+      await d.delete();
+      return;
+    } catch (_) {}
+
+    // パターン2: deleteDocument()
+    try {
+      await d.deleteDocument();
+      return;
+    } catch (_) {}
+
+    throw Exception('delete not supported by your docman DocumentFile');
+  }
+
+  String _mimeFor({required String itemExt}) {
+    if (itemExt == '.pdf') return 'application/pdf';
+    if (itemExt == '.png') return 'image/png';
+    if (itemExt == '.webp') return 'image/webp';
+    if (itemExt == '.bmp') return 'image/bmp';
+    return 'image/jpeg'; // jpg/jpeg fallback
   }
 
   String _ensureExtension(MediaItem item, String name) {
@@ -363,7 +524,7 @@ class AndroidFolderRepository implements MediaRepository {
       return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
     }
 
-    final ext = _extLower(item.displayName); // 例 ".jpg"
+    final ext = _lowerExt(item.displayName); // 既存の拡張子を維持
     if (ext.isEmpty) return n;
     return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
   }

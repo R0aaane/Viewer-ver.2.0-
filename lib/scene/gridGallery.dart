@@ -1299,6 +1299,28 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _loadFolder(FolderHandle(nextCurrent), saveAsLast: false);
   }
 
+  Future<void> _importToCurrentFolder() async {
+    if (_currentFolderRaw == null) return;
+    final folder = FolderHandle(_currentFolderRaw!);
+    try {
+      final count = await widget.repo.importIntoFolder(folder);
+      if (!mounted) return;
+
+      if (count > 0) {
+        await _loadFolder(folder, saveAsLast: false);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('追加しました: $count 件')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('追加に失敗: $e')),
+      );
+    }
+  }
+
   Future<void> _refreshAllFavoritesItems() async {
     if (_loadingFavAll) return;
     if (_foldersRaw.isEmpty) {
@@ -1830,6 +1852,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         tooltip: 'フォルダ追加',
                         onPressed: _addFolder,
                         icon: const Icon(Icons.create_new_folder_outlined),
+                      ),
+                      IconButton(
+                        tooltip: 'ファイル追加',
+                        onPressed: _currentFolderRaw == null ? null : _importToCurrentFolder,
+                        icon: const Icon(Icons.upload_file_outlined),
                       ),
                       IconButton(
                         tooltip: 'ホームへ',

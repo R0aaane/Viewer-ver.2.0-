@@ -295,6 +295,57 @@ class WindowsFolderRepository implements MediaRepository {
       tags: item.tags,
     );
   }
+
+  @override
+  Future<int> importIntoFolder(FolderHandle folder) async {
+    final destDir = Directory(folder.raw);
+    if (!await destDir.exists()) {
+      throw Exception('Folder not found: ${folder.raw}');
+    }
+
+    final files = await openFiles(
+      acceptedTypeGroups: [
+        const XTypeGroup(
+          label: 'Images/PDF',
+          extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'pdf'],
+        ),
+      ],
+    );
+
+    if (files.isEmpty) return 0;
+
+    int ok = 0;
+    for (final xf in files) {
+      try {
+        final src = File(xf.path);
+        if (!await src.exists()) continue;
+
+        final name = xf.name;
+        final unique = _uniqueNameInDir(destDir, name);
+        await src.copy('${destDir.path}${Platform.pathSeparator}$unique');
+        ok++;
+      } catch (_) {}
+    }
+    return ok;
+  }
+
+  String _uniqueNameInDir(Directory dir, String name) {
+    final dot = name.lastIndexOf('.');
+    final base = dot >= 0 ? name.substring(0, dot) : name;
+    final ext = dot >= 0 ? name.substring(dot) : '';
+
+    var candidate = name;
+    var n = 1;
+    while (File('${dir.path}${Platform.pathSeparator}$candidate').existsSync()) {
+      candidate = '$base ($n)$ext';
+      n++;
+      if (n > 999) {
+        candidate = '${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
+        break;
+      }
+    }
+    return candidate;
+  }
   
   String _ensureExtensionForFs(MediaItem item, String name) {
     final n = name.trim();
