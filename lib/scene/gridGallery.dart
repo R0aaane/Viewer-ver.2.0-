@@ -381,13 +381,25 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       current = existsFolders.isNotEmpty ? existsFolders.first : null;
     }
 
-    // ★ 実在しないフォルダが消えた場合は prefs も更新しておく（重要）
+    //  実在しないフォルダが消えた場合は prefs も更新しておく（重要）
     await prefs.setStringList(_PrefsKeys.folders, existsFolders.toList());
 
     if (current != null) {
       await prefs.setString(_PrefsKeys.currentFolder, current);
     } else {
       await prefs.remove(_PrefsKeys.currentFolder);
+    }
+
+    //  アプリ保管庫（必ず書き込み可）をフォルダ一覧に常に入れる
+    final lib = await widget.repo.getAppLibraryFolder();
+    final libRaw = lib.raw;
+
+    if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
+      aliases[libRaw] = '保管庫';
+    }
+    if (!folders.contains(libRaw)) {
+      folders = List<String>.from(folders)..insert(0, libRaw);
+      await prefs.setStringList(_PrefsKeys.folders, folders);
     }
 
     // 反映
@@ -1686,6 +1698,32 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               tooltip: 'フォルダ追加',
               onPressed: _addFolder,
               icon: const Icon(Icons.create_new_folder_outlined),
+            ),
+            IconButton(
+              tooltip: '保管庫へ取り込み',
+              icon: const Icon(Icons.archive_outlined),
+              onPressed: () async {
+                try {
+                  final lib = await widget.repo.getAppLibraryFolder();
+                  final count = await widget.repo.importIntoFolder(lib);
+                  if (!mounted) return;
+            
+                  // 保管庫を開く（見える形で “取り込めた” を確認できる）
+                  await _loadFolder(lib, saveAsLast: true);
+                  if (!mounted) return;
+            
+                  if (count > 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('保管庫へ取り込み: $count 件')),
+                    );
+                  }
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('取り込み失敗: $e')),
+                  );
+                }
+              },
             ),
             IconButton(
               tooltip: 'お気に入り更新',

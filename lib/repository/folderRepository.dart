@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
 
 import '../models/folder.dart';
@@ -69,6 +70,15 @@ class WindowsFolderRepository implements MediaRepository {
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
 
+  @override
+  Future<FolderHandle> getAppLibraryFolder() async {
+    final base = await getApplicationDocumentsDirectory();
+    final libDir = Directory('${base.path}${Platform.pathSeparator}library');
+    if (!await libDir.exists()) {
+      await libDir.create(recursive: true);
+    }
+    return FolderHandle(libDir.path);
+  }
   // ------------------------------
   // サムネイル：メモリLRUキャッシュ
   // ------------------------------
@@ -149,7 +159,7 @@ class WindowsFolderRepository implements MediaRepository {
     return doc.pagesCount;
   }
 
-  // ---- 追加：任意ページをPNGとして取得（画像はそのまま返す）----
+  // ---- 任意ページをPNGとして取得（画像はそのまま返す）----
   @override
   Future<Uint8List> renderPageBytes(
     MediaItem item,
