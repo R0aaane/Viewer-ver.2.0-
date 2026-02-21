@@ -358,27 +358,46 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
+    // 保管庫を必ず登録（最初からフォルダ指定済みにする）
+    final lib = await widget.repo.getAppLibraryFolder();
+    final libRaw = lib.raw;
+
+    // folders に無ければ先頭に入れる（常に見える）
+    if (!folders.contains(libRaw)) {
+      folders = <String>[libRaw, ...folders];
+      await prefs.setStringList(_PrefsKeys.folders, folders);
+    }
+
+    // 表示名（エイリアス）も無ければ付与
+    if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
+      aliases[libRaw] = '保管庫';
+      await prefs.setString(_PrefsKeys.folderAliasesJson, jsonEncode(aliases));
+    }
+
     // --- 実在チェック（消えているフォルダを除外）---
     final existsFolders = <String>{};
 
     for (final p in folders) {
-      // ★ _foldersRaw ではなく prefs から読んだ folders
-      if (Platform.isWindows) {
-        try {
-          final d = Directory(p);
-          if (await d.exists()) existsFolders.add(p);
-        } catch (_) {}
-      } else {
-        // Android: SAFの treeUri（content://...）だけ有効
-        if (p.startsWith('content://')) {
-          existsFolders.add(p);
-        }
+      // SAF treeUri（content://...）はそのまま有効
+      if (p.startsWith('content://')) {
+        existsFolders.add(p);
+        continue;
       }
+
+      // 通常パス（保管庫など）は Directory.exists で判定
+      try {
+        final d = Directory(p);
+        if (await d.exists()) existsFolders.add(p);
+      } catch (_) {}
     }
 
-    // current の整合性
+    // current の整合性（無ければ保管庫をデフォルト）
     if (current == null || !existsFolders.contains(current)) {
-      current = existsFolders.isNotEmpty ? existsFolders.first : null;
+      if (existsFolders.contains(libRaw)) {
+        current = libRaw; // ★ デフォルトは保管庫
+      } else {
+        current = existsFolders.isNotEmpty ? existsFolders.first : null;
+      }
     }
 
     //  実在しないフォルダが消えた場合は prefs も更新しておく（重要）
@@ -389,10 +408,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     } else {
       await prefs.remove(_PrefsKeys.currentFolder);
     }
-
-    //  アプリ保管庫（必ず書き込み可）をフォルダ一覧に常に入れる
-    final lib = await widget.repo.getAppLibraryFolder();
-    final libRaw = lib.raw;
 
     if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
       aliases[libRaw] = '保管庫';
@@ -1707,11 +1722,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   final lib = await widget.repo.getAppLibraryFolder();
                   final count = await widget.repo.importIntoFolder(lib);
                   if (!mounted) return;
-            
+
                   // 保管庫を開く（見える形で “取り込めた” を確認できる）
                   await _loadFolder(lib, saveAsLast: true);
                   if (!mounted) return;
-            
+
                   if (count > 0) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('保管庫へ取り込み: $count 件')),
