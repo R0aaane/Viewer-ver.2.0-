@@ -234,6 +234,77 @@ class TagService {
     });
   }
 
+    // ----------------------------
+  // 追加: カテゴリ別タグ一覧（例: artist）
+  Future<List<model.Tag>> listTagsByCategory(model.TagCategory category) async {
+    final cat = _categoryToInt(category);
+
+    final rows = await (_db.select(_db.tags)..where((t) => t.category.equals(cat)))
+        .get();
+
+    // 重複排除（念のため）
+    final seen = <String>{};
+    final out = <model.Tag>[];
+    for (final r in rows) {
+      final key = '${r.category}:${r.name}';
+      if (seen.add(key)) {
+        out.add(model.Tag(name: r.name, category: _intToCategory(r.category)));
+      }
+    }
+    return out;
+  }
+
+  // タグ（カテゴリ+名前）に紐づく MediaItem をDBから復元して返す（フォルダ横断）
+  Future<List<m.MediaItem>> findMediaItemsByTagGlobal({
+    required model.TagCategory category,
+    required String name,
+    bool partial = false,
+  }) async {
+    final cat = _categoryToInt(category);
+
+    final q = _db.select(_db.mediaItems).join([
+      innerJoin(
+        _db.mediaItemTags,
+        _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
+      ),
+      innerJoin(
+        _db.tags,
+        _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId),
+      ),
+    ])
+      ..where(_db.tags.category.equals(cat));
+
+    if (partial) {
+      q.where(_db.tags.name.like('%$name%'));
+    } else {
+      q.where(_db.tags.name.equals(name));
+    }
+
+    final rows = await q.get();
+
+    // 重複排除しつつ復元
+    final seen = <String>{};
+    final out = <m.MediaItem>[];
+
+    for (final r in rows) {
+      final mi = r.readTable(_db.mediaItems);
+      if (!seen.add(mi.id)) continue;
+
+      out.add(
+        m.MediaItem(
+          id: mi.id,
+          folderRaw: mi.folderRaw,
+          displayName: mi.displayName,
+          kind: (mi.kind == 0) ? m.MediaKind.image : m.MediaKind.pdf,
+          modified: (mi.modifiedEpochMs == null)
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(mi.modifiedEpochMs!),
+        ),
+      );
+    }
+    return out;
+  }
+
 
 }
 

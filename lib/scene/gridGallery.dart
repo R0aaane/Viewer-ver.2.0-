@@ -14,7 +14,7 @@ import '../database/pdf_export_service.dart';
 
 import '../repository/mediaRepository.dart';
 
-
+import 'artistTagIndex.dart';
 import 'detailImage.dart';
 
 
@@ -1738,6 +1738,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     SnackBar(content: Text('取り込み失敗: $e')),
                   );
                 }
+              },
+            ),
+            IconButton(
+              tooltip: 'アーティストタグ一覧',
+              icon: const Icon(Icons.person),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ArtistTagIndexPage(
+                      tagService: widget.tagService,
+                      repo: widget.repo
+                    ),
+                  ),
+                );
               },
             ),
             IconButton(
