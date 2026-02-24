@@ -30,13 +30,12 @@ class _LruCache<K, V> {
   V? get(K key) {
     final v = _map.remove(key);
     if (v == null) return null;
-    // アクセスされたものを末尾へ（最近使った）
+    // アクセスされたものを末尾へ
     _map[key] = v;
     return v;
   }
 
   void put(K key, V value) {
-    // 既存があれば差し替え（容量調整）
     final old = _map.remove(key);
     if (old != null) {
       _bytes -= sizeOf(old);
@@ -79,10 +78,12 @@ class WindowsFolderRepository implements MediaRepository {
     }
     return FolderHandle(libDir.path);
   }
+
   // ------------------------------
   // サムネイル：メモリLRUキャッシュ
   // ------------------------------
-  // 目安: 64MB / 最大400件（どちらか先に達したら古いものから破棄）
+  // 目安: 64MB / 最大400件
+  // （どちらか先に達したら古いものから破棄）
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
     maxBytes: 64 * 1024 * 1024,
     maxEntries: 400,
@@ -90,10 +91,10 @@ class WindowsFolderRepository implements MediaRepository {
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
 
-  // 同一サムネの同時要求を1回にまとめる（急スクロール対策）
+  // 同一サムネの同時要求を1回にまとめ、急なスクロールに対応できるように
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
 
-  // PDF document キャッシュ（ページ送り高速化）
+  // PDF キャッシュ（ページ送り高速化）
   final Map<String, PdfDocument> _pdfCache = {};
 
   @override
@@ -127,7 +128,7 @@ class WindowsFolderRepository implements MediaRepository {
 
       items.add(
         MediaItem(
-          id: e.path, // ★フルパス
+          id: e.path, //　フルパスを渡す
           displayName: _fileName(e.path),
           kind: kind,
           folderRaw: folder.raw,
@@ -136,7 +137,7 @@ class WindowsFolderRepository implements MediaRepository {
       );
     }
 
-    // 更新日時 新しい順
+    // 更新日時 新しい順で
     items.sort((a, b) {
       final am = a.modified?.millisecondsSinceEpoch ?? 0;
       final bm = b.modified?.millisecondsSinceEpoch ?? 0;
@@ -151,7 +152,7 @@ class WindowsFolderRepository implements MediaRepository {
     return File(item.id).readAsBytes();
   }
 
-  // ---- 追加：ページ数取得 ----
+  // ---- ページ数を取得 ----
   @override
   Future<int> getPageCount(MediaItem item) async {
     if (item.kind != MediaKind.pdf) return 1;
@@ -159,7 +160,7 @@ class WindowsFolderRepository implements MediaRepository {
     return doc.pagesCount;
   }
 
-  // ---- 任意ページをPNGとして取得（画像はそのまま返す）----
+  // ---- 任意ページをPNGとして取得できるように ----
   @override
   Future<Uint8List> renderPageBytes(
     MediaItem item,
@@ -181,15 +182,15 @@ class WindowsFolderRepository implements MediaRepository {
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
     final cacheKey = '${item.id}|$maxWidth';
 
-    // 1) LRU キャッシュ hit
+    // LRU キャッシュをあたってみる
     final cached = _thumbCache.get(cacheKey);
     if (cached != null) return cached;
 
-    // 2) 同一キーの in-flight を共有
+    // 同一キーの in-flight を共有
     final inflight = _thumbInFlight[cacheKey];
     if (inflight != null) return inflight;
 
-    // 3) 作成（in-flight 登録）
+    // 作成（in-flight 登録）
     final future = _buildThumbPair(item, maxWidth)
         .then((pair) {
           _thumbCache.put(cacheKey, pair);
@@ -287,14 +288,14 @@ class WindowsFolderRepository implements MediaRepository {
     if (!await oldFile.exists()) {
       throw Exception('File not found: $oldPath');
     }
-  
+
     final fixedName = _ensureExtensionForFs(item, newDisplayName);
-  
+
     final parent = oldFile.parent.path;
     final newPath = '$parent${Platform.pathSeparator}$fixedName';
-  
+
     final renamed = await oldFile.rename(newPath);
-  
+
     // ファイルパスは変わるので id も更新する
     return MediaItem(
       id: renamed.path,
@@ -346,7 +347,9 @@ class WindowsFolderRepository implements MediaRepository {
 
     var candidate = name;
     var n = 1;
-    while (File('${dir.path}${Platform.pathSeparator}$candidate').existsSync()) {
+    while (File(
+      '${dir.path}${Platform.pathSeparator}$candidate',
+    ).existsSync()) {
       candidate = '$base ($n)$ext';
       n++;
       if (n > 999) {
@@ -356,20 +359,20 @@ class WindowsFolderRepository implements MediaRepository {
     }
     return candidate;
   }
-  
+
   String _ensureExtensionForFs(MediaItem item, String name) {
     final n = name.trim();
     if (n.isEmpty) return item.displayName;
-  
+
     if (item.kind == MediaKind.pdf) {
       return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
     }
-  
+
     final ext = _extLowerFs(item.displayName);
     if (ext.isEmpty) return n;
     return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
   }
-  
+
   String _extLowerFs(String fileName) {
     final dot = fileName.lastIndexOf('.');
     if (dot < 0 || dot == fileName.length - 1) return '';

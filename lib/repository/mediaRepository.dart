@@ -11,12 +11,12 @@ class ThumbPair {
 abstract class MediaRepository {
   Future<FolderHandle?> pickFolder();
 
-  /// ★ 追加：アプリ専用保管庫フォルダ（必ず書き込み可）を返す
+  // アプリ専用保管庫フォルダ（必ず書き込み可）を返す
   Future<FolderHandle> getAppLibraryFolder();
 
   Future<List<MediaItem>> listMedia(FolderHandle folder);
 
-  /// ★ 追加：外部から選んだ画像/PDFを folder に取り込む（コピー保存）
+  // 外部から選んだ画像/PDFを folder に取り込む（コピー保存）
   Future<int> importIntoFolder(FolderHandle folder);
 
   /// 一覧用サムネ
@@ -29,13 +29,13 @@ abstract class MediaRepository {
   Future<int> getPageCount(MediaItem item);
 
   /// page(1-based) を画像として返す
-  /// 画像は page 無視でOK
+  /// 画像は page 無視で大丈夫
   Future<Uint8List> renderPageBytes(
     MediaItem item,
     int page, {
     int maxWidth = 1600,
   });
 
-  // ファイル名変更（displayName のみ変更。id(uri/path)は基本維持）
+  // ファイル名変更（displayName のみ変更。id(uri/path)は基本維持、市内と崩れる）
   Future<MediaItem> rename(MediaItem item, String newDisplayName);
 }

@@ -32,7 +32,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
 
   Widget _coverThumb(MediaItem item) {
     return AspectRatio(
-      aspectRatio: 3 / 4, // 縦長（漫画・PDF向け）
+      aspectRatio: 3 / 4,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: FutureBuilder<ThumbPair>(
@@ -46,7 +46,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
               );
             }
             return Image.memory(
-              snap.data!.front, // ★PDFは表紙、画像はその画像
+              snap.data!.front,
               fit: BoxFit.cover,
               gaplessPlayback: true,
             );
@@ -59,7 +59,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
   Future<void> _openDetail(MediaItem item) async {
     final folderRaw = item.folderRaw;
 
-    // 1) フォルダ全件を取得（キャッシュ）
+    // フォルダ全件を取得
     List<MediaItem> items;
     if (_folderItemsCache.containsKey(folderRaw)) {
       items = _folderItemsCache[folderRaw]!;
@@ -68,7 +68,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
       _folderItemsCache[folderRaw] = items;
     }
 
-    // 2) index を特定
+    // ファイルindex を特定
     final idx = items.indexWhere((e) => e.id == item.id);
     if (!mounted) return;
     if (idx < 0) {
@@ -78,7 +78,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
       return;
     }
 
-    // 3) detailへ遷移（あなたの detailImage.dart のコンストラクタに合わせる）
+    // detailページへ遷移
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -96,9 +96,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('アーティスト: ${widget.tagName}'),
-      ),
+      appBar: AppBar(title: Text('アーティスト: ${widget.tagName}')),
       body: FutureBuilder<List<MediaItem>>(
         future: widget.tagService.findMediaItemsByTagGlobal(
           category: widget.category,
@@ -114,9 +112,13 @@ class _TagResultsPageState extends State<TagResultsPage> {
             return const Center(child: Text('該当なし'));
           }
 
-          // 作品名で見やすくソート（任意）
+          // 作品名で見やすくソート
           final sorted = items.toList(growable: true)
-            ..sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+            ..sort(
+              (a, b) => a.displayName.toLowerCase().compareTo(
+                b.displayName.toLowerCase(),
+              ),
+            );
 
           return ListView.separated(
             padding: const EdgeInsets.all(12),

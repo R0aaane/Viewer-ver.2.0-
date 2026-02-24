@@ -9,10 +9,10 @@ class ArtistTagIndexPage extends StatefulWidget {
   final TagService tagService;
   final MediaRepository repo;
   const ArtistTagIndexPage({
-    super.key, 
+    super.key,
     required this.tagService,
-    required this.repo
-    });
+    required this.repo,
+  });
 
   @override
   State<ArtistTagIndexPage> createState() => _ArtistTagIndexPageState();
@@ -58,7 +58,9 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
           const Divider(height: 1),
           Expanded(
             child: FutureBuilder<List<model.Tag>>(
-              future: widget.tagService.listTagsByCategory(model.TagCategory.artist),
+              future: widget.tagService.listTagsByCategory(
+                model.TagCategory.artist,
+              ),
               builder: (context, snap) {
                 if (!snap.hasData) {
                   return const Center(child: CircularProgressIndicator());
@@ -71,7 +73,11 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
                 // 検索（部分一致）
                 final filtered = (_q.isEmpty)
                     ? tags
-                    : tags.where((x) => x.toLowerCase().contains(_q.toLowerCase())).toList();
+                    : tags
+                          .where(
+                            (x) => x.toLowerCase().contains(_q.toLowerCase()),
+                          )
+                          .toList();
 
                 // グルーピング（A-Z / あ-ん / その他）
                 final grouped = <String, List<String>>{};
@@ -82,7 +88,9 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
 
                 // 各グループ内は自然ソートっぽく（単純比較）
                 for (final k in grouped.keys) {
-                  grouped[k]!.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+                  grouped[k]!.sort(
+                    (a, b) => a.toLowerCase().compareTo(b.toLowerCase()),
+                  );
                 }
 
                 final keys = grouped.keys.toList()
@@ -105,10 +113,10 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
                           context,
                           MaterialPageRoute(
                             builder: (_) => TagResultsPage(
-                             tagService: widget.tagService,
-                             repo: widget.repo,
-                             category: model.TagCategory.artist,
-                             tagName: name,
+                              tagService: widget.tagService,
+                              repo: widget.repo,
+                              category: model.TagCategory.artist,
+                              tagName: name,
                             ),
                           ),
                         );
@@ -132,13 +140,13 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
     final first = s.runes.first;
     final ch = String.fromCharCode(first);
 
-    // Latin
+    // ラテン語
     final upper = ch.toUpperCase();
     if (upper.codeUnitAt(0) >= 65 && upper.codeUnitAt(0) <= 90) {
       return upper;
     }
 
-    // Japanese (hiragana/katakana)
+    // 日本語
     final hira = _toHiragana(ch);
     final g = _kanaHead(hira);
     if (g != null) return g;
@@ -170,54 +178,63 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
     return 9999;
   }
 
-  // katakana -> hiragana（単一文字のみ想定）
+  // カタカナ -> ひらがな（単一文字のみ想定）
   String _toHiragana(String ch) {
     if (ch.isEmpty) return ch;
     final code = ch.codeUnitAt(0);
-    // Katakana block: 0x30A1..0x30F6
+    // カタカナ 0x30A1..0x30F6
     if (code >= 0x30A1 && code <= 0x30F6) {
       return String.fromCharCode(code - 0x60);
     }
     return ch;
   }
 
-  // 先頭かなを五十音の「行」に丸める（が→か / ぱ→は など）
+  // 先頭かなを五十音の「行」に変更する。（が→か / ぱ→は など）
   String? _kanaHead(String hira) {
     if (hira.isEmpty) return null;
     final code = hira.codeUnitAt(0);
 
-    // Hiragana block: 0x3041..0x3096
+    // ひらがな 0x3041..0x3096
     if (code < 0x3041 || code > 0x3096) return null;
 
-    // 濁点/半濁点/小書きも吸収
+    // 濁点/半濁点/小書きも変更
     const map = <String, String>{
       // あ行
-      'ぁ':'あ','あ':'あ','ぃ':'あ','い':'あ','ぅ':'あ','う':'あ','ぇ':'あ','え':'あ','ぉ':'あ','お':'あ',
+      'ぁ': 'あ',
+      'あ': 'あ',
+      'ぃ': 'あ',
+      'い': 'あ',
+      'ぅ': 'あ',
+      'う': 'あ',
+      'ぇ': 'あ',
+      'え': 'あ',
+      'ぉ': 'あ',
+      'お': 'あ',
       // か行
-      'か':'か','き':'か','く':'か','け':'か','こ':'か',
-      'が':'か','ぎ':'か','ぐ':'か','げ':'か','ご':'か',
+      'か': 'か', 'き': 'か', 'く': 'か', 'け': 'か', 'こ': 'か',
+      'が': 'か', 'ぎ': 'か', 'ぐ': 'か', 'げ': 'か', 'ご': 'か',
       // さ行
-      'さ':'さ','し':'さ','す':'さ','せ':'さ','そ':'さ',
-      'ざ':'さ','じ':'さ','ず':'さ','ぜ':'さ','ぞ':'さ',
+      'さ': 'さ', 'し': 'さ', 'す': 'さ', 'せ': 'さ', 'そ': 'さ',
+      'ざ': 'さ', 'じ': 'さ', 'ず': 'さ', 'ぜ': 'さ', 'ぞ': 'さ',
       // た行
-      'た':'た','ち':'た','つ':'た','て':'た','と':'た',
-      'だ':'た','ぢ':'た','づ':'た','で':'た','ど':'た',
+      'た': 'た', 'ち': 'た', 'つ': 'た', 'て': 'た', 'と': 'た',
+      'だ': 'た', 'ぢ': 'た', 'づ': 'た', 'で': 'た', 'ど': 'た',
       // な行
-      'な':'な','に':'な','ぬ':'な','ね':'な','の':'な',
+      'な': 'な', 'に': 'な', 'ぬ': 'な', 'ね': 'な', 'の': 'な',
       // は行
-      'は':'は','ひ':'は','ふ':'は','へ':'は','ほ':'は',
-      'ば':'は','び':'は','ぶ':'は','べ':'は','ぼ':'は',
-      'ぱ':'は','ぴ':'は','ぷ':'は','ぺ':'は','ぽ':'は',
+      'は': 'は', 'ひ': 'は', 'ふ': 'は', 'へ': 'は', 'ほ': 'は',
+      'ば': 'は', 'び': 'は', 'ぶ': 'は', 'べ': 'は', 'ぼ': 'は',
+      'ぱ': 'は', 'ぴ': 'は', 'ぷ': 'は', 'ぺ': 'は', 'ぽ': 'は',
       // ま行
-      'ま':'ま','み':'ま','む':'ま','め':'ま','も':'ま',
+      'ま': 'ま', 'み': 'ま', 'む': 'ま', 'め': 'ま', 'も': 'ま',
       // や行
-      'ゃ':'や','や':'や','ゅ':'や','ゆ':'や','ょ':'や','よ':'や',
+      'ゃ': 'や', 'や': 'や', 'ゅ': 'や', 'ゆ': 'や', 'ょ': 'や', 'よ': 'や',
       // ら行
-      'ら':'ら','り':'ら','る':'ら','れ':'ら','ろ':'ら',
+      'ら': 'ら', 'り': 'ら', 'る': 'ら', 'れ': 'ら', 'ろ': 'ら',
       // わ行
-      'ゎ':'わ','わ':'わ','を':'わ',
+      'ゎ': 'わ', 'わ': 'わ', 'を': 'わ',
       // ん
-      'ん':'ん',
+      'ん': 'ん',
     };
 
     final head = map[hira];

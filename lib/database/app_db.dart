@@ -6,20 +6,14 @@ import 'package:path_provider/path_provider.dart';
 
 part 'app_db.g.dart';
 
-/// TagCategory はあなたの models/tag.dart の enum と「順序を揃える」こと
-enum TagCategoryDb {
-  artist,
-  series,
-  mediaType,
-  character,
-  free,
-}
+enum TagCategoryDb { artist, series, mediaType, character, free }
 
 // MediaItem の定義はここから
 @DataClassName('DbMediaItem')
 class MediaItems extends Table {
   TextColumn get id => text()(); // Windows: full path / Android: document Uri
-  TextColumn get folderRaw => text()(); // Windows: parent path / Android: treeUri
+  TextColumn get folderRaw =>
+      text()(); // Windows: parent path / Android: treeUri
   TextColumn get displayName => text()();
   IntColumn get kind => integer()(); // 0=image 1=pdf
   IntColumn get modifiedEpochMs => integer().nullable()();
@@ -36,9 +30,7 @@ class Tags extends Table {
   IntColumn get category => integer()(); // TagCategoryDb index
 
   @override
-  List<String> get customConstraints => [
-        'UNIQUE(name, category)',
-      ];
+  List<String> get customConstraints => ['UNIQUE(name, category)'];
 }
 
 @DataClassName('DbMediaItemTag')
@@ -60,11 +52,9 @@ class AppDb extends _$AppDb {
   // 将来のマイグレーション用
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) async => m.createAll(),
-        onUpgrade: (m, from, to) async {
-          // schemaVersion を上げたらここに追加
-        },
-      );
+    onCreate: (m) async => m.createAll(),
+    onUpgrade: (m, from, to) async {},
+  );
 }
 
 LazyDatabase _openConnection() {

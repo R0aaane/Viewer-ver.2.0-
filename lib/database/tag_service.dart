@@ -3,7 +3,7 @@ import '../models/mediaItem.dart' as m;
 import '../models/tag.dart' as model;
 import 'app_db.dart' as db;
 
-class TagWithId { 
+class TagWithId {
   final int tagId;
   final model.Tag tag;
   const TagWithId({required this.tagId, required this.tag});
@@ -47,7 +47,9 @@ class TagService {
   }
 
   Future<void> upsertMediaItem(m.MediaItem item) async {
-    await _db.into(_db.mediaItems).insertOnConflictUpdate(
+    await _db
+        .into(_db.mediaItems)
+        .insertOnConflictUpdate(
           db.MediaItemsCompanion.insert(
             id: item.id,
             folderRaw: item.folderRaw,
@@ -61,22 +63,25 @@ class TagService {
   Future<int> ensureTagId(model.Tag tag) async {
     final cat = _categoryToInt(tag.category);
 
-    final existing = await (_db.select(_db.tags)
-          ..where((t) => t.name.equals(tag.name) & t.category.equals(cat)))
-        .getSingleOrNull();
+    final existing =
+        await (_db.select(_db.tags)
+              ..where((t) => t.name.equals(tag.name) & t.category.equals(cat)))
+            .getSingleOrNull();
 
     if (existing != null) return existing.tagId;
 
-    return _db.into(_db.tags).insert(
-          db.TagsCompanion.insert(name: tag.name, category: cat),
-        );
+    return _db
+        .into(_db.tags)
+        .insert(db.TagsCompanion.insert(name: tag.name, category: cat));
   }
 
   Future<void> addTagToItem(m.MediaItem item, model.Tag tag) async {
     await upsertMediaItem(item);
     final tagId = await ensureTagId(tag);
 
-    await _db.into(_db.mediaItemTags).insert(
+    await _db
+        .into(_db.mediaItemTags)
+        .insert(
           db.MediaItemTagsCompanion.insert(itemId: item.id, tagId: tagId),
           mode: InsertMode.insertOrIgnore,
         );
@@ -85,21 +90,23 @@ class TagService {
   Future<List<TagWithId>> listTagsForItem(String itemId) async {
     final rows = await (_db.select(_db.mediaItemTags).join([
       innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-    ])
-          ..where(_db.mediaItemTags.itemId.equals(itemId)))
-        .get();
+    ])..where(_db.mediaItemTags.itemId.equals(itemId))).get();
 
-    return rows.map((r) {
-      final t = r.readTable(_db.tags);
-      return TagWithId(
-        tagId: t.tagId,
-        tag: model.Tag(name: t.name, category: _intToCategory(t.category)),
-      );
-    }).toList(growable: false);
+    return rows
+        .map((r) {
+          final t = r.readTable(_db.tags);
+          return TagWithId(
+            tagId: t.tagId,
+            tag: model.Tag(name: t.name, category: _intToCategory(t.category)),
+          );
+        })
+        .toList(growable: false);
   }
 
-  /// 複数 itemId のタグ名一覧をまとめて取得（Home検索用）
-  Future<Map<String, List<String>>> getTagNamesByItemIds(List<String> itemIds) async {
+  // 複数 itemId のタグ名一覧をまとめて取得（Home検索用）
+  Future<Map<String, List<String>>> getTagNamesByItemIds(
+    List<String> itemIds,
+  ) async {
     final result = <String, List<String>>{};
     if (itemIds.isEmpty) return result;
 
@@ -107,12 +114,14 @@ class TagService {
     const chunkSize = 800;
 
     for (int i = 0; i < itemIds.length; i += chunkSize) {
-      final chunk = itemIds.sublist(i, (i + chunkSize) > itemIds.length ? itemIds.length : (i + chunkSize));
+      final chunk = itemIds.sublist(
+        i,
+        (i + chunkSize) > itemIds.length ? itemIds.length : (i + chunkSize),
+      );
 
       final q = _db.select(_db.mediaItemTags).join([
         innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-      ])
-        ..where(_db.mediaItemTags.itemId.isIn(chunk));
+      ])..where(_db.mediaItemTags.itemId.isIn(chunk));
 
       final rows = await q.get();
 
@@ -120,12 +129,11 @@ class TagService {
         final link = r.readTable(_db.mediaItemTags);
         final t = r.readTable(_db.tags);
         (result[link.itemId] ??= <String>[]).add(t.name);
-     }
-   }
+      }
+    }
 
     return result;
   }
-
 
   Future<List<String>> findItemIdsByTag({
     required String folderRaw,
@@ -135,18 +143,19 @@ class TagService {
   }) async {
     final cat = _categoryToInt(category);
 
-    final q = _db.select(_db.mediaItems).join([
-      innerJoin(
-        _db.mediaItemTags,
-        _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
-      ),
-      innerJoin(
-        _db.tags,
-        _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId),
-      ),
-    ])
-      ..where(_db.mediaItems.folderRaw.equals(folderRaw))
-      ..where(_db.tags.category.equals(cat));
+    final q =
+        _db.select(_db.mediaItems).join([
+            innerJoin(
+              _db.mediaItemTags,
+              _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
+            ),
+            innerJoin(
+              _db.tags,
+              _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId),
+            ),
+          ])
+          ..where(_db.mediaItems.folderRaw.equals(folderRaw))
+          ..where(_db.tags.category.equals(cat));
 
     if (partial) {
       q.where(_db.tags.name.like('%$name%'));
@@ -164,15 +173,15 @@ class TagService {
   }
 
   Future<void> removeTagFromItem(String itemId, int tagId) async {
-  await (_db.delete(_db.mediaItemTags)
-        ..where((x) => x.itemId.equals(itemId) & x.tagId.equals(tagId)))
-      .go();
+    await (_db.delete(
+      _db.mediaItemTags,
+    )..where((x) => x.itemId.equals(itemId) & x.tagId.equals(tagId))).go();
   }
 
   /// カテゴリ内のタグ候補（マスター）を一覧取得
   Future<List<TagWithId>> listTagMasterByCategory(
     model.TagCategory category, {
-    String? contains, // 絞り込み用（任意）
+    String? contains,
     int limit = 200,
   }) async {
     final cat = _categoryToInt(category);
@@ -189,19 +198,26 @@ class TagService {
 
     final rows = await q.get();
     return rows
-        .map((t) => TagWithId(tagId: t.tagId, tag: model.Tag(name: t.name, category: _intToCategory(t.category))))
+        .map(
+          (t) => TagWithId(
+            tagId: t.tagId,
+            tag: model.Tag(name: t.name, category: _intToCategory(t.category)),
+          ),
+        )
         .toList(growable: false);
   }
 
-  /// マスタータグを削除（使っているアイテムがあっても消したい場合用）
+  // マスタータグを削除（使っているアイテムがあっても消したい場合用）
   Future<void> deleteTagMaster(int tagId) async {
     await _db.transaction(() async {
-      await (_db.delete(_db.mediaItemTags)..where((x) => x.tagId.equals(tagId))).go();
+      await (_db.delete(
+        _db.mediaItemTags,
+      )..where((x) => x.tagId.equals(tagId))).go();
       await (_db.delete(_db.tags)..where((x) => x.tagId.equals(tagId))).go();
     });
   }
 
-  /// 表示中など「複数アイテムに同じタグを一括付与」する（高速）
+  // 表示中など「複数アイテムに同じタグを一括付与」する
   Future<void> addTagToItems(List<m.MediaItem> items, model.Tag tag) async {
     if (items.isEmpty) return;
 
@@ -209,38 +225,45 @@ class TagService {
 
     // drift batch で高速に upsert + link insert(orIgnore)
     await _db.batch((b) {
-      // media_items upsert
       b.insertAllOnConflictUpdate(
         _db.mediaItems,
-        items.map((it) {
-          return db.MediaItemsCompanion.insert(
-            id: it.id,
-            folderRaw: it.folderRaw,
-            displayName: it.displayName,
-            kind: _kindToInt(it.kind),
-            modifiedEpochMs: Value(it.modified?.millisecondsSinceEpoch),
-          );
-        }).toList(growable: false),
+        items
+            .map((it) {
+              return db.MediaItemsCompanion.insert(
+                id: it.id,
+                folderRaw: it.folderRaw,
+                displayName: it.displayName,
+                kind: _kindToInt(it.kind),
+                modifiedEpochMs: Value(it.modified?.millisecondsSinceEpoch),
+              );
+            })
+            .toList(growable: false),
       );
 
       // link insert (ignore duplicates)
       b.insertAll(
         _db.mediaItemTags,
-        items.map((it) {
-          return db.MediaItemTagsCompanion.insert(itemId: it.id, tagId: tagId);
-        }).toList(growable: false),
+        items
+            .map((it) {
+              return db.MediaItemTagsCompanion.insert(
+                itemId: it.id,
+                tagId: tagId,
+              );
+            })
+            .toList(growable: false),
         mode: InsertMode.insertOrIgnore,
       );
     });
   }
 
-    // ----------------------------
-  // 追加: カテゴリ別タグ一覧（例: artist）
+  // ----------------------------
+  // カテゴリ別タグ一覧（例: artist）
   Future<List<model.Tag>> listTagsByCategory(model.TagCategory category) async {
     final cat = _categoryToInt(category);
 
-    final rows = await (_db.select(_db.tags)..where((t) => t.category.equals(cat)))
-        .get();
+    final rows = await (_db.select(
+      _db.tags,
+    )..where((t) => t.category.equals(cat))).get();
 
     // 重複排除（念のため）
     final seen = <String>{};
@@ -254,7 +277,7 @@ class TagService {
     return out;
   }
 
-  // タグ（カテゴリ+名前）に紐づく MediaItem をDBから復元して返す（フォルダ横断）
+  // タグ（カテゴリ+名前）に紐づく MediaItem をDBから復元して返す
   Future<List<m.MediaItem>> findMediaItemsByTagGlobal({
     required model.TagCategory category,
     required String name,
@@ -267,12 +290,8 @@ class TagService {
         _db.mediaItemTags,
         _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
       ),
-      innerJoin(
-        _db.tags,
-        _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId),
-      ),
-    ])
-      ..where(_db.tags.category.equals(cat));
+      innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
+    ])..where(_db.tags.category.equals(cat));
 
     if (partial) {
       q.where(_db.tags.name.like('%$name%'));
@@ -282,7 +301,7 @@ class TagService {
 
     final rows = await q.get();
 
-    // 重複排除しつつ復元
+    // 重複を排除しつつ復元
     final seen = <String>{};
     final out = <m.MediaItem>[];
 
@@ -304,8 +323,4 @@ class TagService {
     }
     return out;
   }
-
-
 }
-
-

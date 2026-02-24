@@ -76,7 +76,6 @@ class AndroidFolderRepository implements MediaRepository {
     return out;
   }
 
-
   Future<Uint8List> _safReadBytes(String documentUri) async {
     final doc = await DocumentFile.fromUri(documentUri);
     if (doc == null) {
@@ -103,7 +102,6 @@ class AndroidFolderRepository implements MediaRepository {
   // MediaRepository
   // ==============================
 
-  
   @override
   Future<FolderHandle> getAppLibraryFolder() async {
     final base = await getApplicationDocumentsDirectory();
@@ -121,7 +119,7 @@ class AndroidFolderRepository implements MediaRepository {
     return FolderHandle(treeUri);
   }
 
-    @override
+  @override
   Future<List<MediaItem>> listMedia(FolderHandle folder) async {
     final raw = folder.raw;
 
@@ -147,14 +145,16 @@ class AndroidFolderRepository implements MediaRepository {
       }
       if (kind == null) continue;
 
-      items.add(MediaItem(
-        id: e.documentUri,
-        displayName: e.name,
-        kind: kind,
-        folderRaw: folder.raw,
-        modified: e.modified,
-        tags: const [],
-      ));
+      items.add(
+        MediaItem(
+          id: e.documentUri,
+          displayName: e.name,
+          kind: kind,
+          folderRaw: folder.raw,
+          modified: e.modified,
+          tags: const [],
+        ),
+      );
     }
     return items;
   }
@@ -166,7 +166,9 @@ class AndroidFolderRepository implements MediaRepository {
     final items = <MediaItem>[];
     await for (final ent in dir.list(recursive: true, followLinks: false)) {
       if (ent is! File) continue;
-      final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+      final name = ent.uri.pathSegments.isNotEmpty
+          ? ent.uri.pathSegments.last
+          : ent.path;
       final ext = _lowerExt(name);
 
       MediaKind? kind;
@@ -178,14 +180,16 @@ class AndroidFolderRepository implements MediaRepository {
       if (kind == null) continue;
 
       final stat = await ent.stat();
-      items.add(MediaItem(
-        id: ent.path, // ★ 内部保管庫は file path を id として使う
-        displayName: name,
-        kind: kind,
-        folderRaw: folder.raw,
-        modified: stat.modified,
-        tags: const [],
-      ));
+      items.add(
+        MediaItem(
+          id: ent.path, // ★ 内部保管庫は file path を id として使う
+          displayName: name,
+          kind: kind,
+          folderRaw: folder.raw,
+          modified: stat.modified,
+          tags: const [],
+        ),
+      );
     }
     return items;
   }
@@ -415,50 +419,50 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   Future<List<_SafEntry>> _safListRecursive(String treeUri) async {
-  final root = await DocumentFile.fromUri(treeUri);
-  if (root == null) return const [];
-  if (root.isDirectory != true) return const [];
+    final root = await DocumentFile.fromUri(treeUri);
+    if (root == null) return const [];
+    if (root.isDirectory != true) return const [];
 
-  final out = <_SafEntry>[];
-  final queue = <DocumentFile>[root];
+    final out = <_SafEntry>[];
+    final queue = <DocumentFile>[root];
 
-  while (queue.isNotEmpty) {
-    final dir = queue.removeLast();
-    final children = await dir.listDocuments();
+    while (queue.isNotEmpty) {
+      final dir = queue.removeLast();
+      final children = await dir.listDocuments();
 
-    for (final f in children) {
-      final name = f.name ?? '';
-      if (name.isEmpty) continue;
+      for (final f in children) {
+        final name = f.name ?? '';
+        if (name.isEmpty) continue;
 
-      final isDir = f.isDirectory == true;
-      if (isDir) {
-        queue.add(f);
-        continue;
+        final isDir = f.isDirectory == true;
+        if (isDir) {
+          queue.add(f);
+          continue;
+        }
+
+        out.add(
+          _SafEntry(
+            documentUri: f.uri,
+            name: name,
+            modified: _toDateTimeSafe(f.lastModified),
+            isDir: false,
+          ),
+        );
       }
 
-      out.add(_SafEntry(
-        documentUri: f.uri,
-        name: name,
-        modified: _toDateTimeSafe(f.lastModified),
-        isDir: false,
-      ));
+      await Future<void>.delayed(Duration.zero);
     }
 
-    await Future<void>.delayed(Duration.zero);
+    return out;
   }
-
-  return out;
-}
-
-  
 
   // -------------------------
   // SAF: 親フォルダとファイルを探す
   // -------------------------
   Future<(DocumentFile, DocumentFile)?> _findParentAndDoc(
-      String treeUri,
-      String documentUri,
-      ) async {
+    String treeUri,
+    String documentUri,
+  ) async {
     final root = await DocumentFile.fromUri(treeUri);
     if (root == null) return null;
     if (root.isDirectory != true) return null;
@@ -530,12 +534,12 @@ class AndroidFolderRepository implements MediaRepository {
           final bytes = await f.readAsBytes();
           if (bytes.isEmpty) continue;
 
-        final unique = await _uniqueName(dir, name);
-        final created = await dir.createFile(name: unique, bytes: bytes);
-        if (created != null) ok++;
-      } catch (_) {}
-    }
-    return ok;
+          final unique = await _uniqueName(dir, name);
+          final created = await dir.createFile(name: unique, bytes: bytes);
+          if (created != null) ok++;
+        } catch (_) {}
+      }
+      return ok;
     }
 
     // 3) SAFが書き込み不可 → ★保管庫へ確実に取り込む（fallback）
@@ -558,22 +562,22 @@ class AndroidFolderRepository implements MediaRepository {
     return ok;
   }
 
-Future<String> _uniquePathInDir(Directory dir, String name) async {
-  final dot = name.lastIndexOf('.');
-  final base = dot >= 0 ? name.substring(0, dot) : name;
-  final ext = dot >= 0 ? name.substring(dot) : '';
+  Future<String> _uniquePathInDir(Directory dir, String name) async {
+    final dot = name.lastIndexOf('.');
+    final base = dot >= 0 ? name.substring(0, dot) : name;
+    final ext = dot >= 0 ? name.substring(dot) : '';
 
-  String candidate = name;
-  int n = 1;
-  while (await File('${dir.path}/$candidate').exists()) {
-    candidate = '$base ($n)$ext';
-    n++;
-    if (n > 999) {
-      return '${dir.path}/${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
+    String candidate = name;
+    int n = 1;
+    while (await File('${dir.path}/$candidate').exists()) {
+      candidate = '$base ($n)$ext';
+      n++;
+      if (n > 999) {
+        return '${dir.path}/${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
+      }
     }
+    return '${dir.path}/$candidate';
   }
-  return '${dir.path}/$candidate';
-}
 
   Future<String> _uniqueName(DocumentFile dir, String name) async {
     final dot = name.lastIndexOf('.');
@@ -587,7 +591,8 @@ Future<String> _uniquePathInDir(Directory dir, String name) async {
       if (found == null || found.exists != true) return candidate;
       candidate = '$base ($n)$ext';
       n++;
-      if (n > 999) return '${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
+      if (n > 999)
+        return '${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
     }
   }
 
@@ -595,10 +600,10 @@ Future<String> _uniquePathInDir(Directory dir, String name) async {
   // docman の createFile/delete シグネチャ差を吸収
   // -------------------------
   Future<DocumentFile?> _createFile(
-      DocumentFile dir,
-      String name,
-      Uint8List bytes,
-      ) async {
+    DocumentFile dir,
+    String name,
+    Uint8List bytes,
+  ) async {
     final d = dir as dynamic;
 
     // パターン1: createFile(name: ..., bytes: ...)

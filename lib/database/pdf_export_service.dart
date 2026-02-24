@@ -10,7 +10,7 @@ import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 
 class PdfExportService {
-  /// ✅ 保存先をユーザーに選ばせて（SAF）PDFを書き出す
+  /// 保存先をユーザーに選ばせて（SAF）PDFを書き出す
   /// 戻り値：作成された DocumentFile（uriなどが取れる）
   static Future<DocumentFile?> exportFolderToPdfPickLocation(
     MediaRepository repo,
@@ -19,11 +19,11 @@ class PdfExportService {
     double longSidePt = 842.0,
     void Function(int done, int total)? onProgress,
   }) async {
-    // 1) 保存先フォルダを選択（SAF）
+    // 保存先フォルダを選択（SAF）
     final dir = await DocMan.pick.directory();
     if (dir == null) return null;
 
-    // 2) PDFバイトを生成（Isolate）
+    // PDFバイトを生成（Isolate）
     final pdfBytes = await _buildPdfBytesIsolate(
       repo,
       items,
@@ -31,14 +31,14 @@ class PdfExportService {
       onProgress: onProgress,
     );
 
-    // 3) 既に同名があれば削除して作り直し（docmanは既存上書きが弱い）
+    // 既に同名があれば削除して作り直し（docmanは既存上書きが弱い）
     final safeName = _sanitizePdfName(fileName);
     final existing = await dir.find('$safeName.pdf');
     if (existing != null) {
       await existing.delete();
     }
 
-    // 4) 選択フォルダへPDF作成
+    // 選択フォルダへPDF作成
     final created = await dir.createFile(
       name: '$safeName.pdf',
       bytes: pdfBytes,
@@ -59,8 +59,9 @@ class PdfExportService {
     required double longSidePt,
     void Function(int done, int total)? onProgress,
   }) async {
-    final targets =
-        items.where((e) => e.kind == MediaKind.image).toList(growable: false);
+    final targets = items
+        .where((e) => e.kind == MediaKind.image)
+        .toList(growable: false);
     final total = targets.length;
 
     final worker = await _PdfWorker.spawn(longSidePt: longSidePt);
@@ -82,7 +83,6 @@ class PdfExportService {
   }
 }
 
-/// --- isolate worker ---
 class _PdfWorker {
   final SendPort _sendPort;
   final ReceivePort _receivePort;
@@ -151,26 +151,28 @@ void _pdfIsolateEntry(_IsolateInit init) {
       final w = decoded.width.toDouble();
       final h = decoded.height.toDouble();
 
-      // 画像比率に合わせた可変ページ（トリミングなし）
+      // 画像比率に合わせた可変ページ
       final bool landscape = w >= h;
-      final double pageW =
-          landscape ? init.longSidePt : init.longSidePt * (w / h);
-      final double pageH =
-          landscape ? init.longSidePt * (h / w) : init.longSidePt;
+      final double pageW = landscape
+          ? init.longSidePt
+          : init.longSidePt * (w / h);
+      final double pageH = landscape
+          ? init.longSidePt * (h / w)
+          : init.longSidePt;
 
       final img = pw.MemoryImage(bytes);
 
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat(pageW, pageH),
-          margin: pw.EdgeInsets.zero, // ✅ 余白ゼロ
+          margin: pw.EdgeInsets.zero, // 余白ゼロ
           build: (_) => pw.FullPage(
             ignoreMargins: true,
             child: pw.Image(
               img,
               width: pageW,
               height: pageH,
-              fit: pw.BoxFit.contain, // ✅ トリミングなし
+              fit: pw.BoxFit.contain, // トリミングなし
             ),
           ),
         ),
