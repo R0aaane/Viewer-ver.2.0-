@@ -456,39 +456,6 @@ class AndroidFolderRepository implements MediaRepository {
     return out;
   }
 
-  // -------------------------
-  // SAF: 親フォルダとファイルを探す
-  // -------------------------
-  Future<(DocumentFile, DocumentFile)?> _findParentAndDoc(
-    String treeUri,
-    String documentUri,
-  ) async {
-    final root = await DocumentFile.fromUri(treeUri);
-    if (root == null) return null;
-    if (root.isDirectory != true) return null;
-
-    final queue = <DocumentFile>[root];
-
-    while (queue.isNotEmpty) {
-      final dir = queue.removeLast();
-      final children = await dir.listDocuments();
-
-      for (final c in children) {
-        if (c.isDirectory == true) {
-          queue.add(c);
-          continue;
-        }
-        if (c.uri == documentUri) {
-          return (dir, c);
-        }
-      }
-
-      await Future<void>.delayed(Duration.zero);
-    }
-
-    return null;
-  }
-
   @override
   Future<int> importIntoFolder(FolderHandle folder) async {
     final picked = await DocMan.pick.files(
@@ -535,7 +502,7 @@ class AndroidFolderRepository implements MediaRepository {
           if (bytes.isEmpty) continue;
 
           final unique = await _uniqueName(dir, name);
-          final created = await dir.createFile(name: unique, bytes: bytes);
+          final created = await _createFile(dir, unique, bytes);
           if (created != null) ok++;
         } catch (_) {}
       }
@@ -628,49 +595,12 @@ class AndroidFolderRepository implements MediaRepository {
     return null;
   }
 
-  Future<void> _deleteDoc(DocumentFile doc) async {
-    final d = doc as dynamic;
-
-    // パターン1: delete()
-    try {
-      await d.delete();
-      return;
-    } catch (_) {}
-
-    // パターン2: deleteDocument()
-    try {
-      await d.deleteDocument();
-      return;
-    } catch (_) {}
-
-    throw Exception('delete not supported by your docman DocumentFile');
-  }
-
   String _mimeFor({required String itemExt}) {
     if (itemExt == '.pdf') return 'application/pdf';
     if (itemExt == '.png') return 'image/png';
     if (itemExt == '.webp') return 'image/webp';
     if (itemExt == '.bmp') return 'image/bmp';
     return 'image/jpeg'; // jpg/jpeg fallback
-  }
-
-  String _ensureExtension(MediaItem item, String name) {
-    final n = name.trim();
-    if (n.isEmpty) return item.displayName;
-
-    if (item.kind == MediaKind.pdf) {
-      return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
-    }
-
-    final ext = _lowerExt(item.displayName); // 既存の拡張子を維持
-    if (ext.isEmpty) return n;
-    return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
-  }
-
-  String _extLower(String fileName) {
-    final dot = fileName.lastIndexOf('.');
-    if (dot < 0 || dot == fileName.length - 1) return '';
-    return fileName.substring(dot).toLowerCase();
   }
 }
 

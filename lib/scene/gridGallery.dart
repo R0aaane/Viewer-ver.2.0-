@@ -587,6 +587,31 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
+  Future<void> _organizeLibrary() async {
+    try {
+      final lib = await widget.repo.getAppLibraryFolder();
+      final moved = await widget.tagService.organizeAppLibrary(
+        libraryRoot: lib.raw,
+      );
+
+      if (!mounted) return;
+
+      // 表示更新：今見てるフォルダが保管庫配下ならリロード
+      if (_currentFolderRaw != null && _currentFolderRaw!.startsWith(lib.raw)) {
+        await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false);
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('保管庫整理: 移動 ${moved.length} 件')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('保管庫整理に失敗: $e')));
+    }
+  }
+
   Widget _homeFavThumb(MediaItem item) {
     return AspectRatio(
       aspectRatio: 3 / 4,
@@ -1731,6 +1756,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   ).showSnackBar(SnackBar(content: Text('取り込み失敗: $e')));
                 }
               },
+            ),
+            IconButton(
+              tooltip: '保管庫を整理（作者/シリーズ）',
+              icon: const Icon(Icons.auto_awesome_mosaic_outlined),
+              onPressed: _organizeLibrary,
             ),
             IconButton(
               tooltip: 'アーティストタグ一覧',

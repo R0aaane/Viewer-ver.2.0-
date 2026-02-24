@@ -1,5 +1,7 @@
 import 'package:drift/drift.dart';
 import '../models/mediaItem.dart' as m;
+import 'dart:io';
+import 'package:path/path.dart' as p;
 import '../models/tag.dart' as model;
 import 'app_db.dart' as db;
 
@@ -207,16 +209,6 @@ class TagService {
         .toList(growable: false);
   }
 
-  // マスタータグを削除（使っているアイテムがあっても消したい場合用）
-  Future<void> deleteTagMaster(int tagId) async {
-    await _db.transaction(() async {
-      await (_db.delete(
-        _db.mediaItemTags,
-      )..where((x) => x.tagId.equals(tagId))).go();
-      await (_db.delete(_db.tags)..where((x) => x.tagId.equals(tagId))).go();
-    });
-  }
-
   // 表示中など「複数アイテムに同じタグを一括付与」する
   Future<void> addTagToItems(List<m.MediaItem> items, model.Tag tag) async {
     if (items.isEmpty) return;
@@ -322,5 +314,160 @@ class TagService {
       );
     }
     return out;
+  }
+
+  //保管庫の整理用
+  Future<Map<String, String>> organizeAppLibrary({
+    required String libraryRoot,
+  }) async {
+    final moved = <String, String>{};
+
+    // libraryRoot 配下の MediaItems をDBから拾う（id が file path のもの前提）
+    final items = await (_db.select(
+      _db.mediaItems,
+    )..where((m) => m.id.like('$libraryRoot%'))).get();
+
+    for (final it in items) {
+      // SAF Uriは対象外（保管庫は file path の想定）
+      if (it.id.startsWith('content://')) continue;
+
+      final tags = await listTagsForItem(it.id);
+      final artist = _pickFirst(tags, model.TagCategory.artist);
+      final series = _pickFirst(tags, model.TagCategory.series);
+
+      // タグが無いなら移動しない（library直下でOK）
+      if (artist == null && series == null) continue;
+
+      final destDir = _calcLibraryDestDir(
+        libraryRoot: libraryRoot,
+        artist: artist,
+        series: series,
+      );
+
+      final srcPath = it.id;
+      final fileName = p.basename(srcPath);
+      final targetPath = _uniquePath(destDir, fileName);
+
+      // 既に期待位置なら何もしない
+      if (p.equals(p.normalize(srcPath), p.normalize(targetPath))) continue;
+
+      try {
+        await Directory(destDir).create(recursive: true);
+
+        // move (rename) → 失敗したら copy+delete
+        final srcFile = File(srcPath);
+        if (!await srcFile.exists()) continue;
+
+        try {
+          await srcFile.rename(targetPath);
+        } catch (_) {
+          await srcFile.copy(targetPath);
+          await srcFile.delete();
+        }
+
+        // DB: oldId -> newId に付け替え
+        await _db.transaction(() async {
+          // new mediaItems row
+          await _db
+              .into(_db.mediaItems)
+              .insertOnConflictUpdate(
+                db.MediaItemsCompanion.insert(
+                  id: targetPath,
+                  folderRaw: p.dirname(targetPath),
+                  displayName: fileName,
+                  kind: it.kind,
+                  modifiedEpochMs: Value(it.modifiedEpochMs),
+                ),
+              );
+
+          // mediaItemTags の itemId を更新
+          await _db.customUpdate(
+            'UPDATE media_item_tags SET item_id = ? WHERE item_id = ?',
+            variables: [
+              Variable<String>(targetPath),
+              Variable<String>(srcPath),
+            ],
+            updates: {_db.mediaItemTags},
+          );
+
+          // old mediaItems row delete
+          await (_db.delete(
+            _db.mediaItems,
+          )..where((m) => m.id.equals(srcPath))).go();
+        });
+
+        moved[srcPath] = targetPath;
+      } catch (_) {
+        // 1件失敗しても続行
+      }
+    }
+
+    return moved;
+  }
+
+  TagWithId? _pickFirst(List<TagWithId> tags, model.TagCategory cat) {
+    for (final t in tags) {
+      if (t.tag.category == cat) return t;
+    }
+    return null;
+  }
+
+  String _calcLibraryDestDir({
+    required String libraryRoot,
+    TagWithId? artist,
+    TagWithId? series,
+  }) {
+    String safe(String s) => _sanitizeDirName(s);
+
+    if (artist != null) {
+      final a = safe(artist.tag.name);
+      if (series != null) {
+        final s = safe(series.tag.name);
+        return p.join(libraryRoot, '作者', a, s);
+      }
+      return p.join(libraryRoot, '作者', a);
+    }
+
+    // artist無しで series だけある場合は “シリーズ” 配下に置く
+    if (series != null) {
+      final s = safe(series.tag.name);
+      return p.join(libraryRoot, 'シリーズ', s);
+    }
+
+    return libraryRoot;
+  }
+
+  String _sanitizeDirName(String input) {
+    var s = input.trim();
+    if (s.isEmpty) return '_';
+
+    // Windows NG文字 + パス区切り等を置換
+    s = s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    // 制御文字も排除
+    s = s.replaceAll(RegExp(r'[\x00-\x1F]'), '_');
+    // 末尾のドット/スペースはWindowsで問題になりやすい
+    s = s.replaceAll(RegExp(r'[\. ]+$'), '');
+    if (s.isEmpty) return '_';
+    return s;
+  }
+
+  String _uniquePath(String dir, String fileName) {
+    final base = p.basenameWithoutExtension(fileName);
+    final ext = p.extension(fileName);
+
+    var candidate = p.join(dir, fileName);
+    var n = 1;
+    while (File(candidate).existsSync()) {
+      candidate = p.join(dir, '$base ($n)$ext');
+      n++;
+      if (n > 999) {
+        candidate = p.join(
+          dir,
+          '${base}_${DateTime.now().millisecondsSinceEpoch}$ext',
+        );
+        break;
+      }
+    }
+    return candidate;
   }
 }

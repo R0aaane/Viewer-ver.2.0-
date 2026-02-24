@@ -862,7 +862,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                           ),
                           DropdownMenuItem(
                             value: TagCategory.series,
-                            child: Text('オリジナル/二次'),
+                            child: Text('シリーズ'),
                           ),
                           DropdownMenuItem(
                             value: TagCategory.mediaType,
