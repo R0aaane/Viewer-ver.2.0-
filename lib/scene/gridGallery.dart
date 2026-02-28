@@ -444,35 +444,72 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final key = folderItem.id;
     final cached = _folderPreviewInFlight[key];
     if (cached != null) return cached;
-
+  
     final fut = () async {
-      try {
-        // フォルダ直下の中身を取得（folders + files が返る想定）
-        final children = await widget.repo.listMedia(FolderHandle(folderItem.id));
-
-        // まずファイルのみ抽出
-        final files = children
-            .where((e) => e.kind == MediaKind.pdf || e.kind == MediaKind.image)
-            .toList(growable: false);
-
-        if (files.isEmpty) return null;
-
-        // 優先：PDF → なければ画像
-        files.sort((a, b) {
-          int score(MediaItem x) => x.kind == MediaKind.pdf ? 0 : 1;
-          return score(a).compareTo(score(b));
-        });
-
-        final first = files.first;
-
-        // 既存のサムネ生成を流用（PDFなら表紙、画像なら縮小）
-        final pair = await widget.repo.readThumbPair(first, maxWidth: 360);
-        return pair.front;
-      } catch (_) {
-        return null;
+      // ---- 探索上限（重くしないため）----
+      const int maxDepth = 4;         // 0=直下, 1=1階層下...
+      const int maxDirs = 60;         // 訪問するフォルダ数上限
+      const int maxFilesChecked = 300;// ファイル検査数上限
+  
+      // 幅優先で浅い階層から探す
+      final queue = <({String uri, int depth})>[
+        (uri: folderItem.id, depth: 0),
+      ];
+  
+      int dirsVisited = 0;
+      int filesChecked = 0;
+  
+      while (queue.isNotEmpty) {
+        final cur = queue.removeAt(0);
+        if (cur.depth > maxDepth) continue;
+  
+        List<MediaItem> children;
+        try {
+          // ★ ここは既に docman 直列化済みの repo.listMedia を通る想定
+          children = await widget.repo.listMedia(FolderHandle(cur.uri));
+        } catch (_) {
+          continue;
+        }
+  
+        dirsVisited++;
+        if (dirsVisited > maxDirs) break;
+  
+        // 1) まずこのフォルダ直下のファイルを探す
+        MediaItem? best;
+        for (final it in children) {
+          if (it.kind == MediaKind.pdf || it.kind == MediaKind.image) {
+            best = it;
+            // PDF優先（表紙に向く）
+            if (it.kind == MediaKind.pdf) break;
+          }
+          filesChecked++;
+          if (filesChecked > maxFilesChecked) break;
+        }
+  
+        if (best != null) {
+          try {
+            final pair = await widget.repo.readThumbPair(best, maxWidth: 360);
+            return pair.front;
+          } catch (_) {
+            // 読めないファイルなら探索継続
+          }
+        }
+  
+        if (filesChecked > maxFilesChecked) break;
+  
+        // 2) ファイルが無いならサブフォルダをキューに追加
+        if (cur.depth < maxDepth) {
+          for (final it in children) {
+            if (it.kind == MediaKind.folder) {
+              queue.add((uri: it.id, depth: cur.depth + 1));
+            }
+          }
+        }
       }
+  
+      return null;
     }();
-
+  
     _folderPreviewInFlight[key] = fut;
     return fut;
   }
@@ -1304,7 +1341,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _loadProcessed = 0;
       _loadTotal = 0;
     });
-    
+    _folderPreviewInFlight.clear();
 
     if (saveAsLast) {
       await _saveLastFolder(folder);
