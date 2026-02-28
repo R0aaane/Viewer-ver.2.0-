@@ -16,6 +16,13 @@ class AndroidFolderRepository implements MediaRepository {
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
 
+  // docman(DocumentFile) 操作は同時実行すると AlreadyRunning になるので全体を直列化
+  final _AsyncMutex _docmanMutex = _AsyncMutex();
+
+  Future<T> _docmanSync<T>(Future<T> Function() action) {
+    return _docmanMutex.synchronized(action);
+  }
+
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
     maxBytes: 64 * 1024 * 1024,
     maxEntries: 400,
@@ -53,49 +60,65 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   Future<List<_SafEntry>> _safListShallow(String dirUri) async {
-    final dir = await DocumentFile.fromUri(dirUri);
-    if (dir == null) return const [];
-    if (dir.isDirectory != true) return const [];
+    return _docmanSync(() async {
+      final dir = await DocumentFile.fromUri(dirUri);
+      if (dir == null) return const [];
+      if (dir.isDirectory != true) return const [];
 
-    final children = await dir.listDocuments();
+      final children = await dir.listDocuments();
 
-    final out = <_SafEntry>[];
-    for (final f in children) {
-      final name = f.name;
-      if (name.isEmpty) continue;
+      String _fallbackNameFromUri(String uri) {
+        try {
+          final u = Uri.parse(uri);
+          for (int i = u.pathSegments.length - 1; i >= 0; i--) {
+            final s = u.pathSegments[i].trim();
+            if (s.isNotEmpty) return Uri.decodeComponent(s);
+          }
+        } catch (_) {}
+        return '(no name)';
+      }
 
-      out.add(
-        _SafEntry(
+      final out = <_SafEntry>[];
+      for (final f in children) {
+        final rawName = (f.name ?? '').trim();
+        final isDir = f.isDirectory == true;
+
+        final name =
+            rawName.isNotEmpty ? rawName : (isDir ? _fallbackNameFromUri(f.uri) : '');
+        if (name.isEmpty) continue;
+
+        out.add(_SafEntry(
           documentUri: f.uri,
           name: name,
           modified: _toDateTimeSafe(f.lastModified),
-          isDir: f.isDirectory == true,
-        ),
-      );
-    }
-    return out;
+          isDir: isDir,
+        ));
+      }
+      return out;
+    });
   }
 
   Future<Uint8List> _safReadBytes(String documentUri) async {
-    final doc = await DocumentFile.fromUri(documentUri);
-    if (doc == null) {
-      throw Exception('DocumentFile.fromUri failed: $documentUri');
-    }
-    if (doc.isDirectory == true) {
-      throw Exception('Tried to read directory as file: $documentUri');
-    }
+    return _docmanSync(() async {
+      final doc = await DocumentFile.fromUri(documentUri);
+      if (doc == null) {
+        throw Exception('DocumentFile.fromUri failed: $documentUri');
+      }
+      if (doc.isDirectory == true) {
+        throw Exception('Tried to read directory as file: $documentUri');
+      }
 
-    // 1) まず read()
-    final cached = await doc.cache();
-    if (cached == null) {
-      throw Exception('cache() failed: $documentUri');
-    }
+      final cached = await doc.cache();
+      if (cached == null) {
+        throw Exception('cache() failed: $documentUri');
+      }
 
-    final fb = await cached.readAsBytes();
-    if (fb.isEmpty) {
-      throw Exception('cached file is empty: $documentUri');
-    }
-    return fb;
+      final fb = await cached.readAsBytes();
+      if (fb.isEmpty) {
+        throw Exception('cached file is empty: $documentUri');
+      }
+      return fb;
+    });
   }
 
   // ==============================
@@ -120,57 +143,146 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   @override
-  Future<List<MediaItem>> listMedia(FolderHandle folder) async {
+  Future<List<MediaItem>> listMedia(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
     final raw = folder.raw;
 
-    // ★ content:// は SAF、それ以外は通常ファイルパス（保管庫など）
     if (raw.startsWith('content://')) {
-      return _listMediaSaf(folder);
+      return _listMediaSaf(folder, onProgress: onProgress);
     } else {
-      return _listMediaFs(folder);
+      return _listMediaFs(folder, onProgress: onProgress);
     }
   }
 
-  Future<List<MediaItem>> _listMediaSaf(FolderHandle folder) async {
-    final entries = await _safListRecursive(folder.raw);
-    final items = <MediaItem>[];
+  Future<List<MediaItem>> _listMediaSaf(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    // ✅ 直下のみ
+    final entries = await _safListShallow(folder.raw);
+
+    final folders = <MediaItem>[];
+    final files = <MediaItem>[];
+
+    int processed = 0;
+    final total = entries.length;
+
     for (final e in entries) {
-      final ext = _lowerExt(e.name);
+      if (e.isDir) {
+        folders.add(
+          MediaItem(
+            id: e.documentUri,          // サブフォルダURI
+            displayName: e.name,
+            kind: MediaKind.folder,
+            folderRaw: folder.raw,
+            modified: e.modified,
+            tags: const [],
+          ),
+        );
+      } else {
+        final ext = _lowerExt(e.name);
 
-      MediaKind? kind;
-      if (ext == _pdfExt) {
-        kind = MediaKind.pdf;
-      } else if (_imageExt.contains(ext)) {
-        kind = MediaKind.image;
+        MediaKind? kind;
+        if (ext == _pdfExt) kind = MediaKind.pdf;
+        if (_imageExt.contains(ext)) kind = MediaKind.image;
+        if (kind == null) continue;
+
+        files.add(
+          MediaItem(
+            id: e.documentUri,
+            displayName: e.name,
+            kind: kind,
+            folderRaw: folder.raw,
+            modified: e.modified,
+            tags: const [],
+          ),
+        );
       }
-      if (kind == null) continue;
 
-      items.add(
-        MediaItem(
-          id: e.documentUri,
-          displayName: e.name,
-          kind: kind,
-          folderRaw: folder.raw,
-          modified: e.modified,
-          tags: const [],
-        ),
-      );
+      processed++;
+      if (onProgress != null) onProgress(processed, total);
     }
-    return items;
+
+    // フォルダ→ファイル順が見やすい
+    return <MediaItem>[...folders, ...files];
+  }
+  
+  Future<int> _safCountMedia(String treeUri) async {
+    int total = 0;  
+
+    final root = await DocumentFile.fromUri(treeUri);
+    if (root == null || root.isDirectory != true) return 0; 
+
+    final queue = <String>[root.uri]; 
+
+    while (queue.isNotEmpty) {
+      final dirUri = queue.removeLast();
+      final dir = await DocumentFile.fromUri(dirUri);
+      if (dir == null || dir.isDirectory != true) continue; 
+
+      List<DocumentFile> children;
+      try {
+        children = await dir.listDocuments();
+      } catch (_) {
+        continue; // 読めないフォルダはスキップ
+      } 
+
+      for (final f in children) {
+        final name = (f.name ?? '').trim();
+        if (name.isEmpty) continue; 
+
+        if (f.isDirectory == true) {
+          if (f.uri.isNotEmpty) queue.add(f.uri);
+        } else {
+          final ext = _lowerExt(name);
+          if (ext == _pdfExt || _imageExt.contains(ext)) {
+            total++;
+          }
+        }
+      } 
+
+      await Future<void>.delayed(Duration.zero);
+    } 
+
+    return total;
   }
 
-  Future<List<MediaItem>> _listMediaFs(FolderHandle folder) async {
+  Future<List<MediaItem>> _listMediaFs(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
     final dir = Directory(folder.raw);
     if (!await dir.exists()) return const [];
-
+  
+    bool isTarget(FileSystemEntity e) {
+      if (e is! File) return false;
+      final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+      final ext = _lowerExt(name);
+      return ext == _pdfExt || _imageExt.contains(ext);
+    }
+  
+    // total が必要なら 2パス（%を出すため）
+    int total = 0;
+    if (onProgress != null) {
+      await for (final ent in dir.list(recursive: false, followLinks: false)) {
+        if (isTarget(ent)) total++;
+      }
+    }
+  
     final items = <MediaItem>[];
-    await for (final ent in dir.list(recursive: true, followLinks: false)) {
+    int processed = 0;
+  
+    await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is! File) continue;
+  
       final name = ent.uri.pathSegments.isNotEmpty
           ? ent.uri.pathSegments.last
           : ent.path;
+  
       final ext = _lowerExt(name);
-
+  
       MediaKind? kind;
       if (ext == _pdfExt) {
         kind = MediaKind.pdf;
@@ -178,11 +290,11 @@ class AndroidFolderRepository implements MediaRepository {
         kind = MediaKind.image;
       }
       if (kind == null) continue;
-
+  
       final stat = await ent.stat();
       items.add(
         MediaItem(
-          id: ent.path, // ★ 内部保管庫は file path を id として使う
+          id: ent.path,
           displayName: name,
           kind: kind,
           folderRaw: folder.raw,
@@ -190,7 +302,11 @@ class AndroidFolderRepository implements MediaRepository {
           tags: const [],
         ),
       );
+  
+      processed++;
+      if (onProgress != null) onProgress(processed, total);
     }
+  
     return items;
   }
 
@@ -268,43 +384,34 @@ class AndroidFolderRepository implements MediaRepository {
     return _lockOf(documentUri).synchronized(() async {
       final cached = _pdfCache.remove(documentUri);
       if (cached != null) {
-        _pdfCache[documentUri] = cached; // LRU更新
+        _pdfCache[documentUri] = cached;
         return cached;
       }
-
+  
       PdfDocument doc;
-
-      // ★ SAF (content://...) と、保管庫 (file path) を分岐
+  
       if (documentUri.startsWith('content://')) {
-        // SAF: cache() してから openFile
-        final docFile = await DocumentFile.fromUri(documentUri);
-        if (docFile == null) {
-          throw Exception('DocumentFile.fromUri failed: $documentUri');
-        }
-        final cachedFile = await docFile.cache();
-        if (cachedFile == null) {
-          throw Exception('cache() failed: $documentUri');
-        }
-        doc = await PdfDocument.openFile(cachedFile.path);
+        doc = await _docmanSync(() async {
+          final docFile = await DocumentFile.fromUri(documentUri);
+          if (docFile == null) throw Exception('DocumentFile.fromUri failed: $documentUri');
+  
+          final cachedFile = await docFile.cache();
+          if (cachedFile == null) throw Exception('cache() failed: $documentUri');
+  
+          return PdfDocument.openFile(cachedFile.path);
+        });
       } else {
-        // 保管庫など: そのままファイルパスで openFile
         final f = File(documentUri);
-        if (!await f.exists()) {
-          throw Exception('PDF file not found: $documentUri');
-        }
+        if (!await f.exists()) throw Exception('PDF file not found: $documentUri');
         doc = await PdfDocument.openFile(documentUri);
       }
-
+  
       _pdfCache[documentUri] = doc;
-
       while (_pdfCache.length > _pdfCacheMaxEntries) {
         final oldestKey = _pdfCache.keys.first;
         final oldest = _pdfCache.remove(oldestKey);
-        if (oldest != null) {
-          await oldest.close();
-        }
+        if (oldest != null) await oldest.close();
       }
-
       return doc;
     });
   }
@@ -418,27 +525,47 @@ class AndroidFolderRepository implements MediaRepository {
     return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
   }
 
-  Future<List<_SafEntry>> _safListRecursive(String treeUri) async {
+  Future<List<_SafEntry>> _safListRecursive(
+    String treeUri, {
+    void Function(int processed, int total)? onProgress,
+    required int total,
+  }) async {
     final root = await DocumentFile.fromUri(treeUri);
     if (root == null) return const [];
     if (root.isDirectory != true) return const [];
 
     final out = <_SafEntry>[];
-    final queue = <DocumentFile>[root];
+
+    // ★ DocumentFile をキュー保持しない（ネイティブ参照事故を減らす）
+    final queue = <String>[root.uri];
+
+    int processed = 0;
 
     while (queue.isNotEmpty) {
-      final dir = queue.removeLast();
-      final children = await dir.listDocuments();
+      final dirUri = queue.removeLast();
+      final dir = await DocumentFile.fromUri(dirUri);
+      if (dir == null || dir.isDirectory != true) continue;
+
+      List<DocumentFile> children;
+      try {
+        children = await dir.listDocuments();
+      } catch (_) {
+        continue;
+      }
 
       for (final f in children) {
-        final name = f.name ?? '';
+        final name = (f.name ?? '').trim();
         if (name.isEmpty) continue;
 
         final isDir = f.isDirectory == true;
         if (isDir) {
-          queue.add(f);
+          if (f.uri.isNotEmpty) queue.add(f.uri);
           continue;
         }
+
+        // 画像/PDF 以外は out に入れない（重くしない）
+        final ext = _lowerExt(name);
+        if (!(ext == _pdfExt || _imageExt.contains(ext))) continue;
 
         out.add(
           _SafEntry(
@@ -448,6 +575,9 @@ class AndroidFolderRepository implements MediaRepository {
             isDir: false,
           ),
         );
+
+        processed++;
+        if (onProgress != null) onProgress(processed, total);
       }
 
       await Future<void>.delayed(Duration.zero);

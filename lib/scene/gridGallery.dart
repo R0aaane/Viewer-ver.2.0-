@@ -58,6 +58,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _items = const [];
   bool _loading = false;
 
+  int _loadProcessed = 0;
+  int _loadTotal = 0;
+  DateTime _lastProgressUi = DateTime.fromMillisecondsSinceEpoch(0);
+
   String _parentDirOfFullPath(String fullPath) {
     // Windowsでの"C:\a\b\c.jpg" / "C:/a/b/c.jpg" どちらも対応
     final p = fullPath.replaceAll('/', '\\');
@@ -433,6 +437,45 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _loadFolder(FolderHandle(current), saveAsLast: false);
   }
 
+  // フォルダのプレビュー（1枚だけ）をキャッシュする：folderId(uri/path) -> Future<Uint8List?>
+  final Map<String, Future<Uint8List?>> _folderPreviewInFlight = {};
+
+  Future<Uint8List?> _getFolderPreviewBytes(MediaItem folderItem) {
+    final key = folderItem.id;
+    final cached = _folderPreviewInFlight[key];
+    if (cached != null) return cached;
+
+    final fut = () async {
+      try {
+        // フォルダ直下の中身を取得（folders + files が返る想定）
+        final children = await widget.repo.listMedia(FolderHandle(folderItem.id));
+
+        // まずファイルのみ抽出
+        final files = children
+            .where((e) => e.kind == MediaKind.pdf || e.kind == MediaKind.image)
+            .toList(growable: false);
+
+        if (files.isEmpty) return null;
+
+        // 優先：PDF → なければ画像
+        files.sort((a, b) {
+          int score(MediaItem x) => x.kind == MediaKind.pdf ? 0 : 1;
+          return score(a).compareTo(score(b));
+        });
+
+        final first = files.first;
+
+        // 既存のサムネ生成を流用（PDFなら表紙、画像なら縮小）
+        final pair = await widget.repo.readThumbPair(first, maxWidth: 360);
+        return pair.front;
+      } catch (_) {
+        return null;
+      }
+    }();
+
+    _folderPreviewInFlight[key] = fut;
+    return fut;
+  }
   // ----------------
   // Tags (SharedPreferences依存)
 
@@ -1258,19 +1301,39 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _folder = folder;
       _loading = true;
       _items = const [];
+      _loadProcessed = 0;
+      _loadTotal = 0;
     });
+    
 
     if (saveAsLast) {
       await _saveLastFolder(folder);
     }
 
-    final items = await widget.repo.listMedia(folder);
-    print('[UI] loaded items=${items.length} folder=${folder.raw}');
+    final items = await widget.repo.listMedia(
+      folder,
+      onProgress: (processed, total) {
+        if (!mounted) return;
+
+        // setState の連打を防ぐ（100ms 以上空いたら更新）
+        final now = DateTime.now();
+        if (now.difference(_lastProgressUi).inMilliseconds < 100) return;
+        _lastProgressUi = now;
+
+        setState(() {
+          _loadProcessed = processed;
+          _loadTotal = total;
+        });
+      },
+    );
+    final folderCount = items.where((e) => e.kind == MediaKind.folder).length;
+    print('[UI] folders=$folderCount');
     if (!mounted) return;
     setState(() {
       _items = items;
       _filteredItems = items;
       _loading = false;
+      _loadProcessed = items.length;
     });
     _applySearchFilterDb(); // 検索中なら反映
     _folderItemsCache[folder.raw] = _items;
@@ -1464,9 +1527,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     if (pdfOnly != null) {
       if (pdfOnly) {
-        out = out.where((e) => e.kind == MediaKind.pdf);
+        // ✅ folder は常に残しつつ、pdf を表示
+        out = out.where((e) => e.kind == MediaKind.folder || e.kind == MediaKind.pdf);
       } else {
-        out = out.where((e) => e.kind == MediaKind.image);
+        // ✅ folder は常に残しつつ、image を表示
+        out = out.where((e) => e.kind == MediaKind.folder || e.kind == MediaKind.image);
       }
     }
 
@@ -1880,9 +1945,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     )
                   : null,
               title: Text(
-                _currentFolderRaw == null
-                    ? '一覧表示'
-                    : '一覧表示: ${_folderLabel(_currentFolderRaw!)}',
+                _folder == null ? '一覧表示' : '一覧表示: ${_folderLabel(_folder!.raw)}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -2112,14 +2175,20 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                               },
                             ),
                             const Spacer(),
-                            if (_loading)
+                            if (_loading) ...[
+                              if (_loadTotal > 0)
+                                Text(
+                                  '${((_loadProcessed / _loadTotal) * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                                )
+                              else
+                                const Text('...'),
+                              const SizedBox(width: 8),
                               const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
+                                child: CircularProgressIndicator(strokeWidth: 2),
                               ),
+                            ],
                           ],
                         ),
                       ),
@@ -2490,7 +2559,9 @@ class _ThumbTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // folder はサムネ生成しない
+    // -------------------------
+    // 1) Folder tile
+    // -------------------------
     if (item.kind == MediaKind.folder) {
       return Material(
         elevation: 2,
@@ -2498,19 +2569,43 @@ class _ThumbTile extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: Stack(
           children: [
+            // 背景（プレビュー or フォルダアイコン）
             Positioned.fill(
-              child: Container(
-                alignment: Alignment.center,
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: const Icon(Icons.folder, size: 56),
+              child: FutureBuilder<Uint8List?>(
+                future: context
+                    .findAncestorStateOfType<_GalleryGridPageState>()
+                    ?._getFolderPreviewBytes(item),
+                builder: (context, snap) {
+                  final bytes = snap.data;
+                  if (bytes != null && bytes.isNotEmpty) {
+                    return Image.memory(
+                      bytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      filterQuality: FilterQuality.low,
+                    );
+                  }
+                  return Container(
+                    alignment: Alignment.center,
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child: const Icon(Icons.folder, size: 56),
+                  );
+                },
               ),
             ),
+
+            // ✅ 右上に FOLDER バッジ
+            const Positioned(top: 8, right: 8, child: _FolderBadge()),
+
+            // タイトル
             Positioned(
               left: 8,
               right: 8,
               bottom: 8,
               child: _TitleChip(title: item.displayName, subtitle: subtitle),
             ),
+
+            // 選択時
             if (selected)
               Positioned.fill(
                 child: Container(
@@ -2525,48 +2620,61 @@ class _ThumbTile extends StatelessWidget {
       );
     }
 
-    return FutureBuilder<ThumbPair>(
-      future: repo.readThumbPair(item, maxWidth: 360),
-      builder: (context, snap) {
-        if (!snap.hasData) return const _TileShell(loading: true);
-        final bytes = snap.data!.front;
-
-        return Material(
-          elevation: 2,
-          borderRadius: BorderRadius.circular(10),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              Positioned(
-                top: 6,
-                left: 6,
-                child: _FavButton(
-                  isFavorite: isFavorite,
-                  onPressed: onToggleFavorite,
-                ),
-              ),
-              Positioned.fill(child: _ThumbImage(bytes: bytes)),
-              Positioned(
-                left: 8,
-                right: 8,
-                bottom: 8,
-                child: _TitleChip(title: item.displayName, subtitle: subtitle),
-              ),
-              if (item.kind == MediaKind.pdf)
-                const Positioned(top: 8, right: 8, child: _PdfBadge()),
-              if (selected)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black.withOpacity(0.35),
-                    alignment: Alignment.topRight,
-                    padding: const EdgeInsets.all(8),
-                    child: const Icon(Icons.check_circle, size: 26),
-                  ),
-                ),
-            ],
+    // -------------------------
+    // 2) PDF / Image tile
+    // -------------------------
+    return Material(
+      elevation: 2,
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: FutureBuilder<ThumbPair>(
+              future: repo.readThumbPair(item, maxWidth: 360),
+              builder: (context, snap) {
+                if (!snap.hasData) {
+                  return _TileShell(loading: true);
+                }
+                return _ThumbImage(bytes: snap.data!.front);
+              },
+            ),
           ),
-        );
-      },
+
+          // 右上：PDFバッジ + ★
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (item.kind == MediaKind.pdf) const _PdfBadge(),
+                const SizedBox(width: 6),
+                _FavButton(isFavorite: isFavorite, onPressed: onToggleFavorite),
+              ],
+            ),
+          ),
+
+          // タイトル
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 8,
+            child: _TitleChip(title: item.displayName, subtitle: subtitle),
+          ),
+
+          // 選択時
+          if (selected)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withOpacity(0.35),
+                alignment: Alignment.topRight,
+                padding: const EdgeInsets.all(8),
+                child: const Icon(Icons.check_circle, size: 26),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -2617,6 +2725,27 @@ class _PdfBadge extends StatelessWidget {
             SizedBox(width: 4),
             Text('PDF', style: TextStyle(color: Colors.white)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FolderBadge extends StatelessWidget {
+  const _FolderBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.65),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Text(
+          'FOLDER',
+          style: TextStyle(color: Colors.white, fontSize: 12),
         ),
       ),
     );

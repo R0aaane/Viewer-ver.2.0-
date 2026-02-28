@@ -14,7 +14,12 @@ abstract class MediaRepository {
   // アプリ専用保管庫フォルダ（必ず書き込み可）を返す
   Future<FolderHandle> getAppLibraryFolder();
 
-  Future<List<MediaItem>> listMedia(FolderHandle folder);
+  /// フォルダ内のメディア一覧を取得。
+  /// onProgress(processed,total) を随時呼ぶ（total が不明なら 0）。
+  Future<List<MediaItem>> listMedia(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  });
 
   // 外部から選んだ画像/PDFを folder に取り込む（コピー保存）
   Future<int> importIntoFolder(FolderHandle folder);

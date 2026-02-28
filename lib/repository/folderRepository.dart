@@ -105,39 +105,59 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   @override
-  Future<List<MediaItem>> listMedia(FolderHandle folder) async {
+  Future<List<MediaItem>> listMedia(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
     final dir = Directory(folder.raw);
     if (!await dir.exists()) return const [];
 
-    final items = <MediaItem>[];
-    await for (final e in dir.list(recursive: true, followLinks: false)) {
-      if (e is! File) continue;
-
+    bool isTarget(FileSystemEntity e) {
+      if (e is! File) return false;
       final ext = _lowerExt(e.path);
+      return _imageExt.contains(ext) || ext == _pdfExt;
+    }
 
-      MediaKind? kind;
+    // ---- pass1: total を数える（アイテム保持しない）----
+    int total = 0;
+    await for (final e in dir.list(recursive: true, followLinks: false)) {
+      if (isTarget(e)) total++;
+    }
+
+    // ---- pass2: 実データ生成 + 進捗通知 ----
+    final items = <MediaItem>[];
+    int processed = 0;
+
+    await for (final e in dir.list(recursive: true, followLinks: false)) {
+      if (!isTarget(e)) continue;
+
+      final f = e as File;
+      final ext = _lowerExt(f.path);
+
+      MediaKind kind;
       if (_imageExt.contains(ext)) {
         kind = MediaKind.image;
-      } else if (ext == _pdfExt) {
-        kind = MediaKind.pdf;
       } else {
-        continue;
+        kind = MediaKind.pdf;
       }
 
-      final stat = await e.stat();
+      final stat = await f.stat();
 
       items.add(
         MediaItem(
-          id: e.path, //　フルパスを渡す
-          displayName: _fileName(e.path),
+          id: f.path,
+          displayName: _fileName(f.path),
           kind: kind,
           folderRaw: folder.raw,
           modified: stat.modified,
         ),
       );
+
+      processed++;
+      if (onProgress != null) onProgress(processed, total);
     }
 
-    // 更新日時 新しい順で
+    // 更新日時 新しい順
     items.sort((a, b) {
       final am = a.modified?.millisecondsSinceEpoch ?? 0;
       final bm = b.modified?.millisecondsSinceEpoch ?? 0;
