@@ -112,44 +112,71 @@ class WindowsFolderRepository implements MediaRepository {
     final dir = Directory(folder.raw);
     if (!await dir.exists()) return const [];
 
-    bool isTarget(FileSystemEntity e) {
+    bool isMediaFile(FileSystemEntity e) {
       if (e is! File) return false;
-      final ext = _lowerExt(e.path);
+      final name = e.uri.pathSegments.isNotEmpty
+          ? e.uri.pathSegments.last
+          : e.path;
+      final ext = _lowerExt(name);
       return _imageExt.contains(ext) || ext == _pdfExt;
     }
 
-    // ---- pass1: total を数える（アイテム保持しない）----
-    int total = 0;
-    await for (final e in dir.list(recursive: true, followLinks: false)) {
-      if (isTarget(e)) total++;
+    // 表示用は「直下のみ」＋ Directory も返す
+    final entries = <FileSystemEntity>[];
+    await for (final e in dir.list(recursive: false, followLinks: false)) {
+      entries.add(e);
     }
 
-    // ---- pass2: 実データ生成 + 進捗通知 ----
-    final items = <MediaItem>[];
+    final total = entries.length;
     int processed = 0;
 
-    await for (final e in dir.list(recursive: true, followLinks: false)) {
-      if (!isTarget(e)) continue;
+    final folders = <MediaItem>[];
+    final files = <MediaItem>[];
 
-      final f = e as File;
-      final ext = _lowerExt(f.path);
+    for (final e in entries) {
+      // 直下サブフォルダ
+      if (e is Directory) {
+        final stat = await e.stat();
+        final name = _fileName(e.path); // 既存のヘルパー流用（末尾名取得）
 
-      MediaKind kind;
-      if (_imageExt.contains(ext)) {
-        kind = MediaKind.image;
-      } else {
-        kind = MediaKind.pdf;
+        folders.add(
+          MediaItem(
+            id: e.path,
+            displayName: name,
+            kind: MediaKind.folder,
+            folderRaw: folder.raw,
+            modified: stat.modified,
+            tags: const [],
+          ),
+        );
+
+        processed++;
+        if (onProgress != null) onProgress(processed, total);
+        continue;
       }
 
+      // 直下ファイル（画像/PDF）
+      if (!isMediaFile(e)) {
+        processed++;
+        if (onProgress != null) onProgress(processed, total);
+        continue;
+      }
+
+      final f = e as File;
+      final name = _fileName(f.path);
+      final ext = _lowerExt(name);
+
+      final kind = _imageExt.contains(ext) ? MediaKind.image : MediaKind.pdf;
       final stat = await f.stat();
 
-      items.add(
+      files.add(
         MediaItem(
           id: f.path,
-          displayName: _fileName(f.path),
+          displayName: name,
           kind: kind,
           folderRaw: folder.raw,
           modified: stat.modified,
+          tags: const [],
         ),
       );
 
@@ -157,14 +184,17 @@ class WindowsFolderRepository implements MediaRepository {
       if (onProgress != null) onProgress(processed, total);
     }
 
-    // 更新日時 新しい順
-    items.sort((a, b) {
-      final am = a.modified?.millisecondsSinceEpoch ?? 0;
-      final bm = b.modified?.millisecondsSinceEpoch ?? 0;
-      return bm.compareTo(am);
-    });
+    // 見やすく：フォルダ→ファイル、各々名前順
+    folders.sort(
+      (a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+    );
+    files.sort(
+      (a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+    );
 
-    return items;
+    return <MediaItem>[...folders, ...files];
   }
 
   @override
