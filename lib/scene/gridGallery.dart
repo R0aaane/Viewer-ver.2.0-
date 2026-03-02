@@ -160,6 +160,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _selectMode = false;
   final Set<String> _selectedIds = <String>{};
 
+  // ---- paging (負荷対策) ----
+  static const int _pageSize = 20;
+
+  // ギャラリー（現在フォルダ）のページ
+  int _galleryPageIndex = 0;
+
+  // Home検索ギャラリー（全フォルダ検索結果）のページ
+  int _homeSearchPageIndex = 0;
+
   void _exitSelectMode() {
     setState(() {
       _selectMode = false;
@@ -330,8 +339,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final filtered = _items
         .where((it) => it.displayName.toLowerCase().contains(lower))
         .toList();
-
-    setState(() => _filteredItems = filtered);
+    if (q.isEmpty) {
+      setState(() {
+        _filteredItems = _items;
+        _galleryPageIndex = 0; 
+      });
+      return;
+    }
   }
 
   Future<void> _loadPrefsAndAutoOpenFolder() async {
@@ -630,6 +644,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       setState(() {
         _homeSearching = false;
         _homeSearchResults = const [];
+        _homeSearchPageIndex = 0;
       });
       return;
     }
@@ -1396,6 +1411,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _items = const [];
       _loadProcessed = 0;
       _loadTotal = 0;
+      _galleryPageIndex = 0;
     });
     _folderPreviewInFlight.clear();
 
@@ -2566,86 +2582,168 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
     }
   }
+  Widget _buildPager({
+    required int totalItems,
+    required int pageSize,
+    required int pageIndex,
+    required ValueChanged<int> onChange,
+  }) {
+    if (totalItems <= pageSize) return const SizedBox.shrink();
+
+    final totalPages = (totalItems + pageSize - 1) ~/ pageSize;
+    final clamped = pageIndex.clamp(0, totalPages - 1);
+
+    final start = clamped * pageSize + 1;
+    final end = ((clamped + 1) * pageSize).clamp(0, totalItems);
+
+    final info = Text('$start-$end / $totalItems');
+
+    // ページ数が多い時はドロップダウンにする（チップが溢れるため）
+    final bool useDropdown = totalPages > 10;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      child: Row(
+        children: [
+          info,
+          const Spacer(),
+          if (useDropdown)
+            DropdownButton<int>(
+              value: clamped,
+              items: List.generate(
+                totalPages,
+                (i) => DropdownMenuItem(
+                  value: i,
+                  child: Text('ページ ${i + 1}'),
+                ),
+              ),
+              onChanged: (v) {
+                if (v == null) return;
+                onChange(v);
+              },
+            )
+          else
+            Flexible(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(totalPages, (i) {
+                    final selected = i == clamped;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: ChoiceChip(
+                        label: Text('${i + 1}'),
+                        selected: selected,
+                        onSelected: (_) => onChange(i),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<MediaItem> _slicePage(List<MediaItem> items, int pageIndex, int pageSize) {
+    if (items.isEmpty) return const [];
+    final totalPages = (items.length + pageSize - 1) ~/ pageSize;
+    final p = pageIndex.clamp(0, totalPages - 1);
+    final start = p * pageSize;
+    final end = (start + pageSize).clamp(0, items.length);
+    return items.sublist(start, end);
+  }
 
   Widget _buildGrid(List<MediaItem> items, {bool showFolderLabel = false}) {
     if (items.isEmpty) {
       return const Center(child: Text('該当するアイテムがありません'));
     }
+    final pageItems = _slicePage(items, _galleryPageIndex, _pageSize);
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 220,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.75,
-      ),
-      itemCount: items.length,
-      itemBuilder: (context, i) {
-        final item = items[i];
-        final isFav = _favorites.contains(item.id);
-        final selected = _selectedIds.contains(item.id);
+    return Column(
+      children: [
+        _buildPager(
+          totalItems: items.length,
+          pageSize: _pageSize,
+          pageIndex: _galleryPageIndex,
+          onChange: (p) => setState(() => _galleryPageIndex = p),
+        ),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.all(12),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 220,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.75,
+            ),
+            itemCount: pageItems.length,
+            itemBuilder: (context, i) {
+              final item = pageItems[i];
+              final isFav = _favorites.contains(item.id);
+              final selected = _selectedIds.contains(item.id);
 
-        return InkWell(
-          onLongPress: () {
-            if (item.kind == MediaKind.folder) return;
-            if (!_selectMode) {
-              _enterSelectMode(item);
-            } else {
-              _toggleSelect(item);
-            }
-          },
-          onTap: () async {
-            // フォルダは階層構造
-            if (item.kind == MediaKind.folder) {
-              if (_selectMode) return;
-              _exitSelectMode();
-              await _enterFolder(item);
-              return;
-            }
+              return InkWell(
+                onLongPress: () {
+                  if (item.kind == MediaKind.folder) return;
+                  if (!_selectMode) {
+                    _enterSelectMode(item);
+                  } else {
+                    _toggleSelect(item);
+                  }
+                },
+                onTap: () async {
+                  if (item.kind == MediaKind.folder) {
+                    if (_selectMode) return;
+                    _exitSelectMode();
+                    await _enterFolder(item);
+                    return;
+                  }
 
-            // 選択モード
-            if (_selectMode) {
-              _toggleSelect(item);
-              return;
-            }
+                  if (_selectMode) {
+                    _toggleSelect(item);
+                    return;
+                  }
 
-            // Detailページへ、folder を除外したリストで開く
-            final mediaOnly = _items
-                .where((e) => e.kind != MediaKind.folder)
-                .toList(growable: false);
-            final index = mediaOnly.indexWhere((e) => e.id == item.id);
+                  // Detailページへ、folder を除外したリストで開く
+                  final mediaOnly = _items
+                      .where((e) => e.kind != MediaKind.folder)
+                      .toList(growable: false);
+                  final index = mediaOnly.indexWhere((e) => e.id == item.id);
 
-            final changed = await Navigator.push<bool>(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ImageDetailPage(
+                  final changed = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ImageDetailPage(
+                        repo: widget.repo,
+                        tagService: widget.tagService,
+                        items: mediaOnly,
+                        initialIndex: index < 0 ? 0 : index,
+                        initialPdfPage: 1,
+                      ),
+                    ),
+                  );
+
+                  if (changed == true) {
+                    await _reloadFavorites();
+                    await _reloadTags();
+                  }
+                },
+                child: _ThumbTile(
                   repo: widget.repo,
-                  tagService: widget.tagService,
-                  items: mediaOnly,
-                  initialIndex: index < 0 ? 0 : index,
-                  initialPdfPage: 1,
+                  item: item,
+                  isFavorite: isFav,
+                  subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+                  onToggleFavorite: () => _toggleFavorite(item),
+                  selected: selected,
+                  folderTileMode: _folderTileMode,
                 ),
-              ),
-            );
-
-            if (changed == true) {
-              await _reloadFavorites();
-              await _reloadTags();
-            }
-          },
-
-          child: _ThumbTile(
-            repo: widget.repo,
-            item: item,
-            isFavorite: isFav,
-            subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-            onToggleFavorite: () => _toggleFavorite(item),
-            selected: selected,
-            folderTileMode: _folderTileMode,
+              );
+            },
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 
@@ -2657,78 +2755,91 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return const Center(child: Text('該当するアイテムがありません'));
     }
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 220,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.75,
-      ),
-      itemCount: items.length,
-      itemBuilder: (context, i) {
-        final item = items[i];
-        final isFav = _favorites.contains(item.id);
+    final pageItems = _slicePage(items, _homeSearchPageIndex, _pageSize);
 
-        final selected = _selectedIds.contains(item.id);
+    return Column(
+      children: [
+        _buildPager(
+          totalItems: items.length,
+          pageSize: _pageSize,
+          pageIndex: _homeSearchPageIndex,
+          onChange: (p) => setState(() => _homeSearchPageIndex = p),
+        ),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.all(12),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 220,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.75,
+            ),
+            itemCount: pageItems.length,
+            itemBuilder: (context, i) {
+              final item = pageItems[i];
+              final isFav = _favorites.contains(item.id);
+              final selected = _selectedIds.contains(item.id);
 
-        return InkWell(
-          onLongPress: () {
-            if (item.kind == MediaKind.folder) return;
-            if (!_selectMode) {
-              _enterSelectMode(item);
-            } else {
-              _toggleSelect(item);
-            }
-          },
-          onTap: () async {
-            if (item.kind == MediaKind.folder) {
-              if (_selectMode) return;
-              _exitSelectMode();
-              await _enterFolder(item);
-              return;
-            }
+              return InkWell(
+                onLongPress: () {
+                  if (item.kind == MediaKind.folder) return;
+                  if (!_selectMode) {
+                    _enterSelectMode(item);
+                  } else {
+                    _toggleSelect(item);
+                  }
+                },
+                onTap: () async {
+                  if (item.kind == MediaKind.folder) {
+                    if (_selectMode) return;
+                    _exitSelectMode();
+                    await _enterFolder(item);
+                    return;
+                  }
 
-            if (_selectMode) {
-              _toggleSelect(item);
-              return;
-            }
+                  if (_selectMode) {
+                    _toggleSelect(item);
+                    return;
+                  }
 
-            // folder除外でDetailページへ
-            final mediaOnly = items
-                .where((e) => e.kind != MediaKind.folder)
-                .toList(growable: false);
-            final index = mediaOnly.indexWhere((e) => e.id == item.id);
+                  // folder除外でDetailページへ（このページの items を元に前後移動）
+                  final mediaOnly = items
+                      .where((e) => e.kind != MediaKind.folder)
+                      .toList(growable: false);
+                  final index = mediaOnly.indexWhere((e) => e.id == item.id);
 
-            final changed = await Navigator.push<bool>(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ImageDetailPage(
+                  final changed = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ImageDetailPage(
+                        repo: widget.repo,
+                        tagService: widget.tagService,
+                        items: mediaOnly,
+                        initialIndex: index < 0 ? 0 : index,
+                        initialPdfPage: 1,
+                      ),
+                    ),
+                  );
+
+                  if (changed == true) {
+                    await _reloadFavorites();
+                    await _reloadTags();
+                  }
+                },
+                child: _ThumbTile(
                   repo: widget.repo,
-                  tagService: widget.tagService,
-                  items: mediaOnly,
-                  initialIndex: index < 0 ? 0 : index,
-                  initialPdfPage: 1,
+                  item: item,
+                  isFavorite: isFav,
+                  subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+                  onToggleFavorite: () => _toggleFavorite(item),
+                  selected: selected,
+                  folderTileMode: _folderTileMode,  
                 ),
-              ),
-            );
-
-            if (changed == true) {
-              await _reloadFavorites();
-              await _reloadTags();
-            }
-          },
-          child: _ThumbTile(
-            repo: widget.repo,
-            item: item,
-            isFavorite: isFav,
-            subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-            onToggleFavorite: () => _toggleFavorite(item),
-            selected: selected,
-            folderTileMode: _folderTileMode,
+              );
+            },
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 }

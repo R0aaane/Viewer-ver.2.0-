@@ -8,6 +8,12 @@ class ThumbPair {
   const ThumbPair({required this.front, this.back});
 }
 
+class PagedMediaResult {
+  final List<MediaItem> items;
+  final int total; // フォルダ全体の総件数
+  const PagedMediaResult({required this.items, required this.total});
+}
+
 abstract class MediaRepository {
   Future<FolderHandle?> pickFolder();
 
