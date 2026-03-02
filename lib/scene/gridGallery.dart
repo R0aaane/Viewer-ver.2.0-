@@ -21,6 +21,28 @@ enum _SortMode { name, updatedAt, addedAt }
 
 enum _MainPage { home, gallery, search }
 
+enum _HomeMenuAction {
+  addFolder,
+  importToLibrary,
+  organizeLibrary,
+  artistTagIndex,
+  refreshFavorites,
+  openSearchGallery,
+}
+
+enum _GalleryMenuAction {
+  addFolder,
+  addFile,
+  exportPdf,
+  folderTileMode,
+  goHome,
+}
+
+enum FolderTileMode {
+  labelOnly,      // フォルダアイコン＋名前だけ（最軽量）
+  preview,        // フォルダ内の表紙プレビュー＋FOLDERバッジ（重め）
+}
+
 class _PrefsKeys {
   // 旧キー
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
@@ -34,6 +56,7 @@ class _PrefsKeys {
   static const String favorites = 'prefs.favorites';
 
   static const String folderAliasesJson = 'prefs.folderAliasesJson';
+  static const String folderTileMode = 'prefs.folderTileMode';
 
   /// json map: { "<MediaItem.id>": ["tag1","tag2", ...] }
   static const String tagsJson = 'prefs.tagsJson';
@@ -61,6 +84,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _loadProcessed = 0;
   int _loadTotal = 0;
   DateTime _lastProgressUi = DateTime.fromMillisecondsSinceEpoch(0);
+
+  FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
 
   String _parentDirOfFullPath(String fullPath) {
     // Windowsでの"C:\a\b\c.jpg" / "C:/a/b/c.jpg" どちらも対応
@@ -127,6 +152,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   final Map<String, List<MediaItem>> _folderItemsCache = {};
   List<MediaItem> _favoriteItemsAll = const [];
   bool _loadingFavAll = false;
+
+  // Home検索用（再帰＋ファイルのみ）
+  final Map<String, List<MediaItem>> _folderItemsCacheRecursive = {};
 
   // ---- 複数選択モード ----
   bool _selectMode = false;
@@ -416,6 +444,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await prefs.setStringList(_PrefsKeys.folders, folders);
     }
 
+    final modeIndex = prefs.getInt(_PrefsKeys.folderTileMode);
+    if (modeIndex != null &&
+        modeIndex >= 0 &&
+        modeIndex < FolderTileMode.values.length) {
+      _folderTileMode = FolderTileMode.values[modeIndex];
+    }
+
     // 反映
     setState(() {
       if (fitIndex != null &&
@@ -435,6 +470,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     // 選択中フォルダをロード
     await _loadFolder(FolderHandle(current), saveAsLast: false);
+  }
+
+  Future<void> _saveFolderTileMode(FolderTileMode m) async {
+  setState(() => _folderTileMode = m);
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setInt(_PrefsKeys.folderTileMode, m.index);
   }
 
   // フォルダのプレビュー（1枚だけ）をキャッシュする：folderId(uri/path) -> Future<Uint8List?>
@@ -601,8 +642,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       for (final raw in _foldersRaw) {
         if (_folderItemsCache.containsKey(raw)) continue;
         try {
-          final list = await widget.repo.listMedia(FolderHandle(raw));
-          _folderItemsCache[raw] = list;
+          // 全フォルダの “再帰ファイル一覧” を cache へ（未作成分だけ）
+          for (final raw in _foldersRaw) {
+            if (_folderItemsCacheRecursive.containsKey(raw)) continue;
+            try {
+              final list = await widget.repo.listMediaRecursiveFiles(FolderHandle(raw));
+              // ★ 検索結果にフォルダが混じると困るので file only でOK
+              _folderItemsCacheRecursive[raw] = list;
+            } catch (_) {
+              _folderItemsCacheRecursive[raw] = const <MediaItem>[];
+            }
+          }
+
+          final all = <MediaItem>[];
+          for (final raw in _foldersRaw) {
+            final list = _folderItemsCacheRecursive[raw] ?? const <MediaItem>[];
+            all.addAll(list);
+          }
         } catch (_) {
           _folderItemsCache[raw] = const <MediaItem>[];
         }
@@ -1624,6 +1680,272 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return list.toList(growable: false);
   }
 
+  // ---- AppBar overflow menus ----
+  Future<void> _onHomeMenuSelected(_HomeMenuAction action) async {
+    switch (action) {
+      case _HomeMenuAction.addFolder:
+        _addFolder();
+        return;
+      case _HomeMenuAction.importToLibrary:
+        try {
+          final lib = await widget.repo.getAppLibraryFolder();
+          final count = await widget.repo.importIntoFolder(lib);
+          if (!mounted) return;
+
+          // 保管庫を開く
+          await _loadFolder(lib, saveAsLast: true);
+          if (!mounted) return;
+
+          if (count > 0) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('保管庫へ取り込み: $count 件')),
+            );
+          }
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('取り込み失敗: $e')));
+        }
+        return;
+      case _HomeMenuAction.organizeLibrary:
+        _organizeLibrary();
+        return;
+      case _HomeMenuAction.artistTagIndex:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ArtistTagIndexPage(
+              tagService: widget.tagService,
+              repo: widget.repo,
+            ),
+          ),
+        );
+        return;
+      case _HomeMenuAction.refreshFavorites:
+        _refreshAllFavoritesItems();
+        return;
+      case _HomeMenuAction.openSearchGallery:
+        _exitSelectMode();
+        setState(() => _page = _MainPage.search);
+        return;
+    }
+  }
+
+  Future<void> _onGalleryMenuSelected(_GalleryMenuAction action) async {
+    switch (action) {
+      case _GalleryMenuAction.addFolder:
+        _addFolder();
+        return;
+      case _GalleryMenuAction.addFile:
+        if (_currentFolderRaw == null) return;
+        _importToCurrentFolder();
+        return;
+      case _GalleryMenuAction.exportPdf:
+        await _exportCurrentFolderImagesToPdf();
+        return;
+      case _GalleryMenuAction.folderTileMode:
+        await _showFolderTileModeDialog(); // ←追加
+        return;
+      case _GalleryMenuAction.goHome:
+        _exitSelectMode();
+        setState(() => _page = _MainPage.home);
+        return;
+    }
+  }
+
+  PopupMenuButton<_HomeMenuAction> _buildHomeOverflowMenu() {
+    return PopupMenuButton<_HomeMenuAction>(
+      tooltip: 'メニュー',
+      icon: const Icon(Icons.more_vert),
+      onSelected: _onHomeMenuSelected,
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: _HomeMenuAction.addFolder,
+          child: ListTile(
+            leading: Icon(Icons.create_new_folder_outlined),
+            title: Text('フォルダ追加'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _HomeMenuAction.importToLibrary,
+          child: ListTile(
+            leading: Icon(Icons.archive_outlined),
+            title: Text('保管庫へ取り込み'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _HomeMenuAction.organizeLibrary,
+          child: ListTile(
+            leading: Icon(Icons.auto_awesome_mosaic_outlined),
+            title: Text('保管庫を整理（作者/シリーズ）'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _HomeMenuAction.artistTagIndex,
+          child: ListTile(
+            leading: Icon(Icons.person),
+            title: Text('アーティストタグ一覧'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _HomeMenuAction.refreshFavorites,
+          child: ListTile(
+            leading: Icon(Icons.star),
+            title: Text('お気に入り更新'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _HomeMenuAction.openSearchGallery,
+          child: ListTile(
+            leading: Icon(Icons.grid_view),
+            title: Text('検索結果（ギャラリー表示）'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  PopupMenuButton<_GalleryMenuAction> _buildGalleryOverflowMenu() {
+    return PopupMenuButton<_GalleryMenuAction>(
+    tooltip: 'メニュー',
+    icon: const Icon(Icons.more_vert),
+    onSelected: _onGalleryMenuSelected,
+    itemBuilder: (context) => [
+      const PopupMenuItem(
+        value: _GalleryMenuAction.folderTileMode,
+        child: ListTile(
+          leading: Icon(Icons.folder_open_outlined),
+          title: Text('フォルダ表示'),
+        ),
+      ),
+        const PopupMenuItem(
+          value: _GalleryMenuAction.addFolder,
+          child: ListTile(
+            leading: Icon(Icons.create_new_folder_outlined),
+            title: Text('フォルダ追加'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _GalleryMenuAction.addFile,
+          enabled: _currentFolderRaw != null,
+          child: const ListTile(
+            leading: Icon(Icons.upload_file_outlined),
+            title: Text('ファイル追加'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _GalleryMenuAction.exportPdf,
+          child: ListTile(
+            leading: Icon(Icons.picture_as_pdf_outlined),
+            title: Text('このフォルダの画像をPDFにまとめる'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _GalleryMenuAction.goHome,
+          child: ListTile(
+            leading: Icon(Icons.home_outlined),
+            title: Text('ホームへ'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _exportCurrentFolderImagesToPdf() async {
+    if (_loading) return;
+
+    final images = _applyFilter(_items, pdfOnly: false);
+    if (images.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('画像がありません')),
+      );
+      return;
+    }
+
+    final folderName = _currentFolderRaw == null
+        ? 'export'
+        : _folderLabel(_currentFolderRaw!);
+
+    int done = 0;
+    final total = images.length;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('PDFを生成中...'),
+        content: StatefulBuilder(
+          builder: (context, setD) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(value: total == 0 ? null : done / total),
+              const SizedBox(height: 12),
+              Text('$done / $total'),
+              const SizedBox(height: 8),
+              const Text('保存先フォルダを選択後、生成を開始します'),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      setState(() => _loading = true);
+
+      final created = await PdfExportService.exportFolderToPdfPickLocation(
+        widget.repo,
+        images,
+        folderName,
+        onProgress: (d, t) {
+          done = d;
+          if (mounted) setState(() {});
+        },
+      );
+
+      if (!mounted) return;
+      Navigator.pop(context);
+
+      if (created == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('保存をキャンセルしました')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PDF保存完了: ${created.name}')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('PDF出力に失敗: $e')));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+  Future<void> _showFolderTileModeDialog() async {
+    final mode = await showDialog<FolderTileMode>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('フォルダ表示'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, FolderTileMode.labelOnly),
+            child: const Text('フォルダ＋名前（軽量）'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, FolderTileMode.preview),
+            child: const Text('表紙プレビュー（重い）'),
+          ),
+        ],
+      ),
+    );
+
+    if (mode == null) return;
+    _saveFolderTileMode(mode); // ←あなたが持ってる既存関数を呼ぶ想定
+  }
+
   Drawer _buildSidebar() {
     return Drawer(
       child: SafeArea(
@@ -1827,72 +2149,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         drawer: _buildSidebar(),
         appBar: AppBar(
           title: const Text('ホーム'),
-          actions: [
-            IconButton(
-              tooltip: 'フォルダ追加',
-              onPressed: _addFolder,
-              icon: const Icon(Icons.create_new_folder_outlined),
-            ),
-            IconButton(
-              tooltip: '保管庫へ取り込み',
-              icon: const Icon(Icons.archive_outlined),
-              onPressed: () async {
-                try {
-                  final lib = await widget.repo.getAppLibraryFolder();
-                  final count = await widget.repo.importIntoFolder(lib);
-                  if (!mounted) return;
-
-                  // 保管庫を開く
-                  await _loadFolder(lib, saveAsLast: true);
-                  if (!mounted) return;
-
-                  if (count > 0) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('保管庫へ取り込み: $count 件')),
-                    );
-                  }
-                } catch (e) {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text('取り込み失敗: $e')));
-                }
-              },
-            ),
-            IconButton(
-              tooltip: '保管庫を整理（作者/シリーズ）',
-              icon: const Icon(Icons.auto_awesome_mosaic_outlined),
-              onPressed: _organizeLibrary,
-            ),
-            IconButton(
-              tooltip: 'アーティストタグ一覧',
-              icon: const Icon(Icons.person),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ArtistTagIndexPage(
-                      tagService: widget.tagService,
-                      repo: widget.repo,
-                    ),
-                  ),
-                );
-              },
-            ),
-            IconButton(
-              tooltip: 'お気に入り更新',
-              onPressed: _refreshAllFavoritesItems,
-              icon: const Icon(Icons.star),
-            ),
-            IconButton(
-              tooltip: '検索結果(ギャラリー)',
-              onPressed: () {
-                _exitSelectMode();
-                setState(() => _page = _MainPage.search);
-              },
-              icon: const Icon(Icons.grid_view),
-            ),
-          ],
+          actions: [_buildHomeOverflowMenu()],
         ),
         body: _buildHomeBody(),
       );
@@ -2037,110 +2294,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       ),
                     ]
                   : [
-                      IconButton(
-                        tooltip: 'フォルダ追加',
-                        onPressed: _addFolder,
-                        icon: const Icon(Icons.create_new_folder_outlined),
-                      ),
-                      IconButton(
-                        tooltip: 'ファイル追加',
-                        onPressed: _currentFolderRaw == null
-                            ? null
-                            : _importToCurrentFolder,
-                        icon: const Icon(Icons.upload_file_outlined),
-                      ),
-                      IconButton(
-                        tooltip: 'ホームへ',
-                        onPressed: () {
-                          _exitSelectMode();
-                          setState(() => _page = _MainPage.home);
-                        },
-                        icon: const Icon(Icons.home_outlined),
-                      ),
-                      IconButton(
-                        tooltip: 'このフォルダの画像をPDFにまとめる（保存先選択）',
-                        icon: const Icon(Icons.picture_as_pdf_outlined),
-                        onPressed: () async {
-                          if (_loading) return;
-
-                          final images = _applyFilter(_items, pdfOnly: false);
-                          if (images.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('画像がありません')),
-                            );
-                            return;
-                          }
-
-                          final folderName = _currentFolderRaw == null
-                              ? 'export'
-                              : _folderLabel(_currentFolderRaw!);
-
-                          int done = 0;
-                          final total = images.length;
-
-                          // 進捗ダイアログ（キャンセルは禁止、選択と生成が途中で壊れるのを避ける）
-                          showDialog(
-                            context: context,
-                            barrierDismissible: false,
-                            builder: (_) => StatefulBuilder(
-                              builder: (context, setD) => AlertDialog(
-                                title: const Text('PDFを生成中...'),
-                                content: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    LinearProgressIndicator(
-                                      value: total == 0 ? null : done / total,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text('$done / $total'),
-                                    const SizedBox(height: 8),
-                                    const Text('保存先フォルダを選択後、生成を開始します'),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-
-                          try {
-                            setState(() => _loading = true);
-
-                            final created =
-                                await PdfExportService.exportFolderToPdfPickLocation(
-                                  widget.repo,
-                                  images,
-                                  folderName,
-                                  onProgress: (d, t) {
-                                    done = d;
-                                    // ダイアログの表示更新
-                                    if (mounted) setState(() {});
-                                  },
-                                );
-
-                            if (!mounted) return;
-                            Navigator.pop(context); // 進捗ダイアログ閉じる
-
-                            if (created == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('保存をキャンセルしました')),
-                              );
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('PDF保存完了: ${created.name}'),
-                                ),
-                              );
-                            }
-                          } catch (e) {
-                            if (!mounted) return;
-                            Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('PDF出力に失敗: $e')),
-                            );
-                          } finally {
-                            if (mounted) setState(() => _loading = false);
-                          }
-                        },
-                      ),
+                      _buildGalleryOverflowMenu(),
                     ],
               bottom: PreferredSize(
                 // 検索(約56) + ソート(約40) + TabBar(約48) + 余白
@@ -2488,6 +2642,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
             onToggleFavorite: () => _toggleFavorite(item),
             selected: selected,
+            folderTileMode: _folderTileMode,
           ),
         );
       },
@@ -2570,6 +2725,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
             onToggleFavorite: () => _toggleFavorite(item),
             selected: selected,
+            folderTileMode: _folderTileMode,
           ),
         );
       },
@@ -2584,6 +2740,7 @@ class _ThumbTile extends StatelessWidget {
   final bool isFavorite;
   final VoidCallback onToggleFavorite;
   final bool selected;
+  final FolderTileMode folderTileMode;
 
   const _ThumbTile({
     required this.repo,
@@ -2592,6 +2749,7 @@ class _ThumbTile extends StatelessWidget {
     required this.isFavorite,
     required this.onToggleFavorite,
     this.selected = false,
+    required this.folderTileMode,
   });
 
   @override
@@ -2600,13 +2758,49 @@ class _ThumbTile extends StatelessWidget {
     // 1) Folder tile
     // -------------------------
     if (item.kind == MediaKind.folder) {
+    // ① 軽量モード：プレビューを一切呼ばない
+    if (folderTileMode == FolderTileMode.labelOnly) {
+      return Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.antiAlias,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Container(
+                  alignment: Alignment.center,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Icon(Icons.folder, size: 56),
+                ),
+              ),
+              const Positioned(top: 8, right: 8, child: _FolderBadge()),
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 8,
+                child: _TitleChip(title: item.displayName, subtitle: subtitle),
+              ),
+              if (selected)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black.withOpacity(0.35),
+                    alignment: Alignment.topRight,
+                    padding: const EdgeInsets.all(8),
+                    child: const Icon(Icons.check_circle, size: 26),
+                  ),
+                ),
+            ],
+          ),
+        );
+      }
+
+      // ② プレビューモード：表紙を取得して表示
       return Material(
         elevation: 2,
         borderRadius: BorderRadius.circular(10),
         clipBehavior: Clip.antiAlias,
         child: Stack(
           children: [
-            // 背景（プレビュー or フォルダアイコン）
             Positioned.fill(
               child: FutureBuilder<Uint8List?>(
                 future: context
@@ -2622,6 +2816,7 @@ class _ThumbTile extends StatelessWidget {
                       filterQuality: FilterQuality.low,
                     );
                   }
+                  // フォールバック（中身が無い/遅い/失敗）
                   return Container(
                     alignment: Alignment.center,
                     color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -2630,19 +2825,13 @@ class _ThumbTile extends StatelessWidget {
                 },
               ),
             ),
-
-            // ✅ 右上に FOLDER バッジ
             const Positioned(top: 8, right: 8, child: _FolderBadge()),
-
-            // タイトル
             Positioned(
               left: 8,
               right: 8,
               bottom: 8,
               child: _TitleChip(title: item.displayName, subtitle: subtitle),
             ),
-
-            // 選択時
             if (selected)
               Positioned.fill(
                 child: Container(

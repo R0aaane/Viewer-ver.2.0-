@@ -43,4 +43,9 @@ abstract class MediaRepository {
 
   // ファイル名変更（displayName のみ変更。id(uri/path)は基本維持、市内と崩れる）
   Future<MediaItem> rename(MediaItem item, String newDisplayName);
+
+  Future<List<MediaItem>> listMediaRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  });
 }

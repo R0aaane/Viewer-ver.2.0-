@@ -198,6 +198,71 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> listMediaRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    // Windowsは常にファイルパス前提
+    return _listMediaFsRecursiveFiles(folder, onProgress: onProgress);
+  }
+  
+  Future<List<MediaItem>> _listMediaFsRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final dir = Directory(folder.raw);
+    if (!await dir.exists()) return const [];
+
+    bool isTarget(FileSystemEntity e) {
+      if (e is! File) return false;
+      final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+      final ext = _lowerExt(name);
+      return ext == _pdfExt || _imageExt.contains(ext);
+    }
+
+    int total = 0;
+    if (onProgress != null) {
+      await for (final ent in dir.list(recursive: true, followLinks: false)) {
+        if (isTarget(ent)) total++;
+      }
+    }
+
+    final items = <MediaItem>[];
+    int processed = 0;
+
+    await for (final ent in dir.list(recursive: true, followLinks: false)) {
+      if (ent is! File) continue;
+
+      final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+      final ext = _lowerExt(name);
+
+      MediaKind? kind;
+      if (ext == _pdfExt) kind = MediaKind.pdf;
+      if (_imageExt.contains(ext)) kind = MediaKind.image;
+      if (kind == null) continue;
+
+      final stat = await ent.stat();
+      items.add(
+        MediaItem(
+          id: ent.path,
+          displayName: name,
+          kind: kind,
+          folderRaw: folder.raw, // ★検索元ルート
+          modified: stat.modified,
+          tags: const [],
+        ),
+      );
+
+      processed++;
+      if (onProgress != null) onProgress(processed, total);
+    }
+
+    return items;
+  }
+
+  
+
+  @override
   Future<Uint8List> readBytes(MediaItem item) async {
     return File(item.id).readAsBytes();
   }

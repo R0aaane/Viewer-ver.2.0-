@@ -311,6 +311,105 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> listMediaRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final raw = folder.raw;
+    if (raw.startsWith('content://')) {
+      return _listMediaSafRecursiveFiles(folder, onProgress: onProgress);
+    } else {
+      return _listMediaFsRecursiveFiles(folder, onProgress: onProgress);
+    }
+  }
+
+  Future<List<MediaItem>> _listMediaSafRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    // total（進捗%用）を先に数える。重いので onProgress がある時だけ。
+    final total = (onProgress == null) ? 0 : await _docmanSync(() => _safCountMedia(folder.raw));
+
+    final entries = await _docmanSync(() => _safListRecursive(
+          folder.raw,
+          onProgress: onProgress,
+          total: total,
+        ));
+
+    // entries はファイルのみ入る設計なので MediaItem にする
+    final items = <MediaItem>[];
+    for (final e in entries) {
+      final ext = _lowerExt(e.name);
+      MediaKind? kind;
+      if (ext == _pdfExt) kind = MediaKind.pdf;
+      if (_imageExt.contains(ext)) kind = MediaKind.image;
+      if (kind == null) continue;
+
+      items.add(MediaItem(
+        id: e.documentUri,
+        displayName: e.name,
+        kind: kind,
+        folderRaw: folder.raw, // ★ “検索元の登録フォルダ” を root として保持
+        modified: e.modified,
+        tags: const [],
+      ));
+    }
+    return items;
+  }
+
+  Future<List<MediaItem>> _listMediaFsRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final dir = Directory(folder.raw);
+    if (!await dir.exists()) return const [];
+  
+    bool isTarget(FileSystemEntity e) {
+      if (e is! File) return false;
+      final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+      final ext = _lowerExt(name);
+      return ext == _pdfExt || _imageExt.contains(ext);
+    }
+  
+    int total = 0;
+    if (onProgress != null) {
+      await for (final ent in dir.list(recursive: true, followLinks: false)) {
+        if (isTarget(ent)) total++;
+      }
+    }
+  
+    final items = <MediaItem>[];
+    int processed = 0;
+  
+    await for (final ent in dir.list(recursive: true, followLinks: false)) {
+      if (ent is! File) continue;
+  
+      final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+      final ext = _lowerExt(name);
+  
+      MediaKind? kind;
+      if (ext == _pdfExt) kind = MediaKind.pdf;
+      if (_imageExt.contains(ext)) kind = MediaKind.image;
+      if (kind == null) continue;
+  
+      final stat = await ent.stat();
+      items.add(MediaItem(
+        id: ent.path,
+        displayName: name,
+        kind: kind,
+        folderRaw: folder.raw, // ★ root
+        modified: stat.modified,
+        tags: const [],
+      ));
+  
+      processed++;
+      if (onProgress != null) onProgress(processed, total);
+    }
+  
+    return items;
+  }
+
+  @override
   Future<Uint8List> readBytes(MediaItem item) {
     if (item.id.startsWith('content://')) {
       return _safReadBytes(item.id);
@@ -387,17 +486,17 @@ class AndroidFolderRepository implements MediaRepository {
         _pdfCache[documentUri] = cached;
         return cached;
       }
-  
+
       PdfDocument doc;
-  
+
       if (documentUri.startsWith('content://')) {
         doc = await _docmanSync(() async {
           final docFile = await DocumentFile.fromUri(documentUri);
           if (docFile == null) throw Exception('DocumentFile.fromUri failed: $documentUri');
-  
+
           final cachedFile = await docFile.cache();
           if (cachedFile == null) throw Exception('cache() failed: $documentUri');
-  
+
           return PdfDocument.openFile(cachedFile.path);
         });
       } else {
@@ -405,7 +504,7 @@ class AndroidFolderRepository implements MediaRepository {
         if (!await f.exists()) throw Exception('PDF file not found: $documentUri');
         doc = await PdfDocument.openFile(documentUri);
       }
-  
+
       _pdfCache[documentUri] = doc;
       while (_pdfCache.length > _pdfCacheMaxEntries) {
         final oldestKey = _pdfCache.keys.first;
