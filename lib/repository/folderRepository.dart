@@ -198,6 +198,94 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   @override
+  Future<int> countMedia(FolderHandle folder) async {
+    final dir = Directory(folder.raw);
+    if (!await dir.exists()) return 0;
+
+    int total = 0;
+    await for (final ent in dir.list(recursive: false, followLinks: false)) {
+      if (ent is Directory) {
+        total++; // フォルダも表示対象
+      } else if (ent is File) {
+        final name = ent.uri.pathSegments.isNotEmpty
+            ? ent.uri.pathSegments.last
+            : ent.path;
+        if (_isTargetFileName(name)) total++; // 画像/PDFのみ
+      }
+    }
+    return total;
+  }
+
+  @override
+  Future<PagedMediaResult> listMediaPage(
+    FolderHandle folder, {
+    required int offset,
+    required int limit,
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final dir = Directory(folder.raw);
+    if (!await dir.exists()) {
+      return const PagedMediaResult(items: [], total: 0);
+    }
+
+    final folders = <MediaItem>[];
+    final files = <MediaItem>[];
+
+    await for (final ent in dir.list(recursive: false, followLinks: false)) {
+      if (ent is Directory) {
+        final stat = await ent.stat();
+        folders.add(
+          MediaItem(
+            id: ent.path,
+            displayName: _fileName(ent.path),
+            kind: MediaKind.folder,
+            folderRaw: folder.raw,
+            modified: stat.modified,
+            tags: const [],
+          ),
+        );
+        continue;
+      }
+
+      if (ent is File) {
+        final name = ent.uri.pathSegments.isNotEmpty
+            ? ent.uri.pathSegments.last
+            : ent.path;
+        if (!_isTargetFileName(name)) continue;
+
+        final ext = _lowerExt(name);
+        final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
+        final stat = await ent.stat();
+
+        files.add(
+          MediaItem(
+            id: ent.path,
+            displayName: name,
+            kind: kind,
+            folderRaw: folder.raw,
+            modified: stat.modified,
+            tags: const [],
+          ),
+        );
+      }
+    }
+
+    // フォルダ→ファイル、名前順
+    folders.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    files.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+
+    final all = <MediaItem>[...folders, ...files];
+    final total = all.length;
+
+    final start = offset.clamp(0, total);
+    final end = (start + limit).clamp(0, total);
+    final slice = all.sublist(start, end);
+
+    if (onProgress != null) onProgress(slice.length, slice.length);
+    return PagedMediaResult(items: slice, total: total);
+  }
+
+  @override
   Future<List<MediaItem>> listMediaRecursiveFiles(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
@@ -394,6 +482,11 @@ class WindowsFolderRepository implements MediaRepository {
     final dot = path.lastIndexOf('.');
     if (dot < 0) return '';
     return path.substring(dot).toLowerCase();
+  }
+
+  bool _isTargetFileName(String name) {
+    final ext = _lowerExt(name);
+    return ext == _pdfExt || _imageExt.contains(ext);
   }
 
   @override

@@ -85,6 +85,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _loadTotal = 0;
   DateTime _lastProgressUi = DateTime.fromMillisecondsSinceEpoch(0);
 
+  static const int _pageSize = 20;
+  int _galleryPageIndex = 0;
+  int _galleryTotal = 0;
+
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
 
   String _parentDirOfFullPath(String fullPath) {
@@ -1394,8 +1398,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _folder = folder;
       _loading = true;
       _items = const [];
+      _filteredItems = const [];
       _loadProcessed = 0;
       _loadTotal = 0;
+      _galleryPageIndex = 0;
+      _galleryTotal = 0;
     });
     _folderPreviewInFlight.clear();
 
@@ -1403,34 +1410,84 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _saveLastFolder(folder);
     }
 
-    final items = await widget.repo.listMedia(
-      folder,
-      onProgress: (processed, total) {
-        if (!mounted) return;
+    try {
+      final total = await widget.repo.countMedia(folder);
+      if (!mounted) return;
 
-        // setState の連打を防ぐ（100ms 以上空いたら更新）
-        final now = DateTime.now();
-        if (now.difference(_lastProgressUi).inMilliseconds < 100) return;
-        _lastProgressUi = now;
+      final res = await widget.repo.listMediaPage(
+        folder,
+        offset: 0,
+        limit: _pageSize,
+        onProgress: (p, t) {
+          if (!mounted) return;
+          setState(() {
+            _loadProcessed = p;
+            _loadTotal = t;
+          });
+        },
+      );
+      if (!mounted) return;
 
-        setState(() {
-          _loadProcessed = processed;
-          _loadTotal = total;
-        });
-      },
-    );
-    final folderCount = items.where((e) => e.kind == MediaKind.folder).length;
-    print('[UI] folders=$folderCount');
-    if (!mounted) return;
+      setState(() {
+        _galleryTotal = total; // res.total でもOK（同じになるはず）
+        _items = res.items;
+        _filteredItems = res.items; // ←検索は「ページ内」でOKならこれでOK
+        _loading = false;
+      });
+
+      _folderItemsCache[folder.raw] = _items;
+      await _refreshAllFavoritesItems();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('読み込み失敗: $e')),
+      );
+    }
+  }
+
+  Future<void> _loadGalleryPage(int pageIndex) async {
+    final folder = _folder;
+    if (folder == null) return;
+
+    final offset = pageIndex * _pageSize;
+
     setState(() {
-      _items = items;
-      _filteredItems = items;
-      _loading = false;
-      _loadProcessed = items.length;
+      _loading = true;
+      _items = const [];
+      _filteredItems = const [];
+      _loadProcessed = 0;
+      _loadTotal = 0;
     });
-    _applySearchFilterDb(); // 検索中なら反映
-    _folderItemsCache[folder.raw] = _items;
-    await _refreshAllFavoritesItems();
+
+    try {
+      final res = await widget.repo.listMediaPage(
+        folder,
+        offset: offset,
+        limit: _pageSize,
+        onProgress: (p, t) {
+          if (!mounted) return;
+          setState(() {
+            _loadProcessed = p;
+            _loadTotal = t;
+          });
+        },
+      );
+      if (!mounted) return;
+
+      setState(() {
+        _galleryPageIndex = pageIndex;
+        _items = res.items;
+        _filteredItems = res.items;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ページ読み込み失敗: $e')),
+      );
+    }
   }
 
   Future<void> _persistFolders() async {
@@ -2572,80 +2629,140 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return const Center(child: Text('該当するアイテムがありません'));
     }
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 220,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.75,
-      ),
-      itemCount: items.length,
-      itemBuilder: (context, i) {
-        final item = items[i];
-        final isFav = _favorites.contains(item.id);
-        final selected = _selectedIds.contains(item.id);
+     return Column(
+      children: [
+        // ★ 一番上にページャ
+        _buildPager(),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.all(12),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 220,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.75,
+            ),
+            itemCount: items.length,
+            itemBuilder: (context, i) {
+              final item = items[i];
+              final isFav = _favorites.contains(item.id);
+              final selected = _selectedIds.contains(item.id);
 
-        return InkWell(
-          onLongPress: () {
-            if (item.kind == MediaKind.folder) return;
-            if (!_selectMode) {
-              _enterSelectMode(item);
-            } else {
-              _toggleSelect(item);
-            }
-          },
-          onTap: () async {
-            // フォルダは階層構造
-            if (item.kind == MediaKind.folder) {
-              if (_selectMode) return;
-              _exitSelectMode();
-              await _enterFolder(item);
-              return;
-            }
+              return InkWell(
+                onLongPress: () {
+                  if (item.kind == MediaKind.folder) return;
+                  if (!_selectMode) {
+                    _enterSelectMode(item);
+                  } else {
+                    _toggleSelect(item);
+                  }
+                },
+                onTap: () async {
+                  if (item.kind == MediaKind.folder) {
+                    if (_selectMode) return;
+                    _exitSelectMode();
+                    await _enterFolder(item);
+                    return;
+                  }
 
-            // 選択モード
-            if (_selectMode) {
-              _toggleSelect(item);
-              return;
-            }
+                  if (_selectMode) {
+                    _toggleSelect(item);
+                    return;
+                  }
 
-            // Detailページへ、folder を除外したリストで開く
-            final mediaOnly = _items
-                .where((e) => e.kind != MediaKind.folder)
-                .toList(growable: false);
-            final index = mediaOnly.indexWhere((e) => e.id == item.id);
+                  final mediaOnly = _items
+                      .where((e) => e.kind != MediaKind.folder)
+                      .toList(growable: false);
+                  final index = mediaOnly.indexWhere((e) => e.id == item.id);
 
-            final changed = await Navigator.push<bool>(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ImageDetailPage(
+                  final changed = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ImageDetailPage(
+                        repo: widget.repo,
+                        tagService: widget.tagService,
+                        items: mediaOnly,
+                        initialIndex: index < 0 ? 0 : index,
+                        initialPdfPage: 1,
+                      ),
+                    ),
+                  );
+
+                  if (changed == true) {
+                    await _reloadFavorites();
+                    await _reloadTags();
+                  }
+                },
+                child: _ThumbTile(
                   repo: widget.repo,
-                  tagService: widget.tagService,
-                  items: mediaOnly,
-                  initialIndex: index < 0 ? 0 : index,
-                  initialPdfPage: 1,
+                  item: item,
+                  isFavorite: isFav,
+                  subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+                  onToggleFavorite: () => _toggleFavorite(item),
+                  selected: selected,
+                  folderTileMode: _folderTileMode,
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPager() {
+    if (_galleryTotal <= _pageSize) return const SizedBox.shrink();
+
+    final totalPages = (_galleryTotal + _pageSize - 1) ~/ _pageSize;
+    final clamped = _galleryPageIndex.clamp(0, totalPages - 1);
+
+    final start = clamped * _pageSize + 1;
+    final end = ((clamped + 1) * _pageSize).clamp(0, _galleryTotal);
+
+    final useDropdown = totalPages > 10;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      child: Row(
+        children: [
+          Text('$start-$end / $_galleryTotal'),
+          const Spacer(),
+          if (useDropdown)
+            DropdownButton<int>(
+              value: clamped,
+              items: List.generate(
+                totalPages,
+                (i) => DropdownMenuItem(
+                  value: i,
+                  child: Text('ページ ${i + 1}'),
                 ),
               ),
-            );
-
-            if (changed == true) {
-              await _reloadFavorites();
-              await _reloadTags();
-            }
-          },
-
-          child: _ThumbTile(
-            repo: widget.repo,
-            item: item,
-            isFavorite: isFav,
-            subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-            onToggleFavorite: () => _toggleFavorite(item),
-            selected: selected,
-            folderTileMode: _folderTileMode,
-          ),
-        );
-      },
+              onChanged: (v) {
+                if (v == null) return;
+                _loadGalleryPage(v);
+              },
+            )
+          else
+            Flexible(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(totalPages, (i) {
+                    final selected = i == clamped;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: ChoiceChip(
+                        label: Text('${i + 1}'),
+                        selected: selected,
+                        onSelected: (_) => _loadGalleryPage(i),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -2857,7 +2974,7 @@ class _ThumbTile extends StatelessWidget {
         children: [
           Positioned.fill(
             child: FutureBuilder<ThumbPair>(
-              future: repo.readThumbPair(item, maxWidth: 360),
+              future: repo.readThumbPair(item, maxWidth: 240),
               builder: (context, snap) {
                 if (!snap.hasData) {
                   return _TileShell(loading: true);

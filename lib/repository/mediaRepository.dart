@@ -8,6 +8,12 @@ class ThumbPair {
   const ThumbPair({required this.front, this.back});
 }
 
+class PagedMediaResult {
+  final List<MediaItem> items;
+  final int total; // 直下(shallow)の総件数（フォルダ + 対象ファイル）
+  const PagedMediaResult({required this.items, required this.total});
+}
+
 abstract class MediaRepository {
   Future<FolderHandle?> pickFolder();
 
@@ -46,6 +52,18 @@ abstract class MediaRepository {
 
   Future<List<MediaItem>> listMediaRecursiveFiles(
     FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  });
+
+  /// 直下の「表示対象件数」（フォルダ + 対象ファイル）を返す
+  Future<int> countMedia(FolderHandle folder);
+
+  /// 直下のページ取得（フォルダ + 対象ファイル）
+  /// offset: 0-based, limit: 20 
+  Future<PagedMediaResult> listMediaPage(
+    FolderHandle folder, {
+    required int offset,
+    required int limit,
     void Function(int processed, int total)? onProgress,
   });
 }

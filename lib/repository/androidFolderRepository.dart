@@ -41,6 +41,28 @@ class AndroidFolderRepository implements MediaRepository {
   final LinkedHashMap<String, PdfDocument> _pdfCache = LinkedHashMap();
   static const int _pdfCacheMaxEntries = 6;
 
+  //一度に読み込むレンダリングを制限
+  int _thumbActive = 0;
+  final List<Completer<void>> _thumbWaiters = [];
+  
+  Future<void> _acquireThumbSlot([int max = 2]) async {
+    if (_thumbActive < max) {
+      _thumbActive++;
+      return;
+    }
+    final c = Completer<void>();
+    _thumbWaiters.add(c);
+    await c.future;
+    _thumbActive++;
+  }
+  
+  void _releaseThumbSlot() {
+    _thumbActive--;
+    if (_thumbWaiters.isNotEmpty) {
+      _thumbWaiters.removeAt(0).complete();
+    }
+  }
+
   // ==============================
   // SAF アダプタ（docman）
   // ==============================
@@ -154,6 +176,157 @@ class AndroidFolderRepository implements MediaRepository {
     } else {
       return _listMediaFs(folder, onProgress: onProgress);
     }
+  }
+
+    @override
+  Future<int> countMedia(FolderHandle folder) async {
+    final raw = folder.raw;
+
+    if (raw.startsWith('content://')) {
+      // shallow: 直下だけ数える
+      final entries = await _safListShallow(raw);
+      int total = 0;
+      for (final e in entries) {
+        if (e.isDir) {
+          total++;
+        } else {
+          if (_isTargetFileName(e.name)) total++;
+        }
+      }
+      return total;
+    }
+
+    final dir = Directory(raw);
+    if (!await dir.exists()) return 0;
+
+    int total = 0;
+    await for (final ent in dir.list(recursive: false, followLinks: false)) {
+      if (ent is Directory) {
+        total++;
+      } else if (ent is File) {
+        final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+        if (_isTargetFileName(name)) total++;
+      }
+    }
+    return total;
+  }
+
+  @override
+  Future<PagedMediaResult> listMediaPage(
+    FolderHandle folder, {
+    required int offset,
+    required int limit,
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final raw = folder.raw;
+
+    if (raw.startsWith('content://')) {
+      final entries = await _safListShallow(raw);
+
+      // フォルダ→ファイル、名前順
+      final dirs = <_SafEntry>[];
+      final files = <_SafEntry>[];
+
+      for (final e in entries) {
+        if (e.isDir) {
+          dirs.add(e);
+        } else {
+          if (_isTargetFileName(e.name)) files.add(e);
+        }
+      }
+
+      dirs.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      files.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+      final all = <_SafEntry>[...dirs, ...files];
+      final total = all.length;
+
+      final start = offset.clamp(0, total);
+      final end = (start + limit).clamp(0, total);
+      final slice = all.sublist(start, end);
+
+      final out = <MediaItem>[];
+      int processed = 0;
+
+      for (final e in slice) {
+        if (e.isDir) {
+          out.add(MediaItem(
+            id: e.documentUri,
+            displayName: e.name,
+            kind: MediaKind.folder,
+            folderRaw: folder.raw,
+            modified: e.modified,
+            tags: const [],
+          ));
+        } else {
+          final ext = _lowerExt(e.name);
+          final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
+
+          out.add(MediaItem(
+            id: e.documentUri,
+            displayName: e.name,
+            kind: kind,
+            folderRaw: folder.raw,
+            modified: e.modified,
+            tags: const [],
+          ));
+        }
+
+        processed++;
+        if (onProgress != null) onProgress(processed, slice.length);
+      }
+
+      return PagedMediaResult(items: out, total: total);
+    }
+
+    // FS (直下)
+    final dir = Directory(raw);
+    if (!await dir.exists()) return const PagedMediaResult(items: [], total: 0);
+
+    final dirItems = <MediaItem>[];
+    final fileItems = <MediaItem>[];
+
+    await for (final ent in dir.list(recursive: false, followLinks: false)) {
+      if (ent is Directory) {
+        dirItems.add(MediaItem(
+          id: ent.path,
+          displayName: _fileName(ent.path),
+          kind: MediaKind.folder,
+          folderRaw: folder.raw,
+          modified: null,
+          tags: const [],
+        ));
+      } else if (ent is File) {
+        final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+        if (!_isTargetFileName(name)) continue;
+
+        final ext = _lowerExt(name);
+        final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
+        final stat = await ent.stat();
+
+        fileItems.add(MediaItem(
+          id: ent.path,
+          displayName: name,
+          kind: kind,
+          folderRaw: folder.raw,
+          modified: stat.modified,
+          tags: const [],
+        ));
+      }
+    }
+
+    dirItems.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    fileItems.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+
+    final all = <MediaItem>[...dirItems, ...fileItems];
+    final total = all.length;
+
+    final start = offset.clamp(0, total);
+    final end = (start + limit).clamp(0, total);
+    final slice = all.sublist(start, end);
+
+    if (onProgress != null) onProgress(slice.length, slice.length);
+    return PagedMediaResult(items: slice, total: total);
   }
 
   Future<List<MediaItem>> _listMediaSaf(
@@ -447,14 +620,19 @@ class AndroidFolderRepository implements MediaRepository {
     final inflight = _thumbInFlight[cacheKey];
     if (inflight != null) return inflight;
 
-    final future = _buildThumbPair(item, maxWidth)
-        .then((pair) {
-          _thumbCache.put(cacheKey, pair);
-          return pair;
-        })
-        .whenComplete(() {
-          _thumbInFlight.remove(cacheKey);
-        });
+   final future = () async {
+    await _acquireThumbSlot(2); // 同時2個まで
+    try {
+      final pair = await _buildThumbPair(item, maxWidth);
+      _thumbCache.put(cacheKey, pair);
+      return pair;
+    } finally {
+      _releaseThumbSlot();
+    }
+  }()
+  .whenComplete(() {
+    _thumbInFlight.remove(cacheKey);
+  });
 
     _thumbInFlight[cacheKey] = future;
     return future;
@@ -472,11 +650,7 @@ class AndroidFolderRepository implements MediaRepository {
     final mid = (pageCount / 2).ceil().clamp(1, pageCount);
 
     final front = await _renderPage(item.id, doc, 1, maxWidth);
-    Uint8List? back;
-    if (pageCount >= 2) {
-      back = await _renderPage(item.id, doc, mid, maxWidth);
-    }
-    return ThumbPair(front: front, back: back);
+    return ThumbPair(front: front, back: null);
   }
 
   Future<PdfDocument> _openPdf(String documentUri) {
@@ -555,6 +729,18 @@ class AndroidFolderRepository implements MediaRepository {
     final dot = name.lastIndexOf('.');
     if (dot < 0) return '';
     return name.substring(dot).toLowerCase();
+  }
+
+  static String _fileName(String path) {
+    if (path.startsWith('content://')) return path;
+    var p = path.replaceAll('\\', '/');
+    final idx = p.lastIndexOf('/');
+    return idx < 0 ? p : p.substring(idx + 1);
+  }
+
+  bool _isTargetFileName(String name) {
+    final ext = _lowerExt(name);
+    return ext == _pdfExt || _imageExt.contains(ext);
   }
 
   @override
