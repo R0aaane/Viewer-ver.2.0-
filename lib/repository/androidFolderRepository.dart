@@ -16,11 +16,15 @@ class AndroidFolderRepository implements MediaRepository {
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
 
-  // docman(DocumentFile) 操作は同時実行すると AlreadyRunning になるので全体を直列化
-  final _AsyncMutex _docmanMutex = _AsyncMutex();
+  final _AsyncMutex _docmanListMutex = _AsyncMutex(); // listDocuments系
+  final _AsyncMutex _docmanReadMutex = _AsyncMutex(); // cache()/readAsBytes系
 
-  Future<T> _docmanSync<T>(Future<T> Function() action) {
-    return _docmanMutex.synchronized(action);
+  Future<T> _docmanListSync<T>(Future<T> Function() action) {
+    return _docmanListMutex.synchronized(action);
+  }
+
+  Future<T> _docmanReadSync<T>(Future<T> Function() action) {
+    return _docmanReadMutex.synchronized(action);
   }
 
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
@@ -82,7 +86,7 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   Future<List<_SafEntry>> _safListShallow(String dirUri) async {
-    return _docmanSync(() async {
+    return _docmanListSync(() async {
       final dir = await DocumentFile.fromUri(dirUri);
       if (dir == null) return const [];
       if (dir.isDirectory != true) return const [];
@@ -121,7 +125,7 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   Future<Uint8List> _safReadBytes(String documentUri) async {
-    return _docmanSync(() async {
+    return _docmanReadSync(() async {
       final doc = await DocumentFile.fromUri(documentUri);
       if (doc == null) {
         throw Exception('DocumentFile.fromUri failed: $documentUri');
@@ -501,9 +505,9 @@ class AndroidFolderRepository implements MediaRepository {
     void Function(int processed, int total)? onProgress,
   }) async {
     // total（進捗%用）を先に数える。重いので onProgress がある時だけ。
-    final total = (onProgress == null) ? 0 : await _docmanSync(() => _safCountMedia(folder.raw));
+    final total = (onProgress == null) ? 0 : await _docmanListSync(() => _safCountMedia(folder.raw));
 
-    final entries = await _docmanSync(() => _safListRecursive(
+    final entries = await _docmanListSync(() => _safListRecursive(
           folder.raw,
           onProgress: onProgress,
           total: total,
@@ -664,7 +668,7 @@ class AndroidFolderRepository implements MediaRepository {
       PdfDocument doc;
 
       if (documentUri.startsWith('content://')) {
-        doc = await _docmanSync(() async {
+        doc = await _docmanListSync(() async {
           final docFile = await DocumentFile.fromUri(documentUri);
           if (docFile == null) throw Exception('DocumentFile.fromUri failed: $documentUri');
 

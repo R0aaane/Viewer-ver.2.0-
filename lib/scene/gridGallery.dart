@@ -85,6 +85,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _loadTotal = 0;
   DateTime _lastProgressUi = DateTime.fromMillisecondsSinceEpoch(0);
 
+  bool _thumbsEnabled = true;
+
   static const int _pageSize = 20;
   int _galleryPageIndex = 0;
   int _galleryTotal = 0;
@@ -1395,6 +1397,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     required bool saveAsLast,
   }) async {
     setState(() {
+      _thumbsEnabled = false;
       _folder = folder;
       _loading = true;
       _items = const [];
@@ -1435,6 +1438,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _loading = false;
       });
 
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+       // 一覧を先に描画させてからサムネ開始
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+        setState(() => _thumbsEnabled = true);
+      });
+
       _folderItemsCache[folder.raw] = _items;
       await _refreshAllFavoritesItems();
     } catch (e) {
@@ -1453,6 +1463,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final offset = pageIndex * _pageSize;
 
     setState(() {
+      _thumbsEnabled = false;
       _loading = true;
       _items = const [];
       _filteredItems = const [];
@@ -1484,6 +1495,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+        setState(() => _thumbsEnabled = true);
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('ページ読み込み失敗: $e')),
       );
@@ -2951,11 +2967,26 @@ class _ThumbTile extends StatelessWidget {
             ),
             if (selected)
               Positioned.fill(
-                child: Container(
-                  color: Colors.black.withOpacity(0.35),
-                  alignment: Alignment.topRight,
-                  padding: const EdgeInsets.all(8),
-                  child: const Icon(Icons.check_circle, size: 26),
+                child: Builder(
+                  builder: (context) {
+                    final st = context.findAncestorStateOfType<_GalleryGridPageState>();
+                    final enabled = st?._thumbsEnabled ?? true;
+              
+                    // 一覧を先に出す：ここではサムネ生成を開始しない
+                    if (!enabled) {
+                      return _TileShell(loading: true);
+                    }
+              
+                    return FutureBuilder<ThumbPair>(
+                      future: repo.readThumbPair(item, maxWidth: 240),
+                      builder: (context, snap) {
+                        if (!snap.hasData) {
+                          return _TileShell(loading: true);
+                        }
+                        return _ThumbImage(bytes: snap.data!.front);
+                      },
+                    );
+                  },
                 ),
               ),
           ],
