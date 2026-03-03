@@ -1414,9 +1414,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     try {
-      final total = await widget.repo.countMedia(folder);
-      if (!mounted) return;
-
       final res = await widget.repo.listMediaPage(
         folder,
         offset: 0,
@@ -1432,7 +1429,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) return;
 
       setState(() {
-        _galleryTotal = total; // res.total でもOK（同じになるはず）
+        _galleryTotal = res.total; 
         _items = res.items;
         _filteredItems = res.items; // ←検索は「ページ内」でOKならこれでOK
         _loading = false;
@@ -1492,14 +1489,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _filteredItems = res.items;
         _loading = false;
       });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loading = false);
+      
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 250));
         if (!mounted) return;
         setState(() => _thumbsEnabled = true);
       });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('ページ読み込み失敗: $e')),
       );
@@ -2997,22 +2995,36 @@ class _ThumbTile extends StatelessWidget {
     // -------------------------
     // 2) PDF / Image tile
     // -------------------------
+
+    final st = context.findAncestorStateOfType<_GalleryGridPageState>();
+    final enabled = st?._thumbsEnabled ?? true;
+
     return Material(
       elevation: 2,
       borderRadius: BorderRadius.circular(10),
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
+          // NOTE: _thumbsEnabled が false の間は FutureBuilder 自体を作らない（= サムネ生成を開始しない）
           Positioned.fill(
-            child: FutureBuilder<ThumbPair>(
-              future: repo.readThumbPair(item, maxWidth: 240),
-              builder: (context, snap) {
-                if (!snap.hasData) {
-                  return _TileShell(loading: true);
-                }
-                return _ThumbImage(bytes: snap.data!.front);
-              },
-            ),
+            child: (() {
+              final st = context.findAncestorStateOfType<_GalleryGridPageState>();
+              final enabled = st?._thumbsEnabled ?? true;
+
+              if (!enabled) {
+                return _TileShell(loading: true);
+              }
+
+              return FutureBuilder<ThumbPair>(
+                future: repo.readThumbPair(item, maxWidth: 240),
+                builder: (context, snap) {
+                  if (!snap.hasData) {
+                    return _TileShell(loading: true);
+                  }
+                  return _ThumbImage(bytes: snap.data!.front);
+                },
+              );
+            })(),
           ),
 
           // 右上：PDFバッジ + ★

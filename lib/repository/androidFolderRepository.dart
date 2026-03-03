@@ -15,9 +15,13 @@ import 'mediaRepository.dart';
 class AndroidFolderRepository implements MediaRepository {
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
+  static const Duration _safShallowTtl = Duration(seconds: 15);
 
   final _AsyncMutex _docmanListMutex = _AsyncMutex(); // listDocuments系
   final _AsyncMutex _docmanReadMutex = _AsyncMutex(); // cache()/readAsBytes系
+  
+  // SAF shallow cache（直下一覧/ソート済み）
+  final Map<String, _ShallowCacheEntry> _safShallowCache = {};
 
   Future<T> _docmanListSync<T>(Future<T> Function() action) {
     return _docmanListMutex.synchronized(action);
@@ -33,6 +37,7 @@ class AndroidFolderRepository implements MediaRepository {
     sizeOf: (pair) =>
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
+  
 
   // PDF操作は並列不可なのでURI単位でロック
   final Map<String, _AsyncMutex> _pdfLocks = {};
@@ -116,7 +121,7 @@ class AndroidFolderRepository implements MediaRepository {
         out.add(_SafEntry(
           documentUri: f.uri,
           name: name,
-          modified: _toDateTimeSafe(f.lastModified),
+          modified: null, // 変更日時は一旦取らない（重い＆docmanのバージョン差が大きい）
           isDir: isDir,
         ));
       }
@@ -182,22 +187,14 @@ class AndroidFolderRepository implements MediaRepository {
     }
   }
 
-    @override
+  @override
   Future<int> countMedia(FolderHandle folder) async {
     final raw = folder.raw;
 
     if (raw.startsWith('content://')) {
-      // shallow: 直下だけ数える
-      final entries = await _safListShallow(raw);
-      int total = 0;
-      for (final e in entries) {
-        if (e.isDir) {
-          total++;
-        } else {
-          if (_isTargetFileName(e.name)) total++;
-        }
-      }
-      return total;
+      final c = await _getSafShallowCached(raw);
+      // sortedAll は dirs + 対象ファイルだけ、なので length = total と同義
+      return c.sortedAll.length;
     }
 
     final dir = Directory(raw);
@@ -225,63 +222,47 @@ class AndroidFolderRepository implements MediaRepository {
     final raw = folder.raw;
 
     if (raw.startsWith('content://')) {
-      final entries = await _safListShallow(raw);
+    final c = await _getSafShallowCached(raw);
+    final all = c.sortedAll;
 
-      // フォルダ→ファイル、名前順
-      final dirs = <_SafEntry>[];
-      final files = <_SafEntry>[];
+    final total = all.length;
+    final start = offset.clamp(0, total);
+    final end = (start + limit).clamp(0, total);
+    final slice = all.sublist(start, end);
 
-      for (final e in entries) {
-        if (e.isDir) {
-          dirs.add(e);
-        } else {
-          if (_isTargetFileName(e.name)) files.add(e);
-        }
+    final out = <MediaItem>[];
+    int processed = 0;
+
+    for (final e in slice) {
+      if (e.isDir) {
+        out.add(MediaItem(
+          id: e.documentUri,
+          displayName: e.name,
+          kind: MediaKind.folder,
+          folderRaw: folder.raw,
+          modified: e.modified,
+          tags: const [],
+        ));
+      } else {
+        final ext = _lowerExt(e.name);
+        final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
+
+        out.add(MediaItem(
+          id: e.documentUri,
+          displayName: e.name,
+          kind: kind,
+          folderRaw: folder.raw,
+          modified: e.modified,
+          tags: const [],
+        ));
       }
 
-      dirs.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      files.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-
-      final all = <_SafEntry>[...dirs, ...files];
-      final total = all.length;
-
-      final start = offset.clamp(0, total);
-      final end = (start + limit).clamp(0, total);
-      final slice = all.sublist(start, end);
-
-      final out = <MediaItem>[];
-      int processed = 0;
-
-      for (final e in slice) {
-        if (e.isDir) {
-          out.add(MediaItem(
-            id: e.documentUri,
-            displayName: e.name,
-            kind: MediaKind.folder,
-            folderRaw: folder.raw,
-            modified: e.modified,
-            tags: const [],
-          ));
-        } else {
-          final ext = _lowerExt(e.name);
-          final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
-
-          out.add(MediaItem(
-            id: e.documentUri,
-            displayName: e.name,
-            kind: kind,
-            folderRaw: folder.raw,
-            modified: e.modified,
-            tags: const [],
-          ));
-        }
-
-        processed++;
-        if (onProgress != null) onProgress(processed, slice.length);
-      }
-
-      return PagedMediaResult(items: out, total: total);
+      processed++;
+      if (onProgress != null) onProgress(processed, slice.length);
     }
+
+    return PagedMediaResult(items: out, total: total);
+  }
 
     // FS (直下)
     final dir = Directory(raw);
@@ -668,7 +649,7 @@ class AndroidFolderRepository implements MediaRepository {
       PdfDocument doc;
 
       if (documentUri.startsWith('content://')) {
-        doc = await _docmanListSync(() async {
+        doc = await _docmanReadSync(() async {
           final docFile = await DocumentFile.fromUri(documentUri);
           if (docFile == null) throw Exception('DocumentFile.fromUri failed: $documentUri');
 
@@ -796,6 +777,7 @@ class AndroidFolderRepository implements MediaRepository {
     if (moved == null) {
       throw Exception('rename: moveTo not supported or permission denied');
     }
+    _invalidateSafShallow(item.folderRaw);
 
     // id(uri)は変わる可能性あり（今は気にしないとのことなのでここでは反映のみ）
     return MediaItem(
@@ -925,6 +907,7 @@ class AndroidFolderRepository implements MediaRepository {
           if (created != null) ok++;
         } catch (_) {}
       }
+      _invalidateSafShallow(folder.raw);
       return ok;
     }
 
@@ -1021,6 +1004,54 @@ class AndroidFolderRepository implements MediaRepository {
     if (itemExt == '.bmp') return 'image/bmp';
     return 'image/jpeg'; // jpg/jpeg fallback
   }
+
+  Future<_ShallowCacheEntry> _getSafShallowCached(String dirUri) async {
+    // TTL内なら返す
+    final hit = _safShallowCache[dirUri];
+    if (hit != null && DateTime.now().difference(hit.at) <= _safShallowTtl) {
+      return hit;
+    }
+
+    // 直下一覧を取り直す（docman listDocumentsはここだけ）
+    final entries = await _safListShallow(dirUri);
+
+    // ここで “一度だけ” 分類＆ソート
+    final dirs = <_SafEntry>[];
+    final files = <_SafEntry>[];
+
+    for (final e in entries) {
+      if (e.isDir) {
+        dirs.add(e);
+      } else {
+        if (_isTargetFileName(e.name)) files.add(e);
+      }
+    }
+
+    int cmp(_SafEntry a, _SafEntry b) =>
+        a.name.toLowerCase().compareTo(b.name.toLowerCase());
+
+    dirs.sort(cmp);
+    files.sort(cmp);
+
+    final sortedAll = <_SafEntry>[...dirs, ...files];
+
+    final entry = _ShallowCacheEntry(
+      at: DateTime.now(),
+      entries: entries,
+      sortedAll: sortedAll,
+    );
+
+    _safShallowCache[dirUri] = entry;
+    return entry;
+  }
+
+  void _invalidateSafShallow(String dirUri) {
+    _safShallowCache.remove(dirUri);
+  }
+
+  void _invalidateSafShallowAll() {
+    _safShallowCache.clear();
+  }
 }
 
 class _SafEntry {
@@ -1108,4 +1139,19 @@ class _AsyncMutex {
 
     return completer.future;
   }
+}
+
+// ==============================
+// SAF shallow cache（直下一覧/ソート済み）
+// ==============================
+
+class _ShallowCacheEntry {
+  final DateTime at;
+  final List<_SafEntry> entries;         // raw listDocuments結果（整形済み）
+  final List<_SafEntry> sortedAll;       // dirs→files + name sort 済み
+  _ShallowCacheEntry({
+    required this.at,
+    required this.entries,
+    required this.sortedAll,
+  });
 }
