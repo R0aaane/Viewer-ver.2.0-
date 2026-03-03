@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Directory, Platform;
 import 'dart:typed_data';
+import 'dart:collection';
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -86,6 +88,62 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   DateTime _lastProgressUi = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _thumbsEnabled = true;
+
+  // --- スクロール中はサムネ生成を止める ---
+  Timer? _thumbResumeDebounce;
+
+  // --- フォルダ表紙プレビュー：LRUキャッシュ + 同時実行数制限 ---
+  final LinkedHashMap<String, Uint8List?> _folderPreviewCache = LinkedHashMap();
+  int _folderPreviewCacheBytes = 0;
+  static const int _folderPreviewCacheMaxEntries = 120;
+  static const int _folderPreviewCacheMaxBytes = 24 * 1024 * 1024; // 24MB
+
+  final Map<String, Future<Uint8List?>> _folderPreviewInFlight = {};
+
+  int _folderPreviewActive = 0;
+  final List<Completer<void>> _folderPreviewWaiters = [];
+
+  Future<void> _acquireFolderPreviewSlot([int max = 1]) async {
+    if (_folderPreviewActive < max) {
+      _folderPreviewActive++;
+      return;
+    }
+    final c = Completer<void>();
+    _folderPreviewWaiters.add(c);
+    await c.future;
+    _folderPreviewActive++;
+  }
+
+  void _releaseFolderPreviewSlot() {
+    _folderPreviewActive--;
+    if (_folderPreviewWaiters.isNotEmpty) {
+      _folderPreviewWaiters.removeAt(0).complete();
+    }
+  }
+
+  Uint8List? _folderPreviewCacheGet(String key) {
+    final v = _folderPreviewCache.remove(key);
+    if (v == null && !_folderPreviewCache.containsKey(key)) return null;
+    // null も「中身なし」キャッシュとして扱う（同じ探索を繰り返さない）
+    _folderPreviewCache[key] = v;
+    return v;
+  }
+
+  void _folderPreviewCachePut(String key, Uint8List? bytes) {
+    final old = _folderPreviewCache.remove(key);
+    if (old != null) _folderPreviewCacheBytes -= old.lengthInBytes;
+
+    _folderPreviewCache[key] = bytes;
+    if (bytes != null) _folderPreviewCacheBytes += bytes.lengthInBytes;
+
+    while (_folderPreviewCache.isNotEmpty &&
+        (_folderPreviewCache.length > _folderPreviewCacheMaxEntries ||
+            _folderPreviewCacheBytes > _folderPreviewCacheMaxBytes)) {
+      final oldestKey = _folderPreviewCache.keys.first;
+      final oldestVal = _folderPreviewCache.remove(oldestKey);
+      if (oldestVal != null) _folderPreviewCacheBytes -= oldestVal.lengthInBytes;
+    }
+  }
 
   static const int _pageSize = 20;
   int _galleryPageIndex = 0;
@@ -484,79 +542,89 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   await prefs.setInt(_PrefsKeys.folderTileMode, m.index);
   }
 
-  // フォルダのプレビュー（1枚だけ）をキャッシュする：folderId(uri/path) -> Future<Uint8List?>
-  final Map<String, Future<Uint8List?>> _folderPreviewInFlight = {};
-
   Future<Uint8List?> _getFolderPreviewBytes(MediaItem folderItem) {
+    // スクロール中 / 初期描画中は生成しない
+    //if (!_thumbsEnabled) return Future.value(null);
+
     final key = folderItem.id;
-    final cached = _folderPreviewInFlight[key];
-    if (cached != null) return cached;
-  
-    final fut = () async {
-      // ---- 探索上限（重くしないため）----
-      const int maxDepth = 4;         // 0=直下, 1=1階層下...
-      const int maxDirs = 60;         // 訪問するフォルダ数上限
-      const int maxFilesChecked = 300;// ファイル検査数上限
-  
-      // 幅優先で浅い階層から探す
-      final queue = <({String uri, int depth})>[
-        (uri: folderItem.id, depth: 0),
-      ];
-  
-      int dirsVisited = 0;
-      int filesChecked = 0;
-  
-      while (queue.isNotEmpty) {
-        final cur = queue.removeAt(0);
-        if (cur.depth > maxDepth) continue;
-  
-        List<MediaItem> children;
-        try {
-          // ★ ここは既に docman 直列化済みの repo.listMedia を通る想定
-          children = await widget.repo.listMedia(FolderHandle(cur.uri));
-        } catch (_) {
-          continue;
-        }
-  
-        dirsVisited++;
-        if (dirsVisited > maxDirs) break;
-  
-        // 1) まずこのフォルダ直下のファイルを探す
-        MediaItem? best;
-        for (final it in children) {
-          if (it.kind == MediaKind.pdf || it.kind == MediaKind.image) {
-            best = it;
-            // PDF優先（表紙に向く）
-            if (it.kind == MediaKind.pdf) break;
-          }
-          filesChecked++;
-          if (filesChecked > maxFilesChecked) break;
-        }
-  
-        if (best != null) {
-          try {
-            final pair = await widget.repo.readThumbPair(best, maxWidth: 360);
-            return pair.front;
-          } catch (_) {
-            // 読めないファイルなら探索継続
+
+    // bytesを優先
+    if (_folderPreviewCache.containsKey(key)) {
+      return Future.value(_folderPreviewCacheGet(key));
+    }
+
+    final inflight = _folderPreviewInFlight[key];
+    if (inflight != null) return inflight;
+
+    Future<MediaItem?> pickCandidateInFolder(String folderRaw) async {
+      const int pageLimit = 60;
+      const int maxPages = 4; // 最大240件だけ見る（重くしない）
+
+      MediaItem? firstImage;
+
+      for (int p = 0; p < maxPages; p++) {
+        final res = await widget.repo.listMediaPage(
+          FolderHandle(folderRaw),
+          offset: p * pageLimit,
+          limit: pageLimit,
+        );
+
+        for (final it in res.items) {
+          if (it.kind == MediaKind.pdf) return it; // PDF優先
+          if (it.kind == MediaKind.image && firstImage == null) {
+            firstImage = it;
           }
         }
-  
-        if (filesChecked > maxFilesChecked) break;
-  
-        // 2) ファイルが無いならサブフォルダをキューに追加
-        if (cur.depth < maxDepth) {
-          for (final it in children) {
-            if (it.kind == MediaKind.folder) {
-              queue.add((uri: it.id, depth: cur.depth + 1));
-            }
-          }
-        }
+
+        // 末尾まで来た
+        if (res.items.length < pageLimit) break;
       }
-  
-      return null;
+
+      return firstImage;
+    }
+
+    final fut = () async {
+      await _acquireFolderPreviewSlot(1); // フォルダ表紙は同時1に抑える
+      try {
+        // 1) まず直下から候補を探す（DBインデックス経由で速い）
+        final cand = await pickCandidateInFolder(folderItem.id);
+        if (cand != null) {
+          final pair = await widget.repo.readThumbPair(cand, maxWidth: 240);
+          _folderPreviewCachePut(key, pair.front);
+          return pair.front;
+        }
+
+        // 2) 直下に無い場合：サブフォルダを少しだけ見る（1段だけ、最大3個）
+        final firstPage = await widget.repo.listMediaPage(
+          FolderHandle(folderItem.id),
+          offset: 0,
+          limit: 60,
+        );
+
+        int tried = 0;
+        for (final it in firstPage.items) {
+          if (it.kind != MediaKind.folder) continue;
+          final cand2 = await pickCandidateInFolder(it.id);
+          if (cand2 != null) {
+            final pair = await widget.repo.readThumbPair(cand2, maxWidth: 240);
+            _folderPreviewCachePut(key, pair.front);
+            return pair.front;
+          }
+          tried++;
+          if (tried >= 3) break;
+        }
+
+        _folderPreviewCachePut(key, null);
+        return null;
+      } catch (_) {
+        _folderPreviewCachePut(key, null);
+        return null;
+      } finally {
+        _releaseFolderPreviewSlot();
+        _folderPreviewInFlight.remove(key);
+      }
     }();
-  
+
     _folderPreviewInFlight[key] = fut;
     return fut;
   }
@@ -1626,6 +1694,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   @override
   void dispose() {
+    _thumbResumeDebounce?.cancel();
     _homeSearchDebounce?.cancel();
     _searchCtrl.dispose();
     _homeSearchCtrl.dispose();
@@ -2648,78 +2717,81 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         // ★ 一番上にページャ
         _buildPager(),
         Expanded(
-          child: GridView.builder(
-            padding: const EdgeInsets.all(12),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 0.75,
+          child: NotificationListener<ScrollNotification>(
+            child: GridView.builder(
+              cacheExtent: 200, // 先読み抑制
+              padding: const EdgeInsets.all(12),
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 220,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: 0.75
             ),
-            itemCount: items.length,
-            itemBuilder: (context, i) {
-              final item = items[i];
-              final isFav = _favorites.contains(item.id);
-              final selected = _selectedIds.contains(item.id);
-
-              return InkWell(
-                onLongPress: () {
-                  if (item.kind == MediaKind.folder) return;
-                  if (!_selectMode) {
-                    _enterSelectMode(item);
-                  } else {
-                    _toggleSelect(item);
-                  }
-                },
-                onTap: () async {
-                  if (item.kind == MediaKind.folder) {
-                    if (_selectMode) return;
-                    _exitSelectMode();
-                    await _enterFolder(item);
-                    return;
-                  }
-
-                  if (_selectMode) {
-                    _toggleSelect(item);
-                    return;
-                  }
-
-                  final mediaOnly = _items
-                      .where((e) => e.kind != MediaKind.folder)
-                      .toList(growable: false);
-                  final index = mediaOnly.indexWhere((e) => e.id == item.id);
-
-                  final changed = await Navigator.push<bool>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ImageDetailPage(
-                        repo: widget.repo,
-                        tagService: widget.tagService,
-                        items: mediaOnly,
-                        initialIndex: index < 0 ? 0 : index,
-                        initialPdfPage: 1,
+              itemCount: items.length,
+              itemBuilder: (context, i) {
+                final item = items[i];
+                final isFav = _favorites.contains(item.id);
+                final selected = _selectedIds.contains(item.id);
+  
+                return InkWell(
+                  onLongPress: () {
+                    if (item.kind == MediaKind.folder) return;
+                    if (!_selectMode) {
+                      _enterSelectMode(item);
+                    } else {
+                      _toggleSelect(item);
+                    }
+                  },
+                  onTap: () async {
+                    if (item.kind == MediaKind.folder) {
+                      if (_selectMode) return;
+                      _exitSelectMode();
+                      await _enterFolder(item);
+                      return;
+                    }
+  
+                    if (_selectMode) {
+                      _toggleSelect(item);
+                      return;
+                    }
+  
+                    final mediaOnly = _items
+                        .where((e) => e.kind != MediaKind.folder)
+                        .toList(growable: false);
+                    final index = mediaOnly.indexWhere((e) => e.id == item.id);
+  
+                    final changed = await Navigator.push<bool>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ImageDetailPage(
+                          repo: widget.repo,
+                          tagService: widget.tagService,
+                          items: mediaOnly,
+                          initialIndex: index < 0 ? 0 : index,
+                          initialPdfPage: 1,
+                        ),
                       ),
-                    ),
-                  );
-
-                  if (changed == true) {
-                    await _reloadFavorites();
-                    await _reloadTags();
-                  }
-                },
-                child: _ThumbTile(
-                  repo: widget.repo,
-                  item: item,
-                  isFavorite: isFav,
-                  subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-                  onToggleFavorite: () => _toggleFavorite(item),
-                  selected: selected,
-                  folderTileMode: _folderTileMode,
-                ),
-              );
-            },
+                    );
+  
+                    if (changed == true) {
+                      await _reloadFavorites();
+                      await _reloadTags();
+                    }
+                  },
+                  child: _ThumbTile(
+                    repo: widget.repo,
+                    item: item,
+                    isFavorite: isFav,
+                    subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+                    onToggleFavorite: () => _toggleFavorite(item),
+                    selected: selected,
+                    folderTileMode: _folderTileMode,
+                  ),
+                );
+              },
+            ),
           ),
-        ),
+        )
       ],
     );
   }
@@ -2789,6 +2861,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     return GridView.builder(
+      cacheExtent: 200, // 先読み抑制
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 220,
@@ -2926,6 +2999,9 @@ class _ThumbTile extends StatelessWidget {
       }
 
       // ② プレビューモード：表紙を取得して表示
+      final st = context.findAncestorStateOfType<_GalleryGridPageState>();
+      final enabled = st?._thumbsEnabled ?? true;
+      
       return Material(
         elevation: 2,
         borderRadius: BorderRadius.circular(10),
@@ -2933,28 +3009,31 @@ class _ThumbTile extends StatelessWidget {
         child: Stack(
           children: [
             Positioned.fill(
-              child: FutureBuilder<Uint8List?>(
-                future: context
-                    .findAncestorStateOfType<_GalleryGridPageState>()
-                    ?._getFolderPreviewBytes(item),
-                builder: (context, snap) {
-                  final bytes = snap.data;
-                  if (bytes != null && bytes.isNotEmpty) {
-                    return Image.memory(
-                      bytes,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                      filterQuality: FilterQuality.low,
-                    );
-                  }
-                  // フォールバック（中身が無い/遅い/失敗）
-                  return Container(
-                    alignment: Alignment.center,
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    child: const Icon(Icons.folder, size: 56),
-                  );
-                },
-              ),
+              child: !enabled
+                  ? Container(
+                      alignment: Alignment.center,
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      child: const Icon(Icons.folder, size: 56),
+                    )
+                  : FutureBuilder<Uint8List?>(
+                      future: st?._getFolderPreviewBytes(item),
+                      builder: (context, snap) {
+                        final bytes = snap.data;
+                        if (bytes != null && bytes.isNotEmpty) {
+                          return Image.memory(
+                            bytes,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                            filterQuality: FilterQuality.low,
+                          );
+                        }
+                        return Container(
+                          alignment: Alignment.center,
+                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                          child: const Icon(Icons.folder, size: 56),
+                        );
+                      },
+                    ),
             ),
             const Positioned(top: 8, right: 8, child: _FolderBadge()),
             Positioned(
@@ -2963,28 +3042,15 @@ class _ThumbTile extends StatelessWidget {
               bottom: 8,
               child: _TitleChip(title: item.displayName, subtitle: subtitle),
             ),
+      
+            // ✅ selected overlay（ここで readThumbPair を呼ばない）
             if (selected)
               Positioned.fill(
-                child: Builder(
-                  builder: (context) {
-                    final st = context.findAncestorStateOfType<_GalleryGridPageState>();
-                    final enabled = st?._thumbsEnabled ?? true;
-              
-                    // 一覧を先に出す：ここではサムネ生成を開始しない
-                    if (!enabled) {
-                      return _TileShell(loading: true);
-                    }
-              
-                    return FutureBuilder<ThumbPair>(
-                      future: repo.readThumbPair(item, maxWidth: 240),
-                      builder: (context, snap) {
-                        if (!snap.hasData) {
-                          return _TileShell(loading: true);
-                        }
-                        return _ThumbImage(bytes: snap.data!.front);
-                      },
-                    );
-                  },
+                child: Container(
+                  color: Colors.black.withOpacity(0.35),
+                  alignment: Alignment.topRight,
+                  padding: const EdgeInsets.all(8),
+                  child: const Icon(Icons.check_circle, size: 26),
                 ),
               ),
           ],
