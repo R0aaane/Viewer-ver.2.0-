@@ -64,6 +64,12 @@ class _PrefsKeys {
   static const String tagsJson = 'prefs.tagsJson';
 }
 
+class _FolderNavState {
+  final FolderHandle folder;
+  final int pageIndex;
+  const _FolderNavState(this.folder, this.pageIndex);
+}
+
 class GalleryGridPage extends StatefulWidget {
   final MediaRepository repo;
   final TagService tagService;
@@ -187,20 +193,27 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Map<String, List<String>> _dbTagsByItemId = <String, List<String>>{};
 
   // フォルダ階層ナビ（ギャラリー内）
-  final List<FolderHandle> _dirStack = <FolderHandle>[];
+  final List<_FolderNavState> _dirStack = <_FolderNavState>[];
 
   bool get _canGoUp => _dirStack.isNotEmpty;
+  
 
-  Future<void> _enterFolder(MediaItem folderItem) async {
-    if (_folder == null) return;
-    _dirStack.add(_folder!);
-    await _loadFolder(FolderHandle(folderItem.id), saveAsLast: false);
+  Future<void> _enterFolder(MediaItem folderItem) async { 
+    if (_folder == null) return;  
+
+    // いま見ているフォルダ + その時のページを積む積む
+    _dirStack.add(_FolderNavState(_folder!, _galleryPageIndex));
+
+    // 入った先は従来通りページ1から
+    await _loadFolder(FolderHandle(folderItem.id), saveAsLast: false, pageIndex: 0);
   }
 
   Future<void> _goUpFolder() async {
     if (_dirStack.isEmpty) return;
     final prev = _dirStack.removeLast();
-    await _loadFolder(prev, saveAsLast: false);
+
+    // 戻る時は「元のフォルダ」かつ「元のページ」に復帰
+    await _loadFolder(prev.folder, saveAsLast: false, pageIndex: prev.pageIndex);
   }
 
   final TextEditingController _searchCtrl = TextEditingController();
@@ -1463,6 +1476,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _loadFolder(
     FolderHandle folder, {
     required bool saveAsLast,
+    int pageIndex = 0,
   }) async {
     setState(() {
       _thumbsEnabled = false;
@@ -1472,7 +1486,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _filteredItems = const [];
       _loadProcessed = 0;
       _loadTotal = 0;
-      _galleryPageIndex = 0;
+      _galleryPageIndex = pageIndex;
       _galleryTotal = 0;
     });
     _folderPreviewInFlight.clear();
@@ -1482,9 +1496,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     try {
+      final offset = pageIndex * _pageSize;
       final res = await widget.repo.listMediaPage(
         folder,
-        offset: 0,
+        offset: offset,
         limit: _pageSize,
         onProgress: (p, t) {
           if (!mounted) return;
@@ -1818,6 +1833,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     return list.toList(growable: false);
+  }
+
+  /// 「タグなし」タブ用: フォルダは除外し、タグが1つも付いていない画像/PDFのみ表示
+  List<MediaItem> _applyUntagged(List<MediaItem> input) {
+    final base = _applyFilter(input, pdfOnly: null);
+    return base.where((e) => e.kind != MediaKind.folder && e.tags.isEmpty).toList();
   }
 
   // ---- AppBar overflow menus ----
@@ -2420,19 +2441,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     // ギャラリー画面
     return DefaultTabController(
-      length: 4,
+      length: 3,
       child: Builder(
         builder: (context) {
           final TabController tc = DefaultTabController.of(context);
           if (!_tabListenerInstalled) {
             _tabListenerInstalled = true;
             tc.addListener(() {
-              if (!tc.indexIsChanging && tc.index == 3) {
+              if (!tc.indexIsChanging && tc.index == 2) {
                 _refreshAllFavoritesItems();
               }
             });
           }
-
+    
           return Scaffold(
             drawer: _isWideLayout(context) ? null : _buildSidebar(),
             appBar: AppBar(
@@ -2466,9 +2487,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           if (idx == 0) {
                             view = _applyFilter(_items, pdfOnly: null);
                           } else if (idx == 1) {
-                            view = _applyFilter(_items, pdfOnly: false);
-                          } else if (idx == 2) {
-                            view = _applyFilter(_items, pdfOnly: true);
+                            view = _applyUntagged(_items);
                           } else {
                             view = _favoriteItemsAll;
                           }
@@ -2598,8 +2617,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       isScrollable: true,
                       tabs: [
                         Tab(text: 'すべて'),
-                        Tab(text: '画像'),
-                        Tab(text: 'PDF'),
+                        Tab(text: 'タグなし'),
                         Tab(text: 'お気に入り'),
                       ],
                     ),
@@ -2621,14 +2639,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 : TabBarView(
                     children: [
                       _buildGrid(_applyFilter(_items, pdfOnly: null)),
-                      _buildGrid(_applyFilter(_items, pdfOnly: false)),
-                      _buildGrid(_applyFilter(_items, pdfOnly: true)),
+                      _buildGrid(_applyUntagged(_items)),
                       _loadingFavAll
                           ? const Center(child: CircularProgressIndicator())
-                          : _buildGrid(
-                              _favoriteItemsAll,
-                              showFolderLabel: true,
-                            ),
+                          : _buildGrid(_favoriteItemsAll, showFolderLabel: true),
                     ],
                   ),
             ),
