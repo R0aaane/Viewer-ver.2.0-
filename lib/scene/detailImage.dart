@@ -473,13 +473,66 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
-  Drawer _buildSidebar() {
-    return Drawer(
-      child: SafeArea(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            const ListTile(title: Text('表示設定'), dense: true),
+  // --- UI: responsive sidebar (Windows/desktop friendly) ---
+  static const double _kSidebarWidth = 340;
+
+  bool _isWideLayout(BuildContext context) =>
+      MediaQuery.of(context).size.width >= 980;
+
+  void _closeSidebar() {
+    // Drawer表示時のみ閉じる（デスクトップの常設サイドバーでは pop しない）
+    if (!_isWideLayout(context)) {
+      Navigator.pop(context);
+    }
+  }
+
+
+  Widget _withSidebar(BuildContext context, Widget body) {
+    if (!_isWideLayout(context)) return body;
+    return Row(
+      children: [
+        SizedBox(width: _kSidebarWidth, child: _buildSidebarPanel()),
+        const VerticalDivider(width: 1),
+        Expanded(child: body),
+      ],
+    );
+  }
+
+  Widget _sidebarHeader() {
+    final title = _item.displayName;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('詳細メニュー', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(title, maxLines: 2, overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+
+  Widget _sidebarSectionLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      child: Text(
+        text,
+        style: Theme.of(context)
+            .textTheme
+            .labelLarge
+            ?.copyWith(color: Theme.of(context).colorScheme.primary),
+      ),
+    );
+  }
+
+  Widget _buildSidebarListView() {
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+            _sidebarHeader(),
+            _sidebarSectionLabel('表示設定'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               child: InputDecorator(
@@ -525,13 +578,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               },
             ),
             const Divider(),
-            const ListTile(title: Text('フォルダ'), dense: true),
+            _sidebarSectionLabel('フォルダ'),
             ListTile(
               title: Text(_folder?.raw ?? '未選択'),
               subtitle: const Text('表示するフォルダに切り替え'),
               trailing: const Icon(Icons.folder_open),
               onTap: () async {
-                Navigator.pop(context);
+                _closeSidebar();
 
                 final folder = await widget.repo.pickFolder();
                 if (folder == null) return;
@@ -551,20 +604,34 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               },
             ),
           ],
-        ),
-      ),
     );
   }
 
+  Drawer _buildSidebar() => Drawer(
+        child: SafeArea(child: _buildSidebarListView()),
+      );
+
+  Widget _buildSidebarPanel() {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      child: SafeArea(child: _buildSidebarListView()),
+    );
+  }
+
+
+
   @override
   Widget build(BuildContext context) {
+    final wide = _isWideLayout(context);
+
     return WillPopScope(
       onWillPop: () async {
         _popWithResult();
         return false;
       },
       child: Scaffold(
-        drawer: _buildSidebar(),
+        drawer: wide ? null : _buildSidebar(),
         backgroundColor: _uiBg,
         appBar: AppBar(
           backgroundColor: _uiBar,
@@ -595,7 +662,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             ],
           ),
 
-          leadingWidth: 96,
+          leadingWidth: wide ? 56 : 96,
           leading: Row(
             children: [
               IconButton(
@@ -603,13 +670,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                 icon: const Icon(Icons.arrow_back),
                 onPressed: _popWithResult,
               ),
-              Builder(
-                builder: (ctx) => IconButton(
-                  tooltip: 'メニュー',
-                  icon: const Icon(Icons.menu),
-                  onPressed: () => Scaffold.of(ctx).openDrawer(),
+              if (!wide)
+                Builder(
+                  builder: (ctx) => IconButton(
+                    tooltip: 'メニュー',
+                    icon: const Icon(Icons.menu),
+                    onPressed: () => Scaffold.of(ctx).openDrawer(),
+                  ),
                 ),
-              ),
             ],
           ),
 
@@ -636,7 +704,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ),
         ),
 
-        body: Shortcuts(
+        body: _withSidebar(context, Shortcuts(
           shortcuts: const <ShortcutActivator, Intent>{
             SingleActivator(LogicalKeyboardKey.arrowLeft): _PrevIntent(),
             SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
@@ -679,7 +747,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               ),
             ),
           ),
-        ),
+        )),
       ),
     );
   }

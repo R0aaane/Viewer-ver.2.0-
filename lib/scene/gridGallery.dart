@@ -2086,18 +2086,74 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     _saveFolderTileMode(mode); // ←あなたが持ってる既存関数を呼ぶ想定
   }
 
-  Drawer _buildSidebar() {
-    return Drawer(
-      child: SafeArea(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
+  // --- UI: responsive sidebar (Windows/desktop friendly) ---
+  static const double _kSidebarWidth = 340;
+
+  bool _isWideLayout(BuildContext context) =>
+      MediaQuery.of(context).size.width >= 980;
+
+  void _closeSidebar() {
+    // Drawer表示時のみ閉じる（デスクトップの常設サイドバーでは pop しない）
+    if (!_isWideLayout(context)) {
+      Navigator.pop(context);
+    }
+  }
+
+
+  Widget _withSidebar(BuildContext context, Widget body) {
+    if (!_isWideLayout(context)) return body;
+    return Row(
+      children: [
+        SizedBox(width: _kSidebarWidth, child: _buildSidebarPanel()),
+        const VerticalDivider(width: 1),
+        Expanded(child: body),
+      ],
+    );
+  }
+
+  Widget _sidebarHeader() {
+    final currentLabel = _currentFolderRaw == null
+        ? '未選択'
+        : _folderLabel(_currentFolderRaw!);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Media Viewer', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text('現在のフォルダ: ${currentLabel}',
+              style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+
+  Widget _sidebarSectionLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      child: Text(
+        text,
+        style: Theme.of(context)
+            .textTheme
+            .labelLarge
+            ?.copyWith(color: Theme.of(context).colorScheme.primary),
+      ),
+    );
+  }
+
+  Widget _buildSidebarListView() {
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+            _sidebarHeader(),
             ListTile(
               leading: const Icon(Icons.home_outlined),
               title: const Text('ホーム'),
               selected: _page == _MainPage.home,
               onTap: () {
-                Navigator.pop(context);
+                _closeSidebar();
                 _exitSelectMode();
                 setState(() => _page = _MainPage.home);
               },
@@ -2107,7 +2163,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               title: const Text('ギャラリー'),
               selected: _page == _MainPage.gallery,
               onTap: () async {
-                Navigator.pop(context);
+                _closeSidebar();
 
                 // フォルダ未選択ならホームで案内（またはフォルダ追加）
                 if (_currentFolderRaw == null) {
@@ -2120,7 +2176,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               },
             ),
             const Divider(),
-            const ListTile(title: Text('作者タグ'), dense: true),
+            _sidebarSectionLabel('作者タグ'),
             if (_loadingArtistTags)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2154,7 +2210,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ],
               ),
 
-            const ListTile(title: Text('表示設定'), dense: true),
+            _sidebarSectionLabel('表示設定'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               child: InputDecorator(
@@ -2199,14 +2255,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               },
             ),
             const Divider(),
-            const ListTile(title: Text('フォルダ'), dense: true),
+            _sidebarSectionLabel('フォルダ'),
 
             // 追加ボタン
             ListTile(
               leading: const Icon(Icons.create_new_folder_outlined),
               title: const Text('フォルダを追加'),
               onTap: () async {
-                Navigator.pop(context);
+                _closeSidebar();
                 await _addFolder();
               },
             ),
@@ -2246,7 +2302,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         tooltip: '名前を変更',
                         icon: const Icon(Icons.edit_outlined),
                         onPressed: () async {
-                          Navigator.pop(context);
+                          _closeSidebar();
                           await _renameFolder(raw);
                         },
                       ),
@@ -2254,7 +2310,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         tooltip: 'このフォルダを削除',
                         icon: const Icon(Icons.delete_outline),
                         onPressed: () async {
-                          Navigator.pop(context);
+                          _closeSidebar();
                           await _removeFolder(raw);
                         },
                       ),
@@ -2262,7 +2318,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   ),
 
                   onTap: () async {
-                    Navigator.pop(context);
+                    _closeSidebar();
                     await _switchFolder(raw);
                   },
                 ),
@@ -2276,29 +2332,41 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               ),
             ],
           ],
-        ),
-      ),
     );
   }
+
+  Drawer _buildSidebar() => Drawer(
+        child: SafeArea(child: _buildSidebarListView()),
+      );
+
+  Widget _buildSidebarPanel() {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      child: SafeArea(child: _buildSidebarListView()),
+    );
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
     // ホーム画面
     if (_page == _MainPage.home) {
       return Scaffold(
-        drawer: _buildSidebar(),
+        drawer: _isWideLayout(context) ? null : _buildSidebar(),
         appBar: AppBar(
           title: const Text('ホーム'),
           actions: [_buildHomeOverflowMenu()],
         ),
-        body: _buildHomeBody(),
+        body: _withSidebar(context, _buildHomeBody()),
       );
     }
 
     // 検索結果（Home検索をギャラリー表示する。）
     if (_page == _MainPage.search) {
       return Scaffold(
-        drawer: _buildSidebar(),
+        drawer: _isWideLayout(context) ? null : _buildSidebar(),
         appBar: AppBar(
           title: const Text('検索結果'),
           actions: _selectMode
@@ -2346,7 +2414,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   ),
                 ],
         ),
-        body: _buildHomeSearchGalleryBody(),
+        body: _withSidebar(context, _buildHomeSearchGalleryBody()),
       );
     }
 
@@ -2366,7 +2434,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
 
           return Scaffold(
-            drawer: _buildSidebar(),
+            drawer: _isWideLayout(context) ? null : _buildSidebar(),
             appBar: AppBar(
               leading: _canGoUp
                   ? IconButton(
@@ -2539,7 +2607,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
               ),
             ),
-            body: _folder == null
+            body: _withSidebar(context, _folder == null
                 ? Center(
                     child: ElevatedButton(
                       onPressed: _addFolder,
@@ -2563,6 +2631,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                             ),
                     ],
                   ),
+            ),
           );
         },
       ),

@@ -30,6 +30,30 @@ class _TagResultsPageState extends State<TagResultsPage> {
   // folderRaw -> items（そのフォルダの全件）
   final Map<String, List<MediaItem>> _folderItemsCache = {};
 
+  String _categoryLabel(model.TagCategory c) {
+    switch (c) {
+      case model.TagCategory.artist:
+        return '作者';
+      case model.TagCategory.series:
+        return 'シリーズ';
+      case model.TagCategory.mediaType:
+        return '種別';
+      case model.TagCategory.character:
+        return 'キャラ';
+      case model.TagCategory.free:
+        return '自由';
+    }
+  }
+
+  String _shortFolder(String raw) {
+    final parts = raw
+        .split(RegExp(r'[\/]+'))
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    return parts.isEmpty ? raw : parts.last;
+  }
+
+
   Widget _coverThumb(MediaItem item) {
     return AspectRatio(
       aspectRatio: 3 / 4,
@@ -96,7 +120,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('アーティスト: ${widget.tagName}')),
+      appBar: AppBar(title: Text('${_categoryLabel(widget.category)}: ${widget.tagName}')),
       body: FutureBuilder<List<MediaItem>>(
         future: widget.tagService.findMediaItemsByTagGlobal(
           category: widget.category,
@@ -153,7 +177,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                'フォルダ: ${it.folderRaw}',
+                                'フォルダ: ${_shortFolder(it.folderRaw)}',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.bodySmall,
