@@ -7,12 +7,22 @@ import 'dart:ui' as ui;
 import 'package:docman/docman.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:drift/drift.dart' as drift;
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import 'mediaRepository.dart';
 
+import '../database/app_db.dart' as db;
+
 class AndroidFolderRepository implements MediaRepository {
+  final db.AppDb _db;
+  AndroidFolderRepository(this._db);
+
+  // インデックスの有効期限
+  static const Duration _folderIndexTtl = Duration(minutes: 10);
+
+  // 対象ファイルの拡張子（小文字）
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
   static const Duration _safShallowTtl = Duration(seconds: 15);
@@ -70,6 +80,180 @@ class AndroidFolderRepository implements MediaRepository {
     if (_thumbWaiters.isNotEmpty) {
       _thumbWaiters.removeAt(0).complete();
     }
+  }
+
+  int _entryKindToMediaKind(int k) {
+  final e = db.FolderEntryKindDb.values[k];
+  switch (e) {
+    case db.FolderEntryKindDb.folder:
+      return 2; // 仮（使わない）
+    case db.FolderEntryKindDb.image:
+      return 0;
+    case db.FolderEntryKindDb.pdf:
+      return 1;
+  }
+}
+
+MediaKind _dbKindToMediaKind(int k) {
+  final e = db.FolderEntryKindDb.values[k];
+  switch (e) {
+    case db.FolderEntryKindDb.folder:
+      return MediaKind.folder;
+    case db.FolderEntryKindDb.image:
+      return MediaKind.image;
+    case db.FolderEntryKindDb.pdf:
+      return MediaKind.pdf;
+  }
+}
+
+int _mediaKindToFolderEntryKind(MediaKind k) {
+  switch (k) {
+    case MediaKind.folder:
+      return db.FolderEntryKindDb.folder.index;
+    case MediaKind.image:
+      return db.FolderEntryKindDb.image.index;
+    case MediaKind.pdf:
+      return db.FolderEntryKindDb.pdf.index;
+  }
+}
+
+String _sortKey(String name) => name.trim().toLowerCase();
+
+Future<db.DbFolderIndex?> _getFolderIndexRow(String folderRaw) {
+  return (_db.select(_db.folderIndexes)..where((t) => t.folderRaw.equals(folderRaw)))
+      .getSingleOrNull();
+}
+
+bool _isIndexFresh(db.DbFolderIndex idx) {
+  final scanned = DateTime.fromMillisecondsSinceEpoch(idx.scannedAtEpochMs);
+  return DateTime.now().difference(scanned) <= _folderIndexTtl;
+}
+
+Future<PagedMediaResult?> _tryListPageFromDb(
+  FolderHandle folder, {
+  required int offset,
+  required int limit,
+}) async {
+  final raw = folder.raw;
+  final idx = await _getFolderIndexRow(raw);
+  if (idx == null) return null;
+
+  final q = _db.select(_db.folderEntries)
+    ..where((t) => t.folderRaw.equals(raw))
+    ..orderBy([
+      (t) => drift.OrderingTerm.asc(t.kind),      // folder(0) -> image(1) -> pdf(2)
+      (t) => drift.OrderingTerm.asc(t.sortName),  // name sort
+    ])
+    ..limit(limit, offset: offset);
+
+  final rows = await q.get();
+
+  final items = rows.map((r) {
+    final kind = _dbKindToMediaKind(r.kind);
+    return MediaItem(
+      id: r.entryId,
+      displayName: r.displayName,
+      kind: kind,
+      folderRaw: raw,
+      modified: r.modifiedEpochMs == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(r.modifiedEpochMs!),
+      tags: const [],
+    );
+  }).toList(growable: false);
+
+  return PagedMediaResult(items: items, total: idx.totalCount);
+}
+
+  /// SAF直下をスキャンしてDBへ保存（差分は「全入れ替え」で簡単・堅牢）
+  Future<void> _rebuildFolderIndexSaf(String folderRaw) async {
+    // SAF直下
+    final entries = await _safListShallow(folderRaw);
+
+    // 対象だけ + kind決定
+    final out = <db.FolderEntriesCompanion>[];
+    for (final e in entries) {
+      if (e.isDir) {
+        out.add(db.FolderEntriesCompanion.insert(
+          folderRaw: folderRaw,
+          entryId: e.documentUri,
+          displayName: e.name,
+          kind: db.FolderEntryKindDb.folder.index,
+          modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
+          sortName: _sortKey(e.name),
+        ));
+        continue;
+      }
+
+      final ext = _lowerExt(e.name);
+      if (ext == _pdfExt) {
+        out.add(db.FolderEntriesCompanion.insert(
+          folderRaw: folderRaw,
+          entryId: e.documentUri,
+          displayName: e.name,
+          kind: db.FolderEntryKindDb.pdf.index,
+          modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
+          sortName: _sortKey(e.name),
+        ));
+        continue;
+      }
+      if (_imageExt.contains(ext)) {
+        out.add(db.FolderEntriesCompanion.insert(
+          folderRaw: folderRaw,
+          entryId: e.documentUri,
+          displayName: e.name,
+          kind: db.FolderEntryKindDb.image.index,
+          modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
+          sortName: _sortKey(e.name),
+        ));
+        continue;
+      }
+    }
+
+    // sort（DB orderByでも整うが totalCount を正確に）
+    out.sort((a, b) {
+      final ak = a.kind.value;
+      final bk = b.kind.value;
+      if (ak != bk) return ak.compareTo(bk);
+      return a.sortName.value.compareTo(b.sortName.value);
+    });
+
+    final total = out.length;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+    await _db.transaction(() async {
+      // 既存削除 → 作り直し（整合性が一番強い）
+      await (_db.delete(_db.folderEntries)..where((t) => t.folderRaw.equals(folderRaw))).go();
+
+      await _db.into(_db.folderIndexes).insertOnConflictUpdate(
+        db.FolderIndexesCompanion.insert(
+          folderRaw: folderRaw,
+          scannedAtEpochMs: nowMs,
+          totalCount: total,
+        ),
+      );
+
+      if (out.isNotEmpty) {
+        await _db.batch((b) {
+          b.insertAll(_db.folderEntries, out, mode: drift.InsertMode.insertOrReplace);
+        });
+      }
+    });
+  }
+
+  Future<void> _ensureFolderIndexSaf(String folderRaw, {bool force = false}) async {
+    final idx = await _getFolderIndexRow(folderRaw);
+    if (!force && idx != null && _isIndexFresh(idx)) return;
+
+    // 重いので多重起動を避けたいなら、簡易inflightを入れるのも可
+    await _rebuildFolderIndexSaf(folderRaw);
+  }
+
+  Future<void> _invalidateFolderIndex(String folderRaw) async {
+    await _db.transaction(() async {
+      await (_db.delete(_db.folderEntries)..where((t) => t.folderRaw.equals(folderRaw))).go();
+      await (_db.delete(_db.folderIndexes)..where((t) => t.folderRaw.equals(folderRaw))).go();
+    });
   }
 
   // ==============================
@@ -192,9 +376,13 @@ class AndroidFolderRepository implements MediaRepository {
     final raw = folder.raw;
 
     if (raw.startsWith('content://')) {
-      final c = await _getSafShallowCached(raw);
-      // sortedAll は dirs + 対象ファイルだけ、なので length = total と同義
-      return c.sortedAll.length;
+      final idx = await _getFolderIndexRow(raw);
+      if (idx != null && _isIndexFresh(idx)) return idx.totalCount;
+
+      // 無い/古いなら作る
+      await _ensureFolderIndexSaf(raw, force: true);
+      final idx2 = await _getFolderIndexRow(raw);
+      return idx2?.totalCount ?? 0;
     }
 
     final dir = Directory(raw);
@@ -222,48 +410,23 @@ class AndroidFolderRepository implements MediaRepository {
     final raw = folder.raw;
 
     if (raw.startsWith('content://')) {
-    final c = await _getSafShallowCached(raw);
-    final all = c.sortedAll;
-
-    final total = all.length;
-    final start = offset.clamp(0, total);
-    final end = (start + limit).clamp(0, total);
-    final slice = all.sublist(start, end);
-
-    final out = <MediaItem>[];
-    int processed = 0;
-
-    for (final e in slice) {
-      if (e.isDir) {
-        out.add(MediaItem(
-          id: e.documentUri,
-          displayName: e.name,
-          kind: MediaKind.folder,
-          folderRaw: folder.raw,
-          modified: e.modified,
-          tags: const [],
-        ));
-      } else {
-        final ext = _lowerExt(e.name);
-        final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
-
-        out.add(MediaItem(
-          id: e.documentUri,
-          displayName: e.name,
-          kind: kind,
-          folderRaw: folder.raw,
-          modified: e.modified,
-          tags: const [],
-        ));
+      // 1) まずDBから即返す（もしあれば）
+      final cached = await _tryListPageFromDb(folder, offset: offset, limit: limit);
+      if (cached != null) {
+        // 2) TTL切れなら裏で更新（UIは即表示のまま）
+        final idx = await _getFolderIndexRow(raw);
+        if (idx != null && !_isIndexFresh(idx)) {
+          // ignore: unawaited_futures
+          _ensureFolderIndexSaf(raw); 
+        }
+        return cached;
       }
 
-      processed++;
-      if (onProgress != null) onProgress(processed, slice.length);
+      // DBに無い（初回）なら: スキャンしてDB作成 → DBから返す
+      await _ensureFolderIndexSaf(raw, force: true);
+      final after = await _tryListPageFromDb(folder, offset: offset, limit: limit);
+      return after ?? const PagedMediaResult(items: [], total: 0);
     }
-
-    return PagedMediaResult(items: out, total: total);
-  }
-
     // FS (直下)
     final dir = Directory(raw);
     if (!await dir.exists()) return const PagedMediaResult(items: [], total: 0);
@@ -777,7 +940,7 @@ class AndroidFolderRepository implements MediaRepository {
     if (moved == null) {
       throw Exception('rename: moveTo not supported or permission denied');
     }
-    _invalidateSafShallow(item.folderRaw);
+    await _invalidateFolderIndex(item.folderRaw);
 
     // id(uri)は変わる可能性あり（今は気にしないとのことなのでここでは反映のみ）
     return MediaItem(

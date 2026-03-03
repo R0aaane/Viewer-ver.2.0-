@@ -3,8 +3,10 @@ import 'dart:io' show Platform;
 import 'mediaRepository.dart';
 import 'folderRepository.dart';
 import 'androidFolderRepository.dart';
+import '../database/app_db.dart'; 
 
-MediaRepository createRepository() {
-  if (Platform.isAndroid) return AndroidFolderRepository();
+
+MediaRepository createRepository(AppDb db) {
+  if (Platform.isAndroid) return AndroidFolderRepository(db);
   return WindowsFolderRepository();
 }

@@ -11,16 +11,18 @@ void main() {
   final appDb = AppDb();
   final tagService = TagService(appDb);
 
-  runApp(MyApp(tagService: tagService));
+  runApp(MyApp(appDb: appDb, tagService: tagService));
 }
 
 class MyApp extends StatelessWidget {
+  final AppDb appDb;
   final TagService tagService;
-  const MyApp({super.key, required this.tagService});
+
+  const MyApp({super.key, required this.appDb, required this.tagService});
 
   @override
   Widget build(BuildContext context) {
-    final repo = createRepository(); 
+    final repo = createRepository(appDb);
 
     return MaterialApp(
       title: 'Media Viewer',

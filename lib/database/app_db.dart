@@ -42,18 +42,61 @@ class MediaItemTags extends Table {
   Set<Column> get primaryKey => {itemId, tagId};
 }
 
-@DriftDatabase(tables: [MediaItems, Tags, MediaItemTags])
+//  フォルダ一覧インデックス用
+enum FolderEntryKindDb {
+  folder, // 0
+  image,  // 1
+  pdf,    // 2
+}
+
+@DataClassName('DbFolderIndex')
+class FolderIndexes extends Table {
+  TextColumn get folderRaw => text()(); // content:// treeUri or fs path
+  IntColumn get scannedAtEpochMs => integer()(); // last scan time
+  IntColumn get totalCount => integer()(); // entries count
+
+  @override
+  Set<Column> get primaryKey => {folderRaw};
+}
+
+@DataClassName('DbFolderEntry')
+class FolderEntries extends Table {
+  TextColumn get folderRaw => text()();         // parent folder raw
+  TextColumn get entryId => text()();           // SAF documentUri / fs full path
+  TextColumn get displayName => text()();       // name shown
+  IntColumn get kind => integer()();            // FolderEntryKindDb index
+  IntColumn get modifiedEpochMs => integer().nullable()();
+
+  // sort最適化（小文字化したキーを持つ）
+  TextColumn get sortName => text()();
+
+  @override
+  Set<Column> get primaryKey => {folderRaw, entryId};
+}
+
+@DriftDatabase(tables: [
+  MediaItems, 
+  Tags, 
+  MediaItemTags, 
+  FolderIndexes, 
+  FolderEntries
+])
 class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   // 将来のマイグレーション用
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async => m.createAll(),
-    onUpgrade: (m, from, to) async {},
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        await m.createTable(folderIndexes);
+        await m.createTable(folderEntries);
+      }
+    },
   );
 }
 
