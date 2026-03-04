@@ -19,7 +19,7 @@ void main() {
     final tagService = TagService(db);
 
     await tester.pumpWidget(
-      MyApp(tagService: tagService),
+      MyApp(appDb: db, tagService: tagService),
     );
 
     // Verify that our counter starts at 0.

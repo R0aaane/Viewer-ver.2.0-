@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../database/tag_service.dart';
+import '../database/tag_service.dart'; 
 import '../models/mediaItem.dart';
-import '../models/tag.dart';
+import '../models/tag.dart' as model;
+
+import 'dart:async';
+
 
 class TagAssignAfterImportPage extends StatefulWidget {
   final List<MediaItem> items;
@@ -20,13 +24,66 @@ class TagAssignAfterImportPage extends StatefulWidget {
 }
 
 class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
-  TagCategory _selectedCategory = TagCategory.artist;
+  model.TagCategory _selectedCategory = model.TagCategory.artist;
   final TextEditingController _tagCtrl = TextEditingController();
 
   // 付与予定のタグ一覧（カテゴリ込み）
-  final List<Tag> _pending = <Tag>[];
+  final List<model.Tag> _pending = <model.Tag>[];
+
+  List<TagWithId> _master = <TagWithId>[];
+  bool _loadingMaster = false;
+  Timer? _debounce;
 
   bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshMaster(); // 初回ロード
+
+    // 入力文字で候補を絞り込む（デバウンス）
+    _tagCtrl.addListener(() {
+      _debounce?.cancel();
+      _debounce = Timer(const Duration(milliseconds: 250), () {
+        if (mounted) _refreshMaster();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _tagCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refreshMaster() async {
+    if (_saving) return;
+    setState(() => _loadingMaster = true);
+    try {
+      final contains = _tagCtrl.text.trim();
+      final rows = await widget.tagService.listTagMasterByCategory(
+        _selectedCategory,
+        contains: contains.isEmpty ? null : contains,
+        limit: 200,
+      );
+      if (!mounted) return;
+      setState(() => _master = rows);
+    } finally {
+      if (mounted) setState(() => _loadingMaster = false);
+    }
+  }
+
+  bool _isPending(model.Tag t) {
+    return _pending.any((x) => x.category == t.category && x.name == t.name);
+  }
+
+  // 既存タグ候補をタップ→pending追加
+  void _addExisting(model.Tag tag) {
+    final t = model.Tag(name: tag.name, category: tag.category);
+    if (_isPending(t)) return;
+    setState(() => _pending.add(t));
+  }
 
   String? _normalizeTag(String input) {
     var t = input.trim();
@@ -47,7 +104,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
       return;
     }
 
-    final tag = Tag(name: name, category: _selectedCategory);
+    final tag = model.Tag(name: name, category: _selectedCategory);
 
     // 重複（同カテゴリ・同名）を避ける
     final exists = _pending.any(
@@ -62,6 +119,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
       _pending.add(tag);
       _tagCtrl.clear();
     });
+    _refreshMaster();
   }
 
   Future<void> _save() async {
@@ -83,17 +141,17 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
     }
   }
 
-  String _catLabel(TagCategory c) {
+  String _catLabel(model.TagCategory c) {
     switch (c) {
-      case TagCategory.artist:
+      case model.TagCategory.artist:
         return '作者';
-      case TagCategory.series:
+      case model.TagCategory.series:
         return 'シリーズ';
-      case TagCategory.mediaType:
+      case model.TagCategory.mediaType:
         return '媒体';
-      case TagCategory.character:
+      case model.TagCategory.character:
         return 'キャラ';
-      case TagCategory.free:
+      case model.TagCategory.free:
         return '自由';
     }
   }
@@ -121,12 +179,15 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
             // カテゴリ + 入力
             Row(
               children: [
-                DropdownButton<TagCategory>(
+                DropdownButton<model.TagCategory>(
                   value: _selectedCategory,
                   onChanged: _saving
                       ? null
-                      : (v) => setState(() => _selectedCategory = v!),
-                  items: TagCategory.values
+                      : (v) {
+                        setState(() => _selectedCategory = v!);
+                        _refreshMaster();
+                      },
+                  items: model.TagCategory.values
                       .map(
                         (c) => DropdownMenuItem(
                           value: c,
@@ -155,6 +216,48 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
             ),
 
             const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(
+                  '既存タグ候補',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(width: 8),
+                if (_loadingMaster)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            // 既存タグ候補リスト（スクロール可能）
+            SizedBox(
+              height: 160,
+              child: _master.isEmpty
+                  ? const Text('（該当なし）')
+                  : ListView.builder(
+                      itemCount: _master.length,
+                      itemBuilder: (context, i) {
+                        final t = _master[i].tag; // model.Tag
+                        final pending = _pending.any(
+                          (x) => x.category == t.category && x.name == t.name,
+                        );
+
+                        return ListTile(
+                          dense: true,
+                          title: Text(t.name),
+                          trailing: pending
+                              ? const Icon(Icons.check, size: 18)
+                              : const Icon(Icons.add, size: 18),
+                          onTap: _saving || pending ? null : () => _addExisting(t),
+                        );
+                      },
+                    ),
+            ),
 
             Text(
               '付与予定',
