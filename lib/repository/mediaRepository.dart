@@ -53,6 +53,14 @@ abstract class MediaRepository {
   // ファイル名変更（displayName のみ変更。id(uri/path)は基本維持、市内と崩れる）
   Future<MediaItem> rename(MediaItem item, String newDisplayName);
 
+  // 既存のMediaItem（ギャラリー内のファイル）を dest にコピーして取り込む
+  // skipIfExists=true の場合、dest直下に同名ファイルがあるならスキップする
+  Future<int> importItemsIntoFolder(
+    FolderHandle dest,
+    List<MediaItem> items, {
+    bool skipIfExists = true,
+  });
+
   Future<List<MediaItem>> listMediaRecursiveFiles(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,

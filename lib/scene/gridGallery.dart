@@ -2481,6 +2481,26 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     },
                     icon: const Icon(Icons.label_outline),
                   ),
+                  IconButton(
+                    tooltip: '選択を保管庫に取り込む（重複はスキップ）',
+                   onPressed: () {
+                    // ここでその場でタブ番号を取る
+                    final tabIndex = DefaultTabController.of(context).index;
+
+                    final List<MediaItem> view;
+                    if (tabIndex == 0) {
+                      view = _applyFilter(_items, pdfOnly: null);
+                    } else if (tabIndex == 1) {
+                      view = _applyFilter(_items, pdfOnly: false);
+                    } else {
+                      view = _applyFilter(_items, pdfOnly: true);
+                    }
+
+                    final targets = _selectedFrom(view);
+                    _importSelectedToLibrary(targets);
+                  },
+                    icon: const Icon(Icons.archive_outlined),
+                  ),
                 ]
               : [
                   IconButton(
@@ -2584,6 +2604,26 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           _bulkAddTagToItems(targets);
                         },
                         icon: const Icon(Icons.label_outline),
+                      ),
+                      IconButton(
+                        tooltip: '選択を保管庫に取り込む（重複はスキップ）',
+                        onPressed: () {
+                          // ここでその場でタブ番号を取る
+                            final tabIndex = DefaultTabController.of(context).index;
+
+                          final List<MediaItem> view;
+                          if (tabIndex == 0) {
+                            view = _applyFilter(_items, pdfOnly: null);
+                          } else if (tabIndex == 1) {
+                            view = _applyFilter(_items, pdfOnly: false);
+                          } else {
+                            view = _applyFilter(_items, pdfOnly: true);
+                            }
+
+                          final targets = _selectedFrom(view);
+                          _importSelectedToLibrary(targets);
+                        },
+                        icon: const Icon(Icons.archive_outlined),
                       ),
                     ]
                   : [
@@ -2854,6 +2894,56 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       // 進捗ダイアログを閉じる
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
     }
+  }
+
+  Future<void> _importSelectedToLibrary(List<MediaItem> targets) async {
+    if (targets.isEmpty) return;
+
+    // 取り込み先（保管庫）
+    final lib = await widget.repo.getAppLibraryFolder();
+
+    // 取り込み前スナップショット（新規分を特定してタグ付け画面にも渡せる）
+    final before = await widget.repo.listMedia(lib);
+    final beforeIds = before.map((e) => e.id).toSet();
+
+    // 同名があればスキップする（軽量重複回避）
+    final imported = await widget.repo.importItemsIntoFolder(
+      lib,
+      targets,
+      skipIfExists: true,
+    );
+
+    if (imported <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('取り込み対象がありません（既に取り込み済みの可能性）')),
+      );
+      return;
+    }
+
+    // 取り込み後差分＝今回新規で増えたファイル
+    final after = await widget.repo.listMedia(lib);
+    final newItems = after
+        .where((e) => e.kind != MediaKind.folder && !beforeIds.contains(e.id))
+        .toList(growable: false);
+
+    if (!mounted) return;
+
+    // 取り込み直後タグ付け（あなたが前に入れている tag_assign_after_import.dart を活用）
+    if (newItems.isNotEmpty) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => TagAssignAfterImportPage(
+            items: newItems,
+            tagService: widget.tagService,
+          ),
+        ),
+      );
+    }
+
+    // 選択解除 + 表示更新
+    _exitSelectMode();
+    setState(() {});
   }
 
   Widget _buildGrid(List<MediaItem> items, {bool showFolderLabel = false}) {

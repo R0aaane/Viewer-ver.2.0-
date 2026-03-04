@@ -1077,12 +1077,56 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       extensions: const ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'pdf'],
       limit: 200,
     );
-    if (picked.isEmpty) return 0;
+      if (picked.isEmpty) return 0;
 
-    // 1) まずターゲットが「保管庫など file path」なら確実に書ける
-    if (!folder.raw.startsWith('content://')) {
-      final dir = Directory(folder.raw);
-      if (!await dir.exists()) await dir.create(recursive: true);
+      // 1) まずターゲットが「保管庫など file path」なら確実に書ける
+      if (!folder.raw.startsWith('content://')) {
+        final dir = Directory(folder.raw);
+        if (!await dir.exists()) await dir.create(recursive: true);
+
+        int ok = 0;
+        for (final f in picked) {
+          try {
+            final name = f.path.split('/').last;
+            final bytes = await f.readAsBytes();
+            if (bytes.isEmpty) continue;
+
+            final outPath = await _uniquePathInDir(dir, name);
+            await File(outPath).writeAsBytes(bytes, flush: true);
+            ok++;
+          } catch (_) {}
+        }
+        return ok;
+      }
+
+      // 2) SAFフォルダの場合：書き込み可なら直接入れる
+    return _docmanSync(() async {
+      final dir = await DocumentFile.fromUri(folder.raw);
+      if (dir == null) throw Exception('DocumentFile.fromUri failed: ${folder.raw}');
+      if (dir.isDirectory != true) throw Exception('Target is not a directory: ${folder.raw}');
+
+      if (dir.canCreate == true) {
+        int ok = 0;
+        for (final f in picked) {
+          try {
+            final name = f.path.split('/').last;
+            final bytes = await f.readAsBytes();
+            if (bytes.isEmpty) continue;
+
+            final unique = await _uniqueName(dir, name); // ←これも docman 操作
+            final created = await _createFile(dir, unique, bytes);
+            if (created != null) ok++;
+          } catch (_) {}
+        }
+        _invalidateSafShallow(folder.raw);
+        await _invalidateFolderIndex(folder.raw);
+        return ok;
+    }
+
+    // 3) SAFが書き込み不可 → ★保管庫へ確実に取り込む（fallback）
+      final lib = await getAppLibraryFolder();
+      final libDir = Directory(lib.raw);
+      if (!await libDir.exists()) await libDir.create(recursive: true);
 
       int ok = 0;
       for (final f in picked) {
@@ -1091,58 +1135,107 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           final bytes = await f.readAsBytes();
           if (bytes.isEmpty) continue;
 
-          final outPath = await _uniquePathInDir(dir, name);
+          final outPath = await _uniquePathInDir(libDir, name);
           await File(outPath).writeAsBytes(bytes, flush: true);
+          ok++;
+        } catch (_) {}
+      }
+      return ok;
+    });
+  }
+
+  @override
+  Future<int> importItemsIntoFolder(
+    FolderHandle dest,
+    List<MediaItem> items, {
+    bool skipIfExists = true,
+  }) async {
+    // 1) dest が file path（保管庫は通常これ）なら、Directoryへ書き込む
+    if (!dest.raw.startsWith('content://')) {
+      final dir = Directory(dest.raw);
+      if (!await dir.exists()) await dir.create(recursive: true);
+
+      final existingLowerNames = <String>{};
+      await for (final ent in dir.list(recursive: false, followLinks: false)) {
+        if (ent is File) {
+          final name = ent.uri.pathSegments.isNotEmpty
+              ? ent.uri.pathSegments.last
+              : ent.path;
+          existingLowerNames.add(name.toLowerCase());
+        }
+      }
+
+      int ok = 0;
+      for (final it in items) {
+        if (it.kind == MediaKind.folder) continue;
+
+        final lower = it.displayName.toLowerCase();
+        if (skipIfExists && existingLowerNames.contains(lower)) continue;
+
+        try {
+          final bytes = await readBytes(it); // 既存の repo API を利用
+          if (bytes.isEmpty) continue;
+
+          final outPath = skipIfExists
+              ? '${dir.path}/${it.displayName}'
+              : await _uniquePathInDir(dir, it.displayName);
+
+          // skipIfExists=true でも、並行で同名が出来る等の事故を避けたいので存在確認
+          if (skipIfExists && await File(outPath).exists()) continue;
+
+          await File(outPath).writeAsBytes(bytes, flush: true);
+          existingLowerNames.add((outPath.split('/').last).toLowerCase());
           ok++;
         } catch (_) {}
       }
       return ok;
     }
 
-    // 2) SAFフォルダの場合：書き込み可なら直接入れる
-  return _docmanSync(() async {
-    final dir = await DocumentFile.fromUri(folder.raw);
-    if (dir == null) throw Exception('DocumentFile.fromUri failed: ${folder.raw}');
-    if (dir.isDirectory != true) throw Exception('Target is not a directory: ${folder.raw}');
+    // 2) dest が SAF の場合（必要なら）
+    return _docmanSync(() async {
+      final dir = await DocumentFile.fromUri(dest.raw);
+      if (dir == null) throw Exception('DocumentFile.fromUri failed: ${dest.raw}');
+      if (dir.isDirectory != true) throw Exception('Target is not a directory: ${dest.raw}');
+      if (dir.canCreate != true) throw Exception('Target folder is not writable: ${dest.raw}');
 
-    if (dir.canCreate == true) {
+      // 既存名セット（docmanで浅く取得）
+      final existingLowerNames = <String>{};
+      final children = await dir.listDocuments();
+      for (final c in children) {
+        final n = (c.name ?? '').trim();
+        if (n.isNotEmpty) existingLowerNames.add(n.toLowerCase());
+      }
+
       int ok = 0;
-      for (final f in picked) {
+      for (final it in items) {
+        if (it.kind == MediaKind.folder) continue;
+
+        final lower = it.displayName.toLowerCase();
+        if (skipIfExists && existingLowerNames.contains(lower)) continue;
+
         try {
-          final name = f.path.split('/').last;
-          final bytes = await f.readAsBytes();
+          final bytes = await readBytes(it);
           if (bytes.isEmpty) continue;
 
-          final unique = await _uniqueName(dir, name); // ←これも docman 操作
-          final created = await _createFile(dir, unique, bytes);
-          if (created != null) ok++;
+          final uniqueName = skipIfExists
+              ? it.displayName
+              : await _uniqueName(dir, it.displayName);
+
+          if (skipIfExists && existingLowerNames.contains(uniqueName.toLowerCase())) continue;
+
+          final created = await _createFile(dir, uniqueName, bytes);
+          if (created != null) {
+            existingLowerNames.add(uniqueName.toLowerCase());
+            ok++;
+          }
         } catch (_) {}
       }
-      _invalidateSafShallow(folder.raw);
-      await _invalidateFolderIndex(folder.raw);
+
+      _invalidateSafShallow(dest.raw);
+      await _invalidateFolderIndex(dest.raw);
       return ok;
+    });
   }
-
-  // 3) SAFが書き込み不可 → ★保管庫へ確実に取り込む（fallback）
-    final lib = await getAppLibraryFolder();
-    final libDir = Directory(lib.raw);
-    if (!await libDir.exists()) await libDir.create(recursive: true);
-
-    int ok = 0;
-    for (final f in picked) {
-      try {
-        final name = f.path.split('/').last;
-        final bytes = await f.readAsBytes();
-        if (bytes.isEmpty) continue;
-
-        final outPath = await _uniquePathInDir(libDir, name);
-        await File(outPath).writeAsBytes(bytes, flush: true);
-        ok++;
-      } catch (_) {}
-    }
-    return ok;
-  });
-}
 
   Future<String> _uniquePathInDir(Directory dir, String name) async {
     final dot = name.lastIndexOf('.');

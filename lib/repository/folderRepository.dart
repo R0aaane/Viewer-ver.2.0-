@@ -548,6 +548,51 @@ class WindowsFolderRepository implements MediaRepository {
     return ok;
   }
 
+    @override
+  Future<int> importItemsIntoFolder(
+    FolderHandle dest,
+    List<MediaItem> items, {
+    bool skipIfExists = true,
+  }) async {
+    final destDir = Directory(dest.raw);
+    if (!await destDir.exists()) {
+      await destDir.create(recursive: true);
+    }
+
+    // 既存名セット（軽量な重複回避）
+    final existingLowerNames = <String>{};
+    await for (final ent in destDir.list(recursive: false, followLinks: false)) {
+      if (ent is File) {
+        final name = _fileName(ent.path).toLowerCase();
+        existingLowerNames.add(name);
+      }
+    }
+
+    int ok = 0;
+
+    for (final it in items) {
+      if (it.kind == MediaKind.folder) continue;
+
+      final src = File(it.id); // Windowsではid=フルパス
+      if (!await src.exists()) continue;
+
+      final name = it.displayName;
+      final lower = name.toLowerCase();
+
+      if (skipIfExists && existingLowerNames.contains(lower)) {
+        continue; // 同名が既に保管庫にあるのでスキップ
+      }
+
+      // 競合する場合は unique 名で保存（skip=false の時の挙動）
+      final outName = skipIfExists ? name : _uniqueNameInDir(destDir, name);
+      await src.copy('${destDir.path}${Platform.pathSeparator}$outName');
+      existingLowerNames.add(outName.toLowerCase());
+      ok++;
+    }
+
+    return ok;
+  }
+
   String _uniqueNameInDir(Directory dir, String name) {
     final dot = name.lastIndexOf('.');
     final base = dot >= 0 ? name.substring(0, dot) : name;
