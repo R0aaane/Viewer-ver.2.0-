@@ -1210,6 +1210,62 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     return null;
   }
 
+  
+  Future<bool> _deleteDoc(DocumentFile doc) async {
+    final d = doc as dynamic;
+    // パターン1: delete()
+    try {
+      final r = await d.delete();
+      if (r is bool) return r;
+      return true; // void の場合も成功扱い
+    } catch (_) {}
+    // パターン2: delete(recursive: false)
+    try {
+      final r = await d.delete(recursive: false);
+      if (r is bool) return r;
+      return true;
+    } catch (_) {}
+    // パターン3: deleteFile()
+    try {
+      final r = await d.deleteFile();
+      if (r is bool) return r;
+      return true;
+    } catch (_) {}
+    return false;
+  }
+
+  @override
+  Future<bool> deleteItem(MediaItem item) async {
+    if (item.kind == MediaKind.folder) return false;
+
+    // SAF (content://)
+    if (item.id.startsWith('content://')) {
+      return _docmanSync(() async {
+        final doc = await DocumentFile.fromUri(item.id);
+        if (doc == null) return false;
+
+        final ok = await _deleteDoc(doc);
+
+        // インデックス/キャッシュ無効化（一覧が古くなるのを防ぐ）
+        _invalidateSafShallow(item.folderRaw);
+        await _invalidateFolderIndex(item.folderRaw);
+
+        return ok;
+      });
+    }
+
+    // 通常ファイル（保管庫などのアプリ領域）
+    try {
+      final f = File(item.id);
+      if (await f.exists()) {
+        await f.delete();
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   String _mimeFor({required String itemExt}) {
     if (itemExt == '.pdf') return 'application/pdf';
     if (itemExt == '.png') return 'image/png';
@@ -1279,6 +1335,9 @@ class _SafEntry {
     required this.isDir,
   });
 }
+
+
+
 
 class _LruCache<K, V> {
   final int maxBytes;

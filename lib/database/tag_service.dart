@@ -89,6 +89,15 @@ class TagService {
         );
   }
 
+  Future<void> deleteItemsByIds(List<String> ids) async {
+    if (ids.isEmpty) return;
+
+    await _db.transaction(() async {
+      await (_db.delete(_db.mediaItemTags)..where((t) => t.itemId.isIn(ids))).go();
+      await (_db.delete(_db.mediaItems)..where((t) => t.id.isIn(ids))).go();
+    });
+  }
+
   Future<List<TagWithId>> listTagsForItem(String itemId) async {
     final rows = await (_db.select(_db.mediaItemTags).join([
       innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),

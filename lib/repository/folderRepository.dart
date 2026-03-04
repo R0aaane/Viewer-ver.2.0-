@@ -586,4 +586,30 @@ class WindowsFolderRepository implements MediaRepository {
     if (dot < 0 || dot == fileName.length - 1) return '';
     return fileName.substring(dot).toLowerCase();
   }
+
+  @override
+  Future<bool> deleteItem(MediaItem item) async {
+    if (item.kind == MediaKind.folder) return false;
+
+    try {
+      final f = File(item.id);
+      if (await f.exists()) {
+        await f.delete();
+      }
+
+      // キャッシュは必須ではないが、残ると混乱するので軽く掃除
+      _thumbCache.clear();
+      final key = item.id;
+      final doc = _pdfCache.remove(key);
+      if (doc != null) {
+        try {
+          await doc.close();
+        } catch (_) {}
+      }
+
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }

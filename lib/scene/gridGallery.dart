@@ -13,6 +13,7 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
+import 'tag_assign_after_import.dart'; 
 
 import '../repository/mediaRepository.dart';
 
@@ -26,7 +27,6 @@ enum _MainPage { home, gallery, search }
 enum _HomeMenuAction {
   addFolder,
   importToLibrary,
-  organizeLibrary,
   artistTagIndex,
   refreshFavorites,
   openSearchGallery,
@@ -36,6 +36,7 @@ enum _GalleryMenuAction {
   addFolder,
   addFile,
   exportPdf,
+  organizeLibrary,
   folderTileMode,
   goHome,
 }
@@ -1675,6 +1676,89 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
+  Future<void> _importToLibraryAndTag() async {
+    try {
+      final lib = await widget.repo.getAppLibraryFolder();
+      final libRaw = lib.raw;
+
+      // folders に保管庫がなければ入れる（念のため）
+      if (!_foldersRaw.contains(libRaw)) {
+        setState(() {
+          _foldersRaw = <String>[libRaw, ..._foldersRaw];
+        });
+        await _persistFolders();
+      }
+
+      // 取り込み前のスナップショット
+      final before = await widget.repo.listMedia(lib);
+      final beforeIds = before.map((e) => e.id).toSet();
+
+      // 取り込み実行
+      final importedCount = await widget.repo.importIntoFolder(lib);
+      if (!mounted) return;
+
+      if (importedCount <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('取り込みはありませんでした')),
+        );
+        return;
+      }
+
+      // 取り込み後：差分抽出
+      final after = await widget.repo.listMedia(lib);
+      final newItems = after
+          .where((e) => e.kind != MediaKind.folder && !beforeIds.contains(e.id))
+          .toList(growable: false);
+
+      // まず保管庫を開く（タグ画面の前に「保管庫が現在フォルダ」になるように）
+      _dirStack.clear();
+      setState(() {
+        _currentFolderRaw = libRaw;
+        _page = _MainPage.gallery; // 保管庫へ取り込んだらギャラリー表示に寄せる
+      });
+      await _persistFolders();
+
+      // ギャラリーを保管庫で更新表示
+      await _loadFolder(lib, saveAsLast: false);
+      if (!mounted) return;
+
+      // 差分が取れない場合でも、取り込み成功の通知は出す
+      if (newItems.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保管庫へ取り込み: $importedCount 件（差分取得なし）')),
+        );
+        return;
+      }
+
+      // タグ付け画面を出す
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => TagAssignAfterImportPage(
+            items: newItems,
+            tagService: widget.tagService,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
+
+      // タグ付け後：Home検索や件数表示にも反映させたいのでキャッシュ更新
+      if (_homeQuery.trim().isNotEmpty) {
+        await _runHomeSearch();
+      }
+      _rebuildTagCountCache();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('保管庫へ取り込み: $importedCount 件（タグ付け対象: ${newItems.length} 件）')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('取り込み失敗: $e')),
+      );
+    }
+  }
+
   Future<void> _refreshAllFavoritesItems() async {
     if (_loadingFavAll) return;
     if (_foldersRaw.isEmpty) {
@@ -1848,28 +1932,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _addFolder();
         return;
       case _HomeMenuAction.importToLibrary:
-        try {
-          final lib = await widget.repo.getAppLibraryFolder();
-          final count = await widget.repo.importIntoFolder(lib);
-          if (!mounted) return;
-
-          // 保管庫を開く
-          await _loadFolder(lib, saveAsLast: true);
-          if (!mounted) return;
-
-          if (count > 0) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('保管庫へ取り込み: $count 件')),
-            );
-          }
-        } catch (e) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('取り込み失敗: $e')));
-        }
-        return;
-      case _HomeMenuAction.organizeLibrary:
-        _organizeLibrary();
+        await _importToLibraryAndTag();
         return;
       case _HomeMenuAction.artistTagIndex:
         Navigator.push(
@@ -1904,6 +1967,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       case _GalleryMenuAction.exportPdf:
         await _exportCurrentFolderImagesToPdf();
         return;
+      case _GalleryMenuAction.organizeLibrary:
+        _organizeLibrary();
+        return;
       case _GalleryMenuAction.folderTileMode:
         await _showFolderTileModeDialog(); // ←追加
         return;
@@ -1932,13 +1998,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           child: ListTile(
             leading: Icon(Icons.archive_outlined),
             title: Text('保管庫へ取り込み'),
-          ),
-        ),
-        PopupMenuItem(
-          value: _HomeMenuAction.organizeLibrary,
-          child: ListTile(
-            leading: Icon(Icons.auto_awesome_mosaic_outlined),
-            title: Text('保管庫を整理（作者/シリーズ）'),
           ),
         ),
         PopupMenuItem(
@@ -1992,6 +2051,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           child: const ListTile(
             leading: Icon(Icons.upload_file_outlined),
             title: Text('ファイル追加'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _GalleryMenuAction.organizeLibrary,
+          child: ListTile(
+            leading: Icon(Icons.auto_awesome_mosaic_outlined),
+            title: Text('保管庫を整理（作者/シリーズ）'),
           ),
         ),
         const PopupMenuItem(

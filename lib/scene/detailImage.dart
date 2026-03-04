@@ -13,6 +13,8 @@ import '../models/tag.dart';
 
 enum ReaderFitMode { vertical, horizontal, contain }
 
+enum _DetailMenuAction { delete }
+
 class _PrefsKeys {
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
   static const String fitMode = 'prefs.readerFitMode';
@@ -63,6 +65,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   // tag（タグ）
   List<TagWithId> _tags = const [];
   bool _tagsChanged = false;
+
+  //　フォルダやファイルを削除
+  String? _libraryRootRaw;
+  bool _canDeleteFromLibrary = false;
+
+  String _normPath(String p) => p.replaceAll('/', '\\').toLowerCase();
 
   // 候補tagのキャッシュ
   List<TagWithId> _masterTags = const [];
@@ -167,6 +175,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     if (!mounted) return;
     setState(() {});
+    final lib = await widget.repo.getAppLibraryFolder();
+    _libraryRootRaw = lib.raw;
+
+    // item.folderRaw が libraryRoot 配下なら削除可（整理後のサブフォルダもOK）
+    final itemFolder = _item.folderRaw;
+    _canDeleteFromLibrary =
+        _normPath(itemFolder).startsWith(_normPath(lib.raw));
     await _loadFavoriteForCurrent();
     _reloadForCurrent();
   }
@@ -486,6 +501,60 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
+  Future<void> _deleteCurrentItemWithWarning() async {
+    if (!_canDeleteFromLibrary) return;
+
+    final item = _item;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('削除しますか？'),
+        content: Text(
+          '「${item.displayName}」を保管庫から削除します。\n'
+          'この操作は元に戻せません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('削除'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    // 実削除
+    final deleted = await widget.repo.deleteItem(item);
+    if (!mounted) return;
+
+    if (!deleted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('削除に失敗しました')),
+      );
+      return;
+    }
+
+    // タグDB掃除
+    await widget.tagService.deleteItemsByIds([item.id]);
+
+    // お気に入りに残ってるとゴミになるので外す
+    final prefs = await SharedPreferences.getInstance();
+    final fav = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+        .toSet();
+    fav.remove(item.id);
+    await prefs.setStringList(_PrefsKeys.favorites, fav.toList(growable: false));
+
+    // 詳細画面を閉じて一覧側でリロードさせる
+    if (!mounted) return;
+    Navigator.pop(context, true);
+  }
+
 
   Widget _withSidebar(BuildContext context, Widget body) {
     if (!_isWideLayout(context)) return body;
@@ -693,6 +762,24 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               icon: Icon(
                 _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
               ),
+            ),
+            if (_canDeleteFromLibrary)
+            PopupMenuButton<_DetailMenuAction>(
+              tooltip: 'メニュー',
+              onSelected: (a) {
+                if (a == _DetailMenuAction.delete) {
+                  _deleteCurrentItemWithWarning();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _DetailMenuAction.delete,
+                  child: ListTile(
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('保管庫から削除'),
+                  ),
+                ),
+              ],
             ),
           ],
           bottom: TabBar(
