@@ -2182,59 +2182,112 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _exportCurrentFolderImagesToPdf() async {
     if (_loading) return;
-
-    final images = _applyFilter(_items, pdfOnly: false);
-    if (images.isEmpty) {
+    if (_folder == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('画像がありません')),
+        const SnackBar(content: Text('フォルダが選択されていません')),
       );
       return;
     }
-
-    final folderName = _currentFolderRaw == null
-        ? 'export'
-        : _folderLabel(_currentFolderRaw!);
-
-    int done = 0;
-    final total = images.length;
-
+  
+    int scanDone = 0;
+    int scanTotal = 0;
+    int exportDone = 0;
+    int exportTotal = 0;
+    String phase = 'scan';
+  
+    // ダイアログを先に出す
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: const Text('PDFを生成中...'),
-        content: StatefulBuilder(
-          builder: (context, setD) => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              LinearProgressIndicator(value: total == 0 ? null : done / total),
-              const SizedBox(height: 12),
-              Text('$done / $total'),
-              const SizedBox(height: 8),
-              const Text('保存先フォルダを選択後、生成を開始します'),
-            ],
-          ),
-        ),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setD) {
+          double? progress;
+          String label;
+  
+          if (phase == 'scan') {
+            progress = (scanTotal > 0) ? (scanDone / scanTotal) : null;
+            label = (scanTotal > 0)
+                ? '画像を収集中... $scanDone / $scanTotal'
+                : '画像を収集中...';
+          } else {
+            progress = (exportTotal > 0) ? (exportDone / exportTotal) : null;
+            label = (exportTotal > 0)
+                ? 'PDFを生成中... $exportDone / $exportTotal'
+                : 'PDFを生成中...';
+          }
+  
+          return AlertDialog(
+            title: const Text('PDF書き出し'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: progress),
+                const SizedBox(height: 12),
+                Text(label),
+                const SizedBox(height: 8),
+                const Text('保存先フォルダを選択後、処理を開始します'),
+              ],
+            ),
+          );
+        },
       ),
     );
-
+  
     try {
       setState(() => _loading = true);
-
+  
+      // 現在フォルダ配下を再帰で全部取得
+      final allFiles = await widget.repo.listMediaRecursiveFiles(
+        _folder!,
+        onProgress: (p, t) {
+          scanDone = p;
+          scanTotal = t;
+          if (mounted) {
+            setState(() {});
+          }
+        },
+      );
+  
+      // 画像だけ対象（webp/png/jpg/bmp など）
+      final images = allFiles
+          .where((e) => e.kind == MediaKind.image)
+          .toList(growable: false);
+  
+      if (!mounted) return;
+      if (images.isEmpty) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('このフォルダ配下に画像がありません')),
+        );
+        return;
+      }
+  
+      phase = 'export';
+      exportDone = 0;
+      exportTotal = images.length;
+      if (mounted) setState(() {});
+  
+      final folderName = _currentFolderRaw == null
+          ? 'export'
+          : _folderLabel(_currentFolderRaw!);
+  
       final created = await PdfExportService.exportFolderToPdfPickLocation(
         widget.repo,
         images,
         folderName,
         onProgress: (d, t) {
-          done = d;
-          if (mounted) setState(() {});
+          exportDone = d;
+          exportTotal = t;
+          if (mounted) {
+            setState(() {});
+          }
         },
       );
-
+  
       if (!mounted) return;
       Navigator.pop(context);
-
+  
       if (created == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('保存をキャンセルしました')),
@@ -2247,12 +2300,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('PDF出力に失敗: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF出力に失敗: $e')),
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
+
   Future<void> _showFolderTileModeDialog() async {
     final mode = await showDialog<FolderTileMode>(
       context: context,
