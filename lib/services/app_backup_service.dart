@@ -8,23 +8,24 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/app_db.dart';
 
-/// アプリ設定のバックアップ/復元と Drift DB のバックアップ/復元を扱うサービス。
-///
-/// - SharedPreferences 系の設定は JSON にシリアライズ
-/// - Drift DB（media_viewer.sqlite）はバイナリでバックアップ
-///
-/// 実際の UI（ダイアログ/スナックバー）は呼び出し側で行う想定。
 class AppBackupService {
   AppBackupService(this._db);
 
   final AppDb _db;
 
-  // バックアップフォーマットのバージョン
-  static const int _settingsSchemaVersion = 1;
+  static const int _settingsSchemaVersion = 2;
 
-  /// 設定バックアップをファイルに書き出す（ユーザーに保存先を選ばせる）。
-  ///
-  /// 正常に書き出せた場合 true、ユーザーキャンセルや失敗時は false を返す。
+  // SharedPreferences 側で現在使っているキー
+  static const String _kFolders = 'prefs.folders';
+  static const String _kCurrentFolder = 'prefs.currentFolder';
+  static const String _kFavorites = 'prefs.favorites';
+  static const String _kFolderAliasesJson = 'prefs.folderAliasesJson';
+  static const String _kReaderFitMode = 'prefs.readerFitMode';
+  static const String _kReaderTwoPage = 'prefs.readerTwoPage';
+  static const String _kLastFolderRaw = 'prefs.lastFolderRaw';
+  static const String _kTagsJson = 'prefs.tagsJson'; // 旧互換用
+  static const String _kFolderTileMode = 'prefs.folderTileMode';
+
   Future<bool> exportSettingsWithFilePicker(SharedPreferences prefs) async {
     try {
       final jsonMap = await _buildSettingsJson(prefs);
@@ -39,22 +40,17 @@ class AppBackupService {
         confirmButtonText: '保存',
       );
       final path = location?.path;
-      if (path == null || path.isEmpty) {
-        return false; // キャンセル
-      }
+      if (path == null || path.isEmpty) return false;
 
       final file = File(path);
       await file.create(recursive: true);
-      await file.writeAsString(jsonStr);
+      await file.writeAsString(jsonStr, flush: true);
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  /// 設定バックアップ JSON をユーザーに選ばせて読み込み、SharedPreferences に反映する。
-  ///
-  /// 正常に復元できた場合 true、キャンセル/失敗時は false。
   Future<bool> importSettingsWithFilePicker(SharedPreferences prefs) async {
     try {
       final typeGroup = XTypeGroup(
@@ -66,9 +62,7 @@ class AppBackupService {
 
       final jsonStr = await file.readAsString();
       final dynamic decoded = jsonDecode(jsonStr);
-      if (decoded is! Map<String, dynamic>) {
-        return false;
-      }
+      if (decoded is! Map<String, dynamic>) return false;
 
       await _restoreSettingsFromJson(decoded, prefs);
       return true;
@@ -77,18 +71,30 @@ class AppBackupService {
     }
   }
 
-  /// Drift DB（media_viewer.sqlite）をファイルとしてバックアップする。
+  /// DBのバイナリバックアップ
+  ///
+  /// 注意:
+  /// - タグやメディア索引など、現在の主データは Drift DB 側
+  /// - そのため完全バックアップはこの DB バックアップを使う
   Future<bool> exportDatabaseWithFilePicker() async {
     try {
       final dbFile = await _getDbFile();
-      if (!await dbFile.exists()) {
-        return false;
-      }
+      if (!await dbFile.exists()) return false;
 
-      final bytes = await dbFile.readAsBytes();
+      // 念のため一時コピーを作ってから書き出す
+      final tempDir = await getTemporaryDirectory();
+      final tempCopy = File(
+        p.join(
+          tempDir.path,
+          'media_viewer_export_${DateTime.now().millisecondsSinceEpoch}.sqlite',
+        ),
+      );
+
+      await dbFile.copy(tempCopy.path);
+      final bytes = await tempCopy.readAsBytes();
+
       final now = DateTime.now();
-      final suggestedName =
-          'media_viewer_db_${_yyyymmdd_HHmm(now)}.sqlite';
+      final suggestedName = 'media_viewer_db_${_yyyymmdd_HHmm(now)}.sqlite';
 
       final location = await getSaveLocation(
         suggestedName: suggestedName,
@@ -96,24 +102,31 @@ class AppBackupService {
       );
       final path = location?.path;
       if (path == null || path.isEmpty) {
+        try {
+          await tempCopy.delete();
+        } catch (_) {}
         return false;
       }
 
       final out = File(path);
       await out.create(recursive: true);
       await out.writeAsBytes(bytes, flush: true);
+
+      try {
+        await tempCopy.delete();
+      } catch (_) {}
+
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  /// ユーザーが選んだ SQLite ファイルを現在の DB として復元する。
+  /// DB復元
   ///
-  /// 既存 DB は一時ファイルに退避し、復元が成功したら削除する。
-  /// 失敗した場合は元の DB を戻す（可能な限りロールバック）。
-  ///
-  /// 復元後はアプリ再起動が推奨。
+  /// 重要:
+  /// - いま開いている Drift 接続を閉じてから置き換える
+  /// - この呼び出し後はアプリ再起動前提
   Future<bool> importDatabaseWithFilePicker() async {
     try {
       final typeGroup = XTypeGroup(
@@ -132,26 +145,33 @@ class AppBackupService {
         await dir.create(recursive: true);
       }
 
-      final backupFile =
-          File(p.join(dir.path, 'media_viewer.sqlite.bak_${DateTime.now().millisecondsSinceEpoch}'));
+      final backupFile = File(
+        p.join(
+          dir.path,
+          'media_viewer.sqlite.bak_${DateTime.now().millisecondsSinceEpoch}',
+        ),
+      );
 
-      // 既存 DB を退避
+      try {
+        // 開いているDBを閉じる
+        await _db.close();
+      } catch (_) {
+        // close失敗でも続行はするが、復元成功率は下がる
+      }
+
       if (await dbFile.exists()) {
         await dbFile.copy(backupFile.path);
       }
 
       try {
-        // 新しい DB を書き込み
         await dbFile.writeAsBytes(srcBytes, flush: true);
         return true;
       } catch (_) {
-        // 書き込み失敗時はロールバック
         if (await backupFile.exists()) {
           await backupFile.copy(dbFile.path);
         }
         return false;
       } finally {
-        // バックアップファイルは成功時/失敗時ともに基本不要
         if (await backupFile.exists()) {
           try {
             await backupFile.delete();
@@ -163,41 +183,26 @@ class AppBackupService {
     }
   }
 
-  // ----------------------------
-  // 設定 JSON の構築/復元
-  // ----------------------------
-
   Future<Map<String, dynamic>> _buildSettingsJson(
     SharedPreferences prefs,
   ) async {
-    final folders = prefs.getStringList('prefs.folders') ?? const <String>[];
-    final currentFolder = prefs.getString('prefs.currentFolder');
-    final favorites =
-        prefs.getStringList('prefs.favorites') ?? const <String>[];
-    final aliasesJson = prefs.getString('prefs.folderAliasesJson');
-    final readerFitMode = prefs.getInt('prefs.readerFitMode');
-    final readerTwoPage = prefs.getBool('prefs.readerTwoPage');
-    final lastFolderRaw = prefs.getString('prefs.lastFolderRaw');
-    final tagsJson = prefs.getString('prefs.tagsJson');
-    final folderTileMode = prefs.getInt('prefs.folderTileMode');
-
-    // Drift DB からタグマスター & item-tag 関係も JSON でダンプ（論理バックアップ）
-    final tagDump = await _dumpTagsFromDb();
-
     return <String, dynamic>{
       'schemaVersion': _settingsSchemaVersion,
+      'exportedAt': DateTime.now().toIso8601String(),
       'prefs': <String, dynamic>{
-        'folders': folders,
-        'currentFolder': currentFolder,
-        'favorites': favorites,
-        'folderAliasesJson': aliasesJson,
-        'readerFitMode': readerFitMode,
-        'readerTwoPage': readerTwoPage,
-        'lastFolderRaw': lastFolderRaw,
-        'tagsJson': tagsJson,
-        'folderTileMode': folderTileMode,
+        'folders': prefs.getStringList(_kFolders) ?? const <String>[],
+        'currentFolder': prefs.getString(_kCurrentFolder),
+        'favorites': prefs.getStringList(_kFavorites) ?? const <String>[],
+        'folderAliasesJson': prefs.getString(_kFolderAliasesJson),
+        'readerFitMode': prefs.getInt(_kReaderFitMode),
+        'readerTwoPage': prefs.getBool(_kReaderTwoPage),
+        'lastFolderRaw': prefs.getString(_kLastFolderRaw),
+        'tagsJson': prefs.getString(_kTagsJson), // 旧互換
+        'folderTileMode': prefs.getInt(_kFolderTileMode),
       },
-      'tagDump': tagDump,
+
+      // 参考情報として残すだけ。復元はDBバックアップで行う。
+      'tagDump': await _dumpTagsFromDb(),
     };
   }
 
@@ -206,70 +211,80 @@ class AppBackupService {
     SharedPreferences prefs,
   ) async {
     final prefsMap = data['prefs'];
-    if (prefsMap is Map) {
-      final folders = (prefsMap['folders'] as List?)
-              ?.map((e) => e.toString())
-              .toList(growable: false) ??
-          const <String>[];
-      final currentFolder = prefsMap['currentFolder']?.toString();
-      final favorites = (prefsMap['favorites'] as List?)
-              ?.map((e) => e.toString())
-              .toList(growable: false) ??
-          const <String>[];
-      final aliasesJson = prefsMap['folderAliasesJson']?.toString();
-      final readerFitMode = _toIntOrNull(prefsMap['readerFitMode']);
-      final readerTwoPage = _toBoolOrNull(prefsMap['readerTwoPage']);
-      final lastFolderRaw = prefsMap['lastFolderRaw']?.toString();
-      final tagsJson = prefsMap['tagsJson']?.toString();
-      final folderTileMode = _toIntOrNull(prefsMap['folderTileMode']);
+    if (prefsMap is! Map) return;
 
-      await prefs.setStringList('prefs.folders', folders);
-      if (currentFolder == null || currentFolder.isEmpty) {
-        await prefs.remove('prefs.currentFolder');
-      } else {
-        await prefs.setString('prefs.currentFolder', currentFolder);
-      }
-      await prefs.setStringList('prefs.favorites', favorites);
+    final folders = (prefsMap['folders'] as List?)
+            ?.map((e) => e.toString())
+            .toList(growable: false) ??
+        const <String>[];
 
-      if (aliasesJson == null || aliasesJson.isEmpty) {
-        await prefs.remove('prefs.folderAliasesJson');
-      } else {
-        await prefs.setString('prefs.folderAliasesJson', aliasesJson);
-      }
+    final currentFolder = _stringOrNull(prefsMap['currentFolder']);
+    final favorites = (prefsMap['favorites'] as List?)
+            ?.map((e) => e.toString())
+            .toList(growable: false) ??
+        const <String>[];
 
-      if (readerFitMode == null) {
-        await prefs.remove('prefs.readerFitMode');
-      } else {
-        await prefs.setInt('prefs.readerFitMode', readerFitMode);
-      }
+    final aliasesJson = _stringOrNull(prefsMap['folderAliasesJson']);
+    final readerFitMode = _toIntOrNull(prefsMap['readerFitMode']);
+    final readerTwoPage = _toBoolOrNull(prefsMap['readerTwoPage']);
+    final lastFolderRaw = _stringOrNull(prefsMap['lastFolderRaw']);
+    final tagsJson = _stringOrNull(prefsMap['tagsJson']);
+    final folderTileMode = _toIntOrNull(prefsMap['folderTileMode']);
 
-      if (readerTwoPage == null) {
-        await prefs.remove('prefs.readerTwoPage');
-      } else {
-        await prefs.setBool('prefs.readerTwoPage', readerTwoPage);
-      }
+    await prefs.setStringList(_kFolders, folders);
 
-      if (lastFolderRaw == null || lastFolderRaw.isEmpty) {
-        await prefs.remove('prefs.lastFolderRaw');
-      } else {
-        await prefs.setString('prefs.lastFolderRaw', lastFolderRaw);
-      }
-
-      if (tagsJson == null || tagsJson.isEmpty) {
-        await prefs.remove('prefs.tagsJson');
-      } else {
-        await prefs.setString('prefs.tagsJson', tagsJson);
-      }
-
-      if (folderTileMode == null) {
-        await prefs.remove('prefs.folderTileMode');
-      } else {
-        await prefs.setInt('prefs.folderTileMode', folderTileMode);
-      }
+    if (_isBlank(currentFolder)) {
+      await prefs.remove(_kCurrentFolder);
+    } else {
+      await prefs.setString(_kCurrentFolder, currentFolder!);
     }
 
-    // tagDump は DB 上書きと競合しやすいので、現状は読み取りのみ（DBは別途 sqlite バックアップで扱う）
+    await prefs.setStringList(_kFavorites, favorites);
+
+    if (_isBlank(aliasesJson)) {
+      await prefs.remove(_kFolderAliasesJson);
+    } else {
+      await prefs.setString(_kFolderAliasesJson, aliasesJson!);
+    }
+
+    if (readerFitMode == null) {
+      await prefs.remove(_kReaderFitMode);
+    } else {
+      await prefs.setInt(_kReaderFitMode, readerFitMode);
+    }
+
+    if (readerTwoPage == null) {
+      await prefs.remove(_kReaderTwoPage);
+    } else {
+      await prefs.setBool(_kReaderTwoPage, readerTwoPage);
+    }
+
+    if (_isBlank(lastFolderRaw)) {
+      await prefs.remove(_kLastFolderRaw);
+    } else {
+      await prefs.setString(_kLastFolderRaw, lastFolderRaw!);
+    }
+
+    if (_isBlank(tagsJson)) {
+      await prefs.remove(_kTagsJson);
+    } else {
+      await prefs.setString(_kTagsJson, tagsJson!);
+    }
+
+    if (folderTileMode == null) {
+      await prefs.remove(_kFolderTileMode);
+    } else {
+      await prefs.setInt(_kFolderTileMode, folderTileMode);
+    }
   }
+
+  String? _stringOrNull(Object? v) {
+    if (v == null) return null;
+    final s = v.toString();
+    return s;
+  }
+
+  bool _isBlank(String? s) => s == null || s.trim().isEmpty;
 
   int? _toIntOrNull(Object? v) {
     if (v == null) return null;
@@ -288,10 +303,11 @@ class AppBackupService {
   }
 
   Future<Map<String, dynamic>> _dumpTagsFromDb() async {
-    // Drift の自動生成クラスを通じて単純に全件ダンプする。
     final mediaItems = await _db.select(_db.mediaItems).get();
     final tags = await _db.select(_db.tags).get();
     final links = await _db.select(_db.mediaItemTags).get();
+    final folderIndexes = await _db.select(_db.folderIndexes).get();
+    final folderEntries = await _db.select(_db.folderEntries).get();
 
     return <String, dynamic>{
       'mediaItems': mediaItems
@@ -316,13 +332,29 @@ class AppBackupService {
                 'tagId': l.tagId,
               })
           .toList(growable: false),
+      'folderIndexes': folderIndexes
+          .map((f) => {
+                'folderRaw': f.folderRaw,
+                'scannedAtEpochMs': f.scannedAtEpochMs,
+                'totalCount': f.totalCount,
+              })
+          .toList(growable: false),
+      'folderEntries': folderEntries
+          .map((e) => {
+                'folderRaw': e.folderRaw,
+                'entryId': e.entryId,
+                'displayName': e.displayName,
+                'kind': e.kind,
+                'modifiedEpochMs': e.modifiedEpochMs,
+                'sortName': e.sortName,
+              })
+          .toList(growable: false),
     };
   }
 
   Future<File> _getDbFile() async {
     final dir = await getApplicationDocumentsDirectory();
-    final path = p.join(dir.path, 'media_viewer.sqlite');
-    return File(path);
+    return File(p.join(dir.path, 'media_viewer.sqlite'));
   }
 
   String _yyyymmdd_HHmm(DateTime dt) {
@@ -332,7 +364,6 @@ class AppBackupService {
     final d = two(dt.day);
     final hh = two(dt.hour);
     final mm = two(dt.minute);
-    return '$y$m${d}_$hh$mm';
+    return '${y}${m}${d}_$hh$mm';
   }
 }
-
