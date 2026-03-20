@@ -110,6 +110,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _folderPreviewActive = 0;
   final List<Completer<void>> _folderPreviewWaiters = [];
 
+  String? _libraryRootRaw;
+
+  String _normPath(String p) => p.replaceAll('/', '\\').toLowerCase();
+
+  bool _isInLibraryItem(MediaItem item) {
+    if (_libraryRootRaw == null) return false;
+    final id = _normPath(item.id);
+    final root = _normPath(_libraryRootRaw!);
+    return id == root || id.startsWith('$root\\');
+  }
+
+  bool get _isCurrentFolderInsideLibrary {
+    if (_currentFolderRaw == null || _libraryRootRaw == null) return false;
+    final cur = _normPath(_currentFolderRaw!);
+    final root = _normPath(_libraryRootRaw!);
+    return cur == root || cur.startsWith('$root\\');
+  }
+
   Future<void> _acquireFolderPreviewSlot([int max = 1]) async {
     if (_folderPreviewActive < max) {
       _folderPreviewActive++;
@@ -466,6 +484,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     // 保管庫を最初から登録済みに
     final lib = await widget.repo.getAppLibraryFolder();
     final libRaw = lib.raw;
+    _libraryRootRaw = libRaw;
 
     // folders に存在し無ければ先頭に入れる
     if (!folders.contains(libRaw)) {
@@ -548,6 +567,89 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     // 選択中フォルダをロード
     await _loadFolder(FolderHandle(current), saveAsLast: false);
+  }
+
+  Future<void> _deleteItemsWithWarning(List<MediaItem> targets) async {
+    if (targets.isEmpty) return;
+
+    final onlyLibrary = targets.every(_isInLibraryItem);
+    if (!onlyLibrary) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('保管庫内の項目のみ削除できます')),
+      );
+      return;
+    }
+
+    final names = targets.take(3).map((e) => e.displayName).join('\n');
+    final more = targets.length > 3 ? '\n他 ${targets.length - 3} 件' : '';
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('削除しますか？'),
+        content: Text(
+          targets.length == 1
+              ? '「${targets.first.displayName}」を保管庫から削除します。\nこの操作は元に戻せません。'
+              : '次の ${targets.length} 件を保管庫から削除します。\n$names$more\n\nこの操作は元に戻せません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('削除'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    int deleted = 0;
+    for (final item in targets) {
+      final ok = await widget.repo.deleteItem(item);
+      if (!ok) continue;
+
+      if (item.kind == MediaKind.folder) {
+        await widget.tagService.deleteItemsUnderPathPrefix(item.id);
+      } else {
+        await widget.tagService.deleteItemsByIds([item.id]);
+      }
+
+      _favorites.remove(item.id);
+      _selectedIds.remove(item.id);
+      deleted++;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _PrefsKeys.favorites,
+      _favorites.toList(growable: false),
+    );
+
+    if (!mounted) return;
+
+    await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false, pageIndex: 0);
+    await _refreshAllFavoritesItems();
+    if (_homeQuery.trim().isNotEmpty) {
+      await _runHomeSearch();
+    }
+
+    setState(() {
+      if (_selectedIds.isEmpty) _selectMode = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('削除しました: $deleted / ${targets.length} 件')),
+    );
+  }
+
+  Future<void> _deleteSelectedItems() async {
+    final targets = _selectedFrom(_filteredItems);
+    await _deleteItemsWithWarning(targets);
   }
 
   Future<void> _saveFolderTileMode(FolderTileMode m) async {
@@ -2625,6 +2727,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         },
                         icon: const Icon(Icons.archive_outlined),
                       ),
+                      IconButton(
+                        tooltip: '選択項目を削除',
+                        onPressed: _deleteSelectedItems,
+                        icon: const Icon(Icons.delete_outline),
+                      ),
                     ]
                   : [
                       _buildGalleryOverflowMenu(),
@@ -2972,60 +3079,94 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 final isFav = _favorites.contains(item.id);
                 final selected = _selectedIds.contains(item.id);
   
-                return InkWell(
-                  onLongPress: () {
-                    if (item.kind == MediaKind.folder) return;
-                    if (!_selectMode) {
-                      _enterSelectMode(item);
-                    } else {
-                      _toggleSelect(item);
-                    }
-                  },
-                  onTap: () async {
-                    if (item.kind == MediaKind.folder) {
-                      if (_selectMode) return;
-                      _exitSelectMode();
-                      await _enterFolder(item);
-                      return;
-                    }
-  
-                    if (_selectMode) {
-                      _toggleSelect(item);
-                      return;
-                    }
-  
-                    final mediaOnly = _items
-                        .where((e) => e.kind != MediaKind.folder)
-                        .toList(growable: false);
-                    final index = mediaOnly.indexWhere((e) => e.id == item.id);
-  
-                    final changed = await Navigator.push<bool>(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ImageDetailPage(
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: InkWell(
+                        onLongPress: () {
+                          if (item.kind == MediaKind.folder) return;
+                          if (!_selectMode) {
+                            _enterSelectMode(item);
+                          } else {
+                            _toggleSelect(item);
+                          }
+                        },
+                        onTap: () async {
+                          if (item.kind == MediaKind.folder) {
+                            if (_selectMode) return;
+                            _exitSelectMode();
+                            await _enterFolder(item);
+                            return;
+                          }
+
+                          if (_selectMode) {
+                            _toggleSelect(item);
+                            return;
+                          }
+
+                          final mediaOnly = _items
+                              .where((e) => e.kind != MediaKind.folder)
+                              .toList(growable: false);
+                          final index = mediaOnly.indexWhere((e) => e.id == item.id);
+
+                          final changed = await Navigator.push<bool>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ImageDetailPage(
+                                repo: widget.repo,
+                                tagService: widget.tagService,
+                                items: mediaOnly,
+                                initialIndex: index < 0 ? 0 : index,
+                                initialPdfPage: 1,
+                              ),
+                            ),
+                          );
+
+                          if (changed == true) {
+                            await _reloadFavorites();
+                            await _reloadTags();
+                            await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false, pageIndex: _galleryPageIndex);
+                          }
+                        },
+                        child: _ThumbTile(
                           repo: widget.repo,
-                          tagService: widget.tagService,
-                          items: mediaOnly,
-                          initialIndex: index < 0 ? 0 : index,
-                          initialPdfPage: 1,
+                          item: item,
+                          isFavorite: isFav,
+                          subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+                          onToggleFavorite: () => _toggleFavorite(item),
+                          selected: selected,
+                          folderTileMode: _folderTileMode,
                         ),
                       ),
-                    );
-  
-                    if (changed == true) {
-                      await _reloadFavorites();
-                      await _reloadTags();
-                    }
-                  },
-                  child: _ThumbTile(
-                    repo: widget.repo,
-                    item: item,
-                    isFavorite: isFav,
-                    subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-                    onToggleFavorite: () => _toggleFavorite(item),
-                    selected: selected,
-                    folderTileMode: _folderTileMode,
-                  ),
+                    ),
+
+                    if (_isInLibraryItem(item))
+                      Positioned(
+                        top: 6,
+                        right: 6,
+                        child: Material(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(20),
+                          child: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert, size: 18, color: Colors.white),
+                            onSelected: (v) async {
+                              if (v == 'delete') {
+                                await _deleteItemsWithWarning([item]);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem<String>(
+                                value: 'delete',
+                                child: ListTile(
+                                  leading: Icon(Icons.delete_outline),
+                                  title: Text('保管庫から削除'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
                 );
               },
             ),
@@ -3115,61 +3256,94 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
         final selected = _selectedIds.contains(item.id);
 
-        return InkWell(
-          onLongPress: () {
-            if (item.kind == MediaKind.folder) return;
-            if (!_selectMode) {
-              _enterSelectMode(item);
-            } else {
-              _toggleSelect(item);
-            }
-          },
-          onTap: () async {
-            if (item.kind == MediaKind.folder) {
-              if (_selectMode) return;
-              _exitSelectMode();
-              await _enterFolder(item);
-              return;
-            }
-
-            if (_selectMode) {
-              _toggleSelect(item);
-              return;
-            }
-
-            // folder除外でDetailページへ
-            final mediaOnly = items
-                .where((e) => e.kind != MediaKind.folder)
-                .toList(growable: false);
-            final index = mediaOnly.indexWhere((e) => e.id == item.id);
-
-            final changed = await Navigator.push<bool>(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ImageDetailPage(
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: InkWell(
+                onLongPress: () {
+                  if (item.kind == MediaKind.folder) return;
+                  if (!_selectMode) {
+                    _enterSelectMode(item);
+                  } else {
+                    _toggleSelect(item);
+                  }
+                },
+                onTap: () async {
+                  if (item.kind == MediaKind.folder) {
+                    if (_selectMode) return;
+                    _exitSelectMode();
+                    await _enterFolder(item);
+                    return;
+                  }
+        
+                  if (_selectMode) {
+                    _toggleSelect(item);
+                    return;
+                  }
+        
+                  final mediaOnly = _items
+                      .where((e) => e.kind != MediaKind.folder)
+                      .toList(growable: false);
+                  final index = mediaOnly.indexWhere((e) => e.id == item.id);
+        
+                  final changed = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ImageDetailPage(
+                        repo: widget.repo,
+                        tagService: widget.tagService,
+                        items: mediaOnly,
+                        initialIndex: index < 0 ? 0 : index,
+                        initialPdfPage: 1,
+                      ),
+                    ),
+                  );
+        
+                  if (changed == true) {
+                    await _reloadFavorites();
+                    await _reloadTags();
+                    await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false, pageIndex: _galleryPageIndex);
+                  }
+                },
+                child: _ThumbTile(
                   repo: widget.repo,
-                  tagService: widget.tagService,
-                  items: mediaOnly,
-                  initialIndex: index < 0 ? 0 : index,
-                  initialPdfPage: 1,
+                  item: item,
+                  isFavorite: isFav,
+                  subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+                  onToggleFavorite: () => _toggleFavorite(item),
+                  selected: selected,
+                  folderTileMode: _folderTileMode,
                 ),
               ),
-            );
-
-            if (changed == true) {
-              await _reloadFavorites();
-              await _reloadTags();
-            }
-          },
-          child: _ThumbTile(
-            repo: widget.repo,
-            item: item,
-            isFavorite: isFav,
-            subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-            onToggleFavorite: () => _toggleFavorite(item),
-            selected: selected,
-            folderTileMode: _folderTileMode,
-          ),
+            ),
+        
+            if (_isInLibraryItem(item))
+              Positioned(
+                top: 6,
+                right: 6,
+                child: Material(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                  child: PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, size: 18, color: Colors.white),
+                    onSelected: (v) async {
+                      if (v == 'delete') {
+                        await _deleteItemsWithWarning([item]);
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: ListTile(
+                          leading: Icon(Icons.delete_outline),
+                          title: Text('保管庫から削除'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );

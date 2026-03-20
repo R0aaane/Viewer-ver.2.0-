@@ -1327,11 +1327,35 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     return false;
   }
 
+    bool _isFsFolderInLibrary(MediaItem item) {
+    return item.kind == MediaKind.folder && !item.id.startsWith('content://');
+  }
+
   @override
   Future<bool> deleteItem(MediaItem item) async {
-    if (item.kind == MediaKind.folder) return false;
+    // SAFの外部フォルダ削除は今回は未対応
+    if (item.kind == MediaKind.folder && item.id.startsWith('content://')) {
+      return false;
+    }
 
-    // SAF (content://)
+    // アプリ保管庫の通常フォルダ削除
+    if (_isFsFolderInLibrary(item)) {
+      try {
+        final dir = Directory(item.id);
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+
+        _thumbCache.clear();
+        _invalidateSafShallowAll();
+        await _invalidateFolderIndex(item.folderRaw);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    // SAF (content://) の画像/PDF
     if (item.id.startsWith('content://')) {
       return _docmanSync(() async {
         final doc = await DocumentFile.fromUri(item.id);
@@ -1339,7 +1363,6 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
         final ok = await _deleteDoc(doc);
 
-        // インデックス/キャッシュ無効化（一覧が古くなるのを防ぐ）
         _invalidateSafShallow(item.folderRaw);
         await _invalidateFolderIndex(item.folderRaw);
 
@@ -1347,7 +1370,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       });
     }
 
-    // 通常ファイル（保管庫などのアプリ領域）
+    // 通常ファイル（保管庫など）
     try {
       final f = File(item.id);
       if (await f.exists()) {
@@ -1357,6 +1380,16 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     } catch (_) {
       return false;
     }
+  }
+
+  @override
+  Future<int> deleteItems(List<MediaItem> items) async {
+    int ok = 0;
+    for (final item in items) {
+      final deleted = await deleteItem(item);
+      if (deleted) ok++;
+    }
+    return ok;
   }
 
   String _mimeFor({required String itemExt}) {

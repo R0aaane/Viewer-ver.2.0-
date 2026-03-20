@@ -98,6 +98,23 @@ class TagService {
     });
   }
 
+  Future<void> deleteItemsUnderPathPrefix(String prefix) async {
+    final like = '$prefix%';
+
+    final rows = await (_db.select(_db.mediaItems)
+          ..where((m) => m.id.like(like)))
+        .get();
+
+    if (rows.isEmpty) return;
+
+    final ids = rows.map((e) => e.id).toList(growable: false);
+
+    await _db.transaction(() async {
+      await (_db.delete(_db.mediaItemTags)..where((t) => t.itemId.isIn(ids))).go();
+      await (_db.delete(_db.mediaItems)..where((t) => t.id.isIn(ids))).go();
+    });
+  }
+
   Future<List<TagWithId>> listTagsForItem(String itemId) async {
     final rows = await (_db.select(_db.mediaItemTags).join([
       innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),

@@ -50,6 +50,8 @@ abstract class MediaRepository {
   // ファイル削除（成功 true）
   Future<bool> deleteItem(MediaItem item);
 
+  Future<int> deleteItems(List<MediaItem> items);
+
   // ファイル名変更（displayName のみ変更。id(uri/path)は基本維持、市内と崩れる）
   Future<MediaItem> rename(MediaItem item, String newDisplayName);
 

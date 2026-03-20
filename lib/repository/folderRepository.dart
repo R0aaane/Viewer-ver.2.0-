@@ -348,6 +348,66 @@ class WindowsFolderRepository implements MediaRepository {
     return items;
   }
 
+  bool _isInsideLibrary(String path, String libraryRoot) {
+    var p = path.replaceAll('/', '\\').toLowerCase();
+    var root = libraryRoot.replaceAll('/', '\\').toLowerCase();
+    return p == root || p.startsWith('$root\\');
+  }
+
+  @override
+  Future<bool> deleteItem(MediaItem item) async {
+    try {
+      if (item.kind == MediaKind.folder) {
+        final dir = Directory(item.id);
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+
+        _thumbCache.clear();
+
+        final keys = _pdfCache.keys.toList(growable: false);
+        for (final k in keys) {
+          if (_isInsideLibrary(k, item.id)) {
+            final doc = _pdfCache.remove(k);
+            if (doc != null) {
+              try {
+                await doc.close();
+              } catch (_) {}
+            }
+          }
+        }
+        return true;
+      }
+
+      final f = File(item.id);
+      if (await f.exists()) {
+        await f.delete();
+      }
+
+      _thumbCache.clear();
+      final doc = _pdfCache.remove(item.id);
+      if (doc != null) {
+        try {
+          await doc.close();
+        } catch (_) {}
+      }
+
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<int> deleteItems(List<MediaItem> items) async {
+    int ok = 0;
+    for (final item in items) {
+      final deleted = await deleteItem(item);
+      if (deleted) ok++;
+    }
+    return ok;
+  }
+
   
 
   @override
@@ -630,31 +690,5 @@ class WindowsFolderRepository implements MediaRepository {
     final dot = fileName.lastIndexOf('.');
     if (dot < 0 || dot == fileName.length - 1) return '';
     return fileName.substring(dot).toLowerCase();
-  }
-
-  @override
-  Future<bool> deleteItem(MediaItem item) async {
-    if (item.kind == MediaKind.folder) return false;
-
-    try {
-      final f = File(item.id);
-      if (await f.exists()) {
-        await f.delete();
-      }
-
-      // キャッシュは必須ではないが、残ると混乱するので軽く掃除
-      _thumbCache.clear();
-      final key = item.id;
-      final doc = _pdfCache.remove(key);
-      if (doc != null) {
-        try {
-          await doc.close();
-        } catch (_) {}
-      }
-
-      return true;
-    } catch (_) {
-      return false;
-    }
   }
 }
