@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
+
 import '../database/tag_service.dart';
 import '../models/tag.dart' as model;
-
 import '../repository/mediaRepository.dart';
 import 'TagResults.dart';
+import 'widgets/scene_ui.dart';
 
 class ArtistTagIndexPage extends StatefulWidget {
   final TagService tagService;
   final MediaRepository repo;
+
   const ArtistTagIndexPage({
     super.key,
     required this.tagService,
@@ -20,12 +22,26 @@ class ArtistTagIndexPage extends StatefulWidget {
 
 class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
   final TextEditingController _search = TextEditingController();
-  String _q = '';
+  String _query = '';
 
   @override
   void dispose() {
     _search.dispose();
     super.dispose();
+  }
+
+  void _openTag(String name) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TagResultsPage(
+          tagService: widget.tagService,
+          repo: widget.repo,
+          category: model.TagCategory.artist,
+          tagName: name,
+        ),
+      ),
+    );
   }
 
   @override
@@ -44,15 +60,15 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: TextField(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: SceneSearchField(
               controller: _search,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                hintText: '検索（例: a / さ / #部分一致）',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (v) => setState(() => _q = v.trim()),
+              hintText: 'タグ名で検索',
+              onChanged: (value) => setState(() => _query = value.trim()),
+              onClear: () {
+                _search.clear();
+                setState(() => _query = '');
+              },
             ),
           ),
           const Divider(height: 1),
@@ -61,66 +77,60 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
               future: widget.tagService.listTagsByCategory(
                 model.TagCategory.artist,
               ),
-              builder: (context, snap) {
-                if (!snap.hasData) {
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final tags = snap.data!
-                    .map((t) => t.name)
-                    .where((name) => name.trim().isNotEmpty)
+
+                final tags = snapshot.data!
+                    .map((tag) => tag.name.trim())
+                    .where((name) => name.isNotEmpty)
+                    .toSet()
                     .toList(growable: false);
 
-                // 検索（部分一致）
-                final filtered = (_q.isEmpty)
+                final filtered = _query.isEmpty
                     ? tags
                     : tags
-                          .where(
-                            (x) => x.toLowerCase().contains(_q.toLowerCase()),
-                          )
-                          .toList();
+                        .where(
+                          (name) =>
+                              name.toLowerCase().contains(_query.toLowerCase()),
+                        )
+                        .toList(growable: false);
 
-                // グルーピング（A-Z / あ-ん / その他）
                 final grouped = <String, List<String>>{};
                 for (final name in filtered) {
                   final key = _groupKey(name);
                   (grouped[key] ??= <String>[]).add(name);
                 }
 
-                // 各グループ内は自然ソートっぽく（単純比較）
-                for (final k in grouped.keys) {
-                  grouped[k]!.sort(
-                    (a, b) => a.toLowerCase().compareTo(b.toLowerCase()),
+                for (final entry in grouped.entries) {
+                  entry.value.sort(
+                    (left, right) =>
+                        left.toLowerCase().compareTo(right.toLowerCase()),
                   );
                 }
 
-                final keys = grouped.keys.toList()
-                  ..sort((a, b) => _groupOrder(a).compareTo(_groupOrder(b)));
+                final keys = grouped.keys.toList(growable: false)
+                  ..sort((left, right) => _groupOrder(left).compareTo(
+                        _groupOrder(right),
+                      ));
 
                 if (keys.isEmpty) {
-                  return const Center(child: Text('タグがありません'));
+                  return const SceneEmptyState(
+                    icon: Icons.search_off,
+                    title: '一致するタグがありません',
+                  );
                 }
 
                 return ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
                   itemCount: keys.length,
-                  itemBuilder: (context, i) {
-                    final key = keys[i];
-                    final list = grouped[key]!;
+                  itemBuilder: (context, index) {
+                    final key = keys[index];
                     return _GroupSection(
                       title: key,
-                      items: list,
-                      onTap: (name) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => TagResultsPage(
-                              tagService: widget.tagService,
-                              repo: widget.repo,
-                              category: model.TagCategory.artist,
-                              tagName: name,
-                            ),
-                          ),
-                        );
-                      },
+                      items: grouped[key]!,
+                      onTap: _openTag,
                     );
                   },
                 );
@@ -132,34 +142,28 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
     );
   }
 
-  // ---------- group key: A-Z / あ-ん ----------
   String _groupKey(String name) {
-    final s = name.trim();
-    if (s.isEmpty) return '#';
+    final value = name.trim();
+    if (value.isEmpty) return '#';
 
-    final first = s.runes.first;
-    final ch = String.fromCharCode(first);
-
-    // ラテン語
-    final upper = ch.toUpperCase();
+    final first = String.fromCharCode(value.runes.first);
+    final upper = first.toUpperCase();
     if (upper.codeUnitAt(0) >= 65 && upper.codeUnitAt(0) <= 90) {
       return upper;
     }
 
-    // 日本語
-    final hira = _toHiragana(ch);
-    final g = _kanaHead(hira);
-    if (g != null) return g;
-
-    return '#';
+    final hiragana = _toHiragana(first);
+    return _kanaHead(hiragana) ?? '#';
   }
 
-  // ソート順: A-Z -> あ〜ん -> #（その他）
   int _groupOrder(String key) {
     if (key.length == 1) {
-      final c = key.codeUnitAt(0);
-      if (c >= 65 && c <= 90) return 0 * 1000 + (c - 65);
+      final code = key.codeUnitAt(0);
+      if (code >= 65 && code <= 90) {
+        return code - 65;
+      }
     }
+
     const kanaOrder = <String, int>{
       'あ': 1000,
       'か': 1001,
@@ -171,35 +175,23 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
       'や': 1007,
       'ら': 1008,
       'わ': 1009,
-      'ん': 1010,
     };
-    final v = kanaOrder[key];
-    if (v != null) return v;
-    return 9999;
+    return kanaOrder[key] ?? 9999;
   }
 
-  // カタカナ -> ひらがな（単一文字のみ想定）
-  String _toHiragana(String ch) {
-    if (ch.isEmpty) return ch;
-    final code = ch.codeUnitAt(0);
-    // カタカナ 0x30A1..0x30F6
+  String _toHiragana(String value) {
+    if (value.isEmpty) return value;
+    final code = value.codeUnitAt(0);
     if (code >= 0x30A1 && code <= 0x30F6) {
       return String.fromCharCode(code - 0x60);
     }
-    return ch;
+    return value;
   }
 
-  // 先頭かなを五十音の「行」に変更する。（が→か / ぱ→は など）
-  String? _kanaHead(String hira) {
-    if (hira.isEmpty) return null;
-    final code = hira.codeUnitAt(0);
+  String? _kanaHead(String hiragana) {
+    if (hiragana.isEmpty) return null;
 
-    // ひらがな 0x3041..0x3096
-    if (code < 0x3041 || code > 0x3096) return null;
-
-    // 濁点/半濁点/小書きも変更
-    const map = <String, String>{
-      // あ行
+    const groups = <String, String>{
       'ぁ': 'あ',
       'あ': 'あ',
       'ぃ': 'あ',
@@ -210,42 +202,87 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
       'え': 'あ',
       'ぉ': 'あ',
       'お': 'あ',
-      // か行
-      'か': 'か', 'き': 'か', 'く': 'か', 'け': 'か', 'こ': 'か',
-      'が': 'か', 'ぎ': 'か', 'ぐ': 'か', 'げ': 'か', 'ご': 'か',
-      // さ行
-      'さ': 'さ', 'し': 'さ', 'す': 'さ', 'せ': 'さ', 'そ': 'さ',
-      'ざ': 'さ', 'じ': 'さ', 'ず': 'さ', 'ぜ': 'さ', 'ぞ': 'さ',
-      // た行
-      'た': 'た', 'ち': 'た', 'つ': 'た', 'て': 'た', 'と': 'た',
-      'だ': 'た', 'ぢ': 'た', 'づ': 'た', 'で': 'た', 'ど': 'た',
-      // な行
-      'な': 'な', 'に': 'な', 'ぬ': 'な', 'ね': 'な', 'の': 'な',
-      // は行
-      'は': 'は', 'ひ': 'は', 'ふ': 'は', 'へ': 'は', 'ほ': 'は',
-      'ば': 'は', 'び': 'は', 'ぶ': 'は', 'べ': 'は', 'ぼ': 'は',
-      'ぱ': 'は', 'ぴ': 'は', 'ぷ': 'は', 'ぺ': 'は', 'ぽ': 'は',
-      // ま行
-      'ま': 'ま', 'み': 'ま', 'む': 'ま', 'め': 'ま', 'も': 'ま',
-      // や行
-      'ゃ': 'や', 'や': 'や', 'ゅ': 'や', 'ゆ': 'や', 'ょ': 'や', 'よ': 'や',
-      // ら行
-      'ら': 'ら', 'り': 'ら', 'る': 'ら', 'れ': 'ら', 'ろ': 'ら',
-      // わ行
-      'ゎ': 'わ', 'わ': 'わ', 'を': 'わ',
-      // ん
-      'ん': 'ん',
+      'か': 'か',
+      'が': 'か',
+      'き': 'か',
+      'ぎ': 'か',
+      'く': 'か',
+      'ぐ': 'か',
+      'け': 'か',
+      'げ': 'か',
+      'こ': 'か',
+      'ご': 'か',
+      'さ': 'さ',
+      'ざ': 'さ',
+      'し': 'さ',
+      'じ': 'さ',
+      'す': 'さ',
+      'ず': 'さ',
+      'せ': 'さ',
+      'ぜ': 'さ',
+      'そ': 'さ',
+      'ぞ': 'さ',
+      'た': 'た',
+      'だ': 'た',
+      'ち': 'た',
+      'ぢ': 'た',
+      'っ': 'た',
+      'つ': 'た',
+      'づ': 'た',
+      'て': 'た',
+      'で': 'た',
+      'と': 'た',
+      'ど': 'た',
+      'な': 'な',
+      'に': 'な',
+      'ぬ': 'な',
+      'ね': 'な',
+      'の': 'な',
+      'は': 'は',
+      'ば': 'は',
+      'ぱ': 'は',
+      'ひ': 'は',
+      'び': 'は',
+      'ぴ': 'は',
+      'ふ': 'は',
+      'ぶ': 'は',
+      'ぷ': 'は',
+      'へ': 'は',
+      'べ': 'は',
+      'ぺ': 'は',
+      'ほ': 'は',
+      'ぼ': 'は',
+      'ぽ': 'は',
+      'ま': 'ま',
+      'み': 'ま',
+      'む': 'ま',
+      'め': 'ま',
+      'も': 'ま',
+      'ゃ': 'や',
+      'や': 'や',
+      'ゅ': 'や',
+      'ゆ': 'や',
+      'ょ': 'や',
+      'よ': 'や',
+      'ら': 'ら',
+      'り': 'ら',
+      'る': 'ら',
+      'れ': 'ら',
+      'ろ': 'ら',
+      'ゎ': 'わ',
+      'わ': 'わ',
+      'を': 'わ',
+      'ん': 'わ',
     };
 
-    final head = map[hira];
-    return head;
+    return groups[hiragana];
   }
 }
 
 class _GroupSection extends StatelessWidget {
   final String title;
   final List<String> items;
-  final void Function(String) onTap;
+  final ValueChanged<String> onTap;
 
   const _GroupSection({
     required this.title,
@@ -255,17 +292,26 @@ class _GroupSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ExpansionTile(
-      initiallyExpanded: title == 'あ' || title == 'A',
-      title: Text('$title (${items.length})'),
-      children: [
-        for (final name in items)
-          ListTile(
-            title: Text(name),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => onTap(name),
-          ),
-      ],
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ExpansionTile(
+        initiallyExpanded: title == 'あ' || title == 'A',
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        title: Text('$title (${items.length})'),
+        children: [
+          for (final name in items)
+            ListTile(
+              title: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => onTap(name),
+            ),
+        ],
+      ),
     );
   }
 }

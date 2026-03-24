@@ -337,6 +337,27 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     });
   }
 
+  void _syncReaderFutures(MediaItem item) {
+    _leftFuture = _loadReaderBytes(item, _page);
+
+    if (_twoPage && _isPdf) {
+      final nextPage = _page + 1;
+      _rightFuture = nextPage <= _totalPages
+          ? _loadReaderBytes(item, nextPage)
+          : null;
+      return;
+    }
+
+    _rightFuture = null;
+  }
+
+  void _setCurrentPdfPage(int page) {
+    setState(() {
+      _page = page.clamp(1, _totalPages);
+      _syncReaderFutures(_item);
+    });
+  }
+
   Future<void> _reloadForCurrent() async {
     final item = _item;
 
@@ -351,17 +372,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     setState(() {
       _totalPages = total;
       _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
-
-      _leftFuture = _loadReaderBytes(item, _page);
-
-      if (_twoPage && _isPdf) {
-        final next = _page + 1;
-        _rightFuture = (next <= _totalPages)
-            ? _loadReaderBytes(item, next)
-            : null;
-      } else {
-        _rightFuture = null;
-      }
+      _syncReaderFutures(item);
     });
     await _loadTagsForCurrent();
     await _loadMasterTags();
@@ -372,16 +383,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       final step = _twoPage ? 2 : 1;
       final next = _page + step;
       if (next <= _totalPages) {
-        setState(() => _page = next);
-        _leftFuture = _loadReaderBytes(_item, _page);
-        if (_twoPage) {
-          final p2 = _page + 1;
-          _rightFuture = (p2 <= _totalPages)
-              ? _loadReaderBytes(_item, p2)
-              : null;
-        } else {
-          _rightFuture = null;
-        }
+        _setCurrentPdfPage(next);
       }
     } else {
       if (_index < _items.length - 1) {
@@ -399,16 +401,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       final step = _twoPage ? 2 : 1;
       final prev = _page - step;
       if (prev >= 1) {
-        setState(() => _page = prev);
-        _leftFuture = _loadReaderBytes(_item, _page);
-        if (_twoPage) {
-          final p2 = _page + 1;
-          _rightFuture = (p2 <= _totalPages)
-              ? _loadReaderBytes(_item, p2)
-              : null;
-        } else {
-          _rightFuture = null;
-        }
+        _setCurrentPdfPage(prev);
       }
     } else {
       if (_index > 0) {
@@ -1340,14 +1333,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
         return InkWell(
           onTap: () {
-            setState(() => _page = page);
-            _leftFuture = _loadReaderBytes(item, _page);
-            if (_twoPage) {
-              final p2 = _page + 1;
-              _rightFuture = (p2 <= _totalPages)
-                  ? _loadReaderBytes(item, p2)
-                  : null;
-            }
+            _setCurrentPdfPage(page);
             _tab.animateTo(0);
           },
           child: DecoratedBox(

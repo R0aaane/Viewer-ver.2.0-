@@ -1,11 +1,9 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io' show Directory, Platform;
 import 'dart:typed_data';
-import 'dart:collection';
-import 'dart:async';
 
-import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,12 +12,10 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
-import 'tag_assign_after_import.dart'; 
-
 import '../repository/mediaRepository.dart';
-
 import 'artistTagIndex.dart';
 import 'detailImage.dart';
+import 'tag_assign_after_import.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
 
