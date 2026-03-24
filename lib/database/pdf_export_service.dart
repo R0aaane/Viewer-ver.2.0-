@@ -1,7 +1,9 @@
+import 'dart:io' show File, Platform;
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:docman/docman.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:image/image.dart' as im;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -9,19 +11,31 @@ import 'package:pdf/widgets.dart' as pw;
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 
+class PdfExportResult {
+  final String savedName;
+  final String? savedPath;
+  final String? savedUri;
+
+  const PdfExportResult({
+    required this.savedName,
+    this.savedPath,
+    this.savedUri,
+  });
+}
+
 class PdfExportService {
-  /// 保存先をユーザーに選ばせて（SAF）PDFを書き出す
-  /// 戻り値：作成された DocumentFile（uriなどが取れる）
-  static Future<DocumentFile?> exportFolderToPdfPickLocation(
+  /// 保存先をユーザーに選ばせてPDFを書き出す
+  ///
+  /// - Windows: file_selector の保存ダイアログ
+  /// - Android: DocMan(SAF) のフォルダ選択
+  static Future<PdfExportResult?> exportFolderToPdfPickLocation(
     MediaRepository repo,
     List<MediaItem> items,
     String fileName, {
     double longSidePt = 842.0,
     void Function(int done, int total)? onProgress,
   }) async {
-    // 保存先フォルダを選択（SAF）
-    final dir = await DocMan.pick.directory();
-    if (dir == null) return null;
+    final safeName = _sanitizePdfName(fileName);
 
     // PDFバイトを生成（Isolate）
     final pdfBytes = await _buildPdfBytesIsolate(
@@ -31,25 +45,56 @@ class PdfExportService {
       onProgress: onProgress,
     );
 
-    // 既に同名があれば削除して作り直し（docmanは既存上書きが弱い）
-    final safeName = _sanitizePdfName(fileName);
+    if (Platform.isWindows) {
+      final location = await getSaveLocation(
+        suggestedName: '$safeName.pdf',
+        confirmButtonText: '保存',
+        acceptedTypeGroups: const [
+          XTypeGroup(
+            label: 'PDF',
+            extensions: ['pdf'],
+          ),
+        ],
+      );
+
+      final path = location?.path;
+      if (path == null || path.isEmpty) return null;
+
+      final out = File(path);
+      await out.parent.create(recursive: true);
+      await out.writeAsBytes(pdfBytes, flush: true);
+
+      return PdfExportResult(
+        savedName: out.uri.pathSegments.isNotEmpty
+            ? out.uri.pathSegments.last
+            : '$safeName.pdf',
+        savedPath: out.path,
+      );
+    }
+
+    // Android などは従来通り SAF
+    final dir = await DocMan.pick.directory();
+    if (dir == null) return null;
+
     final existing = await dir.find('$safeName.pdf');
     if (existing != null) {
       await existing.delete();
     }
 
-    // 選択フォルダへPDF作成
     final created = await dir.createFile(
       name: '$safeName.pdf',
       bytes: pdfBytes,
     );
+    if (created == null) return null;
 
-    return created;
+    return PdfExportResult(
+      savedName: created.name ?? '$safeName.pdf',
+      savedUri: created.uri,
+    );
   }
 
   static String _sanitizePdfName(String name) {
     final n = name.trim().isEmpty ? 'export' : name.trim();
-    // Windows/Android的に危ない文字をざっくり除去
     return n.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
   }
 
@@ -62,8 +107,8 @@ class PdfExportService {
     final targets = items
         .where((e) => e.kind == MediaKind.image)
         .toList(growable: false);
-    final total = targets.length;
 
+    final total = targets.length;
     final worker = await _PdfWorker.spawn(longSidePt: longSidePt);
 
     try {
@@ -86,6 +131,7 @@ class PdfExportService {
 class _PdfWorker {
   final SendPort _sendPort;
   final ReceivePort _receivePort;
+
   _PdfWorker._(this._sendPort, this._receivePort);
 
   static Future<_PdfWorker> spawn({required double longSidePt}) async {
@@ -124,6 +170,7 @@ class _PdfWorker {
 class _IsolateInit {
   final SendPort mainSendPort;
   final double longSidePt;
+
   _IsolateInit(this.mainSendPort, this.longSidePt);
 }
 
@@ -151,28 +198,25 @@ void _pdfIsolateEntry(_IsolateInit init) {
       final w = decoded.width.toDouble();
       final h = decoded.height.toDouble();
 
-      // 画像比率に合わせた可変ページ
       final bool landscape = w >= h;
-      final double pageW = landscape
-          ? init.longSidePt
-          : init.longSidePt * (w / h);
-      final double pageH = landscape
-          ? init.longSidePt * (h / w)
-          : init.longSidePt;
+      final double pageW =
+          landscape ? init.longSidePt : init.longSidePt * (w / h);
+      final double pageH =
+          landscape ? init.longSidePt * (h / w) : init.longSidePt;
 
       final img = pw.MemoryImage(bytes);
 
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat(pageW, pageH),
-          margin: pw.EdgeInsets.zero, // 余白ゼロ
+          margin: pw.EdgeInsets.zero,
           build: (_) => pw.FullPage(
             ignoreMargins: true,
             child: pw.Image(
               img,
               width: pageW,
               height: pageH,
-              fit: pw.BoxFit.contain, // トリミングなし
+              fit: pw.BoxFit.contain,
             ),
           ),
         ),
