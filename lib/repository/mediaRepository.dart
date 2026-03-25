@@ -16,6 +16,13 @@ class PagedMediaResult {
 
 abstract class MediaRepository {
   Future<FolderHandle?> pickFolder();
+  Future<MediaItem?> pickSinglePdf();
+  Future<List<MediaItem>> pickExternalMediaFiles({
+    bool allowMultiple = true,
+    bool includeImages = true,
+    bool includePdf = true,
+  });
+  Future<List<MediaItem>> resolveExternalItems(List<String> rawItems);
 
   // アプリ専用保管庫フォルダ（必ず書き込み可）を返す
   Future<FolderHandle> getAppLibraryFolder();

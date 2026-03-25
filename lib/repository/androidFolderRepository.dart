@@ -395,6 +395,55 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }
 
   @override
+  Future<MediaItem?> pickSinglePdf() async {
+    final items = await pickExternalMediaFiles(
+      allowMultiple: false,
+      includeImages: false,
+      includePdf: true,
+    );
+    if (items.isEmpty) return null;
+    return items.first;
+  }
+
+  @override
+  Future<List<MediaItem>> pickExternalMediaFiles({
+    bool allowMultiple = true,
+    bool includeImages = true,
+    bool includePdf = true,
+  }) async {
+    final extensions = <String>[
+      if (includeImages) ...const ['jpg', 'jpeg', 'png', 'webp', 'bmp'],
+      if (includePdf) 'pdf',
+    ];
+    if (extensions.isEmpty) return const [];
+
+    final picked = await DocMan.pick.files(
+      extensions: extensions,
+      limit: allowMultiple ? 200 : 1,
+    );
+    if (picked.isEmpty) return const [];
+
+    final rawItems = picked
+        .map(_pickedDocIdentifier)
+        .whereType<String>()
+        .where((value) => value.trim().isNotEmpty)
+        .toList(growable: false);
+    return resolveExternalItems(rawItems);
+  }
+
+  @override
+  Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
+    final items = <MediaItem>[];
+    for (final raw in rawItems) {
+      final item = await _externalItemFromRaw(raw);
+      if (item != null) {
+        items.add(item);
+      }
+    }
+    return items;
+  }
+
+  @override
   Future<List<MediaItem>> listMedia(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
@@ -949,6 +998,73 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   bool _isTargetFileName(String name) {
     final ext = _lowerExt(name);
     return ext == _pdfExt || _imageExt.contains(ext);
+  }
+
+  String? _pickedDocIdentifier(dynamic picked) {
+    try {
+      final uri = picked.uri?.toString();
+      if (uri is String && uri.isNotEmpty) return uri;
+    } catch (_) {}
+    try {
+      final uri = picked.uri;
+      if (uri is String && uri.isNotEmpty) return uri;
+    } catch (_) {}
+    try {
+      final path = picked.path?.toString();
+      if (path is String && path.isNotEmpty) return path;
+    } catch (_) {}
+    return null;
+  }
+
+  Future<MediaItem?> _externalItemFromRaw(String raw) async {
+    if (raw.trim().isEmpty) return null;
+    if (raw.startsWith('content://')) {
+      return _externalItemFromContentUri(raw);
+    }
+    if (raw.startsWith('file://')) {
+      return _externalItemFromFilePath(Uri.parse(raw).toFilePath());
+    }
+    return _externalItemFromFilePath(raw);
+  }
+
+  Future<MediaItem?> _externalItemFromContentUri(String uri) async {
+    return _docmanSync(() async {
+      final doc = await DocumentFile.fromUri(uri);
+      if (doc == null || doc.isDirectory == true) return null;
+
+      final rawName = (doc.name ?? '').trim();
+      final name = rawName.isNotEmpty ? rawName : _fileName(uri);
+      if (!_isTargetFileName(name)) return null;
+
+      final ext = _lowerExt(name);
+      return MediaItem(
+        id: uri,
+        displayName: name,
+        kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+        folderRaw: uri,
+        modified: _toDateTimeSafe(doc.lastModified),
+        tags: const [],
+      );
+    });
+  }
+
+  Future<MediaItem?> _externalItemFromFilePath(String path) async {
+    final file = File(path);
+    if (!await file.exists()) return null;
+
+    final name = _fileName(path);
+    if (!_isTargetFileName(name)) return null;
+
+    final stat = await file.stat();
+    final ext = _lowerExt(name);
+    return MediaItem(
+      id: path,
+      displayName: name,
+      kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+      folderRaw: file.parent.path,
+      modified: stat.modified,
+      tags: const [],
+    );
   }
 
   @override

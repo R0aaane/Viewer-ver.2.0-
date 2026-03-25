@@ -105,6 +105,67 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   @override
+  Future<MediaItem?> pickSinglePdf() async {
+    final file = await openFile(
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'PDF', extensions: ['pdf']),
+      ],
+    );
+    if (file == null || file.path.isEmpty) return null;
+    return _mediaItemFromPath(file.path);
+  }
+
+  @override
+  Future<List<MediaItem>> pickExternalMediaFiles({
+    bool allowMultiple = true,
+    bool includeImages = true,
+    bool includePdf = true,
+  }) async {
+    final extensions = <String>[
+      if (includeImages) ...const ['jpg', 'jpeg', 'png', 'webp', 'bmp'],
+      if (includePdf) 'pdf',
+    ];
+    if (extensions.isEmpty) return const [];
+
+    final files = allowMultiple
+        ? await openFiles(
+            acceptedTypeGroups: [
+              XTypeGroup(label: 'Media', extensions: extensions),
+            ],
+          )
+        : [
+            if (await openFile(
+                  acceptedTypeGroups: [
+                    XTypeGroup(label: 'Media', extensions: extensions),
+                  ],
+                )
+                case final picked?)
+              picked,
+          ];
+
+    final items = <MediaItem>[];
+    for (final file in files) {
+      final item = await _mediaItemFromPath(file.path);
+      if (item != null) {
+        items.add(item);
+      }
+    }
+    return items;
+  }
+
+  @override
+  Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
+    final items = <MediaItem>[];
+    for (final raw in rawItems) {
+      final item = await _mediaItemFromPath(raw);
+      if (item != null) {
+        items.add(item);
+      }
+    }
+    return items;
+  }
+
+  @override
   Future<List<MediaItem>> listMedia(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
@@ -547,6 +608,29 @@ class WindowsFolderRepository implements MediaRepository {
   bool _isTargetFileName(String name) {
     final ext = _lowerExt(name);
     return ext == _pdfExt || _imageExt.contains(ext);
+  }
+
+  Future<MediaItem?> _mediaItemFromPath(String rawPath) async {
+    if (rawPath.isEmpty) return null;
+    final path = rawPath.startsWith('file://')
+        ? Uri.parse(rawPath).toFilePath()
+        : rawPath;
+    final file = File(path);
+    if (!await file.exists()) return null;
+
+    final name = _fileName(path);
+    if (!_isTargetFileName(name)) return null;
+
+    final ext = _lowerExt(name);
+    final stat = await file.stat();
+    return MediaItem(
+      id: path,
+      displayName: name,
+      kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+      folderRaw: file.parent.path,
+      modified: stat.modified,
+      tags: const [],
+    );
   }
 
   @override
