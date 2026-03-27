@@ -274,7 +274,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Future<void> _loadTagsForCurrent() async {
     setState(() => _tagsLoading = true);
     try {
-      final list = await widget.tagService.listTagsForItem(_item.id);
+      final list = await widget.tagService.listTagsForItem(
+        _item.id,
+        item: _item,
+      );
       if (!mounted) return;
       setState(() => _tags = list);
     } finally {
@@ -283,9 +286,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Future<void> _addExistingMasterTag(TagWithId t) async {
-    await widget.tagService.addTagToItem(_item, t.tag);
-    _tagsChanged = true;
-    await _loadTagsForCurrent();
+    try {
+      await widget.tagService.addTagToItem(_item, t.tag);
+      _tagsChanged = true;
+      await _loadTagsForCurrent();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('タグ追加に失敗しました: $e')));
+    }
   }
 
   Future<void> _addTagFromUi() async {
@@ -301,17 +311,35 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     final tag = Tag(name: name, category: _selectedCategory);
 
-    await widget.tagService.addTagToItem(_item, tag);
+    try {
+      await widget.tagService.addTagToItem(_item, tag);
 
-    _tagsChanged = true;
-    _tagCtrl.clear();
-    await _loadTagsForCurrent();
+      _tagsChanged = true;
+      _tagCtrl.clear();
+      await _loadTagsForCurrent();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('タグ追加に失敗しました: $e')));
+    }
   }
 
   Future<void> _removeTagFromUi(TagWithId t) async {
-    await widget.tagService.removeTagFromItem(_item.id, t.tagId);
-    _tagsChanged = true;
-    await _loadTagsForCurrent();
+    try {
+      await widget.tagService.removeTagFromItem(
+        _item.id,
+        t.tagId,
+        item: _item,
+      );
+      _tagsChanged = true;
+      await _loadTagsForCurrent();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('タグ削除に失敗しました: $e')));
+    }
   }
 
   BoxFit get _boxFit {
@@ -453,6 +481,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     try {
       final updated = await widget.repo.rename(item, newBase);
+      String? metadataWarning;
+      try {
+        await widget.tagService.handleItemRenamed(item, updated);
+      } catch (e) {
+        metadataWarning = 'メタデータの更新に失敗しました: $e';
+      }
       if (!mounted) return;
 
       setState(() {
@@ -462,6 +496,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('名前を変更しました: ${updated.displayName}')),
       );
+      if (metadataWarning != null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(metadataWarning)));
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -533,8 +572,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       return;
     }
 
-    // タグDB掃除
-    await widget.tagService.deleteItemsByIds([item.id]);
+    String? metadataWarning;
+    try {
+      await widget.tagService.handleDeletedItems([item]);
+    } catch (e) {
+      metadataWarning = 'メタデータ削除に失敗しました: $e';
+    }
 
     // お気に入りに残ってるとゴミになるので外す
     final prefs = await SharedPreferences.getInstance();
@@ -542,6 +585,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         .toSet();
     fav.remove(item.id);
     await prefs.setStringList(_PrefsKeys.favorites, fav.toList(growable: false));
+
+    if (metadataWarning != null && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(metadataWarning)));
+    }
 
     // 詳細画面を閉じて一覧側でリロードさせる
     if (!mounted) return;

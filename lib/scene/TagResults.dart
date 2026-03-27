@@ -11,6 +11,7 @@ import 'widgets/scene_ui.dart';
 class TagResultsPage extends StatefulWidget {
   final TagService tagService;
   final MediaRepository repo;
+  final List<String> folderRaws;
   final model.TagCategory category;
   final String tagName;
 
@@ -18,6 +19,7 @@ class TagResultsPage extends StatefulWidget {
     super.key,
     required this.tagService,
     required this.repo,
+    required this.folderRaws,
     required this.category,
     required this.tagName,
   });
@@ -27,8 +29,7 @@ class TagResultsPage extends StatefulWidget {
 }
 
 class _TagResultsPageState extends State<TagResultsPage> {
-  final Map<String, List<MediaItem>> _folderItemsCache =
-      <String, List<MediaItem>>{};
+  final Map<String, List<MediaItem>> _folderItemsCache = <String, List<MediaItem>>{};
 
   String _categoryLabel(model.TagCategory category) {
     switch (category) {
@@ -37,11 +38,11 @@ class _TagResultsPageState extends State<TagResultsPage> {
       case model.TagCategory.series:
         return 'シリーズ';
       case model.TagCategory.mediaType:
-        return '媒体';
+        return 'メディア種別';
       case model.TagCategory.character:
-        return 'キャラ';
+        return 'キャラクター';
       case model.TagCategory.free:
-        return '自由';
+        return '自由タグ';
     }
   }
 
@@ -81,7 +82,6 @@ class _TagResultsPageState extends State<TagResultsPage> {
 
   Future<void> _openDetail(MediaItem item) async {
     final folderRaw = item.folderRaw;
-
     final items = _folderItemsCache.putIfAbsent(folderRaw, () => <MediaItem>[]);
     if (items.isEmpty) {
       final loaded = await widget.repo.listMedia(FolderHandle(folderRaw));
@@ -94,7 +94,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
 
     if (index < 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ファイルが見つかりませんでした')),
+        const SnackBar(content: Text('対象ファイルが見つからなくなりました')),
       );
       return;
     }
@@ -120,10 +120,11 @@ class _TagResultsPageState extends State<TagResultsPage> {
         title: Text('${_categoryLabel(widget.category)}: ${widget.tagName}'),
       ),
       body: FutureBuilder<List<MediaItem>>(
-        future: widget.tagService.findMediaItemsByTagGlobal(
+        future: widget.tagService.findMediaItemsByTagAcrossFolders(
           category: widget.category,
           name: widget.tagName,
-          partial: false,
+          repo: widget.repo,
+          folderRaws: widget.folderRaws,
         ),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
@@ -134,15 +135,14 @@ class _TagResultsPageState extends State<TagResultsPage> {
           if (items.isEmpty) {
             return const SceneEmptyState(
               icon: Icons.label_off_outlined,
-              title: '一致するアイテムがありません',
+              title: '該当するアイテムがありません',
             );
           }
 
           final sorted = items.toList(growable: true)
             ..sort(
-              (left, right) => left.displayName.toLowerCase().compareTo(
-                right.displayName.toLowerCase(),
-              ),
+              (left, right) =>
+                  left.displayName.toLowerCase().compareTo(right.displayName.toLowerCase()),
             );
 
           return ListView.separated(
@@ -182,9 +182,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
                                 runSpacing: 8,
                                 children: [
                                   Chip(
-                                    label: Text(
-                                      item.kind == MediaKind.pdf ? 'PDF' : '画像',
-                                    ),
+                                    label: Text(item.kind == MediaKind.pdf ? 'PDF' : '画像'),
                                   ),
                                   Chip(
                                     label: Text(

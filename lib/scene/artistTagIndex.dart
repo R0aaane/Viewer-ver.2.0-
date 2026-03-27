@@ -9,11 +9,13 @@ import 'widgets/scene_ui.dart';
 class ArtistTagIndexPage extends StatefulWidget {
   final TagService tagService;
   final MediaRepository repo;
+  final List<String> folderRaws;
 
   const ArtistTagIndexPage({
     super.key,
     required this.tagService,
     required this.repo,
+    required this.folderRaws,
   });
 
   @override
@@ -21,12 +23,12 @@ class ArtistTagIndexPage extends StatefulWidget {
 }
 
 class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
-  final TextEditingController _search = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
   @override
   void dispose() {
-    _search.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -37,6 +39,7 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
         builder: (_) => TagResultsPage(
           tagService: widget.tagService,
           repo: widget.repo,
+          folderRaws: widget.folderRaws,
           category: model.TagCategory.artist,
           tagName: name,
         ),
@@ -48,10 +51,10 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('アーティストタグ'),
+        title: const Text('作者タグ一覧'),
         actions: [
           IconButton(
-            tooltip: '更新',
+            tooltip: '再読み込み',
             onPressed: () => setState(() {}),
             icon: const Icon(Icons.refresh),
           ),
@@ -62,11 +65,11 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             child: SceneSearchField(
-              controller: _search,
-              hintText: 'タグ名で検索',
+              controller: _searchController,
+              hintText: '作者名で検索',
               onChanged: (value) => setState(() => _query = value.trim()),
               onClear: () {
-                _search.clear();
+                _searchController.clear();
                 setState(() => _query = '');
               },
             ),
@@ -74,9 +77,7 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
           const Divider(height: 1),
           Expanded(
             child: FutureBuilder<List<model.Tag>>(
-              future: widget.tagService.listTagsByCategory(
-                model.TagCategory.artist,
-              ),
+              future: widget.tagService.listTagsByCategory(model.TagCategory.artist),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
@@ -92,8 +93,7 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
                     ? tags
                     : tags
                         .where(
-                          (name) =>
-                              name.toLowerCase().contains(_query.toLowerCase()),
+                          (name) => name.toLowerCase().contains(_query.toLowerCase()),
                         )
                         .toList(growable: false);
 
@@ -105,20 +105,17 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
 
                 for (final entry in grouped.entries) {
                   entry.value.sort(
-                    (left, right) =>
-                        left.toLowerCase().compareTo(right.toLowerCase()),
+                    (left, right) => left.toLowerCase().compareTo(right.toLowerCase()),
                   );
                 }
 
                 final keys = grouped.keys.toList(growable: false)
-                  ..sort((left, right) => _groupOrder(left).compareTo(
-                        _groupOrder(right),
-                      ));
+                  ..sort((left, right) => _groupOrder(left).compareTo(_groupOrder(right)));
 
                 if (keys.isEmpty) {
                   return const SceneEmptyState(
                     icon: Icons.search_off,
-                    title: '一致するタグがありません',
+                    title: '条件に合う作者タグがありません',
                   );
                 }
 
@@ -148,7 +145,8 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
 
     final first = String.fromCharCode(value.runes.first);
     final upper = first.toUpperCase();
-    if (upper.codeUnitAt(0) >= 65 && upper.codeUnitAt(0) <= 90) {
+    final code = upper.codeUnitAt(0);
+    if (code >= 65 && code <= 90) {
       return upper;
     }
 
@@ -192,46 +190,40 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
     if (hiragana.isEmpty) return null;
 
     const groups = <String, String>{
-      'ぁ': 'あ',
       'あ': 'あ',
-      'ぃ': 'あ',
       'い': 'あ',
-      'ぅ': 'あ',
       'う': 'あ',
-      'ぇ': 'あ',
       'え': 'あ',
-      'ぉ': 'あ',
       'お': 'あ',
       'か': 'か',
-      'が': 'か',
       'き': 'か',
-      'ぎ': 'か',
       'く': 'か',
-      'ぐ': 'か',
       'け': 'か',
-      'げ': 'か',
       'こ': 'か',
+      'が': 'か',
+      'ぎ': 'か',
+      'ぐ': 'か',
+      'げ': 'か',
       'ご': 'か',
       'さ': 'さ',
-      'ざ': 'さ',
       'し': 'さ',
-      'じ': 'さ',
       'す': 'さ',
-      'ず': 'さ',
       'せ': 'さ',
-      'ぜ': 'さ',
       'そ': 'さ',
+      'ざ': 'さ',
+      'じ': 'さ',
+      'ず': 'さ',
+      'ぜ': 'さ',
       'ぞ': 'さ',
       'た': 'た',
-      'だ': 'た',
       'ち': 'た',
-      'ぢ': 'た',
-      'っ': 'た',
       'つ': 'た',
-      'づ': 'た',
       'て': 'た',
-      'で': 'た',
       'と': 'た',
+      'だ': 'た',
+      'ぢ': 'た',
+      'づ': 'た',
+      'で': 'た',
       'ど': 'た',
       'な': 'な',
       'に': 'な',
@@ -239,37 +231,33 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
       'ね': 'な',
       'の': 'な',
       'は': 'は',
-      'ば': 'は',
-      'ぱ': 'は',
       'ひ': 'は',
-      'び': 'は',
-      'ぴ': 'は',
       'ふ': 'は',
-      'ぶ': 'は',
-      'ぷ': 'は',
       'へ': 'は',
-      'べ': 'は',
-      'ぺ': 'は',
       'ほ': 'は',
+      'ば': 'は',
+      'び': 'は',
+      'ぶ': 'は',
+      'べ': 'は',
       'ぼ': 'は',
+      'ぱ': 'は',
+      'ぴ': 'は',
+      'ぷ': 'は',
+      'ぺ': 'は',
       'ぽ': 'は',
       'ま': 'ま',
       'み': 'ま',
       'む': 'ま',
       'め': 'ま',
       'も': 'ま',
-      'ゃ': 'や',
       'や': 'や',
-      'ゅ': 'や',
       'ゆ': 'や',
-      'ょ': 'や',
       'よ': 'や',
       'ら': 'ら',
       'り': 'ら',
       'る': 'ら',
       'れ': 'ら',
       'ろ': 'ら',
-      'ゎ': 'わ',
       'わ': 'わ',
       'を': 'わ',
       'ん': 'わ',

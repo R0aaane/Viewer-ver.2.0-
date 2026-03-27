@@ -6,11 +6,12 @@ import 'repository/repositoryFactory.dart';
 import 'database/app_db.dart';
 import 'database/tag_service.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final appDb = AppDb();
   final tagService = TagService(appDb);
+  await tagService.initialize();
 
   runApp(MyApp(appDb: appDb, tagService: tagService));
 }
@@ -142,7 +143,7 @@ class MyApp extends StatelessWidget {
     final repo = createRepository(appDb);
 
     return MaterialApp(
-      title: 'Media Viewer',
+      title: 'メディアビューア',
       theme: _buildTheme(),
       home: GalleryGridPage(repo: repo, tagService: tagService),
     );

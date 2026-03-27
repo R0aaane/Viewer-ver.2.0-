@@ -18,13 +18,12 @@ class TagAssignAfterImportPage extends StatefulWidget {
   });
 
   @override
-  State<TagAssignAfterImportPage> createState() =>
-      _TagAssignAfterImportPageState();
+  State<TagAssignAfterImportPage> createState() => _TagAssignAfterImportPageState();
 }
 
 class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
   model.TagCategory _selectedCategory = model.TagCategory.artist;
-  final TextEditingController _tagCtrl = TextEditingController();
+  final TextEditingController _tagController = TextEditingController();
 
   final List<model.Tag> _pending = <model.Tag>[];
   List<TagWithId> _master = <TagWithId>[];
@@ -37,13 +36,13 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
   void initState() {
     super.initState();
     _refreshMaster();
-    _tagCtrl.addListener(_handleTagTextChanged);
+    _tagController.addListener(_handleTagTextChanged);
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
-    _tagCtrl
+    _tagController
       ..removeListener(_handleTagTextChanged)
       ..dispose();
     super.dispose();
@@ -62,7 +61,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
     if (_saving) return;
     setState(() => _loadingMaster = true);
     try {
-      final contains = _tagCtrl.text.trim();
+      final contains = _tagController.text.trim();
       final rows = await widget.tagService.listTagMasterByCategory(
         _selectedCategory,
         contains: contains.isEmpty ? null : contains,
@@ -101,23 +100,23 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
   }
 
   void _addPendingTag() {
-    final name = _normalizeTag(_tagCtrl.text);
+    final name = _normalizeTag(_tagController.text);
     if (name == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('タグは空白を含まない名前で入力してください')),
+        const SnackBar(content: Text('タグは空白を含まない 1 語で入力してください')),
       );
       return;
     }
 
     final tag = model.Tag(name: name, category: _selectedCategory);
     if (_isPending(tag)) {
-      _tagCtrl.clear();
+      _tagController.clear();
       return;
     }
 
     setState(() {
       _pending.add(tag);
-      _tagCtrl.clear();
+      _tagController.clear();
     });
     _refreshMaster();
   }
@@ -135,6 +134,11 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
       }
       if (!mounted) return;
       Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('タグ付けに失敗しました: $error')),
+      );
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -149,11 +153,11 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
       case model.TagCategory.series:
         return 'シリーズ';
       case model.TagCategory.mediaType:
-        return '媒体';
+        return 'メディア種別';
       case model.TagCategory.character:
-        return 'キャラ';
+        return 'キャラクター';
       case model.TagCategory.free:
-        return '自由';
+        return '自由タグ';
     }
   }
 
@@ -163,7 +167,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('取り込み後タグ付け ($count件)'),
+        title: Text('取り込み後のタグ付け ($count 件)'),
         actions: [
           TextButton(
             onPressed: _saving ? null : () => Navigator.pop(context),
@@ -182,8 +186,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final compact = constraints.maxWidth < 560;
-                    final categoryField = DropdownButtonFormField<
-                        model.TagCategory>(
+                    final categoryField = DropdownButtonFormField<model.TagCategory>(
                       value: _selectedCategory,
                       isExpanded: true,
                       decoration: const InputDecoration(
@@ -207,10 +210,10 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                     );
 
                     final inputField = TextField(
-                      controller: _tagCtrl,
+                      controller: _tagController,
                       enabled: !_saving,
                       decoration: const InputDecoration(
-                        hintText: '#タグを追加',
+                        hintText: '#タグを入力',
                       ),
                       onSubmitted: (_) => _addPendingTag(),
                     );
@@ -262,9 +265,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                                 ? const SizedBox(
                                     width: 18,
                                     height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
+                                    child: CircularProgressIndicator(strokeWidth: 2),
                                   )
                                 : null,
                           ),
@@ -273,21 +274,17 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                                 ? const SceneEmptyState(
                                     icon: Icons.label_outline,
                                     title: '候補がありません',
-                                    message: '入力中の文字列やカテゴリに一致するタグは見つかりませんでした。',
+                                    message: '入力中の文字やカテゴリに一致するタグがまだありません。',
                                   )
                                 : ListView.separated(
                                     itemCount: _master.length,
-                                    separatorBuilder: (_, __) =>
-                                        const Divider(height: 1),
+                                    separatorBuilder: (_, __) => const Divider(height: 1),
                                     itemBuilder: (context, index) {
                                       final tag = _master[index].tag;
                                       final pending = _isPending(tag);
                                       return ListTile(
                                         dense: true,
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                          horizontal: 4,
-                                        ),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                                         title: Text(
                                           tag.name,
                                           maxLines: 1,
@@ -297,9 +294,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                                           pending ? Icons.check : Icons.add,
                                           size: 18,
                                         ),
-                                        onTap: _saving || pending
-                                            ? null
-                                            : () => _addExisting(tag),
+                                        onTap: _saving || pending ? null : () => _addExisting(tag),
                                       );
                                     },
                                   ),
@@ -318,7 +313,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                                 ? const SceneEmptyState(
                                     icon: Icons.sell_outlined,
                                     title: 'まだタグは選ばれていません',
-                                    message: '候補をタップするか新しいタグを追加してください。',
+                                    message: '候補を選ぶか、新しいタグを追加してください。',
                                   )
                                 : SingleChildScrollView(
                                     child: Wrap(
@@ -332,11 +327,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                                               ),
                                               onDeleted: _saving
                                                   ? null
-                                                  : () => setState(
-                                                        () => _pending.remove(
-                                                          tag,
-                                                        ),
-                                                      ),
+                                                  : () => setState(() => _pending.remove(tag)),
                                             ),
                                           )
                                           .toList(growable: false),
@@ -378,7 +369,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.sell),
-                label: Text(_saving ? '保存中...' : '$count件にタグ付け'),
+                label: Text(_saving ? '保存中...' : '$count 件にタグを付ける'),
               ),
             ],
           ),

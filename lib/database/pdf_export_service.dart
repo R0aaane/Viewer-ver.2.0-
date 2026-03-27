@@ -21,6 +21,9 @@ class PdfExportResult {
     this.savedPath,
     this.savedUri,
   });
+
+  // Backward-compatible alias for older call sites still reading `name`.
+  String get name => savedName;
 }
 
 class PdfExportService {
@@ -92,6 +95,22 @@ class PdfExportService {
       savedUri: created.uri,
     );
   }
+
+  static Future<Uint8List> buildPdfBytes(
+    MediaRepository repo,
+    List<MediaItem> items, {
+    double longSidePt = 842.0,
+    void Function(int done, int total)? onProgress,
+  }) {
+    return _buildPdfBytesIsolate(
+      repo,
+      items,
+      longSidePt: longSidePt,
+      onProgress: onProgress,
+    );
+  }
+
+  static String sanitizePdfName(String name) => _sanitizePdfName(name);
 
   static String _sanitizePdfName(String name) {
     final n = name.trim().isEmpty ? 'export' : name.trim();

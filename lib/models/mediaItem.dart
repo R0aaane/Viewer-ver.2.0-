@@ -6,6 +6,7 @@ class MediaItem {
   final String id; // Windowsはfull path / Android: document Uri
   final String displayName; // file name
   final DateTime? modified;
+  final int? sizeBytes;
   final MediaKind kind;
 
   /// このアイテムが属するフォルダ識別子
@@ -22,6 +23,7 @@ class MediaItem {
     required this.kind,
     required this.folderRaw,
     this.modified,
+    this.sizeBytes,
     this.tags = const [],
   });
 }

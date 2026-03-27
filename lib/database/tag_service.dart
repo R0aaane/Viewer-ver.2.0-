@@ -1,163 +1,267 @@
-import 'package:drift/drift.dart';
-import '../models/mediaItem.dart' as m;
-import 'dart:io';
-import 'package:path/path.dart' as p;
-import '../models/tag.dart' as model;
-import 'app_db.dart' as db;
+import 'dart:async';
 
-class TagWithId {
-  final int tagId;
-  final model.Tag tag;
-  const TagWithId({required this.tagId, required this.tag});
-}
+import 'package:flutter/foundation.dart';
+
+import '../models/folder.dart';
+import '../models/mediaItem.dart';
+import '../models/metadata_settings.dart';
+import '../models/tag.dart';
+import '../models/tag_with_id.dart';
+import '../repository/mediaRepository.dart';
+import '../services/app_settings_service.dart';
+import '../services/media_id_resolver.dart';
+import '../services/remote_tag_api_client.dart';
+import 'app_db.dart';
+import 'local_tag_store.dart';
+
+export '../models/tag_with_id.dart';
 
 class TagService {
-  final db.AppDb _db;
-  TagService(this._db);
+  final LocalTagStore _localStore;
+  final AppSettingsService _settingsService;
+  final MediaIdResolver _idResolver;
 
-  int _kindToInt(m.MediaKind kind) => kind == m.MediaKind.image ? 0 : 1;
+  MetadataSettings _settings = const MetadataSettings();
+  RemoteTagApiClient? _remoteClient;
+  Future<void>? _initializeFuture;
 
-  int _categoryToInt(model.TagCategory c) {
-    switch (c) {
-      case model.TagCategory.artist:
-        return db.TagCategoryDb.artist.index;
-      case model.TagCategory.series:
-        return db.TagCategoryDb.series.index;
-      case model.TagCategory.mediaType:
-        return db.TagCategoryDb.mediaType.index;
-      case model.TagCategory.character:
-        return db.TagCategoryDb.character.index;
-      case model.TagCategory.free:
-        return db.TagCategoryDb.free.index;
+  final Map<String, MediaItem> _knownItems = <String, MediaItem>{};
+  final Map<int, String> _remoteTagIdLookup = <int, String>{};
+  final Map<String, Future<List<RemoteTagRecord>>> _remoteTagCache =
+      <String, Future<List<RemoteTagRecord>>>{};
+
+  TagService(AppDb db)
+      : _localStore = LocalTagStore(db),
+        _settingsService = AppSettingsService(),
+        _idResolver = MediaIdResolver();
+
+  MetadataSettings get settings => _settings;
+
+  bool get isRemoteMode => _settings.storageMode == MetadataStorageMode.remote;
+
+  Future<void> initialize() {
+    return _initializeFuture ??= _initializeInternal();
+  }
+
+  Future<void> _initializeInternal() async {
+    _settings = await _settingsService.loadMetadataSettings();
+    _remoteClient = _buildRemoteClient(_settings);
+  }
+
+  Future<void> reloadSettings() async {
+    _initializeFuture = null;
+    await initialize();
+  }
+
+  Future<void> updateMetadataSettings(MetadataSettings nextSettings) async {
+    await _settingsService.saveMetadataSettings(nextSettings);
+    _settings = nextSettings;
+    _remoteClient = _buildRemoteClient(_settings);
+    _remoteTagCache.clear();
+    _remoteTagIdLookup.clear();
+  }
+
+  Future<void> updateMetadataMode(MetadataStorageMode mode) async {
+    await updateMetadataSettings(_settings.copyWith(storageMode: mode));
+  }
+
+  Future<void> updateRemoteApiBaseUrl(String baseUrl) async {
+    await updateMetadataSettings(_settings.copyWith(remoteApiBaseUrl: baseUrl.trim()));
+  }
+
+  Future<void> updateAuthToken(String? authToken) async {
+    await updateMetadataSettings(
+      _settings.copyWith(
+        authToken: authToken?.trim(),
+        clearAuthToken: authToken == null || authToken.trim().isEmpty,
+      ),
+    );
+  }
+
+  Future<MetadataConnectionStatus> checkConnection() async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      return MetadataConnectionStatus.localMode();
     }
-  }
 
-  model.TagCategory _intToCategory(int v) {
-    final e = db.TagCategoryDb.values[v];
-    switch (e) {
-      case db.TagCategoryDb.artist:
-        return model.TagCategory.artist;
-      case db.TagCategoryDb.series:
-        return model.TagCategory.series;
-      case db.TagCategoryDb.mediaType:
-        return model.TagCategory.mediaType;
-      case db.TagCategoryDb.character:
-        return model.TagCategory.character;
-      case db.TagCategoryDb.free:
-        return model.TagCategory.free;
-    }
-  }
-
-  Future<void> upsertMediaItem(m.MediaItem item) async {
-    await _db
-        .into(_db.mediaItems)
-        .insertOnConflictUpdate(
-          db.MediaItemsCompanion.insert(
-            id: item.id,
-            folderRaw: item.folderRaw,
-            displayName: item.displayName,
-            kind: _kindToInt(item.kind),
-            modifiedEpochMs: Value(item.modified?.millisecondsSinceEpoch),
-          ),
-        );
-  }
-
-  Future<int> ensureTagId(model.Tag tag) async {
-    final cat = _categoryToInt(tag.category);
-
-    final existing =
-        await (_db.select(_db.tags)
-              ..where((t) => t.name.equals(tag.name) & t.category.equals(cat)))
-            .getSingleOrNull();
-
-    if (existing != null) return existing.tagId;
-
-    return _db
-        .into(_db.tags)
-        .insert(db.TagsCompanion.insert(name: tag.name, category: cat));
-  }
-
-  Future<void> addTagToItem(m.MediaItem item, model.Tag tag) async {
-    await upsertMediaItem(item);
-    final tagId = await ensureTagId(tag);
-
-    await _db
-        .into(_db.mediaItemTags)
-        .insert(
-          db.MediaItemTagsCompanion.insert(itemId: item.id, tagId: tagId),
-          mode: InsertMode.insertOrIgnore,
-        );
-  }
-
-  Future<void> deleteItemsByIds(List<String> ids) async {
-    if (ids.isEmpty) return;
-
-    await _db.transaction(() async {
-      await (_db.delete(_db.mediaItemTags)..where((t) => t.itemId.isIn(ids))).go();
-      await (_db.delete(_db.mediaItems)..where((t) => t.id.isIn(ids))).go();
-    });
-  }
-
-  Future<void> deleteItemsUnderPathPrefix(String prefix) async {
-    final like = '$prefix%';
-
-    final rows = await (_db.select(_db.mediaItems)
-          ..where((m) => m.id.like(like)))
-        .get();
-
-    if (rows.isEmpty) return;
-
-    final ids = rows.map((e) => e.id).toList(growable: false);
-
-    await _db.transaction(() async {
-      await (_db.delete(_db.mediaItemTags)..where((t) => t.itemId.isIn(ids))).go();
-      await (_db.delete(_db.mediaItems)..where((t) => t.id.isIn(ids))).go();
-    });
-  }
-
-  Future<List<TagWithId>> listTagsForItem(String itemId) async {
-    final rows = await (_db.select(_db.mediaItemTags).join([
-      innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-    ])..where(_db.mediaItemTags.itemId.equals(itemId))).get();
-
-    return rows
-        .map((r) {
-          final t = r.readTable(_db.tags);
-          return TagWithId(
-            tagId: t.tagId,
-            tag: model.Tag(name: t.name, category: _intToCategory(t.category)),
-          );
-        })
-        .toList(growable: false);
-  }
-
-  // 複数 itemId のタグ名一覧をまとめて取得（Home検索用）
-  Future<Map<String, List<String>>> getTagNamesByItemIds(
-    List<String> itemIds,
-  ) async {
-    final result = <String, List<String>>{};
-    if (itemIds.isEmpty) return result;
-
-    // SQLite の IN 句の上限対策（だいたい 900 くらいで刻む）
-    const chunkSize = 800;
-
-    for (int i = 0; i < itemIds.length; i += chunkSize) {
-      final chunk = itemIds.sublist(
-        i,
-        (i + chunkSize) > itemIds.length ? itemIds.length : (i + chunkSize),
+    try {
+      final client = _requireRemoteClient();
+      return client.checkHealth();
+    } on MetadataException catch (error) {
+      return MetadataConnectionStatus(
+        state: MetadataConnectionState.disconnected,
+        message: error.message,
+        checkedAt: DateTime.now(),
       );
+    }
+  }
 
-      final q = _db.select(_db.mediaItemTags).join([
-        innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-      ])..where(_db.mediaItemTags.itemId.isIn(chunk));
+  Future<MetadataConnectionStatus> checkConnectionForSettings(
+    MetadataSettings draftSettings,
+  ) async {
+    if (draftSettings.storageMode != MetadataStorageMode.remote) {
+      return MetadataConnectionStatus.localMode();
+    }
+    return _buildRemoteClient(draftSettings).checkHealth();
+  }
 
-      final rows = await q.get();
+  Future<void> requestRescan() async {
+    await initialize();
+    if (!isRemoteMode) {
+      return;
+    }
 
-      for (final r in rows) {
-        final link = r.readTable(_db.mediaItemTags);
-        final t = r.readTable(_db.tags);
-        (result[link.itemId] ??= <String>[]).add(t.name);
+    final client = _requireRemoteClient();
+    await client.requestRescan();
+    _remoteTagCache.clear();
+  }
+
+  Future<void> requestRescanForSettings(MetadataSettings draftSettings) async {
+    if (draftSettings.storageMode != MetadataStorageMode.remote) {
+      return;
+    }
+    await _buildRemoteClient(draftSettings).requestRescan();
+  }
+
+  void rememberItem(MediaItem item) {
+    for (final key in _itemLookupKeys(item.id)) {
+      _knownItems[key] = item;
+    }
+  }
+
+  void rememberItems(Iterable<MediaItem> items) {
+    for (final item in items) {
+      rememberItem(item);
+    }
+  }
+
+  Future<void> addTagToItem(MediaItem item, Tag tag) async {
+    await initialize();
+    rememberItem(item);
+
+    if (!isRemoteMode) {
+      await _localStore.addTagToItem(item, tag);
+      return;
+    }
+
+    final identity = await _idResolver.resolve(item);
+    await _requireRemoteClient().addTagToItem(identity.stableId, tag, identity: identity);
+    _remoteTagCache.remove(identity.stableId);
+  }
+
+  Future<void> addTagToItems(List<MediaItem> items, Tag tag) async {
+    await initialize();
+    rememberItems(items);
+
+    if (!isRemoteMode) {
+      await _localStore.addTagToItems(items, tag);
+      return;
+    }
+
+    final targets = items.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    if (targets.isEmpty) {
+      return;
+    }
+
+    final identities = await _resolveIdentities(targets);
+    await _requireRemoteClient().addTagBatch(identities, tag);
+    for (final identity in identities) {
+      _remoteTagCache.remove(identity.stableId);
+    }
+  }
+
+  Future<List<TagWithId>> listTagsForItem(
+    String itemId, {
+    MediaItem? item,
+  }) async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      return _localStore.listTagsForItem(itemId);
+    }
+
+    final resolvedItem = item ?? _lookupKnownItem(itemId);
+    if (resolvedItem == null) {
+      debugPrint('[metadata] listTagsForItem skipped: unknown item $itemId');
+      return const <TagWithId>[];
+    }
+
+    rememberItem(resolvedItem);
+
+    try {
+      final tags = await _loadRemoteTagsForItem(resolvedItem);
+      return tags.map(_toTagWithId).toList(growable: false);
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[metadata] listTagsForItem failed: $error\n$stackTrace');
+      return const <TagWithId>[];
+    }
+  }
+
+  Future<Map<String, List<String>>> getTagNamesByItemIds(
+    List<String> itemIds, {
+    List<MediaItem>? items,
+  }) async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      return _localStore.getTagNamesByItemIds(itemIds);
+    }
+
+    final candidates = <MediaItem>[
+      if (items != null) ...items,
+      ...itemIds
+          .map(_lookupKnownItem)
+          .whereType<MediaItem>(),
+    ];
+    return getTagNamesByItems(candidates);
+  }
+
+  Future<Map<String, List<String>>> getTagNamesByItems(List<MediaItem> items) async {
+    final detailed = await getDetailedTagsByItems(items);
+    return detailed.map(
+      (key, value) => MapEntry(
+        key,
+        value.map((entry) => entry.tag.name).toList(growable: false),
+      ),
+    );
+  }
+
+  Future<Map<String, List<TagWithId>>> getDetailedTagsByItems(List<MediaItem> items) async {
+    await initialize();
+
+    final targets = items.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    rememberItems(targets);
+
+    if (!isRemoteMode) {
+      final result = <String, List<TagWithId>>{};
+      for (final item in targets) {
+        result[item.id] = await _localStore.listTagsForItem(item.id);
       }
+      return result;
+    }
+
+    final result = <String, List<TagWithId>>{};
+    final chunks = _chunkItems(targets, 8);
+
+    try {
+      for (final chunk in chunks) {
+        final loaded = await Future.wait(
+          chunk.map((item) async {
+            final tags = await _loadRemoteTagsForItem(item);
+            return MapEntry(
+              item.id,
+              tags.map(_toTagWithId).toList(growable: false),
+            );
+          }),
+        );
+
+        for (final entry in loaded) {
+          result[entry.key] = entry.value;
+        }
+      }
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[metadata] getDetailedTagsByItems failed: $error\n$stackTrace');
     }
 
     return result;
@@ -165,335 +269,488 @@ class TagService {
 
   Future<List<String>> findItemIdsByTag({
     required String folderRaw,
-    required model.TagCategory category,
+    required TagCategory category,
     required String name,
     bool partial = false,
+    List<MediaItem>? candidates,
   }) async {
-    final cat = _categoryToInt(category);
+    await initialize();
 
-    final q =
-        _db.select(_db.mediaItems).join([
-            innerJoin(
-              _db.mediaItemTags,
-              _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
-            ),
-            innerJoin(
-              _db.tags,
-              _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId),
-            ),
-          ])
-          ..where(_db.mediaItems.folderRaw.equals(folderRaw))
-          ..where(_db.tags.category.equals(cat));
+    if (!isRemoteMode) {
+      if (candidates != null && candidates.isNotEmpty) {
+        final items = candidates.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+        final details = await getDetailedTagsByItems(items);
+        return items
+            .where(
+              (item) => (details[item.id] ?? const <TagWithId>[]).any(
+                (tag) =>
+                    tag.tag.category == category &&
+                    (partial
+                        ? tag.tag.name.toLowerCase().contains(name.toLowerCase())
+                        : tag.tag.name == name),
+              ),
+            )
+            .map((item) => item.id)
+            .toList(growable: false);
+      }
 
-    if (partial) {
-      q.where(_db.tags.name.like('%$name%'));
-    } else {
-      q.where(_db.tags.name.equals(name));
+      return _localStore.findItemIdsByTag(
+        folderRaw: folderRaw,
+        category: category,
+        name: name,
+        partial: partial,
+      );
     }
 
-    final rows = await q.get();
-
-    final ids = <String>{};
-    for (final r in rows) {
-      ids.add(r.readTable(_db.mediaItems).id);
-    }
-    return ids.toList(growable: false);
-  }
-
-  Future<void> removeTagFromItem(String itemId, int tagId) async {
-    await (_db.delete(
-      _db.mediaItemTags,
-    )..where((x) => x.itemId.equals(itemId) & x.tagId.equals(tagId))).go();
-  }
-
-  /// カテゴリ内のタグ候補（マスター）を一覧取得
-  Future<List<TagWithId>> listTagMasterByCategory(
-    model.TagCategory category, {
-    String? contains,
-    int limit = 200,
-  }) async {
-    final cat = _categoryToInt(category);
-
-    final q = _db.select(_db.tags)
-      ..where((t) => t.category.equals(cat))
-      ..orderBy([(t) => OrderingTerm.asc(t.name)])
-      ..limit(limit);
-
-    if (contains != null && contains.trim().isNotEmpty) {
-      final s = contains.trim();
-      q.where((t) => t.name.like('%$s%'));
+    final items = (candidates ?? const <MediaItem>[])
+        .where(
+          (item) =>
+              item.kind != MediaKind.folder &&
+              (folderRaw.isEmpty || item.folderRaw == folderRaw),
+        )
+        .toList(growable: false);
+    if (items.isEmpty) {
+      return const <String>[];
     }
 
-    final rows = await q.get();
-    return rows
-        .map(
-          (t) => TagWithId(
-            tagId: t.tagId,
-            tag: model.Tag(name: t.name, category: _intToCategory(t.category)),
+    if (!partial && (category == TagCategory.artist || category == TagCategory.series)) {
+      final matchedIds = await findItemIdsByArtistSeriesInCandidates(
+        candidates: items,
+        artist: category == TagCategory.artist ? name : null,
+        series: category == TagCategory.series ? name : null,
+      );
+      if (matchedIds.isNotEmpty) {
+        return matchedIds;
+      }
+    }
+
+    final details = await getDetailedTagsByItems(items);
+    return items
+        .where(
+          (item) => (details[item.id] ?? const <TagWithId>[]).any(
+            (tag) =>
+                tag.tag.category == category &&
+                (partial
+                    ? tag.tag.name.toLowerCase().contains(name.toLowerCase())
+                    : tag.tag.name == name),
           ),
         )
+        .map((item) => item.id)
         .toList(growable: false);
   }
 
-  // 表示中など「複数アイテムに同じタグを一括付与」する
-  Future<void> addTagToItems(List<m.MediaItem> items, model.Tag tag) async {
-    if (items.isEmpty) return;
-
-    final tagId = await ensureTagId(tag);
-
-    // drift batch で高速に upsert + link insert(orIgnore)
-    await _db.batch((b) {
-      b.insertAllOnConflictUpdate(
-        _db.mediaItems,
-        items
-            .map((it) {
-              return db.MediaItemsCompanion.insert(
-                id: it.id,
-                folderRaw: it.folderRaw,
-                displayName: it.displayName,
-                kind: _kindToInt(it.kind),
-                modifiedEpochMs: Value(it.modified?.millisecondsSinceEpoch),
-              );
-            })
-            .toList(growable: false),
-      );
-
-      // link insert (ignore duplicates)
-      b.insertAll(
-        _db.mediaItemTags,
-        items
-            .map((it) {
-              return db.MediaItemTagsCompanion.insert(
-                itemId: it.id,
-                tagId: tagId,
-              );
-            })
-            .toList(growable: false),
-        mode: InsertMode.insertOrIgnore,
-      );
-    });
-  }
-
-  // ----------------------------
-  // カテゴリ別タグ一覧（例: artist）
-  Future<List<model.Tag>> listTagsByCategory(model.TagCategory category) async {
-    final cat = _categoryToInt(category);
-
-    final rows = await (_db.select(
-      _db.tags,
-    )..where((t) => t.category.equals(cat))).get();
-
-    // 重複排除（念のため）
-    final seen = <String>{};
-    final out = <model.Tag>[];
-    for (final r in rows) {
-      final key = '${r.category}:${r.name}';
-      if (seen.add(key)) {
-        out.add(model.Tag(name: r.name, category: _intToCategory(r.category)));
-      }
-    }
-    return out;
-  }
-
-  // タグ（カテゴリ+名前）に紐づく MediaItem をDBから復元して返す
-  Future<List<m.MediaItem>> findMediaItemsByTagGlobal({
-    required model.TagCategory category,
-    required String name,
-    bool partial = false,
+  Future<List<String>> findItemIdsByArtistSeriesInCandidates({
+    required List<MediaItem> candidates,
+    String? artist,
+    String? series,
   }) async {
-    final cat = _categoryToInt(category);
+    await initialize();
 
-    final q = _db.select(_db.mediaItems).join([
-      innerJoin(
-        _db.mediaItemTags,
-        _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
-      ),
-      innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-    ])..where(_db.tags.category.equals(cat));
-
-    if (partial) {
-      q.where(_db.tags.name.like('%$name%'));
-    } else {
-      q.where(_db.tags.name.equals(name));
+    final items = candidates.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    if (items.isEmpty) {
+      return const <String>[];
     }
 
-    final rows = await q.get();
-
-    // 重複を排除しつつ復元
-    final seen = <String>{};
-    final out = <m.MediaItem>[];
-
-    for (final r in rows) {
-      final mi = r.readTable(_db.mediaItems);
-      if (!seen.add(mi.id)) continue;
-
-      out.add(
-        m.MediaItem(
-          id: mi.id,
-          folderRaw: mi.folderRaw,
-          displayName: mi.displayName,
-          kind: (mi.kind == 0) ? m.MediaKind.image : m.MediaKind.pdf,
-          modified: (mi.modifiedEpochMs == null)
-              ? null
-              : DateTime.fromMillisecondsSinceEpoch(mi.modifiedEpochMs!),
-        ),
-      );
+    if (!isRemoteMode) {
+      final details = await getDetailedTagsByItems(items);
+      return items
+          .where(
+            (item) => _matchesArtistSeries(
+              details[item.id] ?? const <TagWithId>[],
+              artist: artist,
+              series: series,
+            ),
+          )
+          .map((item) => item.id)
+          .toList(growable: false);
     }
-    return out;
-  }
 
-  //保管庫の整理用
-  Future<Map<String, String>> organizeAppLibrary({
-    required String libraryRoot,
-  }) async {
-    final moved = <String, String>{};
-
-    // libraryRoot 配下の MediaItems をDBから拾う（id が file path のもの前提）
-    final items = await (_db.select(
-      _db.mediaItems,
-    )..where((m) => m.id.like('$libraryRoot%'))).get();
-
-    for (final it in items) {
-      // SAF Uriは対象外（保管庫は file path の想定）
-      if (it.id.startsWith('content://')) continue;
-
-      final tags = await listTagsForItem(it.id);
-      final artist = _pickFirst(tags, model.TagCategory.artist);
-      final series = _pickFirst(tags, model.TagCategory.series);
-
-      // タグが無いなら移動しない（library直下でOK）
-      if (artist == null && series == null) continue;
-
-      final destDir = _calcLibraryDestDir(
-        libraryRoot: libraryRoot,
+    try {
+      final remoteIds = await _requireRemoteClient().searchItemIds(
         artist: artist,
         series: series,
       );
-
-      final srcPath = it.id;
-      final fileName = p.basename(srcPath);
-      final targetPath = _uniquePath(destDir, fileName);
-
-      // 既に期待位置なら何もしない
-      if (p.equals(p.normalize(srcPath), p.normalize(targetPath))) continue;
-
-      try {
-        await Directory(destDir).create(recursive: true);
-
-        // move (rename) → 失敗したら copy+delete
-        final srcFile = File(srcPath);
-        if (!await srcFile.exists()) continue;
-
-        try {
-          await srcFile.rename(targetPath);
-        } catch (_) {
-          await srcFile.copy(targetPath);
-          await srcFile.delete();
-        }
-
-        // DB: oldId -> newId に付け替え
-        await _db.transaction(() async {
-          // new mediaItems row
-          await _db
-              .into(_db.mediaItems)
-              .insertOnConflictUpdate(
-                db.MediaItemsCompanion.insert(
-                  id: targetPath,
-                  folderRaw: p.dirname(targetPath),
-                  displayName: fileName,
-                  kind: it.kind,
-                  modifiedEpochMs: Value(it.modifiedEpochMs),
-                ),
-              );
-
-          // mediaItemTags の itemId を更新
-          await _db.customUpdate(
-            'UPDATE media_item_tags SET item_id = ? WHERE item_id = ?',
-            variables: [
-              Variable<String>(targetPath),
-              Variable<String>(srcPath),
-            ],
-            updates: {_db.mediaItemTags},
-          );
-
-          // old mediaItems row delete
-          await (_db.delete(
-            _db.mediaItems,
-          )..where((m) => m.id.equals(srcPath))).go();
-        });
-
-        moved[srcPath] = targetPath;
-      } catch (_) {
-        // 1件失敗しても続行
-      }
+      return await _mapStableIdsToItemIds(items, remoteIds);
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[metadata] remote artist/series search failed: $error\n$stackTrace');
+      final details = await getDetailedTagsByItems(items);
+      return items
+          .where(
+            (item) => _matchesArtistSeries(
+              details[item.id] ?? const <TagWithId>[],
+              artist: artist,
+              series: series,
+            ),
+          )
+          .map((item) => item.id)
+          .toList(growable: false);
     }
-
-    return moved;
   }
 
-  TagWithId? _pickFirst(List<TagWithId> tags, model.TagCategory cat) {
-    for (final t in tags) {
-      if (t.tag.category == cat) return t;
+  Future<List<String>> findUntaggedItemIdsInCandidates(List<MediaItem> candidates) async {
+    await initialize();
+
+    final items = candidates.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    if (items.isEmpty) {
+      return const <String>[];
+    }
+
+    if (!isRemoteMode) {
+      final details = await getDetailedTagsByItems(items);
+      return items
+          .where((item) => (details[item.id] ?? const <TagWithId>[]).isEmpty)
+          .map((item) => item.id)
+          .toList(growable: false);
+    }
+
+    try {
+      final remoteIds = await _requireRemoteClient().fetchUntaggedIds();
+      return await _mapStableIdsToItemIds(items, remoteIds);
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[metadata] remote untagged search failed: $error\n$stackTrace');
+      final details = await getDetailedTagsByItems(items);
+      return items
+          .where((item) => (details[item.id] ?? const <TagWithId>[]).isEmpty)
+          .map((item) => item.id)
+          .toList(growable: false);
+    }
+  }
+
+  Future<void> removeTagFromItem(
+    String itemId,
+    int tagId, {
+    MediaItem? item,
+  }) async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      await _localStore.removeTagFromItem(itemId, tagId);
+      return;
+    }
+
+    final resolvedItem = item ?? _lookupKnownItem(itemId);
+    if (resolvedItem == null) {
+      throw const MetadataException('対象アイテムの情報が不足しているため、タグを削除できません');
+    }
+
+    final identity = await _idResolver.resolve(resolvedItem);
+    final remoteTagId = _remoteTagIdLookup[tagId];
+    if (remoteTagId == null) {
+      throw const MetadataException('タグ識別子を解決できなかったため、削除できません');
+    }
+
+    await _requireRemoteClient().deleteItemTag(identity.stableId, remoteTagId);
+    _remoteTagCache.remove(identity.stableId);
+  }
+
+  Future<List<TagWithId>> listTagMasterByCategory(
+    TagCategory category, {
+    String? contains,
+    int limit = 200,
+  }) async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      return _localStore.listTagMasterByCategory(
+        category,
+        contains: contains,
+        limit: limit,
+      );
+    }
+
+    try {
+      final tags = await _requireRemoteClient().fetchMasterTags(
+        category,
+        contains: contains,
+        limit: limit,
+      );
+      return tags.map(_toTagWithId).toList(growable: false);
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[metadata] listTagMasterByCategory failed: $error\n$stackTrace');
+      return const <TagWithId>[];
+    }
+  }
+
+  Future<List<Tag>> listTagsByCategory(TagCategory category) async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      return _localStore.listTagsByCategory(category);
+    }
+
+    final masters = await listTagMasterByCategory(category, limit: 500);
+    return masters.map((entry) => entry.tag).toList(growable: false);
+  }
+
+  Future<List<MediaItem>> findMediaItemsByTagGlobal({
+    required TagCategory category,
+    required String name,
+    bool partial = false,
+  }) async {
+    await initialize();
+    if (!isRemoteMode) {
+      return _localStore.findMediaItemsByTagGlobal(
+        category: category,
+        name: name,
+        partial: partial,
+      );
+    }
+
+    return const <MediaItem>[];
+  }
+
+  Future<List<MediaItem>> findMediaItemsByTagAcrossFolders({
+    required TagCategory category,
+    required String name,
+    required MediaRepository repo,
+    required List<String> folderRaws,
+    bool partial = false,
+  }) async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      return _localStore.findMediaItemsByTagGlobal(
+        category: category,
+        name: name,
+        partial: partial,
+      );
+    }
+
+    final allItems = await _loadAllMediaAcrossFolders(repo, folderRaws);
+    final ids = await findItemIdsByTag(
+      folderRaw: '',
+      category: category,
+      name: name,
+      partial: partial,
+      candidates: allItems,
+    );
+    final matched = ids.toSet();
+    return allItems.where((item) => matched.contains(item.id)).toList(growable: false);
+  }
+
+  Future<Map<String, String>> organizeAppLibrary({
+    required String libraryRoot,
+  }) async {
+    await initialize();
+
+    if (isRemoteMode) {
+      throw const MetadataException('リモートメタデータモードでは、ライブラリ整理はまだ未対応です');
+    }
+
+    return _localStore.organizeAppLibrary(libraryRoot: libraryRoot);
+  }
+
+  Future<void> handleItemRenamed(MediaItem before, MediaItem after) async {
+    await initialize();
+    rememberItem(after);
+
+    if (!isRemoteMode) {
+      await _localStore.renameItem(before, after);
+      return;
+    }
+
+    final beforeIdentity = await _idResolver.resolve(before);
+    final afterIdentity = await _idResolver.resolve(after);
+
+    await _requireRemoteClient().notifyRename(
+      beforeItem: before,
+      afterItem: after,
+      before: beforeIdentity,
+      after: afterIdentity,
+    );
+
+    _remoteTagCache.remove(beforeIdentity.stableId);
+    _remoteTagCache.remove(afterIdentity.stableId);
+  }
+
+  Future<void> handleDeletedItems(List<MediaItem> items) async {
+    await initialize();
+    final targets = items.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    if (targets.isEmpty) {
+      return;
+    }
+
+    if (!isRemoteMode) {
+      await _localStore.deleteItemsByIds(targets.map((item) => item.id).toList(growable: false));
+      return;
+    }
+
+    final payload = <(MediaItem, ResolvedMediaIdentity)>[];
+    for (final item in targets) {
+      payload.add((item, await _idResolver.resolve(item)));
+    }
+
+    await _requireRemoteClient().notifyDelete(payload);
+    for (final entry in payload) {
+      _remoteTagCache.remove(entry.$2.stableId);
+    }
+  }
+
+  RemoteTagApiClient _buildRemoteClient(MetadataSettings settings) {
+    return RemoteTagApiClient(
+      baseUrl: settings.remoteApiBaseUrl,
+      defaultHeadersProvider: () {
+        final headers = <String, String>{};
+        final token = settings.authToken?.trim();
+        if (token != null && token.isNotEmpty) {
+          headers['Authorization'] = 'Bearer $token';
+        }
+        return headers;
+      },
+    );
+  }
+
+  RemoteTagApiClient _requireRemoteClient() {
+    final client = _remoteClient;
+    if (client == null || !client.isConfigured) {
+      throw const MetadataException('リモート API の URL が未設定です');
+    }
+    return client;
+  }
+
+  MediaItem? _lookupKnownItem(String itemId) {
+    for (final key in _itemLookupKeys(itemId)) {
+      final item = _knownItems[key];
+      if (item != null) {
+        return item;
+      }
     }
     return null;
   }
 
-  String _calcLibraryDestDir({
-    required String libraryRoot,
-    TagWithId? artist,
-    TagWithId? series,
-  }) {
-    String safe(String s) => _sanitizeDirName(s);
-
-    if (artist != null) {
-      final a = safe(artist.tag.name);
-      if (series != null) {
-        final s = safe(series.tag.name);
-        return p.join(libraryRoot, '作者', a, s);
-      }
-      return p.join(libraryRoot, '作者', a);
-    }
-
-    // artist無しで series だけある場合は “シリーズ” 配下に置く
-    if (series != null) {
-      final s = safe(series.tag.name);
-      return p.join(libraryRoot, 'シリーズ', s);
-    }
-
-    return libraryRoot;
+  List<String> _itemLookupKeys(String raw) {
+    return <String>[
+      raw,
+      raw.replaceAll('\\', '/'),
+      raw.replaceAll('/', '\\'),
+      raw.toLowerCase(),
+      raw.replaceAll('\\', '/').toLowerCase(),
+      raw.replaceAll('/', '\\').toLowerCase(),
+    ];
   }
 
-  String _sanitizeDirName(String input) {
-    var s = input.trim();
-    if (s.isEmpty) return '_';
+  Future<List<RemoteTagRecord>> _loadRemoteTagsForItem(MediaItem item) async {
+    final identity = await _idResolver.resolve(item);
+    final cached = _remoteTagCache[identity.stableId];
+    if (cached != null) {
+      return cached;
+    }
 
-    // Windows NG文字 + パス区切り等を置換
-    s = s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    // 制御文字も排除
-    s = s.replaceAll(RegExp(r'[\x00-\x1F]'), '_');
-    // 末尾のドット/スペースはWindowsで問題になりやすい
-    s = s.replaceAll(RegExp(r'[\. ]+$'), '');
-    if (s.isEmpty) return '_';
-    return s;
+    final future = _requireRemoteClient().fetchItemTags(identity.stableId);
+    _remoteTagCache[identity.stableId] = future;
+    return future;
   }
 
-  String _uniquePath(String dir, String fileName) {
-    final base = p.basenameWithoutExtension(fileName);
-    final ext = p.extension(fileName);
+  TagWithId _toTagWithId(RemoteTagRecord record) {
+    final hashedId = _fnv1a32(record.rawId);
+    _remoteTagIdLookup[hashedId] = record.rawId;
+    return TagWithId(tagId: hashedId, tag: record.tag);
+  }
 
-    var candidate = p.join(dir, fileName);
-    var n = 1;
-    while (File(candidate).existsSync()) {
-      candidate = p.join(dir, '$base ($n)$ext');
-      n++;
-      if (n > 999) {
-        candidate = p.join(
-          dir,
-          '${base}_${DateTime.now().millisecondsSinceEpoch}$ext',
+  int _fnv1a32(String input) {
+    const int offset = 0x811C9DC5;
+    const int prime = 0x01000193;
+
+    var hash = offset;
+    for (final unit in input.codeUnits) {
+      hash ^= unit;
+      hash = (hash * prime) & 0xFFFFFFFF;
+    }
+    return hash & 0x7FFFFFFF;
+  }
+
+  Future<List<ResolvedMediaIdentity>> _resolveIdentities(List<MediaItem> items) async {
+    final result = <ResolvedMediaIdentity>[];
+    final chunks = _chunkItems(items, 8);
+    for (final chunk in chunks) {
+      final resolved = await Future.wait(chunk.map(_idResolver.resolve));
+      result.addAll(resolved);
+    }
+    return result;
+  }
+
+  Future<List<String>> _mapStableIdsToItemIds(
+    List<MediaItem> items,
+    Set<String> stableIds,
+  ) {
+    if (stableIds.isEmpty) {
+      return Future.value(const <String>[]);
+    }
+
+    final matched = <String>[];
+    return () async {
+      final chunks = _chunkItems(items, 8);
+      for (final chunk in chunks) {
+        final resolved = await Future.wait(
+          chunk.map((item) async => MapEntry(item.id, await _idResolver.resolve(item))),
         );
-        break;
+        for (final entry in resolved) {
+          if (stableIds.contains(entry.value.stableId)) {
+            matched.add(entry.key);
+          }
+        }
+      }
+      return matched;
+    }();
+  }
+
+  bool _matchesArtistSeries(
+    List<TagWithId> tags, {
+    String? artist,
+    String? series,
+  }) {
+    final lowerArtist = artist?.toLowerCase();
+    final lowerSeries = series?.toLowerCase();
+
+    final hasArtist = lowerArtist == null ||
+        tags.any(
+          (tag) =>
+              tag.tag.category == TagCategory.artist &&
+              tag.tag.name.toLowerCase() == lowerArtist,
+        );
+    final hasSeries = lowerSeries == null ||
+        tags.any(
+          (tag) =>
+              tag.tag.category == TagCategory.series &&
+              tag.tag.name.toLowerCase() == lowerSeries,
+        );
+
+    return hasArtist && hasSeries;
+  }
+
+  Future<List<MediaItem>> _loadAllMediaAcrossFolders(
+    MediaRepository repo,
+    List<String> folderRaws,
+  ) async {
+    final all = <MediaItem>[];
+    final seen = <String>{};
+
+    for (final folderRaw in folderRaws) {
+      final loaded = await repo.listMediaRecursiveFiles(FolderHandle(folderRaw));
+      for (final item in loaded) {
+        if (item.kind == MediaKind.folder) {
+          continue;
+        }
+        if (seen.add(item.id)) {
+          all.add(item);
+        }
       }
     }
-    return candidate;
+
+    rememberItems(all);
+    return all;
+  }
+
+  List<List<MediaItem>> _chunkItems(List<MediaItem> items, int size) {
+    final chunks = <List<MediaItem>>[];
+    for (var index = 0; index < items.length; index += size) {
+      chunks.add(
+        items.sublist(
+          index,
+          (index + size) > items.length ? items.length : (index + size),
+        ),
+      );
+    }
+    return chunks;
   }
 }

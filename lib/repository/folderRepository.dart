@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
@@ -65,6 +66,18 @@ class _LruCache<K, V> {
   int get length => _map.length;
 }
 
+class _FsPageEntry {
+  final String path;
+  final String name;
+  final MediaKind kind;
+
+  const _FsPageEntry({
+    required this.path,
+    required this.name,
+    required this.kind,
+  });
+}
+
 class WindowsFolderRepository implements MediaRepository {
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
@@ -96,6 +109,28 @@ class WindowsFolderRepository implements MediaRepository {
 
   // PDF キャッシュ（ページ送り高速化）
   final Map<String, PdfDocument> _pdfCache = {};
+
+  bool _isUncPath(String path) => path.startsWith(r'\\');
+
+  Future<T> _withFsRetry<T>(
+    String path,
+    Future<T> Function() action, {
+    int retries = 2,
+  }) async {
+    Object? lastError;
+    for (var attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await action();
+      } catch (error) {
+        lastError = error;
+        if (!_isUncPath(path) || attempt >= retries) {
+          rethrow;
+        }
+        await Future<void>.delayed(Duration(milliseconds: 120 * (attempt + 1)));
+      }
+    }
+    throw lastError ?? Exception('I/O error: $path');
+  }
 
   @override
   Future<FolderHandle?> pickFolder() async {
@@ -237,6 +272,7 @@ class WindowsFolderRepository implements MediaRepository {
           kind: kind,
           folderRaw: folder.raw,
           modified: stat.modified,
+          sizeBytes: stat.size,
           tags: const [],
         ),
       );
@@ -289,20 +325,15 @@ class WindowsFolderRepository implements MediaRepository {
       return const PagedMediaResult(items: [], total: 0);
     }
 
-    final folders = <MediaItem>[];
-    final files = <MediaItem>[];
+    final entries = <_FsPageEntry>[];
 
     await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is Directory) {
-        final stat = await ent.stat();
-        folders.add(
-          MediaItem(
-            id: ent.path,
-            displayName: _fileName(ent.path),
+        entries.add(
+          _FsPageEntry(
+            path: ent.path,
+            name: _fileName(ent.path),
             kind: MediaKind.folder,
-            folderRaw: folder.raw,
-            modified: stat.modified,
-            tags: const [],
           ),
         );
         continue;
@@ -315,35 +346,69 @@ class WindowsFolderRepository implements MediaRepository {
         if (!_isTargetFileName(name)) continue;
 
         final ext = _lowerExt(name);
-        final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
-        final stat = await ent.stat();
-
-        files.add(
-          MediaItem(
-            id: ent.path,
-            displayName: name,
-            kind: kind,
-            folderRaw: folder.raw,
-            modified: stat.modified,
-            tags: const [],
+        entries.add(
+          _FsPageEntry(
+            path: ent.path,
+            name: name,
+            kind: (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image,
           ),
         );
       }
     }
 
-    // フォルダ→ファイル、名前順
-    folders.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
-    files.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    entries.sort((left, right) {
+      final leftKindOrder = left.kind == MediaKind.folder ? 0 : 1;
+      final rightKindOrder = right.kind == MediaKind.folder ? 0 : 1;
+      if (leftKindOrder != rightKindOrder) {
+        return leftKindOrder.compareTo(rightKindOrder);
+      }
+      return left.name.toLowerCase().compareTo(right.name.toLowerCase());
+    });
 
-    final all = <MediaItem>[...folders, ...files];
-    final total = all.length;
+    final total = entries.length;
 
     final start = offset.clamp(0, total);
     final end = (start + limit).clamp(0, total);
-    final slice = all.sublist(start, end);
+    final slice = entries.sublist(start, end);
 
-    if (onProgress != null) onProgress(slice.length, slice.length);
-    return PagedMediaResult(items: slice, total: total);
+    final items = <MediaItem>[];
+    var processed = 0;
+
+    for (final entry in slice) {
+      if (entry.kind == MediaKind.folder) {
+        final stat = await _withFsRetry(entry.path, () => Directory(entry.path).stat());
+        items.add(
+          MediaItem(
+            id: entry.path,
+            displayName: entry.name,
+            kind: MediaKind.folder,
+            folderRaw: folder.raw,
+            modified: stat.modified,
+            tags: const [],
+          ),
+        );
+      } else {
+        final stat = await _withFsRetry(entry.path, () => File(entry.path).stat());
+        items.add(
+          MediaItem(
+            id: entry.path,
+            displayName: entry.name,
+            kind: entry.kind,
+            folderRaw: folder.raw,
+            modified: stat.modified,
+            sizeBytes: stat.size,
+            tags: const [],
+          ),
+        );
+      }
+
+      processed++;
+      if (onProgress != null) {
+        onProgress(processed, slice.length);
+      }
+    }
+
+    return PagedMediaResult(items: items, total: total);
   }
 
   @override
@@ -398,6 +463,7 @@ class WindowsFolderRepository implements MediaRepository {
           kind: kind,
           folderRaw: folder.raw, // ★検索元ルート
           modified: stat.modified,
+          sizeBytes: stat.size,
           tags: const [],
         ),
       );
@@ -473,7 +539,7 @@ class WindowsFolderRepository implements MediaRepository {
 
   @override
   Future<Uint8List> readBytes(MediaItem item) async {
-    return File(item.id).readAsBytes();
+    return _withFsRetry(item.id, () => File(item.id).readAsBytes());
   }
 
   // ---- ページ数を取得 ----
@@ -530,7 +596,7 @@ class WindowsFolderRepository implements MediaRepository {
 
   Future<ThumbPair> _buildThumbPair(MediaItem item, int maxWidth) async {
     if (item.kind == MediaKind.image) {
-      final bytes = await File(item.id).readAsBytes();
+      final bytes = await _withFsRetry(item.id, () => File(item.id).readAsBytes());
       return ThumbPair(front: bytes, back: null);
     }
 
@@ -552,7 +618,7 @@ class WindowsFolderRepository implements MediaRepository {
     final cached = _pdfCache[path];
     if (cached != null) return cached;
 
-    final doc = await PdfDocument.openFile(path);
+    final doc = await _withFsRetry(path, () => PdfDocument.openFile(path));
     _pdfCache[path] = doc;
     return doc;
   }
@@ -629,6 +695,7 @@ class WindowsFolderRepository implements MediaRepository {
       kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
       folderRaw: file.parent.path,
       modified: stat.modified,
+      sizeBytes: stat.size,
       tags: const [],
     );
   }
@@ -655,6 +722,7 @@ class WindowsFolderRepository implements MediaRepository {
       kind: item.kind,
       folderRaw: item.folderRaw,
       modified: item.modified,
+      sizeBytes: item.sizeBytes,
       tags: item.tags,
     );
   }
