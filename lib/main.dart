@@ -1,10 +1,11 @@
-import 'package:flutter/material.dart';
-
-import 'scene/gridGallery.dart';
-import 'repository/repositoryFactory.dart';
+﻿import 'package:flutter/material.dart';
 
 import 'database/app_db.dart';
 import 'database/tag_service.dart';
+import 'repository/mediaRepository.dart';
+import 'repository/repositoryFactory.dart';
+import 'scene/gridGallery.dart';
+import 'services/host_api_server_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,18 +13,33 @@ Future<void> main() async {
   final appDb = AppDb();
   final tagService = TagService(appDb);
   await tagService.initialize();
+  final hostServerService = HostApiServerService();
+  await hostServerService.refresh();
 
-  runApp(MyApp(appDb: appDb, tagService: tagService));
+  final repo = createRepository(appDb, initialSettings: tagService.settings);
+
+  runApp(
+    MyApp(
+      appDb: appDb,
+      tagService: tagService,
+      repo: repo,
+      hostServerService: hostServerService,
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
   final AppDb appDb;
   final TagService tagService;
+  final MediaRepository repo;
+  final HostApiServerService hostServerService;
 
   const MyApp({
     super.key,
     required this.appDb,
     required this.tagService,
+    required this.repo,
+    required this.hostServerService,
   });
 
   ThemeData _buildTheme() {
@@ -51,8 +67,6 @@ class MyApp extends StatelessWidget {
         space: 1,
         color: Colors.white12,
       ),
-
-      // ✅ CardTheme → CardThemeData
       cardTheme: CardThemeData(
         elevation: 0,
         margin: EdgeInsets.zero,
@@ -83,7 +97,6 @@ class MyApp extends StatelessWidget {
         ),
         side: const BorderSide(color: Colors.white12),
       ),
-
       snackBarTheme: const SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         showCloseIcon: true,
@@ -125,8 +138,6 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-
-      // ✅ DialogTheme → DialogThemeData
       dialogTheme: DialogThemeData(
         backgroundColor: const Color(0xFF16171C),
         surfaceTintColor: Colors.transparent,
@@ -139,13 +150,14 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ createRepository に AppDb を渡す
-    final repo = createRepository(appDb);
-
     return MaterialApp(
       title: 'メディアビューア',
       theme: _buildTheme(),
-      home: GalleryGridPage(repo: repo, tagService: tagService),
+      home: GalleryGridPage(
+        repo: repo,
+        tagService: tagService,
+        hostServerService: hostServerService,
+      ),
     );
   }
 }

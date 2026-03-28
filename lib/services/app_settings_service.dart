@@ -3,28 +3,64 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/metadata_settings.dart';
 
 class AppSettingsService {
-  static const String _metadataModeKey = 'prefs.metadata.storageMode';
-  static const String _metadataApiBaseUrlKey = 'prefs.metadata.remoteApiBaseUrl';
+  static const String _legacyMetadataModeKey = 'prefs.metadata.storageMode';
+  static const String _appModeKey = 'prefs.app.mode';
+  static const String _clientApiBaseUrlKey = 'prefs.client.apiBaseUrl';
+  static const String _legacyMetadataApiBaseUrlKey =
+      'prefs.metadata.remoteApiBaseUrl';
   static const String _metadataAuthTokenKey = 'prefs.metadata.authToken';
+  static const String _hostPortKey = 'prefs.host.port';
+  static const String _hostAutoStartKey = 'prefs.host.autoStartServer';
 
   Future<MetadataSettings> loadMetadataSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final modeIndex = prefs.getInt(_metadataModeKey) ?? 0;
-    final mode = (modeIndex >= 0 && modeIndex < MetadataStorageMode.values.length)
-        ? MetadataStorageMode.values[modeIndex]
-        : MetadataStorageMode.local;
+
+    final mode = _loadAppMode(prefs);
+    final clientApiBaseUrl =
+        prefs.getString(_clientApiBaseUrlKey) ??
+        prefs.getString(_legacyMetadataApiBaseUrlKey) ??
+        '';
+    final hostPort = prefs.getInt(_hostPortKey) ?? 8080;
 
     return MetadataSettings(
-      storageMode: mode,
-      remoteApiBaseUrl: prefs.getString(_metadataApiBaseUrlKey) ?? '',
+      appMode: mode,
+      clientApiBaseUrl: clientApiBaseUrl,
+      hostPort: hostPort < 1 ? 8080 : hostPort,
       authToken: prefs.getString(_metadataAuthTokenKey),
+      autoStartHostServer: prefs.getBool(_hostAutoStartKey) ?? false,
     );
+  }
+
+  AppMode _loadAppMode(SharedPreferences prefs) {
+    final storedIndex = prefs.getInt(_appModeKey);
+    if (storedIndex != null &&
+        storedIndex >= 0 &&
+        storedIndex < AppMode.values.length) {
+      return AppMode.values[storedIndex];
+    }
+
+    final legacyModeIndex = prefs.getInt(_legacyMetadataModeKey) ?? 0;
+    final legacyMode =
+        (legacyModeIndex >= 0 &&
+            legacyModeIndex < MetadataStorageMode.values.length)
+        ? MetadataStorageMode.values[legacyModeIndex]
+        : MetadataStorageMode.local;
+    return legacyMode == MetadataStorageMode.remote
+        ? AppMode.client
+        : AppMode.standalone;
   }
 
   Future<void> saveMetadataSettings(MetadataSettings settings) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_metadataModeKey, settings.storageMode.index);
-    await prefs.setString(_metadataApiBaseUrlKey, settings.remoteApiBaseUrl);
+    await prefs.setInt(_appModeKey, settings.appMode.index);
+    await prefs.setInt(_legacyMetadataModeKey, settings.storageMode.index);
+    await prefs.setString(_clientApiBaseUrlKey, settings.clientApiBaseUrl);
+    await prefs.setString(
+      _legacyMetadataApiBaseUrlKey,
+      settings.clientApiBaseUrl,
+    );
+    await prefs.setInt(_hostPortKey, settings.hostPort);
+    await prefs.setBool(_hostAutoStartKey, settings.autoStartHostServer);
 
     final token = settings.authToken?.trim();
     if (token == null || token.isEmpty) {

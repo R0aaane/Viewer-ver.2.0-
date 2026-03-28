@@ -307,6 +307,26 @@ class LocalTagStore {
     return result;
   }
 
+  Future<List<media.MediaItem>> listStoredMediaItems() async {
+    final rows = await (_db.select(_db.mediaItems)
+          ..orderBy([(table) => OrderingTerm.asc(table.displayName)]))
+        .get();
+
+    return rows
+        .map(
+          (row) => media.MediaItem(
+            id: row.id,
+            folderRaw: row.folderRaw,
+            displayName: row.displayName,
+            kind: row.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
+            modified: row.modifiedEpochMs == null
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(row.modifiedEpochMs!),
+          ),
+        )
+        .toList(growable: false);
+  }
+
   Future<List<media.MediaItem>> findMediaItemsByTagGlobal({
     required model.TagCategory category,
     required String name,

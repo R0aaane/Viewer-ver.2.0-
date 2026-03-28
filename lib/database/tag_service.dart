@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -31,13 +32,14 @@ class TagService {
       <String, Future<List<RemoteTagRecord>>>{};
 
   TagService(AppDb db)
-      : _localStore = LocalTagStore(db),
-        _settingsService = AppSettingsService(),
-        _idResolver = MediaIdResolver();
+    : _localStore = LocalTagStore(db),
+      _settingsService = AppSettingsService(),
+      _idResolver = MediaIdResolver();
 
   MetadataSettings get settings => _settings;
 
-  bool get isRemoteMode => _settings.storageMode == MetadataStorageMode.remote;
+  bool get isRemoteMode => _settings.isClientMode;
+  bool get isHostMode => _settings.isHostMode;
 
   Future<void> initialize() {
     return _initializeFuture ??= _initializeInternal();
@@ -61,32 +63,15 @@ class TagService {
     _remoteTagIdLookup.clear();
   }
 
-  Future<void> updateMetadataMode(MetadataStorageMode mode) async {
-    await updateMetadataSettings(_settings.copyWith(storageMode: mode));
-  }
-
-  Future<void> updateRemoteApiBaseUrl(String baseUrl) async {
-    await updateMetadataSettings(_settings.copyWith(remoteApiBaseUrl: baseUrl.trim()));
-  }
-
-  Future<void> updateAuthToken(String? authToken) async {
-    await updateMetadataSettings(
-      _settings.copyWith(
-        authToken: authToken?.trim(),
-        clearAuthToken: authToken == null || authToken.trim().isEmpty,
-      ),
-    );
-  }
-
   Future<MetadataConnectionStatus> checkConnection() async {
     await initialize();
 
-    if (!isRemoteMode) {
+    if (_settings.isStandaloneMode) {
       return MetadataConnectionStatus.localMode();
     }
 
     try {
-      final client = _requireRemoteClient();
+      final client = _requireApiClient();
       return client.checkHealth();
     } on MetadataException catch (error) {
       return MetadataConnectionStatus(
@@ -100,7 +85,7 @@ class TagService {
   Future<MetadataConnectionStatus> checkConnectionForSettings(
     MetadataSettings draftSettings,
   ) async {
-    if (draftSettings.storageMode != MetadataStorageMode.remote) {
+    if (draftSettings.isStandaloneMode) {
       return MetadataConnectionStatus.localMode();
     }
     return _buildRemoteClient(draftSettings).checkHealth();
@@ -108,17 +93,17 @@ class TagService {
 
   Future<void> requestRescan() async {
     await initialize();
-    if (!isRemoteMode) {
+    if (_settings.isStandaloneMode) {
       return;
     }
 
-    final client = _requireRemoteClient();
+    final client = _requireApiClient();
     await client.requestRescan();
     _remoteTagCache.clear();
   }
 
   Future<void> requestRescanForSettings(MetadataSettings draftSettings) async {
-    if (draftSettings.storageMode != MetadataStorageMode.remote) {
+    if (draftSettings.isStandaloneMode) {
       return;
     }
     await _buildRemoteClient(draftSettings).requestRescan();
@@ -140,34 +125,48 @@ class TagService {
     await initialize();
     rememberItem(item);
 
-    if (!isRemoteMode) {
-      await _localStore.addTagToItem(item, tag);
+    if (isRemoteMode) {
+      final identity = await _idResolver.resolve(item);
+      await _requireApiClient().addTagToItem(
+        identity.stableId,
+        tag,
+        identity: identity,
+      );
+      _remoteTagCache.remove(identity.stableId);
       return;
     }
 
-    final identity = await _idResolver.resolve(item);
-    await _requireRemoteClient().addTagToItem(identity.stableId, tag, identity: identity);
-    _remoteTagCache.remove(identity.stableId);
+    await _localStore.addTagToItem(item, tag);
+    await _replaceHostMirrorTagsForItem(item);
   }
 
   Future<void> addTagToItems(List<MediaItem> items, Tag tag) async {
     await initialize();
     rememberItems(items);
 
-    if (!isRemoteMode) {
-      await _localStore.addTagToItems(items, tag);
+    if (isRemoteMode) {
+      final targets = items
+          .where((item) => item.kind != MediaKind.folder)
+          .toList(growable: false);
+      if (targets.isEmpty) {
+        return;
+      }
+
+      for (final item in targets) {
+        final identity = await _idResolver.resolve(item);
+        await _requireApiClient().addTagToItem(
+          identity.stableId,
+          tag,
+          identity: identity,
+        );
+        _remoteTagCache.remove(identity.stableId);
+      }
       return;
     }
 
-    final targets = items.where((item) => item.kind != MediaKind.folder).toList(growable: false);
-    if (targets.isEmpty) {
-      return;
-    }
-
-    final identities = await _resolveIdentities(targets);
-    await _requireRemoteClient().addTagBatch(identities, tag);
-    for (final identity in identities) {
-      _remoteTagCache.remove(identity.stableId);
+    await _localStore.addTagToItems(items, tag);
+    for (final item in items.where((entry) => entry.kind != MediaKind.folder)) {
+      await _replaceHostMirrorTagsForItem(item);
     }
   }
 
@@ -210,14 +209,14 @@ class TagService {
 
     final candidates = <MediaItem>[
       if (items != null) ...items,
-      ...itemIds
-          .map(_lookupKnownItem)
-          .whereType<MediaItem>(),
+      ...itemIds.map(_lookupKnownItem).whereType<MediaItem>(),
     ];
     return getTagNamesByItems(candidates);
   }
 
-  Future<Map<String, List<String>>> getTagNamesByItems(List<MediaItem> items) async {
+  Future<Map<String, List<String>>> getTagNamesByItems(
+    List<MediaItem> items,
+  ) async {
     final detailed = await getDetailedTagsByItems(items);
     return detailed.map(
       (key, value) => MapEntry(
@@ -227,10 +226,14 @@ class TagService {
     );
   }
 
-  Future<Map<String, List<TagWithId>>> getDetailedTagsByItems(List<MediaItem> items) async {
+  Future<Map<String, List<TagWithId>>> getDetailedTagsByItems(
+    List<MediaItem> items,
+  ) async {
     await initialize();
 
-    final targets = items.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    final targets = items
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
     rememberItems(targets);
 
     if (!isRemoteMode) {
@@ -278,7 +281,9 @@ class TagService {
 
     if (!isRemoteMode) {
       if (candidates != null && candidates.isNotEmpty) {
-        final items = candidates.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+        final items = candidates
+            .where((item) => item.kind != MediaKind.folder)
+            .toList(growable: false);
         final details = await getDetailedTagsByItems(items);
         return items
             .where(
@@ -313,7 +318,8 @@ class TagService {
       return const <String>[];
     }
 
-    if (!partial && (category == TagCategory.artist || category == TagCategory.series)) {
+    if (!partial &&
+        (category == TagCategory.artist || category == TagCategory.series)) {
       final matchedIds = await findItemIdsByArtistSeriesInCandidates(
         candidates: items,
         artist: category == TagCategory.artist ? name : null,
@@ -346,7 +352,9 @@ class TagService {
   }) async {
     await initialize();
 
-    final items = candidates.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    final items = candidates
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
     if (items.isEmpty) {
       return const <String>[];
     }
@@ -366,7 +374,7 @@ class TagService {
     }
 
     try {
-      final remoteIds = await _requireRemoteClient().searchItemIds(
+      final remoteIds = await _requireApiClient().searchItemIds(
         artist: artist,
         series: series,
       );
@@ -387,10 +395,14 @@ class TagService {
     }
   }
 
-  Future<List<String>> findUntaggedItemIdsInCandidates(List<MediaItem> candidates) async {
+  Future<List<String>> findUntaggedItemIdsInCandidates(
+    List<MediaItem> candidates,
+  ) async {
     await initialize();
 
-    final items = candidates.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    final items = candidates
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
     if (items.isEmpty) {
       return const <String>[];
     }
@@ -404,7 +416,7 @@ class TagService {
     }
 
     try {
-      final remoteIds = await _requireRemoteClient().fetchUntaggedIds();
+      final remoteIds = await _requireApiClient().fetchUntaggedIds();
       return await _mapStableIdsToItemIds(items, remoteIds);
     } on MetadataException catch (error, stackTrace) {
       debugPrint('[metadata] remote untagged search failed: $error\n$stackTrace');
@@ -425,21 +437,27 @@ class TagService {
 
     if (!isRemoteMode) {
       await _localStore.removeTagFromItem(itemId, tagId);
+      final resolvedItem = item ?? _lookupKnownItem(itemId);
+      if (resolvedItem != null) {
+        await _replaceHostMirrorTagsForItem(resolvedItem);
+      }
       return;
     }
 
     final resolvedItem = item ?? _lookupKnownItem(itemId);
     if (resolvedItem == null) {
-      throw const MetadataException('対象アイテムの情報が不足しているため、タグを削除できません');
+      throw const MetadataException(
+        '対象アイテムの情報が見つからないため、タグを削除できません',
+      );
     }
 
     final identity = await _idResolver.resolve(resolvedItem);
     final remoteTagId = _remoteTagIdLookup[tagId];
     if (remoteTagId == null) {
-      throw const MetadataException('タグ識別子を解決できなかったため、削除できません');
+      throw const MetadataException('タグ ID を解決できないため、削除できません');
     }
 
-    await _requireRemoteClient().deleteItemTag(identity.stableId, remoteTagId);
+    await _requireApiClient().deleteItemTag(identity.stableId, remoteTagId);
     _remoteTagCache.remove(identity.stableId);
   }
 
@@ -459,7 +477,7 @@ class TagService {
     }
 
     try {
-      final tags = await _requireRemoteClient().fetchMasterTags(
+      final tags = await _requireApiClient().fetchMasterTags(
         category,
         contains: contains,
         limit: limit,
@@ -525,7 +543,9 @@ class TagService {
       candidates: allItems,
     );
     final matched = ids.toSet();
-    return allItems.where((item) => matched.contains(item.id)).toList(growable: false);
+    return allItems.where((item) => matched.contains(item.id)).toList(
+      growable: false,
+    );
   }
 
   Future<Map<String, String>> organizeAppLibrary({
@@ -534,7 +554,9 @@ class TagService {
     await initialize();
 
     if (isRemoteMode) {
-      throw const MetadataException('リモートメタデータモードでは、ライブラリ整理はまだ未対応です');
+      throw const MetadataException(
+        'クライアントモードではライブラリ整理は未対応です',
+      );
     }
 
     return _localStore.organizeAppLibrary(libraryRoot: libraryRoot);
@@ -546,13 +568,14 @@ class TagService {
 
     if (!isRemoteMode) {
       await _localStore.renameItem(before, after);
+      await _mirrorHostRename(before, after);
       return;
     }
 
     final beforeIdentity = await _idResolver.resolve(before);
     final afterIdentity = await _idResolver.resolve(after);
 
-    await _requireRemoteClient().notifyRename(
+    await _requireApiClient().notifyRename(
       beforeItem: before,
       afterItem: after,
       before: beforeIdentity,
@@ -565,13 +588,18 @@ class TagService {
 
   Future<void> handleDeletedItems(List<MediaItem> items) async {
     await initialize();
-    final targets = items.where((item) => item.kind != MediaKind.folder).toList(growable: false);
+    final targets = items
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
     if (targets.isEmpty) {
       return;
     }
 
     if (!isRemoteMode) {
-      await _localStore.deleteItemsByIds(targets.map((item) => item.id).toList(growable: false));
+      await _localStore.deleteItemsByIds(
+        targets.map((item) => item.id).toList(growable: false),
+      );
+      await _mirrorHostDelete(targets);
       return;
     }
 
@@ -580,15 +608,139 @@ class TagService {
       payload.add((item, await _idResolver.resolve(item)));
     }
 
-    await _requireRemoteClient().notifyDelete(payload);
+    await _requireApiClient().notifyDelete(payload, hardDelete: true);
     for (final entry in payload) {
       _remoteTagCache.remove(entry.$2.stableId);
     }
   }
 
+  Future<void> syncLocalTagsToHost() async {
+    await initialize();
+    if (!isHostMode) {
+      return;
+    }
+
+    final client = _hostMirrorClient;
+    if (client == null) {
+      return;
+    }
+
+    try {
+      await client.requestRescan();
+      final items = await _localStore.listStoredMediaItems();
+      for (final item in items) {
+        if (item.kind == MediaKind.folder) {
+          continue;
+        }
+        if (!_itemStillExists(item)) {
+          continue;
+        }
+        await _replaceHostMirrorTagsForItem(item);
+      }
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[host-mirror] full sync failed: $error\n$stackTrace');
+    }
+  }
+
+  bool _itemStillExists(MediaItem item) {
+    if (item.id.startsWith('content://')) {
+      return true;
+    }
+    try {
+      return File(item.id).existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _replaceHostMirrorTagsForItem(MediaItem item) async {
+    final client = _hostMirrorClient;
+    if (client == null || item.kind == MediaKind.folder) {
+      return;
+    }
+
+    final currentTags = await _localStore.listTagsForItem(item.id);
+    final tags = currentTags.map((entry) => entry.tag).toList(growable: false);
+    final identity = await _idResolver.resolve(item);
+
+    await _runHostMirror(
+      () => client.replaceTagsForItem(
+        identity.stableId,
+        tags,
+        identity: identity,
+      ),
+      retryAfterRescan: true,
+    );
+  }
+
+  Future<void> _mirrorHostRename(MediaItem before, MediaItem after) async {
+    final client = _hostMirrorClient;
+    if (client == null) {
+      return;
+    }
+
+    final beforeIdentity = await _idResolver.resolve(before);
+    final afterIdentity = await _idResolver.resolve(after);
+    await _runHostMirror(
+      () => client.notifyRename(
+        beforeItem: before,
+        afterItem: after,
+        before: beforeIdentity,
+        after: afterIdentity,
+      ),
+    );
+  }
+
+  Future<void> _mirrorHostDelete(List<MediaItem> items) async {
+    final client = _hostMirrorClient;
+    if (client == null) {
+      return;
+    }
+
+    final payload = <(MediaItem, ResolvedMediaIdentity)>[];
+    for (final item in items) {
+      payload.add((item, await _idResolver.resolve(item)));
+    }
+
+    await _runHostMirror(() => client.notifyDelete(payload, hardDelete: false));
+  }
+
+  Future<void> _runHostMirror(
+    Future<void> Function() action, {
+    bool retryAfterRescan = false,
+  }) async {
+    final client = _hostMirrorClient;
+    if (client == null) {
+      return;
+    }
+
+    try {
+      await action();
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[host-mirror] sync failed: $error\n$stackTrace');
+      if (!retryAfterRescan) {
+        return;
+      }
+      try {
+        await client.requestRescan();
+        await action();
+      } on MetadataException catch (retryError, retryStackTrace) {
+        debugPrint(
+          '[host-mirror] retry failed: $retryError\n$retryStackTrace',
+        );
+      }
+    }
+  }
+
   RemoteTagApiClient _buildRemoteClient(MetadataSettings settings) {
+    final baseUrl = switch (settings.appMode) {
+      AppMode.standalone => '',
+      AppMode.host => settings.hostLoopbackApiBaseUrl,
+      AppMode.client => settings.remoteApiBaseUrl,
+    };
+
     return RemoteTagApiClient(
-      baseUrl: settings.remoteApiBaseUrl,
+      baseUrl: baseUrl,
       defaultHeadersProvider: () {
         final headers = <String, String>{};
         final token = settings.authToken?.trim();
@@ -600,10 +752,18 @@ class TagService {
     );
   }
 
-  RemoteTagApiClient _requireRemoteClient() {
+  RemoteTagApiClient? get _hostMirrorClient {
+    final client = _remoteClient;
+    if (!isHostMode || client == null || !client.isConfigured) {
+      return null;
+    }
+    return client;
+  }
+
+  RemoteTagApiClient _requireApiClient() {
     final client = _remoteClient;
     if (client == null || !client.isConfigured) {
-      throw const MetadataException('リモート API の URL が未設定です');
+      throw const MetadataException('API URL が未設定です');
     }
     return client;
   }
@@ -636,7 +796,7 @@ class TagService {
       return cached;
     }
 
-    final future = _requireRemoteClient().fetchItemTags(identity.stableId);
+    final future = _requireApiClient().fetchItemTags(identity.stableId);
     _remoteTagCache[identity.stableId] = future;
     return future;
   }
@@ -659,7 +819,9 @@ class TagService {
     return hash & 0x7FFFFFFF;
   }
 
-  Future<List<ResolvedMediaIdentity>> _resolveIdentities(List<MediaItem> items) async {
+  Future<List<ResolvedMediaIdentity>> _resolveIdentities(
+    List<MediaItem> items,
+  ) async {
     final result = <ResolvedMediaIdentity>[];
     final chunks = _chunkItems(items, 8);
     for (final chunk in chunks) {
@@ -702,13 +864,15 @@ class TagService {
     final lowerArtist = artist?.toLowerCase();
     final lowerSeries = series?.toLowerCase();
 
-    final hasArtist = lowerArtist == null ||
+    final hasArtist =
+        lowerArtist == null ||
         tags.any(
           (tag) =>
               tag.tag.category == TagCategory.artist &&
               tag.tag.name.toLowerCase() == lowerArtist,
         );
-    final hasSeries = lowerSeries == null ||
+    final hasSeries =
+        lowerSeries == null ||
         tags.any(
           (tag) =>
               tag.tag.category == TagCategory.series &&

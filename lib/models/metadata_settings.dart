@@ -1,31 +1,68 @@
+enum AppMode {
+  standalone,
+  host,
+  client,
+}
+
 enum MetadataStorageMode {
   local,
   remote,
 }
 
 class MetadataSettings {
-  final MetadataStorageMode storageMode;
-  final String remoteApiBaseUrl;
+  final AppMode appMode;
+  final String clientApiBaseUrl;
+  final int hostPort;
   final String? authToken;
+  final bool autoStartHostServer;
 
   const MetadataSettings({
-    this.storageMode = MetadataStorageMode.local,
-    this.remoteApiBaseUrl = '',
+    this.appMode = AppMode.standalone,
+    this.clientApiBaseUrl = '',
+    this.hostPort = 8080,
     this.authToken,
+    this.autoStartHostServer = false,
   });
 
-  bool get isRemote => storageMode == MetadataStorageMode.remote;
+  bool get isStandaloneMode => appMode == AppMode.standalone;
+  bool get isHostMode => appMode == AppMode.host;
+  bool get isClientMode => appMode == AppMode.client;
+
+  bool get isRemote => isClientMode;
+  bool get usesRemoteRepository => isClientMode;
+  bool get shouldMirrorMetadataToHostApi => isHostMode;
+
+  MetadataStorageMode get storageMode =>
+      isClientMode ? MetadataStorageMode.remote : MetadataStorageMode.local;
+
+  String get remoteApiBaseUrl => clientApiBaseUrl;
+
+  String get hostLoopbackApiBaseUrl => 'http://127.0.0.1:$hostPort';
 
   MetadataSettings copyWith({
+    AppMode? appMode,
     MetadataStorageMode? storageMode,
+    String? clientApiBaseUrl,
     String? remoteApiBaseUrl,
+    int? hostPort,
     String? authToken,
     bool clearAuthToken = false,
+    bool? autoStartHostServer,
   }) {
+    final resolvedAppMode = appMode ??
+        (storageMode == null
+            ? this.appMode
+            : (storageMode == MetadataStorageMode.remote
+                  ? AppMode.client
+                  : AppMode.standalone));
+
     return MetadataSettings(
-      storageMode: storageMode ?? this.storageMode,
-      remoteApiBaseUrl: remoteApiBaseUrl ?? this.remoteApiBaseUrl,
+      appMode: resolvedAppMode,
+      clientApiBaseUrl:
+          clientApiBaseUrl ?? remoteApiBaseUrl ?? this.clientApiBaseUrl,
+      hostPort: hostPort ?? this.hostPort,
       authToken: clearAuthToken ? null : (authToken ?? this.authToken),
+      autoStartHostServer: autoStartHostServer ?? this.autoStartHostServer,
     );
   }
 }
@@ -52,7 +89,7 @@ class MetadataConnectionStatus {
   factory MetadataConnectionStatus.unknown() {
     return MetadataConnectionStatus(
       state: MetadataConnectionState.unknown,
-      message: '未確認',
+      message: 'まだ接続確認をしていません',
       checkedAt: DateTime.now(),
     );
   }
@@ -60,7 +97,7 @@ class MetadataConnectionStatus {
   factory MetadataConnectionStatus.localMode() {
     return MetadataConnectionStatus(
       state: MetadataConnectionState.localMode,
-      message: 'ローカルモードでは接続確認は不要です',
+      message: 'スタンドアロンモードではローカルのメタデータを使用します',
       checkedAt: DateTime.now(),
     );
   }

@@ -43,7 +43,7 @@ class RemoteTagApiClient {
     if (!isConfigured) {
       return MetadataConnectionStatus(
         state: MetadataConnectionState.disconnected,
-        message: 'API の URL が未設定です',
+        message: 'API URL が未設定です',
         checkedAt: DateTime.now(),
       );
     }
@@ -51,9 +51,11 @@ class RemoteTagApiClient {
     try {
       final json = await _getJson('/health');
       final message = switch (json) {
-        Map<String, dynamic>() when json['message'] != null => json['message'].toString(),
-        Map<String, dynamic>() when json['status'] != null => '接続成功: ${json['status']}',
-        _ => '接続できました',
+        Map<String, dynamic>() when json['message'] != null =>
+          json['message'].toString(),
+        Map<String, dynamic>() when json['service'] != null =>
+          '${json['service']} に接続できました',
+        _ => '接続確認に成功しました',
       };
 
       return MetadataConnectionStatus(
@@ -90,10 +92,22 @@ class RemoteTagApiClient {
     );
   }
 
-  Future<void> deleteItemTag(String mediaId, String tagId) async {
-    await _deleteJson(
-      '/tags/item/${Uri.encodeComponent(mediaId)}/${Uri.encodeComponent(tagId)}',
+  Future<void> replaceTagsForItem(
+    String mediaId,
+    List<Tag> tags, {
+    ResolvedMediaIdentity? identity,
+  }) async {
+    await _putJson(
+      '/tags/item/${Uri.encodeComponent(mediaId)}',
+      <String, dynamic>{
+        'tags': tags.map(_tagToJson).toList(growable: false),
+        if (identity != null) 'identity': identity.toJson(),
+      },
     );
+  }
+
+  Future<void> deleteItemTag(String mediaId, String tagId) async {
+    await _deleteJson('/tags/item/${Uri.encodeComponent(mediaId)}/${Uri.encodeComponent(tagId)}');
   }
 
   Future<List<RemoteTagRecord>> fetchMasterTags(
@@ -106,7 +120,8 @@ class RemoteTagApiClient {
       queryParameters: <String, String>{
         'category': category.name,
         'limit': '$limit',
-        if (contains != null && contains.trim().isNotEmpty) 'contains': contains.trim(),
+        if (contains != null && contains.trim().isNotEmpty)
+          'contains': contains.trim(),
       },
     );
     final rows = _unwrapList(json, preferredKeys: const ['tags', 'items', 'results']);
@@ -170,11 +185,13 @@ class RemoteTagApiClient {
   }
 
   Future<void> notifyDelete(
-    List<(MediaItem, ResolvedMediaIdentity)> items,
-  ) async {
+    List<(MediaItem, ResolvedMediaIdentity)> items, {
+    required bool hardDelete,
+  }) async {
     await _postJson(
       '/delete',
       <String, dynamic>{
+        'hardDelete': hardDelete,
         'items': items
             .map(
               (entry) => <String, dynamic>{
@@ -182,6 +199,7 @@ class RemoteTagApiClient {
                 'path': entry.$1.id,
                 'folderRaw': entry.$1.folderRaw,
                 'displayName': entry.$1.displayName,
+                'hardDelete': hardDelete,
               },
             )
             .toList(growable: false),
@@ -192,23 +210,19 @@ class RemoteTagApiClient {
   Future<dynamic> _getJson(
     String path, {
     Map<String, String>? queryParameters,
-  }) async {
-    return _requestJson(
-      'GET',
-      path,
-      queryParameters: queryParameters,
-    );
+  }) {
+    return _requestJson('GET', path, queryParameters: queryParameters);
   }
 
-  Future<dynamic> _postJson(String path, Map<String, dynamic> body) async {
-    return _requestJson(
-      'POST',
-      path,
-      body: body,
-    );
+  Future<dynamic> _postJson(String path, Map<String, dynamic> body) {
+    return _requestJson('POST', path, body: body);
   }
 
-  Future<dynamic> _deleteJson(String path) async {
+  Future<dynamic> _putJson(String path, Map<String, dynamic> body) {
+    return _requestJson('PUT', path, body: body);
+  }
+
+  Future<dynamic> _deleteJson(String path) {
     return _requestJson('DELETE', path);
   }
 
@@ -247,14 +261,14 @@ class RemoteTagApiClient {
           : (isJson ? jsonDecode(payload) : _tryDecodeJson(payload));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        final message = _extractErrorMessage(jsonBody) ??
-            'API エラー: HTTP ${response.statusCode}';
+        final message =
+            _extractErrorMessage(jsonBody) ?? 'API エラー: HTTP ${response.statusCode}';
         throw MetadataException(message);
       }
 
       return jsonBody;
     } on TimeoutException {
-      throw const MetadataException('API 接続がタイムアウトしました');
+      throw const MetadataException('API 応答がタイムアウトしました');
     } on SocketException {
       throw const MetadataException('API に接続できません。ネットワーク設定を確認してください');
     } on HttpException catch (error) {
@@ -276,6 +290,8 @@ class RemoteTagApiClient {
         return client.getUrl(uri);
       case 'POST':
         return client.postUrl(uri);
+      case 'PUT':
+        return client.putUrl(uri);
       case 'DELETE':
         return client.deleteUrl(uri);
       default:
@@ -286,34 +302,33 @@ class RemoteTagApiClient {
   Uri _parseBaseUri() {
     final trimmed = baseUrl.trim();
     if (trimmed.isEmpty) {
-      throw const MetadataException('API の URL が未設定です');
+      throw const MetadataException('API URL が未設定です');
     }
 
     Uri uri;
     try {
       uri = Uri.parse(trimmed);
     } catch (_) {
-      throw const MetadataException('API の URL が不正です');
+      throw const MetadataException('API URL の形式が不正です');
     }
 
     if (!uri.hasScheme || uri.host.isEmpty) {
-      throw const MetadataException('API の URL が不正です');
+      throw const MetadataException('API URL の形式が不正です');
     }
     return uri;
   }
 
   String _joinPath(String basePath, String childPath) {
-    final left = basePath.endsWith('/') ? basePath.substring(0, basePath.length - 1) : basePath;
+    final left = basePath.endsWith('/')
+        ? basePath.substring(0, basePath.length - 1)
+        : basePath;
     final right = childPath.startsWith('/') ? childPath : '/$childPath';
     return '$left$right';
   }
 
   RemoteTagRecord _parseRemoteTagRecord(dynamic raw) {
     if (raw is String) {
-      return RemoteTagRecord(
-        rawId: raw,
-        tag: Tag(name: raw),
-      );
+      return RemoteTagRecord(rawId: raw, tag: Tag(name: raw));
     }
 
     if (raw is! Map) {
@@ -324,8 +339,7 @@ class RemoteTagApiClient {
     final tagId =
         tagMap['tagId'] ?? tagMap['id'] ?? tagMap['remoteId'] ?? tagMap['name'];
     final name = tagMap['name']?.toString() ?? '';
-    final categoryRaw =
-        tagMap['category']?.toString() ?? TagCategory.free.name;
+    final categoryRaw = tagMap['category']?.toString() ?? TagCategory.free.name;
 
     return RemoteTagRecord(
       rawId: tagId.toString(),

@@ -9,6 +9,7 @@ import 'package:pdfx/pdfx.dart';
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
+import '../models/metadata_settings.dart';
 import 'mediaRepository.dart';
 
 /// ------------------------------
@@ -81,6 +82,22 @@ class _FsPageEntry {
 class WindowsFolderRepository implements MediaRepository {
   static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
+
+  @override
+  AppMode get appMode => AppMode.standalone;
+
+  @override
+  bool get isRemoteMode => false;
+
+  @override
+  bool get isHostMode => false;
+
+  @override
+  Future<void> reloadSettings() async {}
+
+  @override
+  Future<List<FolderHandle>> listAvailableFolders() async =>
+      const <FolderHandle>[];
 
   @override
   Future<FolderHandle> getAppLibraryFolder() async {
@@ -728,7 +745,10 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   @override
-  Future<int> importIntoFolder(FolderHandle folder) async {
+  Future<int> importIntoFolder(
+    FolderHandle folder, {
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
     final destDir = Directory(folder.raw);
     if (!await destDir.exists()) {
       throw Exception('Folder not found: ${folder.raw}');
@@ -746,6 +766,9 @@ class WindowsFolderRepository implements MediaRepository {
     if (files.isEmpty) return 0;
 
     int ok = 0;
+    int sentBytes = 0;
+    final totalFiles = files.length;
+    final totalBytes = await _sumFileSelectorBytes(files);
     for (final xf in files) {
       try {
         final src = File(xf.path);
@@ -753,18 +776,30 @@ class WindowsFolderRepository implements MediaRepository {
 
         final name = xf.name;
         final unique = _uniqueNameInDir(destDir, name);
+        final stat = await src.stat();
         await src.copy('${destDir.path}${Platform.pathSeparator}$unique');
         ok++;
+        sentBytes += stat.size;
+        onProgress?.call(
+          MediaTransferProgress(
+            sentBytes: sentBytes,
+            totalBytes: totalBytes,
+            completedFiles: ok,
+            totalFiles: totalFiles,
+            currentFileName: unique,
+          ),
+        );
       } catch (_) {}
     }
     return ok;
   }
 
-    @override
+  @override
   Future<int> importItemsIntoFolder(
     FolderHandle dest,
     List<MediaItem> items, {
     bool skipIfExists = true,
+    void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     final destDir = Directory(dest.raw);
     if (!await destDir.exists()) {
@@ -781,6 +816,15 @@ class WindowsFolderRepository implements MediaRepository {
     }
 
     int ok = 0;
+    int sentBytes = 0;
+    final uploadTargets = items
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
+    final totalFiles = uploadTargets.length;
+    final totalBytes = uploadTargets.fold<int>(
+      0,
+      (sum, item) => sum + (item.sizeBytes ?? 0),
+    );
 
     for (final it in items) {
       if (it.kind == MediaKind.folder) continue;
@@ -800,6 +844,16 @@ class WindowsFolderRepository implements MediaRepository {
       await src.copy('${destDir.path}${Platform.pathSeparator}$outName');
       existingLowerNames.add(outName.toLowerCase());
       ok++;
+      sentBytes += it.sizeBytes ?? 0;
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: sentBytes,
+          totalBytes: totalBytes,
+          completedFiles: ok,
+          totalFiles: totalFiles,
+          currentFileName: outName,
+        ),
+      );
     }
 
     return ok;
@@ -823,6 +877,16 @@ class WindowsFolderRepository implements MediaRepository {
       }
     }
     return candidate;
+  }
+
+  Future<int> _sumFileSelectorBytes(List<XFile> files) async {
+    var total = 0;
+    for (final file in files) {
+      try {
+        total += await File(file.path).length();
+      } catch (_) {}
+    }
+    return total;
   }
 
   String _ensureExtensionForFs(MediaItem item, String name) {

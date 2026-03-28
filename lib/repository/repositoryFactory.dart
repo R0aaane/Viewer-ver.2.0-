@@ -1,12 +1,23 @@
-import 'dart:io' show Platform;
+﻿import 'dart:io' show Platform;
 
-import 'mediaRepository.dart';
-import 'folderRepository.dart';
+import '../database/app_db.dart';
+import '../models/metadata_settings.dart';
 import 'androidFolderRepository.dart';
-import '../database/app_db.dart'; 
+import 'folderRepository.dart';
+import 'mediaRepository.dart';
+import 'remote_media_repository.dart';
 
-
-MediaRepository createRepository(AppDb db) {
-  if (Platform.isAndroid) return AndroidFolderRepository(db);
+MediaRepository _createLocalRepository(AppDb db) {
+  if (Platform.isAndroid) {
+    return AndroidFolderRepository(db);
+  }
   return WindowsFolderRepository();
+}
+
+MediaRepository createRepository(
+  AppDb db, {
+  required MetadataSettings initialSettings,
+}) {
+  final local = _createLocalRepository(db);
+  return SwitchingMediaRepository(local, initialSettings: initialSettings);
 }

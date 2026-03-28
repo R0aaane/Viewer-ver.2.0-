@@ -12,6 +12,7 @@ import 'package:drift/drift.dart' as drift;
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
+import '../models/metadata_settings.dart';
 import 'mediaRepository.dart';
 
 import '../database/app_db.dart' as db;
@@ -19,6 +20,22 @@ import '../database/app_db.dart' as db;
 class AndroidFolderRepository implements MediaRepository {
   final db.AppDb _db;
   AndroidFolderRepository(this._db);
+
+  @override
+  AppMode get appMode => AppMode.standalone;
+
+  @override
+  bool get isRemoteMode => false;
+
+  @override
+  bool get isHostMode => false;
+
+  @override
+  Future<void> reloadSettings() async {}
+
+  @override
+  Future<List<FolderHandle>> listAvailableFolders() async =>
+      const <FolderHandle>[];
 
   // インデックスの有効期限
   static const Duration _folderIndexTtl = Duration(minutes: 10);
@@ -1188,7 +1205,10 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }
 
   @override
-  Future<int> importIntoFolder(FolderHandle folder) async {
+  Future<int> importIntoFolder(
+    FolderHandle folder, {
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
     final picked = await DocMan.pick.files(
       extensions: const ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'pdf'],
       limit: 200,
@@ -1265,6 +1285,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     FolderHandle dest,
     List<MediaItem> items, {
     bool skipIfExists = true,
+    void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     // 1) dest が file path（保管庫は通常これ）なら、Directoryへ書き込む
     if (!dest.raw.startsWith('content://')) {

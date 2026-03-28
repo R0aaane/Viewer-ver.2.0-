@@ -35,6 +35,8 @@ class ResolvedMediaIdentity {
 }
 
 class MediaIdResolver {
+  static final p.Context _windowsPath = p.Context(style: p.Style.windows);
+
   final Map<String, Future<ResolvedMediaIdentity>> _cache =
       <String, Future<ResolvedMediaIdentity>>{};
 
@@ -113,8 +115,12 @@ class MediaIdResolver {
       return trimmed;
     }
 
-    final normalized = p.normalize(trimmed).replaceAll('/', '\\');
-    return Platform.isWindows ? normalized.toLowerCase() : normalized;
+    if (_looksLikeWindowsPath(trimmed)) {
+      return _windowsPath.normalize(trimmed).replaceAll('/', '\\').toLowerCase();
+    }
+
+    final normalized = p.normalize(trimmed);
+    return Platform.isWindows ? normalized.replaceAll('/', '\\').toLowerCase() : normalized;
   }
 
   String _relativePathHint(
@@ -136,6 +142,10 @@ class MediaIdResolver {
   }
 
   bool _isContentUri(String raw) => raw.startsWith('content://');
+
+  bool _looksLikeWindowsPath(String raw) {
+    return RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(raw) || raw.contains('\\');
+  }
 
   String _fnv1a64Hex(String input) {
     const int offset = 0xcbf29ce484222325;

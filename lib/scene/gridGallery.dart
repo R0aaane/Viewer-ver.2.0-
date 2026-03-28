@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Directory, Platform;
 import 'dart:typed_data';
@@ -12,6 +12,7 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
+import '../services/host_api_server_service.dart';
 import 'tag_assign_after_import.dart';
 
 import '../repository/mediaRepository.dart';
@@ -44,15 +45,15 @@ enum _GalleryMenuAction {
 }
 
 enum FolderTileMode {
-  labelOnly,      // フォルダアイコン＋名前だけ（最軽量）
-  preview,        // フォルダ内の表紙プレビュー＋FOLDERバッジ（重め）
+  labelOnly,      // 繝輔か繝ｫ繝繧｢繧､繧ｳ繝ｳ・句錐蜑阪□縺托ｼ域怙霆ｽ驥擾ｼ・
+  preview,        // 繝輔か繝ｫ繝蜀・・陦ｨ邏吶・繝ｬ繝薙Η繝ｼ・祈OLDER繝舌ャ繧ｸ・磯㍾繧・ｼ・
 }
 
 class _PrefsKeys {
-  // 旧キー
+  // 譌ｧ繧ｭ繝ｼ
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
 
-  // 複数フォルダ管理用
+  // 隍・焚繝輔か繝ｫ繝邂｡逅・畑
   static const String folders = 'prefs.folders';
   static const String currentFolder = 'prefs.currentFolder';
   static const String fitMode = 'prefs.readerFitMode';
@@ -73,11 +74,13 @@ class _FolderNavState {
 class GalleryGridPage extends StatefulWidget {
   final MediaRepository repo;
   final TagService tagService;
+  final HostApiServerService hostServerService;
 
   const GalleryGridPage({
     super.key,
     required this.repo,
     required this.tagService,
+    required this.hostServerService,
   });
 
   @override
@@ -93,10 +96,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _loadTotal = 0;
   bool _thumbsEnabled = true;
 
-  // --- スクロール中はサムネ生成を止める ---
+  // --- 繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ荳ｭ縺ｯ繧ｵ繝繝咲函謌舌ｒ豁｢繧√ｋ ---
   Timer? _thumbResumeDebounce;
 
-  // --- フォルダ表紙プレビュー：LRUキャッシュ + 同時実行数制限 ---
+  // --- 繝輔か繝ｫ繝陦ｨ邏吶・繝ｬ繝薙Η繝ｼ・哭RU繧ｭ繝｣繝・す繝･ + 蜷梧凾螳溯｡梧焚蛻ｶ髯・---
   final LinkedHashMap<String, Uint8List?> _folderPreviewCache = LinkedHashMap();
   int _folderPreviewCacheBytes = 0;
   static const int _folderPreviewCacheMaxEntries = 120;
@@ -128,7 +131,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Uint8List? _folderPreviewCacheGet(String key) {
     final v = _folderPreviewCache.remove(key);
     if (v == null && !_folderPreviewCache.containsKey(key)) return null;
-    // null も「中身なし」キャッシュとして扱う（同じ探索を繰り返さない）
+    // null 繧ゅ御ｸｭ霄ｫ縺ｪ縺励阪く繝｣繝・す繝･縺ｨ縺励※謇ｱ縺・ｼ亥酔縺俶爾邏｢繧堤ｹｰ繧願ｿ斐＆縺ｪ縺・ｼ・
     _folderPreviewCache[key] = v;
     return v;
   }
@@ -156,43 +159,43 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
 
   String _parentDirOfFullPath(String fullPath) {
-    // Windowsでの"C:\a\b\c.jpg" / "C:/a/b/c.jpg" どちらも対応
+    // Windows縺ｧ縺ｮ"C:\a\b\c.jpg" / "C:/a/b/c.jpg" 縺ｩ縺｡繧峨ｂ蟇ｾ蠢・
     final p = fullPath.replaceAll('/', '\\');
     final idx = p.lastIndexOf('\\');
-    if (idx <= 0) return p; // 念のためね
+    if (idx <= 0) return p; // 蠢ｵ縺ｮ縺溘ａ縺ｭ
     return p.substring(0, idx);
   }
 
   Set<String> _favorites = <String>{};
 
-  // tags（タグID付け）
+  // tags（タグID付き）
   Map<String, List<String>> _tagsById = <String, List<String>>{};
   Map<String, List<TagWithId>> _tagDetailsById = <String, List<TagWithId>>{};
   bool _currentPageMetadataAvailable = true;
 
-  _MainPage _page = _MainPage.home; // 起動時はホーム（ここでどこを起動するか指定している。）
+  _MainPage _page = _MainPage.home; // 襍ｷ蜍墓凾縺ｯ繝帙・繝・医％縺薙〒縺ｩ縺薙ｒ襍ｷ蜍輔☆繧九°謖・ｮ壹＠縺ｦ縺・ｋ縲ゑｼ・
 
-  // 複数フォルダ
-  List<String> _foldersRaw = const []; // 登録済みフォルダ一覧（raw）
-  String? _currentFolderRaw; // 現在選択（raw）
+  // 隍・焚繝輔か繝ｫ繝
+  List<String> _foldersRaw = const []; // 逋ｻ骭ｲ貂医∩繝輔か繝ｫ繝荳隕ｧ・・aw・・
+  String? _currentFolderRaw; // 迴ｾ蝨ｨ驕ｸ謚橸ｼ・aw・・
 
-  // 表示設定（永続化）
+  // 陦ｨ遉ｺ險ｭ螳夲ｼ域ｰｸ邯壼喧・・
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
   bool _twoPage = false;
 
-  // ホーム画面検索 (すべてのフォルダを参照)
+  // 繝帙・繝逕ｻ髱｢讀懃ｴ｢ (縺吶∋縺ｦ縺ｮ繝輔か繝ｫ繝繧貞盾辣ｧ)
   final TextEditingController _homeSearchCtrl = TextEditingController();
   String _homeQuery = '';
   bool _homeSearching = false;
   List<MediaItem> _homeSearchResults = const [];
 
-  // 検索欄入力のたびに全フォルダ検索が動くのを防ぐ
+  // 讀懃ｴ｢谺・・蜉帙・縺溘・縺ｫ蜈ｨ繝輔か繝ｫ繝讀懃ｴ｢縺悟虚縺上・繧帝亟縺・
   Timer? _homeSearchDebounce;
 
-  // Home検索用、DBから引いたタグキャッシュ（itemId -> tagNames）
+  // Home讀懃ｴ｢逕ｨ縲．B縺九ｉ蠑輔＞縺溘ち繧ｰ繧ｭ繝｣繝・す繝･・・temId -> tagNames・・
   Map<String, List<String>> _dbTagsByItemId = <String, List<String>>{};
 
-  // フォルダ階層ナビ（ギャラリー内）
+  // 繝輔か繝ｫ繝髫主ｱ､繝翫ン・医ぐ繝｣繝ｩ繝ｪ繝ｼ蜀・ｼ・
   final List<_FolderNavState> _dirStack = <_FolderNavState>[];
 
   bool get _canGoUp => _dirStack.isNotEmpty;
@@ -201,10 +204,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _enterFolder(MediaItem folderItem) async { 
     if (_folder == null) return;  
 
-    // いま見ているフォルダ + その時のページを積む積む
+    // 縺・∪隕九※縺・ｋ繝輔か繝ｫ繝 + 縺昴・譎ゅ・繝壹・繧ｸ繧堤ｩ阪・遨阪・
     _dirStack.add(_FolderNavState(_folder!, _galleryPageIndex));
 
-    // 入った先は従来通りページ1から
+    // 蜈･縺｣縺溷・縺ｯ蠕捺擂騾壹ｊ繝壹・繧ｸ1縺九ｉ
     await _loadFolder(FolderHandle(folderItem.id), saveAsLast: false, pageIndex: 0);
   }
 
@@ -212,7 +215,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (_dirStack.isEmpty) return;
     final prev = _dirStack.removeLast();
 
-    // 戻る時は「元のフォルダ」かつ「元のページ」に復帰
+    // 謌ｻ繧区凾縺ｯ縲悟・縺ｮ繝輔か繝ｫ繝縲阪°縺､縲悟・縺ｮ繝壹・繧ｸ縲阪↓蠕ｩ蟶ｰ
     await _loadFolder(prev.folder, saveAsLast: false, pageIndex: prev.pageIndex);
   }
 
@@ -221,18 +224,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   _SortMode _sortMode = _SortMode.name;
 
-  // raw -> 表示名
+  // raw -> 陦ｨ遉ｺ蜷・
   Map<String, String> _folderAliases = <String, String>{};
 
-  // 全フォルダを監視、お気に入り表示用
+  // 蜈ｨ繝輔か繝ｫ繝繧堤屮隕悶√♀豌励↓蜈･繧願｡ｨ遉ｺ逕ｨ
   final Map<String, List<MediaItem>> _folderItemsCache = {};
   List<MediaItem> _favoriteItemsAll = const [];
   bool _loadingFavAll = false;
 
-  // Home検索用（再帰＋ファイルのみ）
+  // Home讀懃ｴ｢逕ｨ・亥・蟶ｰ・九ヵ繧｡繧､繝ｫ縺ｮ縺ｿ・・
   final Map<String, List<MediaItem>> _folderItemsCacheRecursive = {};
 
-  // ---- 複数選択モード ----
+  // ---- 隍・焚驕ｸ謚槭Δ繝ｼ繝・----
   bool _selectMode = false;
   final Set<String> _selectedIds = <String>{};
 
@@ -285,18 +288,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .toList(growable: false);
   }
 
-  // TabControllerのlistenerを二重登録しないため
+  // TabController縺ｮlistener繧剃ｺ碁㍾逋ｻ骭ｲ縺励↑縺・◆繧・
   bool _tabListenerInstalled = false;
 
-  //ID 変種生成
+  //ID 螟臥ｨｮ逕滓・
   Set<String> _idVariants(String id) {
     final s = <String>{id};
 
-    // Windows用
+    // Windows逕ｨ
     s.add(id.replaceAll('/', '\\'));
     s.add(id.replaceAll('\\', '/'));
 
-    // Windows用にどっちでも拾える
+    // Windows逕ｨ縺ｫ縺ｩ縺｣縺｡縺ｧ繧よ鏡縺医ｋ
     final lower = id.toLowerCase();
     s.add(lower);
     s.add(lower.replaceAll('/', '\\'));
@@ -305,7 +308,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return s;
   }
 
-  // ---- サイドバー：作者タグ一覧 ----
+  // ---- 繧ｵ繧､繝峨ヰ繝ｼ・壻ｽ懆・ち繧ｰ荳隕ｧ ----
   bool _loadingArtistTags = false;
   List<TagWithId> _artistTagMasters = const [];
   Map<String, int> _tagCountCache = const {};
@@ -360,7 +363,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _openTagGalleryFromDrawer(String tagName) async {
     Navigator.pop(context);
 
-    // タグ検索として検索結果ページへ（既存の検索グリッドを再利用）
+    // 繧ｿ繧ｰ讀懃ｴ｢縺ｨ縺励※讀懃ｴ｢邨先棡繝壹・繧ｸ縺ｸ・域里蟄倥・讀懃ｴ｢繧ｰ繝ｪ繝・ラ繧貞・蛻ｩ逕ｨ・・
     _exitSelectMode();
     setState(() {
       _page = _MainPage.search;
@@ -375,16 +378,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   void initState() {
     super.initState();
     _loadPrefsAndAutoOpenFolder();
+    unawaited(_initializeHostServerIfNeeded());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reloadArtistTagMasters();
     });
   }
 
+  Future<void> _initializeHostServerIfNeeded() async {
+    await widget.hostServerService.refresh();
+    final settings = widget.tagService.settings;
+    if (settings.isHostMode && settings.autoStartHostServer) {
+      await widget.hostServerService.startServer(tagService: widget.tagService);
+    }
+  }
+
   Future<void> _loadPrefsAndAutoOpenFolder() async {
     final prefs = await SharedPreferences.getInstance();
-
-    // folder 表示名を格納
     Map<String, String> aliases = <String, String>{};
+    var aliasesUpdated = false;
     final aliasesJson = prefs.getString(_PrefsKeys.folderAliasesJson);
     if (aliasesJson != null && aliasesJson.isNotEmpty) {
       try {
@@ -393,29 +404,27 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           for (final e in decoded.entries) {
             final k = e.key?.toString();
             final v = e.value?.toString();
-            if (k != null && v != null) aliases[k] = v;
+            if (k == null || v == null) continue;
+            final sanitized = _sanitizeFolderAlias(v, fallbackRaw: k);
+            if (sanitized != null) {
+              aliases[k] = sanitized;
+            }
+            if (sanitized != v) {
+              aliasesUpdated = true;
+            }
           }
         }
       } catch (_) {}
     }
-
-    // favorites（お気に入り）
     final favList =
         prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
-
     _tagsById = <String, List<String>>{};
     _tagDetailsById = <String, List<TagWithId>>{};
-
-    // 表示設定
     final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
     final two = prefs.getBool(_PrefsKeys.twoPage);
-
-    // folders フォルダー
     List<String> folders =
         prefs.getStringList(_PrefsKeys.folders) ?? const <String>[];
     String? current = prefs.getString(_PrefsKeys.currentFolder);
-
-    // もし、lastFolderRaw が残っていたら folders に入れる
     if (folders.isEmpty) {
       final legacy = prefs.getString(_PrefsKeys.lastFolderRaw);
       if (legacy != null && legacy.isNotEmpty) {
@@ -425,46 +434,89 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           await prefs.setStringList(_PrefsKeys.folders, folders);
           await prefs.setString(_PrefsKeys.currentFolder, legacy);
         } else {
-          // Android用
           await prefs.remove(_PrefsKeys.lastFolderRaw);
         }
       }
     }
-
-    // 保管庫を最初から登録済みに
+    final modeIndex = prefs.getInt(_PrefsKeys.folderTileMode);
+    if (modeIndex != null &&
+        modeIndex >= 0 &&
+        modeIndex < FolderTileMode.values.length) {
+      _folderTileMode = FolderTileMode.values[modeIndex];
+    }
+    if (widget.repo.isRemoteMode) {
+      List<FolderHandle> remoteFolders = const <FolderHandle>[];
+      try {
+        remoteFolders = await widget.repo.listAvailableFolders();
+      } catch (error) {
+        if (!mounted) return;
+        setState(() {
+          if (fitIndex != null &&
+              fitIndex >= 0 &&
+              fitIndex < ReaderFitMode.values.length) {
+            _fitMode = ReaderFitMode.values[fitIndex];
+          }
+          if (two != null) _twoPage = two;
+          _favorites = favList.toSet();
+          _foldersRaw = const <String>[];
+          _currentFolderRaw = null;
+          _folderAliases = aliases;
+          _items = const [];
+          _folder = null;
+        });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('ホストに接続できません: $error')));
+        return;
+      }
+      final remoteRaws = remoteFolders
+          .map((entry) => entry.raw)
+          .where((entry) => entry.trim().isNotEmpty)
+          .toList(growable: false);
+      if (current == null || !remoteRaws.contains(current)) {
+        current = remoteRaws.isNotEmpty ? remoteRaws.first : null;
+      }
+      setState(() {
+        if (fitIndex != null &&
+            fitIndex >= 0 &&
+            fitIndex < ReaderFitMode.values.length) {
+          _fitMode = ReaderFitMode.values[fitIndex];
+        }
+        if (two != null) _twoPage = two;
+        _favorites = favList.toSet();
+        _foldersRaw = remoteRaws;
+        _currentFolderRaw = current;
+        _folderAliases = aliases;
+        if (current == null) {
+          _items = const [];
+          _folder = null;
+        }
+      });
+      if (current == null) return;
+      await _loadFolder(FolderHandle(current), saveAsLast: false);
+      return;
+    }
     final lib = await widget.repo.getAppLibraryFolder();
     final libRaw = lib.raw;
-
-    // folders に存在し無ければ先頭に入れる
     if (!folders.contains(libRaw)) {
       folders = <String>[libRaw, ...folders];
       await prefs.setStringList(_PrefsKeys.folders, folders);
     }
-
-    // 保管庫に表示名も無ければ付与
     if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
       aliases[libRaw] = '保管庫';
-      await prefs.setString(_PrefsKeys.folderAliasesJson, jsonEncode(aliases));
+      aliasesUpdated = true;
     }
-
-    // 実在チェック
     final existsFolders = <String>{};
-
     for (final p in folders) {
-      // SAF, Treeuriはそのまま有効
       if (p.startsWith('content://')) {
         existsFolders.add(p);
         continue;
       }
-
-      // Directory.exists で存在を判定
       try {
         final d = Directory(p);
         if (await d.exists()) existsFolders.add(p);
       } catch (_) {}
     }
-
-    // current の整合性（無ければ保管庫をデフォルトとする）
     if (current == null || !existsFolders.contains(current)) {
       if (existsFolders.contains(libRaw)) {
         current = libRaw;
@@ -472,32 +524,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         current = existsFolders.isNotEmpty ? existsFolders.first : null;
       }
     }
-
-    //  実在しないフォルダが消えた場合は prefs も更新しておく
     await prefs.setStringList(_PrefsKeys.folders, existsFolders.toList());
-
     if (current != null) {
       await prefs.setString(_PrefsKeys.currentFolder, current);
     } else {
       await prefs.remove(_PrefsKeys.currentFolder);
     }
-
     if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
       aliases[libRaw] = '保管庫';
+      aliasesUpdated = true;
     }
     if (!folders.contains(libRaw)) {
       folders = List<String>.from(folders)..insert(0, libRaw);
       await prefs.setStringList(_PrefsKeys.folders, folders);
     }
-
-    final modeIndex = prefs.getInt(_PrefsKeys.folderTileMode);
-    if (modeIndex != null &&
-        modeIndex >= 0 &&
-        modeIndex < FolderTileMode.values.length) {
-      _folderTileMode = FolderTileMode.values[modeIndex];
+    if (aliasesUpdated) {
+      await prefs.setString(_PrefsKeys.folderAliasesJson, jsonEncode(aliases));
     }
-
-    // 反映
     setState(() {
       if (fitIndex != null &&
           fitIndex >= 0 &&
@@ -505,19 +548,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _fitMode = ReaderFitMode.values[fitIndex];
       }
       if (two != null) _twoPage = two;
-
       _favorites = favList.toSet();
       _foldersRaw = existsFolders.toList(growable: false);
       _currentFolderRaw = current;
       _folderAliases = aliases;
     });
-
     if (current == null) return;
-
-    // 選択中フォルダをロード
     await _loadFolder(FolderHandle(current), saveAsLast: false);
   }
-
   Future<void> _saveFolderTileMode(FolderTileMode m) async {
   setState(() => _folderTileMode = m);
   final prefs = await SharedPreferences.getInstance();
@@ -525,12 +563,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<Uint8List?> _getFolderPreviewBytes(MediaItem folderItem) {
-    // スクロール中 / 初期描画中は生成しない
+    // 繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ荳ｭ / 蛻晄悄謠冗判荳ｭ縺ｯ逕滓・縺励↑縺・
     //if (!_thumbsEnabled) return Future.value(null);
 
     final key = folderItem.id;
 
-    // bytesを優先
+    // bytes繧貞━蜈・
     if (_folderPreviewCache.containsKey(key)) {
       return Future.value(_folderPreviewCacheGet(key));
     }
@@ -540,7 +578,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     Future<MediaItem?> pickCandidateInFolder(String folderRaw) async {
       const int pageLimit = 60;
-      const int maxPages = 4; // 最大240件だけ見る（重くしない）
+      const int maxPages = 4; // 譛螟ｧ240莉ｶ縺縺題ｦ九ｋ・磯㍾縺上＠縺ｪ縺・ｼ・
 
       MediaItem? firstImage;
 
@@ -552,13 +590,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         );
 
         for (final it in res.items) {
-          if (it.kind == MediaKind.pdf) return it; // PDF優先
+          if (it.kind == MediaKind.pdf) return it; // PDF蜆ｪ蜈・
           if (it.kind == MediaKind.image && firstImage == null) {
             firstImage = it;
           }
         }
 
-        // 末尾まで来た
+        // 譛ｫ蟆ｾ縺ｾ縺ｧ譚･縺・
         if (res.items.length < pageLimit) break;
       }
 
@@ -566,9 +604,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     final fut = () async {
-      await _acquireFolderPreviewSlot(1); // フォルダ表紙は同時1に抑える
+      await _acquireFolderPreviewSlot(1); // 繝輔か繝ｫ繝陦ｨ邏吶・蜷梧凾1縺ｫ謚代∴繧・
       try {
-        // 1) まず直下から候補を探す（DBインデックス経由で速い）
+        // 1) 縺ｾ縺夂峩荳九°繧牙呵｣懊ｒ謗｢縺呻ｼ・B繧､繝ｳ繝・ャ繧ｯ繧ｹ邨檎罰縺ｧ騾溘＞・・
         final cand = await pickCandidateInFolder(folderItem.id);
         if (cand != null) {
           final pair = await widget.repo.readThumbPair(cand, maxWidth: 240);
@@ -576,7 +614,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           return pair.front;
         }
 
-        // 2) 直下に無い場合：サブフォルダを少しだけ見る（1段だけ、最大3個）
+        // 2) 逶ｴ荳九↓辟｡縺・ｴ蜷茨ｼ壹し繝悶ヵ繧ｩ繝ｫ繝繧貞ｰ代＠縺縺題ｦ九ｋ・・谿ｵ縺縺代∵怙螟ｧ3蛟具ｼ・
         final firstPage = await widget.repo.listMediaPage(
           FolderHandle(folderItem.id),
           offset: 0,
@@ -611,7 +649,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return fut;
   }
   // ----------------
-  // Tags (SharedPreferences依存)
+  // Tags (SharedPreferences萓晏ｭ・
 
   List<String> _tagsFor(MediaItem item) => _tagsById[item.id] ?? const <String>[];
 
@@ -662,7 +700,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final q = qRaw.trim().toLowerCase();
     if (q.isEmpty) return true;
 
-    // 空白を区切って、ANDを追加
+    // 遨ｺ逋ｽ繧貞玄蛻・▲縺ｦ縲、ND繧定ｿｽ蜉
     final tokens = q.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
     final name = item.displayName.toLowerCase();
 
@@ -691,14 +729,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
       }
 
-      // #tag はタグのみ対象
+      // #tag 縺ｯ繧ｿ繧ｰ縺ｮ縺ｿ蟇ｾ雎｡
       if (t.startsWith('#')) {
         final needle = t.substring(1);
         if (needle.isEmpty) return true;
         return tags.any((x) => x.contains(needle));
       }
 
-      // 通常は ファイル名 or タグ
+      // 騾壼ｸｸ縺ｯ 繝輔ぃ繧､繝ｫ蜷・or 繧ｿ繧ｰ
       return name.contains(t) || tags.any((x) => x.contains(t));
     }
 
@@ -843,8 +881,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _homeSearchResults = sorted.take(50).toList(growable: false);
       });
     } catch (e, st) {
-      // なんで検索できないのかわからない
-      // ここが見えないと原因が永遠に分からないのでログに出す
+      // 縺ｪ繧薙〒讀懃ｴ｢縺ｧ縺阪↑縺・・縺九ｏ縺九ｉ縺ｪ縺・
+      // 縺薙％縺瑚ｦ九∴縺ｪ縺・→蜴溷屏縺梧ｰｸ驕縺ｫ蛻・°繧峨↑縺・・縺ｧ繝ｭ繧ｰ縺ｫ蜃ｺ縺・
       print('[HOME SEARCH] error: $e\n$st');
 
       if (!mounted) return;
@@ -855,7 +893,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Home検索でエラー: $e')));
+      ).showSnackBar(SnackBar(content: Text('ホーム検索でエラー: $e')));
     }
   }
 
@@ -868,19 +906,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       if (!mounted) return;
 
-      // 表示更新：今見てるフォルダが保管庫配下ならリロード
+      // 陦ｨ遉ｺ譖ｴ譁ｰ・壻ｻ願ｦ九※繧九ヵ繧ｩ繝ｫ繝縺御ｿ晉ｮ｡蠎ｫ驟堺ｸ九↑繧峨Μ繝ｭ繝ｼ繝・
       if (_currentFolderRaw != null && _currentFolderRaw!.startsWith(lib.raw)) {
         await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false);
       }
 
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('保管庫整理: 移動 ${moved.length} 件')));
+      ).showSnackBar(SnackBar(content: Text('菫晉ｮ｡蠎ｫ謨ｴ逅・ 遘ｻ蜍・${moved.length} 莉ｶ')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('保管庫整理に失敗: $e')));
+      ).showSnackBar(SnackBar(content: Text('ライブラリ整理に失敗しました: $e')));
     }
   }
 
@@ -920,7 +958,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        // Homeの検索
+        // Home縺ｮ讀懃ｴ｢
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -955,7 +993,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                             ),
                     ),
                     onChanged: (v) {
-                      // Home検索は _homeQuery を更新して Home検索を走らせる
+                      // Home讀懃ｴ｢縺ｯ _homeQuery 繧呈峩譁ｰ縺励※ Home讀懃ｴ｢繧定ｵｰ繧峨○繧・
                       setState(() => _homeQuery = v);
 
                       _homeSearchDebounce?.cancel();
@@ -983,7 +1021,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 else if (_homeSearchResults.isEmpty)
                   const Text('該当なし')
                 else ...[
-                  Text('件数: ${_homeSearchResults.length}（最大50件表示）'),
+                  Text('件数: ${_homeSearchResults.length} 件（最大50件表示）'),
                   const SizedBox(height: 8),
                   ..._homeSearchResults.map((item) {
                     return Card(
@@ -1113,15 +1151,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // サムネ（高さを入れる）
+                              // 繧ｵ繝繝搾ｼ磯ｫ倥＆繧貞・繧後ｋ・・
                               SizedBox(
-                                height: 120, // ← ここを変えると大きさが変わる
+                                height: 120, // 竊・縺薙％繧貞､峨∴繧九→螟ｧ縺阪＆縺悟､峨ｏ繧・
                                 child: _homeFavThumb(item),
                               ),
 
                               const SizedBox(width: 12),
 
-                              // テキスト領域
+                              // 繝・く繧ｹ繝磯伜沺
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1177,7 +1215,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
                 const SizedBox(height: 8),
                 if (_foldersRaw.isEmpty)
-                  const Text('登録フォルダがありません。「フォルダ追加」から追加してください。')
+                  const Text('登録フォルダがありません。「フォルダを追加」から追加してください。')
                 else
                   ..._foldersRaw.map((raw) {
                     final isCurrent = raw == _currentFolderRaw;
@@ -1234,7 +1272,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final q = _homeQuery.trim();
     if (q.isEmpty) {
       return const Center(
-        child: Text('Homeの検索欄にキーワード（タイトル/タグ/#tag）を入力してください。'),
+        child: Text('Home の検索欄にキーワード、タグ、#tag を入力してください。'),
       );
     }
 
@@ -1242,18 +1280,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return const Center(child: Text('該当するアイテムがありません'));
     }
 
-    // Home検索結果は全フォルダだから、_items（現在フォルダ）を使わず
-    // 検索結果リストをそのまま渡して詳細ページで前後移動できるようにする
+    // Home讀懃ｴ｢邨先棡縺ｯ蜈ｨ繝輔か繝ｫ繝縺縺九ｉ縲＼items・育樟蝨ｨ繝輔か繝ｫ繝・峨ｒ菴ｿ繧上★
+    // 讀懃ｴ｢邨先棡繝ｪ繧ｹ繝医ｒ縺昴・縺ｾ縺ｾ貂｡縺励※隧ｳ邏ｰ繝壹・繧ｸ縺ｧ蜑榊ｾ檎ｧｻ蜍輔〒縺阪ｋ繧医≧縺ｫ縺吶ｋ
     return _buildGridFromList(_homeSearchResults, showFolderLabel: true);
   }
 
   // --------------------
-  // フォルダ表示名設定
+  // 繝輔か繝ｫ繝陦ｨ遉ｺ蜷崎ｨｭ螳・
   // --------------------
   String _basename(String raw) {
     String s = raw;
-    //　アンドロイド対応がややこしいので１－４の順番通りにやる。
-    // 1) SAFの content://... の場合は tree/document の次のsegs（セグメント）を取り出す
+    //縲繧｢繝ｳ繝峨Ο繧､繝牙ｯｾ蠢懊′繧・ｄ縺薙＠縺・・縺ｧ・托ｼ搾ｼ斐・鬆・分騾壹ｊ縺ｫ繧・ｋ縲・
+    // 1) SAF縺ｮ content://... 縺ｮ蝣ｴ蜷医・ tree/document 縺ｮ谺｡縺ｮsegs・医そ繧ｰ繝｡繝ｳ繝茨ｼ峨ｒ蜿悶ｊ蜃ｺ縺・
     if (s.startsWith('content://')) {
       try {
         final u = Uri.parse(s);
@@ -1270,15 +1308,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
         }
         if (encoded != null && encoded.isNotEmpty) {
-          s = encoded; // 例: primary%3ADocuments%2Fexperiment（androidの場合、実験フォルダを使う）
+          s = encoded; // 萓・ primary%3ADocuments%2Fexperiment・・ndroid縺ｮ蝣ｴ蜷医∝ｮ滄ｨ薙ヵ繧ｩ繝ｫ繝繧剃ｽｿ縺・ｼ・
         }
       } catch (_) {
-        // 失敗したら s=raw のままフォールバック
+        // 螟ｱ謨励＠縺溘ｉ s=raw 縺ｮ縺ｾ縺ｾ繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ
       }
     }
 
-    // 2) 「primary%3A...」みたいにエンコード文字列だけ保存されているケースにも対応
-    //    二重もあり得るので最大2回回す。
+    // 2) 縲継rimary%3A...縲阪∩縺溘＞縺ｫ繧ｨ繝ｳ繧ｳ繝ｼ繝画枚蟄怜・縺縺台ｿ晏ｭ倥＆繧後※縺・ｋ繧ｱ繝ｼ繧ｹ縺ｫ繧ょｯｾ蠢・
+    //    莠碁㍾繧ゅ≠繧雁ｾ励ｋ縺ｮ縺ｧ譛螟ｧ2蝗槫屓縺吶・
     for (int i = 0; i < 2; i++) {
       if (!s.contains('%')) break;
       try {
@@ -1288,7 +1326,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
-    // 3) "primary:" などボリューム名を落とす → 最後のパス要素だけにする
+    // 3) "primary:" 縺ｪ縺ｩ繝懊Μ繝･繝ｼ繝蜷阪ｒ關ｽ縺ｨ縺・竊・譛蠕後・繝代せ隕∫ｴ縺縺代↓縺吶ｋ
     final colon = s.indexOf(':');
     if (colon >= 0) s = s.substring(colon + 1);
 
@@ -1296,14 +1334,60 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final slash = s.lastIndexOf('/');
     if (slash >= 0) s = s.substring(slash + 1);
 
-    // 4) 空なら元の raw を返す
+    // 4) 遨ｺ縺ｪ繧牙・縺ｮ raw 繧定ｿ斐☆
     return s.trim().isEmpty ? raw : s.trim();
   }
 
   String _folderLabel(String raw) {
     final a = _folderAliases[raw];
-    if (a != null && a.trim().isNotEmpty) return a.trim();
+    final sanitized = a == null ? null : _sanitizeFolderAlias(a, fallbackRaw: raw);
+    if (sanitized != null && sanitized.trim().isNotEmpty) return sanitized.trim();
     return _basename(raw);
+  }
+
+  String? _sanitizeFolderAlias(String? alias, {required String fallbackRaw}) {
+    if (alias == null) {
+      return null;
+    }
+    final trimmed = alias.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    if (_looksLikeMojibake(trimmed)) {
+      final fallback = _basename(fallbackRaw).trim();
+      return fallback.isEmpty ? 'フォルダ' : fallback;
+    }
+    if (trimmed == 'Library') {
+      return '保管庫';
+    }
+    return trimmed;
+  }
+
+  bool _looksLikeMojibake(String value) {
+    const patterns = <String>[
+      '繝',
+      '繧',
+      '縺',
+      '荳',
+      '譛',
+      '逋ｻ',
+      '讀懃ｴ｢',
+      '驕',
+      '蜑',
+      '隧',
+      '邏',
+      '陦',
+      '遉',
+      '莉ｶ',
+      '蠖',
+      '閾',
+      '髢',
+      '繝帙',
+      '･',
+      '｢',
+      '｣',
+    ];
+    return patterns.any(value.contains);
   }
 
   Future<void> _persistFolderAliases() async {
@@ -1328,7 +1412,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             autofocus: true,
             decoration: const InputDecoration(
               labelText: '表示名（タイトル）',
-              hintText: '例：漫画 / 資料 / 仕事 など',
+              hintText: '例: 漫画 / 雑誌 / 保存用 など',
             ),
             onSubmitted: (_) => Navigator.of(ctx).pop(controller.text),
           ),
@@ -1360,7 +1444,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   // --------------------
-  // 永続化：表示設定
+  // 豌ｸ邯壼喧・夊｡ｨ遉ｺ險ｭ螳・
   // --------------------
   Future<void> _saveFitMode(ReaderFitMode mode) async {
     setState(() => _fitMode = mode);
@@ -1375,7 +1459,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   // --------------------
-  // お気に入り（★）
+  // 縺頑ｰ励↓蜈･繧奇ｼ遺・・・
   // --------------------
   Future<void> _reloadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
@@ -1408,7 +1492,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _openDetailFromHome(MediaItem item) async {
     final folderRaw = item.folderRaw;
 
-    // フォルダが未登録なら登録
+    // 繝輔か繝ｫ繝縺梧悴逋ｻ骭ｲ縺ｪ繧臥匳骭ｲ
     if (!_foldersRaw.contains(folderRaw)) {
       final next = List<String>.from(_foldersRaw)..add(folderRaw);
       setState(() {
@@ -1418,7 +1502,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       await _persistFolders();
     } else {
-      // 登録済みなら current をフォルダーに合わせる
+      // 逋ｻ骭ｲ貂医∩縺ｪ繧・current 繧偵ヵ繧ｩ繝ｫ繝繝ｼ縺ｫ蜷医ｏ縺帙ｋ
       if (_currentFolderRaw != folderRaw) {
         setState(() {
           _currentFolderRaw = folderRaw;
@@ -1428,7 +1512,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
-    // 対象フォルダをロード（キャッシュがあればそれを使う）
+    // 蟇ｾ雎｡繝輔か繝ｫ繝繧偵Ο繝ｼ繝会ｼ医く繝｣繝・す繝･縺後≠繧後・縺昴ｌ繧剃ｽｿ縺・ｼ・
     if (_folderItemsCache.containsKey(folderRaw)) {
       setState(() {
         _items = _folderItemsCache[folderRaw] ?? const [];
@@ -1436,21 +1520,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       });
     } else {
       await _loadFolder(FolderHandle(folderRaw), saveAsLast: false);
-      // _loadFolder が _items を更新するときにキャッシュにも入れておく
+      // _loadFolder 縺・_items 繧呈峩譁ｰ縺吶ｋ縺ｨ縺阪↓繧ｭ繝｣繝・す繝･縺ｫ繧ょ・繧後※縺翫￥
       _folderItemsCache[folderRaw] = _items;
     }
 
-    // 存在しているindex を探す（ない場合はSnackbarでテキストを返す）
+    // 蟄伜惠縺励※縺・ｋindex 繧呈爾縺呻ｼ医↑縺・ｴ蜷医・Snackbar縺ｧ繝・く繧ｹ繝医ｒ霑斐☆・・
     final idx = _items.indexWhere((e) => e.id == item.id);
     if (idx < 0) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ファイルが見つかりません（移動/削除された可能性）')),
-      );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('ファイルが見つかりません。移動または削除された可能性があります。')),
+        );
       return;
     }
 
-    // 詳細ページへ一発で遷移する。
+    // 隧ｳ邏ｰ繝壹・繧ｸ縺ｸ荳逋ｺ縺ｧ驕ｷ遘ｻ縺吶ｋ縲・
     final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -1464,20 +1548,20 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ),
     );
 
-    // detailページでお気に入りが変わった場合、ホームの一覧のお気に入りも更新
+    // detail繝壹・繧ｸ縺ｧ縺頑ｰ励↓蜈･繧翫′螟峨ｏ縺｣縺溷ｴ蜷医√・繝ｼ繝縺ｮ荳隕ｧ縺ｮ縺頑ｰ励↓蜈･繧翫ｂ譖ｴ譁ｰ
     if (changed == true) {
       await _reloadFavorites();
       await _refreshAllFavoritesItems();
       if (_homeQuery.trim().isNotEmpty) {
-        await _runHomeSearch(); // タグ変更をHome検索に反映
+        await _runHomeSearch(); // 繧ｿ繧ｰ螟画峩繧辿ome讀懃ｴ｢縺ｫ蜿肴丐
       }
     }
   }
 
-  /// お気に入り一覧などで「このアイテムが属するフォルダの表示名」を返す
+  /// 縺頑ｰ励↓蜈･繧贋ｸ隕ｧ縺ｪ縺ｩ縺ｧ縲後％縺ｮ繧｢繧､繝・Β縺悟ｱ槭☆繧九ヵ繧ｩ繝ｫ繝縺ｮ陦ｨ遉ｺ蜷阪阪ｒ霑斐☆
   String _folderLabelForItem(MediaItem item) {
-    // お気に入りは「全フォルダ横断」なので、
-    // 登録済みフォルダ（_foldersRaw）のどれに属するかを推定して表示する。
+    // 縺頑ｰ励↓蜈･繧翫・縲悟・繝輔か繝ｫ繝讓ｪ譁ｭ縲阪↑縺ｮ縺ｧ縲・
+    // 逋ｻ骭ｲ貂医∩繝輔か繝ｫ繝・・foldersRaw・峨・縺ｩ繧後↓螻槭☆繧九°繧呈耳螳壹＠縺ｦ陦ｨ遉ｺ縺吶ｋ縲・
     final itemNorm = _normalizePath(item.id);
 
     String? bestMatchRaw;
@@ -1486,7 +1570,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     for (final raw in _foldersRaw) {
       final folderNorm = _normalizePath(raw);
 
-      // "C:\pics" と "C:\pics2" の誤一致を避けるため、最後の区切りまで見る。
+      // "C:\pics" 縺ｨ "C:\pics2" 縺ｮ隱､荳閾ｴ繧帝∩縺代ｋ縺溘ａ縲∵怙蠕後・蛹ｺ蛻・ｊ縺ｾ縺ｧ隕九ｋ縲・
       final ok = itemNorm == folderNorm || itemNorm.startsWith('$folderNorm\\');
       if (!ok) continue;
 
@@ -1497,16 +1581,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     if (bestMatchRaw != null) {
-      return _folderLabel(bestMatchRaw); // alias があれば alias、無ければ basename
+      return _folderLabel(bestMatchRaw); // alias 縺後≠繧後・ alias縲∫┌縺代ｌ縺ｰ basename
     }
 
-    // 登録外のフォルダから来た場合はすぐ上のフォルダ名を表示
+    // 逋ｻ骭ｲ螟悶・繝輔か繝ｫ繝縺九ｉ譚･縺溷ｴ蜷医・縺吶＄荳翫・繝輔か繝ｫ繝蜷阪ｒ陦ｨ遉ｺ
     final parentRaw = _parentDirOfFullPath(item.id);
     return _basename(parentRaw);
   }
 
   String _normalizePath(String p) {
-    // Windows用
+    // Windows逕ｨ
     var s = p.replaceAll('/', '\\');
     while (s.endsWith('\\')) {
       s = s.substring(0, s.length - 1);
@@ -1515,13 +1599,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   // --------------------
-  // フォルダー管理
+  // 繝輔か繝ｫ繝繝ｼ邂｡逅・
   // --------------------
   Future<void> _saveLastFolder(FolderHandle folder) async {
+    if (widget.repo.isRemoteMode) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_PrefsKeys.lastFolderRaw, folder.raw);
   }
-
   Future<void> _loadFolder(
     FolderHandle folder, {
     required bool saveAsLast,
@@ -1569,7 +1653,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       unawaited(_refreshCurrentPageTags(res.items));
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-       // 一覧を先に描画させてからサムネ開始
+       // 荳隕ｧ繧貞・縺ｫ謠冗判縺輔○縺ｦ縺九ｉ繧ｵ繝繝埼幕蟋・
         await Future<void>.delayed(const Duration(milliseconds: 250));
         if (!mounted) return;
         setState(() => _thumbsEnabled = true);
@@ -1581,7 +1665,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('読み込み失敗: $e')),
+        SnackBar(content: Text('フォルダの読み込みに失敗しました: $e')),
       );
     }
   }
@@ -1633,12 +1717,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ページ読み込み失敗: $e')),
+        SnackBar(content: Text('ページの読み込みに失敗しました: $e')),
       );
     }
   }
 
   Future<void> _persistFolders() async {
+    if (widget.repo.isRemoteMode) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_PrefsKeys.folders, _foldersRaw);
     if (_currentFolderRaw == null) {
@@ -1647,27 +1732,44 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await prefs.setString(_PrefsKeys.currentFolder, _currentFolderRaw!);
     }
   }
-
   Future<void> _addFolder() async {
+    if (widget.repo.isRemoteMode) {
+      List<FolderHandle> remoteFolders = const <FolderHandle>[];
+      try {
+        remoteFolders = await widget.repo.listAvailableFolders();
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('ホストに接続できません: $error')));
+        return;
+      }
+      if (!mounted) return;
+      final raws = remoteFolders.map((entry) => entry.raw).toList(growable: false);
+      setState(() {
+        _foldersRaw = raws;
+        _currentFolderRaw ??= raws.isNotEmpty ? raws.first : null;
+      });
+      if (_currentFolderRaw != null) {
+        await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false);
+      }
+      return;
+    }
     final folder = await widget.repo.pickFolder();
     if (folder == null) return;
-
     final raw = folder.raw;
     final next = List<String>.from(_foldersRaw);
     _dirStack.clear();
     if (!next.contains(raw)) {
       next.add(raw);
     }
-
     setState(() {
       _foldersRaw = next.toList(growable: false);
       _currentFolderRaw = raw;
     });
-
     await _persistFolders();
     await _loadFolder(folder, saveAsLast: false);
   }
-
   Future<void> _switchFolder(String raw) async {
     if (_currentFolderRaw == raw) return;
     _dirStack.clear();
@@ -1707,31 +1809,83 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _importToCurrentFolder() async {
     if (_currentFolderRaw == null) return;
     final folder = FolderHandle(_currentFolderRaw!);
+    final progress = ValueNotifier<MediaTransferProgress?>(null);
+    var dialogShown = false;
     try {
-      final count = await widget.repo.importIntoFolder(folder);
+      dialogShown = true;
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
+            content: ValueListenableBuilder<MediaTransferProgress?>(
+              valueListenable: progress,
+              builder: (context, value, _) {
+                final fraction = value?.fraction;
+                final completed = value?.completedFiles ?? 0;
+                final total = value?.totalFiles ?? 0;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    LinearProgressIndicator(
+                      value: fraction == null || total == 0 ? null : fraction,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(total == 0 ? '準備中...' : '$completed / $total'),
+                    if (value?.currentFileName != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        value!.currentFileName!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      final count = await widget.repo.importIntoFolder(
+        folder,
+        onProgress: (next) => progress.value = next,
+      );
       if (!mounted) return;
 
       if (count > 0) {
+        try {
+          await widget.tagService.requestRescan();
+        } catch (_) {}
         await _loadFolder(folder, saveAsLast: false);
         if (!mounted) return;
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('追加しました: $count 件')));
+        ).showSnackBar(SnackBar(content: Text('取り込み完了: $count 件')));
       }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('追加に失敗: $e')));
+      ).showSnackBar(SnackBar(content: Text('取り込みに失敗しました: $e')));
+    } finally {
+      progress.dispose();
+      if (dialogShown && mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
     }
   }
 
   Future<void> _importToLibraryAndTag() async {
+    final progress = ValueNotifier<MediaTransferProgress?>(null);
+    var dialogShown = false;
     try {
       final lib = await widget.repo.getAppLibraryFolder();
       final libRaw = lib.raw;
 
-      // folders に保管庫がなければ入れる（念のため）
+      // folders 縺ｫ菫晉ｮ｡蠎ｫ縺後↑縺代ｌ縺ｰ蜈･繧後ｋ・亥ｿｵ縺ｮ縺溘ａ・・
       if (!_foldersRaw.contains(libRaw)) {
         setState(() {
           _foldersRaw = <String>[libRaw, ..._foldersRaw];
@@ -1739,48 +1893,93 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         await _persistFolders();
       }
 
-      // 取り込み前のスナップショット
+      // 蜿悶ｊ霎ｼ縺ｿ蜑阪・繧ｹ繝翫ャ繝励す繝ｧ繝・ヨ
       final before = await widget.repo.listMedia(lib);
       final beforeIds = before.map((e) => e.id).toSet();
 
-      // 取り込み実行
-      final importedCount = await widget.repo.importIntoFolder(lib);
+      dialogShown = true;
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
+            content: ValueListenableBuilder<MediaTransferProgress?>(
+              valueListenable: progress,
+              builder: (context, value, _) {
+                final fraction = value?.fraction;
+                final completed = value?.completedFiles ?? 0;
+                final total = value?.totalFiles ?? 0;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    LinearProgressIndicator(
+                      value: fraction == null || total == 0 ? null : fraction,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(total == 0 ? '準備中...' : '$completed / $total'),
+                    if (value?.currentFileName != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        value!.currentFileName!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      // 蜿悶ｊ霎ｼ縺ｿ螳溯｡・
+      final importedCount = await widget.repo.importIntoFolder(
+        lib,
+        onProgress: (next) => progress.value = next,
+      );
       if (!mounted) return;
 
       if (importedCount <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('取り込みはありませんでした')),
+          const SnackBar(content: Text('取り込み対象がありませんでした')),
         );
         return;
       }
 
-      // 取り込み後：差分抽出
+      try {
+        await widget.tagService.requestRescan();
+      } catch (_) {}
+
+      // 蜿悶ｊ霎ｼ縺ｿ蠕鯉ｼ壼ｷｮ蛻・歓蜃ｺ
       final after = await widget.repo.listMedia(lib);
       final newItems = after
           .where((e) => e.kind != MediaKind.folder && !beforeIds.contains(e.id))
           .toList(growable: false);
 
-      // まず保管庫を開く（タグ画面の前に「保管庫が現在フォルダ」になるように）
+      // 縺ｾ縺壻ｿ晉ｮ｡蠎ｫ繧帝幕縺擾ｼ医ち繧ｰ逕ｻ髱｢縺ｮ蜑阪↓縲御ｿ晉ｮ｡蠎ｫ縺檎樟蝨ｨ繝輔か繝ｫ繝縲阪↓縺ｪ繧九ｈ縺・↓・・
       _dirStack.clear();
       setState(() {
         _currentFolderRaw = libRaw;
-        _page = _MainPage.gallery; // 保管庫へ取り込んだらギャラリー表示に寄せる
+        _page = _MainPage.gallery; // 菫晉ｮ｡蠎ｫ縺ｸ蜿悶ｊ霎ｼ繧薙□繧峨ぐ繝｣繝ｩ繝ｪ繝ｼ陦ｨ遉ｺ縺ｫ蟇・○繧・
       });
       await _persistFolders();
 
-      // ギャラリーを保管庫で更新表示
+      // 繧ｮ繝｣繝ｩ繝ｪ繝ｼ繧剃ｿ晉ｮ｡蠎ｫ縺ｧ譖ｴ譁ｰ陦ｨ遉ｺ
       await _loadFolder(lib, saveAsLast: false);
       if (!mounted) return;
 
-      // 差分が取れない場合でも、取り込み成功の通知は出す
+      // 蟾ｮ蛻・′蜿悶ｌ縺ｪ縺・ｴ蜷医〒繧ゅ∝叙繧願ｾｼ縺ｿ謌仙粥縺ｮ騾夂衍縺ｯ蜃ｺ縺・
       if (newItems.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('保管庫へ取り込み: $importedCount 件（差分取得なし）')),
+          SnackBar(content: Text('ライブラリへ取り込み: $importedCount 件（差分なし）')),
         );
         return;
       }
 
-      // タグ付け画面を出す
+      // 繧ｿ繧ｰ莉倥￠逕ｻ髱｢繧貞・縺・
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => TagAssignAfterImportPage(
@@ -1792,7 +1991,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       if (!mounted) return;
 
-      // タグ付け後：Home検索や件数表示にも反映させたいのでキャッシュ更新
+      // 繧ｿ繧ｰ莉倥￠蠕鯉ｼ唏ome讀懃ｴ｢繧・ｻｶ謨ｰ陦ｨ遉ｺ縺ｫ繧ょ渚譏縺輔○縺溘＞縺ｮ縺ｧ繧ｭ繝｣繝・す繝･譖ｴ譁ｰ
       if (_homeQuery.trim().isNotEmpty) {
         await _runHomeSearch();
       }
@@ -1800,13 +1999,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _refreshArtistTagCounts();
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保管庫へ取り込み: $importedCount 件（タグ付け対象: ${newItems.length} 件）')),
+        SnackBar(content: Text('ライブラリへ取り込み: $importedCount 件・タグ付け対象: ${newItems.length} 件')),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('取り込み失敗: $e')),
+        SnackBar(content: Text('ライブラリ取り込みに失敗しました: $e')),
       );
+    } finally {
+      progress.dispose();
+      if (dialogShown && mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
     }
   }
 
@@ -1821,14 +2025,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() => _loadingFavAll = true);
 
     try {
-      // 未キャッシュのフォルダだけ読み込む
+      // 譛ｪ繧ｭ繝｣繝・す繝･縺ｮ繝輔か繝ｫ繝縺縺題ｪｭ縺ｿ霎ｼ繧
       for (final raw in _foldersRaw) {
         if (_folderItemsCache.containsKey(raw)) continue;
         final items = await widget.repo.listMedia(FolderHandle(raw));
         _folderItemsCache[raw] = items;
       }
 
-      // 全フォルダ分からお気に入りだけ抽出
+      // 蜈ｨ繝輔か繝ｫ繝蛻・°繧峨♀豌励↓蜈･繧翫□縺第歓蜃ｺ
       final all = <MediaItem>[];
       for (final raw in _foldersRaw) {
         final items = _folderItemsCache[raw] ?? const <MediaItem>[];
@@ -1910,10 +2114,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     if (pdfOnly != null) {
       if (pdfOnly) {
-        // ✅ folder は常に残しつつ、pdf を表示
+        // 笨・folder 縺ｯ蟶ｸ縺ｫ谿九＠縺､縺､縲｝df 繧定｡ｨ遉ｺ
         out = out.where((e) => e.kind == MediaKind.folder || e.kind == MediaKind.pdf);
       } else {
-        // ✅ folder は常に残しつつ、image を表示
+        // 笨・folder 縺ｯ蟶ｸ縺ｫ谿九＠縺､縺､縲（mage 繧定｡ｨ遉ｺ
         out = out.where((e) => e.kind == MediaKind.folder || e.kind == MediaKind.image);
       }
     }
@@ -2000,7 +2204,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return list.toList(growable: false);
   }
 
-  /// 「タグなし」タブ用: フォルダは除外し、タグが1つも付いていない画像/PDFのみ表示
+  /// 縲後ち繧ｰ縺ｪ縺励阪ち繝也畑: 繝輔か繝ｫ繝縺ｯ髯､螟悶＠縲√ち繧ｰ縺・縺､繧ゆｻ倥＞縺ｦ縺・↑縺・判蜒・PDF縺ｮ縺ｿ陦ｨ遉ｺ
   List<MediaItem> _applyUntagged(List<MediaItem> input) {
     if (!_currentPageMetadataAvailable) {
       return const <MediaItem>[];
@@ -2016,9 +2220,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final changed = await MetadataSettingsDialog.show(
       context,
       tagService: widget.tagService,
+      hostServerService: widget.hostServerService,
     );
     if (changed != true || !mounted) return;
-
+    await widget.repo.reloadSettings();
+    await widget.hostServerService.refresh();
+    final nextSettings = widget.tagService.settings;
+    if (!nextSettings.isHostMode &&
+        widget.hostServerService.status.state == HostServerState.running) {
+      await widget.hostServerService.stopServer();
+    } else if (nextSettings.isHostMode && nextSettings.autoStartHostServer) {
+      await widget.hostServerService.startServer(tagService: widget.tagService);
+    }
+    _folderItemsCache.clear();
+    _folderItemsCacheRecursive.clear();
+    _dirStack.clear();
+    await _loadPrefsAndAutoOpenFolder();
     await _refreshCurrentPageTags();
     if (_homeQuery.trim().isNotEmpty) {
       await _runHomeSearch();
@@ -2028,12 +2245,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       setState(() {});
     }
   }
-
   // ---- AppBar overflow menus ----
   Future<void> _onHomeMenuSelected(_HomeMenuAction action) async {
     switch (action) {
       case _HomeMenuAction.addFolder:
-        _addFolder();
+        await _addFolder();
         return;
       case _HomeMenuAction.importToLibrary:
         await _importToLibraryAndTag();
@@ -2062,24 +2278,37 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
     }
   }
-
   Future<void> _onGalleryMenuSelected(_GalleryMenuAction action) async {
     switch (action) {
       case _GalleryMenuAction.addFolder:
-        _addFolder();
+        await _addFolder();
         return;
       case _GalleryMenuAction.addFile:
         if (_currentFolderRaw == null) return;
         _importToCurrentFolder();
         return;
       case _GalleryMenuAction.exportPdf:
+        if (widget.repo.isRemoteMode) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f PDF \u66f8\u304d\u51fa\u3057\u306f\u672a\u5bfe\u5fdc\u3067\u3059')),
+          );
+          return;
+        }
         await _exportCurrentFolderImagesToPdf();
         return;
       case _GalleryMenuAction.organizeLibrary:
+        if (widget.repo.isRemoteMode) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f\u30e9\u30a4\u30d6\u30e9\u30ea\u6574\u7406\u306f\u672a\u5bfe\u5fdc\u3067\u3059')),
+          );
+          return;
+        }
         _organizeLibrary();
         return;
       case _GalleryMenuAction.folderTileMode:
-        await _showFolderTileModeDialog(); // ←追加
+        await _showFolderTileModeDialog();
         return;
       case _GalleryMenuAction.metadataSettings:
         await _openMetadataSettings();
@@ -2090,7 +2319,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
     }
   }
-
   PopupMenuButton<_HomeMenuAction> _buildHomeOverflowMenu() {
     return PopupMenuButton<_HomeMenuAction>(
       tooltip: 'メニュー',
@@ -2108,7 +2336,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           value: _HomeMenuAction.importToLibrary,
           child: ListTile(
             leading: Icon(Icons.archive_outlined),
-            title: Text('保管庫へ取り込み'),
+            title: Text('ライブラリへ取り込み'),
           ),
         ),
         PopupMenuItem(
@@ -2122,7 +2350,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           value: _HomeMenuAction.metadataSettings,
           child: ListTile(
             leading: Icon(Icons.settings_outlined),
-            title: Text('メタデータ設定'),
+            title: Text('動作モード設定'),
           ),
         ),
         PopupMenuItem(
@@ -2175,21 +2403,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           value: _GalleryMenuAction.organizeLibrary,
           child: ListTile(
             leading: Icon(Icons.auto_awesome_mosaic_outlined),
-            title: Text('保管庫を整理（作者/シリーズ）'),
+            title: Text('ライブラリ整理（作家・シリーズ）'),
           ),
         ),
         const PopupMenuItem(
           value: _GalleryMenuAction.metadataSettings,
           child: ListTile(
             leading: Icon(Icons.settings_outlined),
-            title: Text('メタデータ設定'),
+            title: Text('動作モード設定'),
           ),
         ),
         const PopupMenuItem(
           value: _GalleryMenuAction.exportPdf,
           child: ListTile(
             leading: Icon(Icons.picture_as_pdf_outlined),
-            title: Text('このフォルダの画像をPDFにまとめる'),
+            title: Text('このフォルダの画像を PDF にまとめる'),
           ),
         ),
         const PopupMenuItem(
@@ -2226,7 +2454,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        title: const Text('PDFを生成中...'),
+        title: const Text('PDF を作成中...'),
         content: StatefulBuilder(
           builder: (context, setD) => Column(
             mainAxisSize: MainAxisSize.min,
@@ -2235,7 +2463,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               const SizedBox(height: 12),
               Text('$done / $total'),
               const SizedBox(height: 8),
-              const Text('保存先フォルダを選択後、生成を開始します'),
+              const Text('保存先フォルダを選択後、処理を開始します。'),
             ],
           ),
         ),
@@ -2264,14 +2492,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PDF保存完了: ${created.name}')),
+          SnackBar(content: Text('PDF菫晏ｭ伜ｮ御ｺ・ ${created.name}')),
         );
       }
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('PDF出力に失敗: $e')));
+          .showSnackBar(SnackBar(content: Text('PDF 出力に失敗しました: $e')));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -2280,22 +2508,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final mode = await showDialog<FolderTileMode>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: const Text('フォルダ表示'),
+        title: const Text('繝輔か繝ｫ繝陦ｨ遉ｺ'),
         children: [
           SimpleDialogOption(
             onPressed: () => Navigator.pop(context, FolderTileMode.labelOnly),
-            child: const Text('フォルダ＋名前（軽量）'),
+            child: const Text('フォルダ名のみ（軽量）'),
           ),
           SimpleDialogOption(
             onPressed: () => Navigator.pop(context, FolderTileMode.preview),
-            child: const Text('表紙プレビュー（重い）'),
+            child: const Text('プレビュー表示（重め）'),
           ),
         ],
       ),
     );
 
     if (mode == null) return;
-    _saveFolderTileMode(mode); // ←あなたが持ってる既存関数を呼ぶ想定
+    _saveFolderTileMode(mode); // 竊舌≠縺ｪ縺溘′謖√▲縺ｦ繧区里蟄倬未謨ｰ繧貞他縺ｶ諠ｳ螳・
   }
 
   // --- UI: responsive sidebar (Windows/desktop friendly) ---
@@ -2305,7 +2533,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       MediaQuery.of(context).size.width >= 980;
 
   void _closeSidebar() {
-    // Drawer表示時のみ閉じる（デスクトップの常設サイドバーでは pop しない）
+    // Drawer陦ｨ遉ｺ譎ゅ・縺ｿ髢峨§繧具ｼ医ョ繧ｹ繧ｯ繝医ャ繝励・蟶ｸ險ｭ繧ｵ繧､繝峨ヰ繝ｼ縺ｧ縺ｯ pop 縺励↑縺・ｼ・
     if (!_isWideLayout(context)) {
       Navigator.pop(context);
     }
@@ -2333,7 +2561,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Media Viewer', style: Theme.of(context).textTheme.titleLarge),
+          Text('メディアビューア', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 4),
           Text('現在のフォルダ: ${currentLabel}',
               style: Theme.of(context).textTheme.bodySmall),
@@ -2377,7 +2605,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               onTap: () async {
                 _closeSidebar();
 
-                // フォルダ未選択ならホームで案内（またはフォルダ追加）
+                // 繝輔か繝ｫ繝譛ｪ驕ｸ謚槭↑繧峨・繝ｼ繝縺ｧ譯亥・・医∪縺溘・繝輔か繝ｫ繝霑ｽ蜉・・
                 if (_currentFolderRaw == null) {
                   _exitSelectMode();
                   setState(() => _page = _MainPage.home);
@@ -2388,7 +2616,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               },
             ),
             const Divider(),
-            _sidebarSectionLabel('作者タグ'),
+            _sidebarSectionLabel('作家タグ'),
             if (_loadingArtistTags)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2397,7 +2625,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             else
               ExpansionTile(
                 leading: const Icon(Icons.person_outline),
-                title: const Text('作者（カテゴリ）'),
+                title: const Text('作家（カテゴリ）'),
                 children: [
                   if (_artistTagMasters.isEmpty)
                     const Padding(
@@ -2405,7 +2633,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         horizontal: 16,
                         vertical: 10,
                       ),
-                      child: Text('作者タグがまだありません'),
+                      child: Text('作家タグがまだありません'),
                     )
                   else
                     ..._artistTagMasters.map((tw) {
@@ -2427,7 +2655,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               child: InputDecorator(
                 decoration: const InputDecoration(
-                  labelText: 'Fitモード',
+                  labelText: '表示フィット',
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
@@ -2446,7 +2674,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       ),
                       DropdownMenuItem(
                         value: ReaderFitMode.contain,
-                        child: Text('全体表示(Contain)'),
+                        child: Text('全体表示 (Contain)'),
                       ),
                     ],
                     onChanged: (v) async {
@@ -2459,7 +2687,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               ),
             ),
             SwitchListTile(
-              title: const Text('見開き (ON/OFF)'),
+              title: const Text('見開き表示 (ON/OFF)'),
               value: _twoPage,
               onChanged: (v) async {
                 setState(() => _twoPage = v);
@@ -2482,7 +2710,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             const Divider(),
             _sidebarSectionLabel('フォルダ'),
 
-            // 追加ボタン
+            // 霑ｽ蜉繝懊ち繝ｳ
             ListTile(
               leading: const Icon(Icons.create_new_folder_outlined),
               title: const Text('フォルダを追加'),
@@ -2551,7 +2779,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: Text(
-                  '※登録フォルダと選択中フォルダは再起動後も復元します（存在する場合）。',
+                  '登録フォルダと選択中フォルダは別管理です。必要に応じて切り替えてください。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
@@ -2576,7 +2804,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   @override
   Widget build(BuildContext context) {
-    // ホーム画面
+    // 繝帙・繝逕ｻ髱｢
     if (_page == _MainPage.home) {
       return Scaffold(
         drawer: _isWideLayout(context) ? null : _buildSidebar(),
@@ -2588,7 +2816,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     }
 
-    // 検索結果（Home検索をギャラリー表示する。）
+    // 讀懃ｴ｢邨先棡・・ome讀懃ｴ｢繧偵ぐ繝｣繝ｩ繝ｪ繝ｼ陦ｨ遉ｺ縺吶ｋ縲ゑｼ・
     if (_page == _MainPage.search) {
       return Scaffold(
         drawer: _isWideLayout(context) ? null : _buildSidebar(),
@@ -2597,7 +2825,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           actions: _selectMode
               ? [
                   IconButton(
-                    tooltip: '選択解除',
+                    tooltip: '驕ｸ謚櫁ｧ｣髯､',
                     onPressed: _exitSelectMode,
                     icon: const Icon(Icons.close),
                   ),
@@ -2612,7 +2840,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     icon: const Icon(Icons.clear_all),
                   ),
                   IconButton(
-                    tooltip: '選択に一括タグ付与',
+                    tooltip: '選択中に一括タグ付け',
                     onPressed: () {
                       final targets = _selectedFrom(_homeSearchResults);
                       _bulkAddTagToItems(targets);
@@ -2620,9 +2848,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     icon: const Icon(Icons.label_outline),
                   ),
                   IconButton(
-                    tooltip: '選択を保管庫に取り込む（重複はスキップ）',
+                    tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
                    onPressed: () {
-                    // ここでその場でタブ番号を取る
+                    // 縺薙％縺ｧ縺昴・蝣ｴ縺ｧ繧ｿ繝也分蜿ｷ繧貞叙繧・
                     final tabIndex = DefaultTabController.of(context).index;
 
                     final List<MediaItem> view;
@@ -2663,7 +2891,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     }
 
-    // ギャラリー画面
+    // 繧ｮ繝｣繝ｩ繝ｪ繝ｼ逕ｻ髱｢
     return DefaultTabController(
       length: 3,
       child: Builder(
@@ -2683,7 +2911,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             appBar: AppBar(
               leading: _canGoUp
                   ? IconButton(
-                      tooltip: '上のフォルダへ',
+                      tooltip: '親フォルダへ',
                       icon: const Icon(Icons.arrow_back),
                       onPressed: () {
                         _exitSelectMode();
@@ -2725,7 +2953,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         icon: const Icon(Icons.clear_all),
                       ),
                       IconButton(
-                        tooltip: '選択に一括タグ付与',
+                        tooltip: '選択中に一括タグ付け',
                         onPressed: () {
                           final idx = tc.index;
                           final List<MediaItem> view;
@@ -2744,9 +2972,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         icon: const Icon(Icons.label_outline),
                       ),
                       IconButton(
-                        tooltip: '選択を保管庫に取り込む（重複はスキップ）',
+                        tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
                         onPressed: () {
-                          // ここでその場でタブ番号を取る
+                          // 縺薙％縺ｧ縺昴・蝣ｴ縺ｧ繧ｿ繝也分蜿ｷ繧貞叙繧・
                             final tabIndex = DefaultTabController.of(context).index;
 
                           final List<MediaItem> view;
@@ -2768,17 +2996,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       _buildGalleryOverflowMenu(),
                     ],
               bottom: PreferredSize(
-                // 検索(約56) + ソート(約40) + TabBar(約48) + 余白
-                //　= 160前後は必要
+                // 讀懃ｴ｢(邏・6) + 繧ｽ繝ｼ繝・邏・0) + TabBar(邏・8) + 菴咏區
+                //縲= 160蜑榊ｾ後・蠢・ｦ・
                 preferredSize: const Size.fromHeight(160),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // ---- 検索バー ----
+                    // ---- 讀懃ｴ｢繝舌・ ----
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                       child: SizedBox(
-                        height: 44, // 高さを決定
+                        height: 44, // 鬮倥＆繧呈ｱｺ螳・
                         child: TextField(
                           controller: _searchCtrl,
                           decoration: InputDecoration(
@@ -2805,14 +3033,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       ),
                     ),
 
-                    // ---- ソート行 ----
+                    // ---- 繧ｽ繝ｼ繝郁｡・----
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: SizedBox(
                         height: 36,
                         child: Row(
                           children: [
-                            const Text('ソート: '),
+                            const Text('ソート'),
                             const SizedBox(width: 8),
                             DropdownButton<_SortMode>(
                               value: _sortMode,
@@ -2855,7 +3083,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       ),
                     ),
 
-                    // ---- タブ ----
+                    // ---- 繧ｿ繝・----
                     const TabBar(
                       isScrollable: true,
                       tabs: [
@@ -2878,7 +3106,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 : _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _items.isEmpty
-                ? const Center(child: Text('画像/PDFがありません'))
+                ? const Center(child: Text('画像や PDF がありません'))
                 : TabBarView(
                     children: [
                       _buildGrid(_applyFilter(_items, pdfOnly: null)),
@@ -2900,7 +3128,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (t.isEmpty) return null;
     if (t.startsWith('#')) t = t.substring(1).trim();
     if (t.isEmpty) return null;
-    // 空白は禁止
+    // 遨ｺ逋ｽ縺ｯ遖∵ｭ｢
     if (t.contains(RegExp(r'\s'))) return null;
     return t;
   }
@@ -2908,7 +3136,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   String _categoryLabel(TagCategory c) {
     switch (c) {
       case TagCategory.artist:
-        return '作者';
+        return '作家';
       case TagCategory.series:
         return 'シリーズ';
       case TagCategory.mediaType:
@@ -2962,14 +3190,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 autofocus: true,
                 decoration: const InputDecoration(
                   labelText: 'タグ名',
-                  hintText: '例: #夏 / artist:xxx の「xxx」など',
+                  hintText: '例: #漫画 / artist:xxx / series:xxx',
                   border: OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => Navigator.of(ctx).pop(true),
               ),
               const SizedBox(height: 8),
               const Text(
-                '※空白を含むタグは不可（検索の分解が崩れるため）',
+                '空白を含むタグは不可です（検索の分解が崩れるため）',
                 style: TextStyle(fontSize: 12),
               ),
             ],
@@ -2999,7 +3227,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    // 進捗ダイアログ
+    // 騾ｲ謐励ム繧､繧｢繝ｭ繧ｰ
     if (!mounted) return;
     showDialog(
       context: context,
@@ -3032,9 +3260,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('一括タグ付与に失敗しました: $e')));
+      ).showSnackBar(SnackBar(content: Text('一括タグ付けに失敗しました: $e')));
     } finally {
-      // 進捗ダイアログを閉じる
+      // 騾ｲ謐励ム繧､繧｢繝ｭ繧ｰ繧帝哩縺倥ｋ
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
     }
   }
@@ -3042,14 +3270,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _importSelectedToLibrary(List<MediaItem> targets) async {
     if (targets.isEmpty) return;
 
-    // 取り込み先（保管庫）
+    // 蜿悶ｊ霎ｼ縺ｿ蜈茨ｼ井ｿ晉ｮ｡蠎ｫ・・
     final lib = await widget.repo.getAppLibraryFolder();
 
-    // 取り込み前スナップショット（新規分を特定してタグ付け画面にも渡せる）
+    // 蜿悶ｊ霎ｼ縺ｿ蜑阪せ繝翫ャ繝励す繝ｧ繝・ヨ・域眠隕丞・繧堤音螳壹＠縺ｦ繧ｿ繧ｰ莉倥￠逕ｻ髱｢縺ｫ繧よｸ｡縺帙ｋ・・
     final before = await widget.repo.listMedia(lib);
     final beforeIds = before.map((e) => e.id).toSet();
 
-    // 同名があればスキップする（軽量重複回避）
+    // 蜷悟錐縺後≠繧後・繧ｹ繧ｭ繝・・縺吶ｋ・郁ｻｽ驥城㍾隍・屓驕ｿ・・
     final imported = await widget.repo.importItemsIntoFolder(
       lib,
       targets,
@@ -3064,7 +3292,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    // 取り込み後差分＝今回新規で増えたファイル
+    // 蜿悶ｊ霎ｼ縺ｿ蠕悟ｷｮ蛻・ｼ昜ｻ雁屓譁ｰ隕上〒蠅励∴縺溘ヵ繧｡繧､繝ｫ
     final after = await widget.repo.listMedia(lib);
     final newItems = after
         .where((e) => e.kind != MediaKind.folder && !beforeIds.contains(e.id))
@@ -3072,7 +3300,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     if (!mounted) return;
 
-    // 取り込み直後タグ付け（あなたが前に入れている tag_assign_after_import.dart を活用）
+    // 蜿悶ｊ霎ｼ縺ｿ逶ｴ蠕後ち繧ｰ莉倥￠・医≠縺ｪ縺溘′蜑阪↓蜈･繧後※縺・ｋ tag_assign_after_import.dart 繧呈ｴｻ逕ｨ・・
     if (newItems.isNotEmpty) {
       await Navigator.of(context).push(
         MaterialPageRoute(
@@ -3084,7 +3312,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     }
 
-    // 選択解除 + 表示更新
+    // 驕ｸ謚櫁ｧ｣髯､ + 陦ｨ遉ｺ譖ｴ譁ｰ
     _exitSelectMode();
     setState(() {});
   }
@@ -3096,12 +3324,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
      return Column(
       children: [
-        // ★ 一番上にページャ
+        // 笘・荳逡ｪ荳翫↓繝壹・繧ｸ繝｣
         _buildPager(),
         Expanded(
           child: NotificationListener<ScrollNotification>(
             child: GridView.builder(
-              cacheExtent: 200, // 先読み抑制
+              cacheExtent: 200, // 蜈郁ｪｭ縺ｿ謚大宛
               padding: const EdgeInsets.all(12),
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 220,
@@ -3243,7 +3471,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     return GridView.builder(
-      cacheExtent: 200, // 先読み抑制
+      cacheExtent: 200, // 蜈郁ｪｭ縺ｿ謚大宛
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 220,
@@ -3280,7 +3508,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               return;
             }
 
-            // folder除外でDetailページへ
+            // folder髯､螟悶〒Detail繝壹・繧ｸ縺ｸ
             final mediaOnly = items
                 .where((e) => e.kind != MediaKind.folder)
                 .toList(growable: false);
@@ -3344,7 +3572,7 @@ class _ThumbTile extends StatelessWidget {
     // 1) Folder tile
     // -------------------------
     if (item.kind == MediaKind.folder) {
-    // ① 軽量モード：プレビューを一切呼ばない
+    // 竭 霆ｽ驥上Δ繝ｼ繝会ｼ壹・繝ｬ繝薙Η繝ｼ繧剃ｸ蛻・他縺ｰ縺ｪ縺・
     if (folderTileMode == FolderTileMode.labelOnly) {
       return Material(
         elevation: 2,
@@ -3380,7 +3608,7 @@ class _ThumbTile extends StatelessWidget {
         );
       }
 
-      // ② プレビューモード：表紙を取得して表示
+      // 竭｡ 繝励Ξ繝薙Η繝ｼ繝｢繝ｼ繝会ｼ夊｡ｨ邏吶ｒ蜿門ｾ励＠縺ｦ陦ｨ遉ｺ
       final st = context.findAncestorStateOfType<_GalleryGridPageState>();
       final enabled = st?._thumbsEnabled ?? true;
       
@@ -3425,7 +3653,7 @@ class _ThumbTile extends StatelessWidget {
               child: _TitleChip(title: item.displayName, subtitle: subtitle),
             ),
       
-            // ✅ selected overlay（ここで readThumbPair を呼ばない）
+            // 笨・selected overlay・医％縺薙〒 readThumbPair 繧貞他縺ｰ縺ｪ縺・ｼ・
             if (selected)
               Positioned.fill(
                 child: Container(
@@ -3453,7 +3681,7 @@ class _ThumbTile extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          // NOTE: _thumbsEnabled が false の間は FutureBuilder 自体を作らない（= サムネ生成を開始しない）
+          // NOTE: _thumbsEnabled 縺・false 縺ｮ髢薙・ FutureBuilder 閾ｪ菴薙ｒ菴懊ｉ縺ｪ縺・ｼ・ 繧ｵ繝繝咲函謌舌ｒ髢句ｧ九＠縺ｪ縺・ｼ・
           Positioned.fill(
             child: (() {
               final st = context.findAncestorStateOfType<_GalleryGridPageState>();
@@ -3475,7 +3703,7 @@ class _ThumbTile extends StatelessWidget {
             })(),
           ),
 
-          // 右上：PDFバッジ + ★
+          // 蜿ｳ荳奇ｼ啀DF繝舌ャ繧ｸ + 笘・
           Positioned(
             top: 8,
             right: 8,
@@ -3489,7 +3717,7 @@ class _ThumbTile extends StatelessWidget {
             ),
           ),
 
-          // タイトル
+          // 繧ｿ繧､繝医Ν
           Positioned(
             left: 8,
             right: 8,
@@ -3497,7 +3725,7 @@ class _ThumbTile extends StatelessWidget {
             child: _TitleChip(title: item.displayName, subtitle: subtitle),
           ),
 
-          // 選択時
+          // 驕ｸ謚樊凾
           if (selected)
             Positioned.fill(
               child: Container(
@@ -3664,7 +3892,7 @@ class _ThumbImage extends StatelessWidget {
         gaplessPlayback: true,
         filterQuality: FilterQuality.low,
         errorBuilder: (context, error, stack) {
-          // ここで失敗を出力
+          // 縺薙％縺ｧ螟ｱ謨励ｒ蜃ｺ蜉・
           return Container(
             alignment: Alignment.center,
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -3704,3 +3932,6 @@ class _TileShell extends StatelessWidget {
     );
   }
 }
+
+
+

@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+﻿import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -62,17 +62,17 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _isFavorite = false;
   bool _favChanged = false;
 
-  // tag（タグ）
+  // tag・医ち繧ｰ・・
   List<TagWithId> _tags = const [];
   bool _tagsChanged = false;
 
-  //　フォルダやファイルを削除
+  //縲繝輔か繝ｫ繝繧・ヵ繧｡繧､繝ｫ繧貞炎髯､
   String? _libraryRootRaw;
   bool _canDeleteFromLibrary = false;
 
   String _normPath(String p) => p.replaceAll('/', '\\').toLowerCase();
 
-  // 候補tagのキャッシュ
+  // 蛟呵｣徼ag縺ｮ繧ｭ繝｣繝・す繝･
   List<TagWithId> _masterTags = const [];
   bool _masterLoading = false;
   final TextEditingController _masterFilterCtrl = TextEditingController();
@@ -103,7 +103,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   String _basename(String raw) {
     if (raw.trim().isEmpty) return raw;
 
-    // Windowsパスなら最後の要素
+    // Windows繝代せ縺ｪ繧画怙蠕後・隕∫ｴ
     if (raw.contains('\\') || raw.contains('/')) {
       var s = raw.replaceAll('\\', '/');
       final slash = s.lastIndexOf('/');
@@ -111,21 +111,21 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       return s;
     }
 
-    // AndroidのtreeUriなどのcontent:// の場合
+    // Android縺ｮtreeUri縺ｪ縺ｩ縺ｮcontent:// 縺ｮ蝣ｴ蜷・
     try {
       var s = raw;
 
-      // 三回ほど回す。
+      // 荳牙屓縺ｻ縺ｩ蝗槭☆縲・
       for (int i = 0; i < 3; i++) {
         if (!s.contains('%')) break;
         s = Uri.decodeComponent(s);
       }
 
-      // primary: などのボリューム名を落としてみる。
+      // primary: 縺ｪ縺ｩ縺ｮ繝懊Μ繝･繝ｼ繝蜷阪ｒ關ｽ縺ｨ縺励※縺ｿ繧九・
       final colon = s.indexOf(':');
       if (colon >= 0) s = s.substring(colon + 1);
 
-      // 最後のパス要素だけ
+      // 譛蠕後・繝代せ隕∫ｴ縺縺・
       s = s.replaceAll('\\', '/');
       final slash = s.lastIndexOf('/');
       if (slash >= 0) s = s.substring(slash + 1);
@@ -160,32 +160,30 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final prefs = await SharedPreferences.getInstance();
     final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
     final two = prefs.getBool(_PrefsKeys.twoPage);
-
     if (fitIndex != null &&
         fitIndex >= 0 &&
         fitIndex < ReaderFitMode.values.length) {
       _fitMode = ReaderFitMode.values[fitIndex];
     }
     if (two != null) _twoPage = two;
-
-    final raw = prefs.getString(_PrefsKeys.lastFolderRaw);
-    if (raw != null && raw.isNotEmpty) {
-      _folder = FolderHandle(raw);
+    if (widget.repo.isRemoteMode) {
+      _folder = FolderHandle(_item.folderRaw);
+    } else {
+      final raw = prefs.getString(_PrefsKeys.lastFolderRaw);
+      if (raw != null && raw.isNotEmpty) {
+        _folder = FolderHandle(raw);
+      }
     }
-
     if (!mounted) return;
     setState(() {});
     final lib = await widget.repo.getAppLibraryFolder();
     _libraryRootRaw = lib.raw;
-
-    // item.folderRaw が libraryRoot 配下なら削除可（整理後のサブフォルダもOK）
     final itemFolder = _item.folderRaw;
-    _canDeleteFromLibrary =
+    _canDeleteFromLibrary = widget.tagService.isRemoteMode ||
         _normPath(itemFolder).startsWith(_normPath(lib.raw));
     await _loadFavoriteForCurrent();
     _reloadForCurrent();
   }
-
   @override
   void dispose() {
     _masterFilterCtrl.dispose();
@@ -238,12 +236,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Future<void> _saveLastFolder(FolderHandle folder) async {
+    if (widget.repo.isRemoteMode) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_PrefsKeys.lastFolderRaw, folder.raw);
   }
 
   // ----------------
-  // Tags (SharedPreferences依存)
+  // Tags (SharedPreferences萓晏ｭ・
 
   String? _normalizeTag(String input) {
     var t = input.trim();
@@ -251,7 +250,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (t.startsWith('#')) t = t.substring(1);
     t = t.trim();
     if (t.isEmpty) return null;
-    // 空白は禁止
+    // 遨ｺ逋ｽ縺ｯ遖∵ｭ｢
     if (t.contains(RegExp(r'\s'))) return null;
     return t;
   }
@@ -305,7 +304,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('タグが無効です（空白なしで入力してください)')));
+      ).showSnackBar(
+        const SnackBar(content: Text('タグ名が無効です（空白を含めずに入力してください）')),
+      );
       return;
     }
 
@@ -455,12 +456,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final newBase = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('PDFの名前を変更'),
+        title: const Text('PDF 名を変更'),
         content: TextField(
           controller: ctrl,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: '拡張子 .pdf は不要',
+            hintText: '拡張子 .pdf は不要です',
             border: OutlineInputBorder(),
           ),
         ),
@@ -490,7 +491,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       if (!mounted) return;
 
       setState(() {
-        _items[_index] = updated; // AppBarのtitle も更新される
+        _items[_index] = updated;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -505,7 +506,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('名前変更に失敗: $e')));
+      ).showSnackBar(SnackBar(content: Text('名前の変更に失敗しました: $e')));
     } finally {
       ctrl.dispose();
     }
@@ -527,7 +528,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       MediaQuery.of(context).size.width >= 980;
 
   void _closeSidebar() {
-    // Drawer表示時のみ閉じる（デスクトップの常設サイドバーでは pop しない）
+    // Drawer陦ｨ遉ｺ譎ゅ・縺ｿ髢峨§繧具ｼ医ョ繧ｹ繧ｯ繝医ャ繝励・蟶ｸ險ｭ繧ｵ繧､繝峨ヰ繝ｼ縺ｧ縺ｯ pop 縺励↑縺・ｼ・
     if (!_isWideLayout(context)) {
       Navigator.pop(context);
     }
@@ -543,7 +544,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       builder: (ctx) => AlertDialog(
         title: const Text('削除しますか？'),
         content: Text(
-          '「${item.displayName}」を保管庫から削除します。\n'
+          '「${item.displayName}」をライブラリから削除します。\n'
           'この操作は元に戻せません。',
         ),
         actions: [
@@ -561,7 +562,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     if (ok != true) return;
 
-    // 実削除
+    // 螳溷炎髯､
     final deleted = await widget.repo.deleteItem(item);
     if (!mounted) return;
 
@@ -579,7 +580,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       metadataWarning = 'メタデータ削除に失敗しました: $e';
     }
 
-    // お気に入りに残ってるとゴミになるので外す
+    // 縺頑ｰ励↓蜈･繧翫↓谿九▲縺ｦ繧九→繧ｴ繝溘↓縺ｪ繧九・縺ｧ螟悶☆
     final prefs = await SharedPreferences.getInstance();
     final fav = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
         .toSet();
@@ -592,7 +593,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       ).showSnackBar(SnackBar(content: Text(metadataWarning)));
     }
 
-    // 詳細画面を閉じて一覧側でリロードさせる
+    // 隧ｳ邏ｰ逕ｻ髱｢繧帝哩縺倥※荳隕ｧ蛛ｴ縺ｧ繝ｪ繝ｭ繝ｼ繝峨＆縺帙ｋ
     if (!mounted) return;
     Navigator.pop(context, true);
   }
@@ -648,7 +649,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               child: InputDecorator(
                 decoration: const InputDecoration(
-                  labelText: 'Fitモード',
+                  labelText: '表示フィット',
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
@@ -667,7 +668,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                       ),
                       DropdownMenuItem(
                         value: ReaderFitMode.contain,
-                        child: Text('全体表示(Contain)'),
+                        child: Text('全体表示 (Contain)'),
                       ),
                     ],
                     onChanged: (v) async {
@@ -680,7 +681,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               ),
             ),
             SwitchListTile(
-              title: const Text('見開き (ON/OFF)'),
+              title: const Text('見開き表示 (ON/OFF)'),
               value: _twoPage,
               onChanged: (v) async {
                 setState(() => _twoPage = v);
@@ -691,28 +692,28 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             const Divider(),
             _sidebarSectionLabel('フォルダ'),
             ListTile(
-              title: Text(_folder?.raw ?? '未選択'),
-              subtitle: const Text('表示するフォルダに切り替え'),
+              title: Text(_folder?.raw ?? '\u672a\u9078\u629e'),
+              subtitle: Text(widget.repo.isRemoteMode
+                  ? '\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f\u73fe\u5728\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u8868\u793a\u4e2d'
+                  : '\u8868\u793a\u3059\u308b\u30d5\u30a9\u30eb\u30c0\u306b\u5207\u308a\u66ff\u3048'),
               trailing: const Icon(Icons.folder_open),
-              onTap: () async {
-                _closeSidebar();
-
-                final folder = await widget.repo.pickFolder();
-                if (folder == null) return;
-
-                final items = await widget.repo.listMedia(folder);
-                if (!mounted) return;
-
-                await _saveLastFolder(folder);
-
-                setState(() {
-                  _folder = folder;
-                  _items = items;
-                  _index = 0;
-                  _page = 1;
-                });
-                _reloadForCurrent();
-              },
+              onTap: widget.repo.isRemoteMode
+                  ? null
+                  : () async {
+                      _closeSidebar();
+                      final folder = await widget.repo.pickFolder();
+                      if (folder == null) return;
+                      final items = await widget.repo.listMedia(folder);
+                      if (!mounted) return;
+                      await _saveLastFolder(folder);
+                      setState(() {
+                        _folder = folder;
+                        _items = items;
+                        _index = 0;
+                        _page = 1;
+                      });
+                      _reloadForCurrent();
+                    },
             ),
           ],
     );
@@ -764,7 +765,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     alignment: Alignment.centerRight,
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
-                      reverse: true, // 右端（操作側）を見せやすくする
+                      reverse: true, // 蜿ｳ遶ｯ・域桃菴懷・・峨ｒ隕九○繧・☆縺上☆繧・
                       child: _topReaderControls(),
                     ),
                   ),
@@ -794,7 +795,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
           actions: [
             IconButton(
-              tooltip: _isFavorite ? 'お気に入り解除' : 'お気に入り追加',
+              tooltip: _isFavorite ? 'お気に入りを解除' : 'お気に入りに追加',
               onPressed: _toggleFavorite,
               icon: Icon(_isFavorite ? Icons.star : Icons.star_border),
             ),
@@ -818,7 +819,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   value: _DetailMenuAction.delete,
                   child: ListTile(
                     leading: Icon(Icons.delete_outline),
-                    title: Text('保管庫から削除'),
+                    title: Text('ライブラリから削除'),
                   ),
                 ),
               ],
@@ -843,7 +844,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             actions: <Type, Action<Intent>>{
               _PrevIntent: CallbackAction<_PrevIntent>(
                 onInvoke: (intent) {
-                  // 閲覧用タブのときだけページを移動
+                  // 髢ｲ隕ｧ逕ｨ繧ｿ繝悶・縺ｨ縺阪□縺代・繝ｼ繧ｸ繧堤ｧｻ蜍・
                   if (_tab.index == 0) _prev();
                   return null;
                 },
@@ -859,7 +860,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   if (_fullscreen) {
                     _toggleFullscreen();
                   } else {
-                    _popWithResult(); // Gridページへ戻る
+                    _popWithResult(); // Grid繝壹・繧ｸ縺ｸ謌ｻ繧・
                   }
                   return null;
                 },
@@ -923,27 +924,27 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ),
         ),
 
-        // 端末タップでページ遷移（左=前 / 右=次）
+        // 遶ｯ譛ｫ繧ｿ繝・・縺ｧ繝壹・繧ｸ驕ｷ遘ｻ・亥ｷｦ=蜑・/ 蜿ｳ=谺｡・・
         Positioned.fill(
           child: LayoutBuilder(
             builder: (context, c) {
               return GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onTapUp: (details) {
-                  // 閲覧用タブ以外は無視する
+                  // 髢ｲ隕ｧ逕ｨ繧ｿ繝紋ｻ･螟悶・辟｡隕悶☆繧・
                   if (_tab.index != 0) return;
 
                   final dx = details.localPosition.dx;
                   final w = c.maxWidth;
 
-                  // 中央は無反応に
+                  // 荳ｭ螟ｮ縺ｯ辟｡蜿榊ｿ懊↓
                   final leftEdge = w * 0.35;
                   final rightEdge = w * 0.65;
 
                   if (dx < leftEdge) {
-                    _prev(); // 左タップ → 前
+                    _prev(); // 蟾ｦ繧ｿ繝・・ 竊・蜑・
                   } else if (dx > rightEdge) {
-                    _next(); // 右タップ → 次
+                    _next(); // 蜿ｳ繧ｿ繝・・ 竊・谺｡
                   }
                 },
               );
@@ -968,10 +969,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           return const Center(child: CircularProgressIndicator());
         }
 
-        // 見開きは「縦合わせ」＋「綴じ側寄せ」が一番安定しやすかった
+        // 隕矩幕縺阪・縲檎ｸｦ蜷医ｏ縺帙搾ｼ九檎ｶｴ縺伜・蟇・○縲阪′荳逡ｪ螳牙ｮ壹＠繧・☆縺九▲縺・
         final fit = isSpread ? BoxFit.fitHeight : _boxFit;
 
-        //pdfの背景に白を追加（透明で透けて見える）
+        //pdf縺ｮ閭梧勹縺ｫ逋ｽ繧定ｿｽ蜉・磯乗・縺ｧ騾上￠縺ｦ隕九∴繧具ｼ・
         final img = Image.memory(
           snap.data!,
           fit: fit,
@@ -1003,7 +1004,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       padding: const EdgeInsets.all(12),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // 下に表示するグリッドの高さ、画面35％ほどを参照
+          // 荳九↓陦ｨ遉ｺ縺吶ｋ繧ｰ繝ｪ繝・ラ縺ｮ鬮倥＆縲∫判髱｢35・・⊇縺ｩ繧貞盾辣ｧ
           final gridHeight = (constraints.maxHeight * 0.35).clamp(180.0, 420.0);
 
           return SingleChildScrollView(
@@ -1035,14 +1036,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     ),
                     if (_isPdf)
                       IconButton(
-                        tooltip: 'PDF名を変更',
+                        tooltip: 'PDF 名を変更',
                         icon: const Icon(Icons.edit, color: Colors.white),
                         onPressed: _renameCurrentPdf,
                       ),
                   ],
                 ),
 
-                // Tags（タグ）
+                // Tags・医ち繧ｰ・・
                 const SizedBox(height: 10),
                 LayoutBuilder(
                   builder: (context, c) {
@@ -1055,7 +1056,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                         items: const [
                           DropdownMenuItem(
                             value: TagCategory.artist,
-                            child: Text('作者'),
+                            child: Text('作家'),
                           ),
                           DropdownMenuItem(
                             value: TagCategory.series,
@@ -1063,7 +1064,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                           ),
                           DropdownMenuItem(
                             value: TagCategory.mediaType,
-                            child: Text('形式(漫画/イラスト)'),
+                            child: Text('メディア種別'),
                           ),
                           DropdownMenuItem(
                             value: TagCategory.character,
@@ -1077,7 +1078,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                         onChanged: (v) async {
                           if (v == null) return;
                           setState(() => _selectedCategory = v);
-                          await _loadMasterTags(); // ★候補をカテゴリごとに更新
+                          await _loadMasterTags(); // 笘・呵｣懊ｒ繧ｫ繝・ざ繝ｪ縺斐→縺ｫ譖ｴ譁ｰ
                         },
                       ),
                     );
@@ -1085,7 +1086,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     final inputField = TextField(
                       controller: _tagCtrl,
                       decoration: const InputDecoration(
-                        hintText: 'タグ（#不要 / 空白なし）',
+                        hintText: 'タグ名を入力 / 空白は不可',
                         isDense: true,
                         border: OutlineInputBorder(),
                       ),
@@ -1155,12 +1156,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   ],
                 ),
 
-                // --- Tags (カテゴリ候補) ---
+                // --- Tags (繧ｫ繝・ざ繝ｪ蛟呵｣・ ---
                 const SizedBox(height: 14),
 
                 Row(
                   children: [
-                    const Text('候補（このカテゴリ）'),
+                    const Text('タグ候補（このカテゴリ）'),
                     const SizedBox(width: 8),
                     if (_masterLoading)
                       const SizedBox(
@@ -1170,7 +1171,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                       ),
                     const Spacer(),
                     IconButton(
-                      tooltip: '再読込',
+                      tooltip: '再読み込み',
                       onPressed: () =>
                           _loadMasterTags(contains: _masterFilterCtrl.text),
                       icon: const Icon(Icons.refresh),
@@ -1223,7 +1224,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                             onPressed: () => _addExistingMasterTag(t),
                           ),
                         if (_masterTags.isEmpty && !_masterLoading)
-                          const Text('候補がありません（追加するとここに蓄積されます）'),
+                          const Text('タグ候補がありません。追加するとここに表示されます。'),
                       ],
                     ),
                   ),
@@ -1231,7 +1232,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
                 const SizedBox(height: 12),
 
-                // --- PDFをスクロール内に固定高さで入れる ---
+                // --- PDF繧偵せ繧ｯ繝ｭ繝ｼ繝ｫ蜀・↓蝗ｺ螳夐ｫ倥＆縺ｧ蜈･繧後ｋ ---
                 if (_isPdf)
                   SizedBox(height: gridHeight, child: _buildPdfThumbGrid(item))
                 else
@@ -1239,7 +1240,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     padding: const EdgeInsets.only(top: 12),
                     child: Center(
                       child: Text(
-                        '画像はサムネ一覧なし',
+                        '画像はサムネイル一覧がありません',
                         style: Theme.of(
                           context,
                         ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
@@ -1276,7 +1277,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
-          tooltip: '次',
+          tooltip: '谺｡',
           onPressed: canNext ? _next : null,
           icon: const Icon(Icons.chevron_right),
           visualDensity: VisualDensity.compact,
@@ -1296,7 +1297,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ),
         ),
 
-        // 見開きはPDFだけ
+        // 隕矩幕縺阪・PDF縺縺・
         if (_isPdf)
           TextButton.icon(
             style: TextButton.styleFrom(
@@ -1310,7 +1311,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             ),
             icon: const Icon(Icons.swap_horiz, size: 18),
             label: Text(
-              _twoPage ? '見開きON' : '見開きOFF',
+              _twoPage ? '見開き ON' : '見開き OFF',
               style: const TextStyle(fontSize: 12),
             ),
             onPressed: () async {
@@ -1323,7 +1324,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
         const SizedBox(width: 6),
 
-        // Fit （全体を表示するモード）
+        // Fit ・亥・菴薙ｒ陦ｨ遉ｺ縺吶ｋ繝｢繝ｼ繝会ｼ・
         PopupMenuButton<ReaderFitMode>(
           tooltip: 'Fit',
           initialValue: _fitMode,
@@ -1339,7 +1340,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             ),
             PopupMenuItem(
               value: ReaderFitMode.contain,
-              child: Text('全体表示(Contain)'),
+              child: Text('全体表示 (Contain)'),
             ),
           ],
           child: Container(
@@ -1445,3 +1446,5 @@ class _NextIntent extends Intent {
 class _EscapeIntent extends Intent {
   const _EscapeIntent();
 }
+
+
