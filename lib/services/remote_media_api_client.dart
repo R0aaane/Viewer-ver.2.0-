@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -270,7 +270,9 @@ class RemoteMediaApiClient {
       final response = await request.close().timeout(timeout);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        final payload = await response.transform(utf8.decoder).join();
+        final payload = await response
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
         final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
         throw RemoteMediaException(
           _extractErrorMessage(jsonBody) ?? _messageForStatus(response.statusCode),
@@ -455,7 +457,9 @@ class RemoteMediaApiClient {
       request.write('--$boundary--\r\n');
 
       final response = await request.close().timeout(timeout);
-      final payload = await response.transform(utf8.decoder).join();
+      final payload = await response
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
       final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -491,12 +495,74 @@ class RemoteMediaApiClient {
     }
   }
 
+  Future<UrlImportResult> downloadUrl({
+    required String folderRaw,
+    required String sourceUrl,
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+  }) async {
+    final effectiveOptions = options ?? const UrlImportOptions();
+    final sourceUrls = effectiveOptions.collectSourceUrls(sourceUrl);
+    final artistTag = importMetadata?.artistTag?.trim();
+    final seriesTag = importMetadata?.seriesTag?.trim();
+    final targetCollection = importMetadata?.targetCollection?.trim();
+    final cookieFilePath = effectiveOptions.normalizedCookieFilePath;
+    final urlListFilePath = effectiveOptions.normalizedUrlListFilePath;
+    final favoriteSites = effectiveOptions.normalizedFavoriteSites;
+    final favoriteUserServices = effectiveOptions.normalizedFavoriteUserServices;
+
+    final jsonBody = await _sendJsonRequest(
+      'POST',
+      '/download-url',
+      body: <String, dynamic>{
+        'folderRaw': folderRaw,
+        'url': sourceUrl,
+        'urls': sourceUrls,
+        if (cookieFilePath != null) 'cookieFilePath': cookieFilePath,
+        'cookieMode': effectiveOptions.cookieMode.apiValue,
+        if (urlListFilePath != null) 'urlListFilePath': urlListFilePath,
+        if (favoriteSites.isNotEmpty) 'sites': favoriteSites,
+        'favoritePosts': effectiveOptions.favoritePosts,
+        if (favoriteUserServices.isNotEmpty)
+          'favoriteUserServices': favoriteUserServices,
+        'mediaType': effectiveOptions.mediaType.apiValue,
+        'parallelDownloads': effectiveOptions.effectiveParallelDownloads,
+        'inline': effectiveOptions.includeInlineImages,
+        'content': effectiveOptions.includePostContent,
+        'comments': effectiveOptions.includeComments,
+        'saveJson': effectiveOptions.saveJson,
+        'overwrite': effectiveOptions.overwriteExistingFiles,
+        'verbose': effectiveOptions.verbose,
+        'convertHitomiToPdf': effectiveOptions.convertHitomiToPdf,
+        if (artistTag != null && artistTag.isNotEmpty) 'artistTag': artistTag,
+        if (seriesTag != null && seriesTag.isNotEmpty) 'seriesTag': seriesTag,
+        if (importMetadata != null && importMetadata.freeTags.isNotEmpty)
+          'freeTags': importMetadata.freeTags,
+        if (importMetadata != null && importMetadata.characterTags.isNotEmpty)
+          'characterTags': importMetadata.characterTags,
+        if (targetCollection != null && targetCollection.isNotEmpty)
+          'targetCollection': targetCollection,
+        'organizeAfterImport': importMetadata?.organizeAfterImport ?? false,
+      },
+    );
+
+    if (jsonBody is! Map<String, dynamic>) {
+      return const UrlImportResult(importedCount: 0);
+    }
+
+    return UrlImportResult(
+      importedCount: _asInt(jsonBody['importedCount']) ?? 0,
+      skippedCount: _asInt(jsonBody['skippedCount']) ?? 0,
+      failedCount: _asInt(jsonBody['failedCount']) ?? 0,
+    );
+  }
+
   Future<dynamic> _getJson(
     String path, {
     Map<String, String>? queryParameters,
   }) async {
     final bytes = await _getBytes(path, queryParameters: queryParameters);
-    final raw = utf8.decode(bytes);
+    final raw = utf8.decode(bytes, allowMalformed: true);
     if (raw.trim().isEmpty) {
       return <String, dynamic>{};
     }
@@ -523,7 +589,9 @@ class RemoteMediaApiClient {
       }
 
       final response = await request.close().timeout(timeout);
-      final payload = await response.transform(utf8.decoder).join();
+      final payload = await response
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
       final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -748,3 +816,7 @@ class RemoteMediaApiClient {
     }
   }
 }
+
+
+
+

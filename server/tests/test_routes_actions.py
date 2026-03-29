@@ -4,9 +4,16 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from server.api.routes_actions import apply_delete, apply_rename, upload_files
+from server.api.routes_actions import apply_delete, apply_rename, download_url, upload_files
 from server.core.errors import ApiError, bad_request
-from server.models.dto import DeleteItemRequest, DeleteRequest, RenameRequest, RenameSideDto
+from server.models.dto import (
+    DeleteItemRequest,
+    DeleteRequest,
+    DownloadUrlRequest,
+    RenameRequest,
+    RenameSideDto,
+)
+from server.services.url_download_service import UrlDownloadError, UrlDownloadResult
 
 
 class _RecordingMetadataStore:
@@ -116,6 +123,41 @@ class _UploadMetadataStore:
         return {source: target}
 
 
+class _FakeUrlDownloadService:
+    def __init__(
+        self,
+        *,
+        result: UrlDownloadResult | None = None,
+        error: Exception | None = None,
+        on_call=None,
+    ) -> None:
+        self.result = result or UrlDownloadResult(imported_count=1)
+        self.error = error
+        self.on_call = on_call
+        self.calls: list[dict[str, str]] = []
+
+    async def download_url(
+        self,
+        *,
+        source_url: str,
+        destination_folder: str,
+        options=None,
+        on_event=None,
+    ) -> UrlDownloadResult:
+        self.calls.append(
+            {
+                'source_url': source_url,
+                'destination_folder': destination_folder,
+                'options': options,
+            }
+        )
+        if self.on_call is not None:
+            self.on_call(source_url, destination_folder)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
 class _FakeUploadFile:
     def __init__(self, filename: str, data: bytes) -> None:
         self.filename = filename
@@ -142,6 +184,7 @@ def _request(
     *,
     index_service: object | None = None,
     media_roots: list[str] | None = None,
+    url_download_service: object | None = None,
 ):
     return SimpleNamespace(
         app=SimpleNamespace(
@@ -149,6 +192,7 @@ def _request(
                 metadata_store=metadata_store,
                 index_service=index_service,
                 settings=SimpleNamespace(media_roots=media_roots or []),
+                url_download_service=url_download_service or _FakeUrlDownloadService(),
             )
         )
     )
@@ -274,6 +318,81 @@ class ActionsRoutesTest(unittest.TestCase):
                 ],
             )
 
+    def test_download_url_applies_tags_after_downloader_creates_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            index_service = _RecordingIndexService()
+
+            def _create_downloaded_file(_: str, destination_folder: str) -> None:
+                creator_dir = os.path.join(destination_folder, 'patreon', 'artist [123]')
+                os.makedirs(creator_dir, exist_ok=True)
+                with open(os.path.join(creator_dir, 'sample.jpg'), 'wb') as handle:
+                    handle.write(b'abc123')
+
+            downloader = _FakeUrlDownloadService(
+                result=UrlDownloadResult(imported_count=1, skipped_count=0, failed_count=0),
+                on_call=_create_downloaded_file,
+            )
+            request = _request(
+                metadata_store,
+                index_service=index_service,
+                media_roots=[temp_dir],
+                url_download_service=downloader,
+            )
+
+            response = asyncio.run(
+                download_url(
+                    request,
+                    DownloadUrlRequest(
+                        folderRaw=temp_dir,
+                        url='https://kemono.su/patreon/user/123/post/456',
+                        artistTag='Artist',
+                        seriesTag='Series',
+                        freeTags=['bonus'],
+                        characterTags=['Heroine'],
+                        targetCollection='library',
+                        organizeAfterImport=True,
+                    ),
+                )
+            )
+
+            self.assertEqual(response.importedCount, 1)
+            self.assertEqual(response.skippedCount, 0)
+            self.assertEqual(response.failedCount, 0)
+            self.assertEqual(response.taggedCount, 1)
+            self.assertEqual(response.organizedCount, 1)
+            self.assertEqual(response.rescannedCount, 2)
+            self.assertEqual(response.targetCollection, 'library')
+            self.assertEqual(index_service.scan_calls, [temp_dir, temp_dir])
+            self.assertEqual(len(downloader.calls), 1)
+            self.assertEqual(downloader.calls[0]['source_url'], 'https://kemono.su/patreon/user/123/post/456')
+            self.assertEqual(downloader.calls[0]['destination_folder'], temp_dir)
+            self.assertEqual(len(metadata_store.add_tag_calls), 1)
+
+    def test_download_url_surfaces_downloader_errors_as_api_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            request = _request(
+                _UploadMetadataStore(),
+                index_service=_RecordingIndexService(),
+                media_roots=[temp_dir],
+                url_download_service=_FakeUrlDownloadService(
+                    error=UrlDownloadError('download failed'),
+                ),
+            )
+
+            with self.assertRaises(ApiError):
+                asyncio.run(
+                    download_url(
+                        request,
+                        DownloadUrlRequest(
+                            folderRaw=temp_dir,
+                            url='https://kemono.su/patreon/user/123/post/456',
+                        ),
+                    )
+                )
+
 
 if __name__ == '__main__':
     unittest.main()
+
+

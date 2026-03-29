@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
@@ -11,6 +11,8 @@ from server.services.metadata_store import build_media_id
 
 
 logger = logging.getLogger(__name__)
+
+mimetypes.add_type('image/avif', '.avif')
 
 
 def _normalize_path(raw: str) -> str:

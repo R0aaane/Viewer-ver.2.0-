@@ -88,6 +88,9 @@ class RemoteMediaRepository implements MediaRepository {
   bool get isHostMode => false;
 
   @override
+  bool get canImportFromUrl => true;
+
+  @override
   Future<void> reloadSettings() async {}
 
   @override
@@ -321,6 +324,9 @@ class RemoteMediaRepository implements MediaRepository {
     if (meta.mimeType == 'image/png') {
       return '.png';
     }
+    if (meta.mimeType == 'image/avif') {
+      return '.avif';
+    }
     if (meta.mimeType == 'image/webp') {
       return '.webp';
     }
@@ -540,6 +546,29 @@ class RemoteMediaRepository implements MediaRepository {
       onProgress: onProgress,
     );
   }
+
+  @override
+  Future<UrlImportResult> importFromUrlIntoFolder(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    final trimmedUrl = sourceUrl.trim();
+    final effectiveOptions = options ?? const UrlImportOptions();
+    if (!effectiveOptions.hasAnySource(trimmedUrl)) {
+      throw const RemoteMediaException('URL、URL 一覧ファイル、またはお気に入り条件を入力してください');
+    }
+
+    return _client.downloadUrl(
+      folderRaw: folder.raw,
+      sourceUrl: trimmedUrl,
+      importMetadata: importMetadata,
+      options: effectiveOptions,
+    );
+  }
+
 
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
@@ -897,6 +926,9 @@ class SwitchingMediaRepository implements MediaRepository {
   bool get isHostMode => _settings.appMode == AppMode.host;
 
   @override
+  bool get canImportFromUrl => _activeRepository.canImportFromUrl;
+
+  @override
   Future<void> reloadSettings() async {
     _settings = await _settingsService.loadMetadataSettings();
     if (_settings.isClientMode) {
@@ -976,6 +1008,23 @@ class SwitchingMediaRepository implements MediaRepository {
     onProgress: onProgress,
   );
 
+
+  @override
+  Future<UrlImportResult> importFromUrlIntoFolder(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) {
+    return _activeRepository.importFromUrlIntoFolder(
+      folder,
+      sourceUrl,
+      importMetadata: importMetadata,
+      options: options,
+      onProgress: onProgress,
+    );
+  }
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) {
     return _activeRepository.readThumbPair(item, maxWidth: maxWidth);

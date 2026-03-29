@@ -9,6 +9,12 @@ void main() {
       expect(MediaFileTypes.imageMimeTypeForFileName('cover.bmp'), 'image/bmp');
     });
 
+    test('treats avif as a supported image format', () {
+      expect(MediaFileTypes.isSupportedImageFileName('cover.AVIF'), isTrue);
+      expect(MediaFileTypes.isSupportedMediaFileName('cover.AVIF'), isTrue);
+      expect(MediaFileTypes.imageMimeTypeForFileName('cover.avif'), 'image/avif');
+    });
+
     test('rejects unsupported media extensions', () {
       expect(MediaFileTypes.isSupportedImageFileName('cover.gif'), isFalse);
       expect(MediaFileTypes.isSupportedMediaFileName('cover.gif'), isFalse);

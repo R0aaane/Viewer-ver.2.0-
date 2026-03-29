@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
@@ -87,6 +87,44 @@ class RescanRequest(BaseModel):
     folderRaw: str | None = None
 
 
+class DownloadUrlRequest(BaseModel):
+    folderRaw: str
+    url: str = ""
+    urls: list[str] = Field(default_factory=list)
+    cookieFilePath: str | None = None
+    cookieMode: Literal['auto', 'none', 'project_kemono', 'project_coomer', 'project_combined', 'custom'] = 'auto'
+    urlListFilePath: str | None = None
+    sites: list[str] = Field(default_factory=list)
+    favoritePosts: bool = False
+    favoriteUserServices: list[str] = Field(default_factory=list)
+    mediaType: Literal["images", "videos", "images_videos", "all"] = "all"
+    parallelDownloads: int = 6
+    inline: bool = False
+    content: bool = False
+    comments: bool = False
+    saveJson: bool = False
+    overwrite: bool = False
+    verbose: bool = False
+    convertHitomiToPdf: bool = True
+    artistTag: str | None = None
+    seriesTag: str | None = None
+    freeTags: list[str] = Field(default_factory=list)
+    characterTags: list[str] = Field(default_factory=list)
+    targetCollection: str | None = None
+    organizeAfterImport: bool = False
+
+
+class DownloadUrlResponse(BaseModel):
+    ok: bool = True
+    importedCount: int
+    skippedCount: int
+    failedCount: int
+    taggedCount: int = 0
+    organizedCount: int = 0
+    rescannedCount: int = 0
+    targetCollection: str | None = None
+
+
 class RenameSideDto(BaseModel):
     mediaId: str | None = None
     path: str | None = None
@@ -165,3 +203,5 @@ class MediaMetaResponse(BaseModel):
     modifiedAt: datetime | None = None
     etag: str | None = None
     supportsRange: bool = True
+
+

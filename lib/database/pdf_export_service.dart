@@ -8,6 +8,7 @@ import 'package:image/image.dart' as im;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../media_file_types.dart';
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 
@@ -132,7 +133,10 @@ class PdfExportService {
 
     try {
       for (int i = 0; i < total; i++) {
-        final bytes = await repo.readBytes(targets[i]);
+        final item = targets[i];
+        final bytes = MediaFileTypes.extensionOf(item.displayName) == '.avif'
+            ? await repo.renderPageBytes(item, 1, maxWidth: 2800)
+            : await repo.readBytes(item);
         await worker.addImage(TransferableTypedData.fromList([bytes]));
         onProgress?.call(i + 1, total);
 

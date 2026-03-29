@@ -47,6 +47,9 @@ class AndroidFolderRepository implements MediaRepository {
   bool get isHostMode => false;
 
   @override
+  bool get canImportFromUrl => false;
+
+  @override
   Future<void> reloadSettings() async {}
 
   @override
@@ -870,7 +873,17 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     int page, {
     int maxWidth = 1600,
   }) async {
-    if (item.kind != MediaKind.pdf) return readBytes(item);
+    if (item.kind != MediaKind.pdf) {
+      final bytes = await readBytes(item);
+      if (_lowerExt(item.displayName) == '.avif' || _lowerExt(item.id) == '.avif') {
+        try {
+          return await _makeImageThumb(bytes, maxWidth);
+        } catch (_) {
+          return bytes;
+        }
+      }
+      return bytes;
+    }
     final doc = await _openPdf(item.id);
     final total = doc.pagesCount;
     final p = page.clamp(1, total);
@@ -1311,6 +1324,17 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       }
       return ok;
     });
+  }
+
+  @override
+  Future<UrlImportResult> importFromUrlIntoFolder(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    throw UnsupportedError('URL import is not supported on Android');
   }
 
   @override

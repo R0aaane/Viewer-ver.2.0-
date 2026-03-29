@@ -6,8 +6,16 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from server.core.errors import bad_request
 from server.core.media_formats import is_supported_media_extension, normalized_extension
-from server.models.dto import DeleteRequest, MessageResponse, RenameRequest, RescanRequest
+from server.models.dto import (
+    DeleteRequest,
+    DownloadUrlRequest,
+    DownloadUrlResponse,
+    MessageResponse,
+    RenameRequest,
+    RescanRequest,
+)
 from server.services.auth_service import require_bearer_token
+from server.services.url_download_service import UrlDownloadError, UrlDownloadOptions
 
 
 router = APIRouter(tags=["actions"], dependencies=[Depends(require_bearer_token)])
@@ -146,6 +154,110 @@ async def upload_files(
     return response
 
 
+@router.post("/download-url", response_model=DownloadUrlResponse)
+async def download_url(
+    request: Request,
+    payload: DownloadUrlRequest,
+) -> DownloadUrlResponse:
+    source_url = payload.url.strip() or "\n".join(entry.strip() for entry in payload.urls if entry.strip())
+    options = UrlDownloadOptions(
+        cookie_file_path=payload.cookieFilePath,
+        cookie_mode=payload.cookieMode,
+        url_list_file_path=payload.urlListFilePath,
+        sites=payload.sites,
+        favorite_posts=payload.favoritePosts,
+        favorite_user_services=payload.favoriteUserServices,
+        media_type=payload.mediaType,
+        parallel_downloads=payload.parallelDownloads,
+        include_inline_images=payload.inline,
+        include_post_content=payload.content,
+        include_comments=payload.comments,
+        save_json=payload.saveJson,
+        overwrite_existing_files=payload.overwrite,
+        verbose=payload.verbose,
+        convert_hitomi_to_pdf=payload.convertHitomiToPdf,
+    )
+    if not options.has_any_source(source_url):
+        raise bad_request("URL、URL 一覧ファイル、またはお気に入り条件を入力してください")
+
+    settings = request.app.state.settings
+    folder_path = os.path.normpath(payload.folderRaw)
+    if not os.path.isdir(folder_path):
+        raise bad_request(f"保存先フォルダが存在しません: {payload.folderRaw}")
+    if settings.media_roots and not any(_is_inside_root(folder_path, root) for root in settings.media_roots):
+        raise bad_request("保存先フォルダが共有対象に含まれていません")
+
+    before_paths = _collect_media_paths(folder_path)
+
+    try:
+        download_result = await request.app.state.url_download_service.download_url(
+            source_url=source_url,
+            destination_folder=folder_path,
+            options=options,
+        )
+    except UrlDownloadError as error:
+        raise bad_request(str(error)) from error
+
+    tagged_count = 0
+    organized_count = 0
+    rescanned_count = 0
+
+    if download_result.imported_count > 0:
+        index_service = request.app.state.index_service
+        metadata_store = request.app.state.metadata_store
+        rescanned_count = index_service.scan_folder(folder_path)
+
+        import_tags = _build_import_tags(
+            artist_tag=payload.artistTag,
+            series_tag=payload.seriesTag,
+            free_tags=payload.freeTags,
+            character_tags=payload.characterTags,
+        )
+
+        after_paths = _collect_media_paths(folder_path)
+        imported_paths = sorted(after_paths.difference(before_paths))
+
+        imported_media_ids: list[str] = []
+        unresolved_paths: list[str] = []
+        for saved_path in imported_paths:
+            try:
+                imported_media_ids.append(
+                    metadata_store.resolve_media_id(
+                        saved_path,
+                        identity={"aliases": [saved_path]},
+                    )
+                )
+            except Exception:
+                unresolved_paths.append(saved_path)
+
+        if unresolved_paths and (import_tags or payload.organizeAfterImport):
+            failed_name = os.path.basename(unresolved_paths[0])
+            raise bad_request(f"取り込み後のメディア認識に失敗しました: {failed_name}")
+
+        if import_tags and imported_media_ids:
+            for media_id in imported_media_ids:
+                metadata_store.add_tags_to_media(media_id, import_tags)
+            tagged_count = len(imported_media_ids)
+
+        if payload.organizeAfterImport and imported_media_ids:
+            organized = metadata_store.organize_media_by_tags(
+                library_root=folder_path,
+                media_ids=imported_media_ids,
+            )
+            organized_count = len(organized)
+            rescanned_count = index_service.scan_folder(folder_path)
+
+    return DownloadUrlResponse(
+        importedCount=download_result.imported_count,
+        skippedCount=download_result.skipped_count,
+        failedCount=download_result.failed_count,
+        taggedCount=tagged_count,
+        organizedCount=organized_count,
+        rescannedCount=rescanned_count,
+        targetCollection=payload.targetCollection,
+    )
+
+
 @router.post("/rename", response_model=MessageResponse)
 def apply_rename(request: Request, payload: RenameRequest) -> MessageResponse:
     before = payload.before
@@ -245,5 +357,19 @@ def _unique_path(folder_path: str, file_name: str) -> str:
         candidate = os.path.join(folder_path, f"{base} ({index}){suffix}")
         index += 1
     return candidate
+
+
+def _collect_media_paths(folder_path: str) -> set[str]:
+    found: set[str] = set()
+    for base, _, files in os.walk(folder_path):
+        for file_name in files:
+            if not is_supported_media_extension(normalized_extension(file_name)):
+                continue
+            found.add(os.path.normpath(os.path.join(base, file_name)))
+    return found
+
+
+
+
 
 

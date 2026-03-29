@@ -1,0 +1,25 @@
+# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+hitomi.la	FALSE	/	TRUE	1809083570	doujinshi	fit_vertical
+hitomi.la	FALSE	/	FALSE	1808461370	__PPU_puid	16730933913470991687
+hitomi.la	FALSE	/	TRUE	1808562835	manga-spread	full_spread
+hitomi.la	FALSE	/	TRUE	1808558250	manga	fit_vertical
+hitomi.la	FALSE	/	FALSE	1804098255	userToken	ef36c5fb-a6f3-4bd2-af24-25628e0b3660
+hitomi.la	FALSE	/	TRUE	1809083583	doujinshi-spread	single_page
+hitomi.la	FALSE	/	TRUE	1808555947	artistcg	fit_vertical
+hitomi.la	FALSE	/	FALSE	1775150350	_uclicks	23
+hitomi.la	FALSE	/	FALSE	1775150350	popFires	23
+hitomi.la	FALSE	/	TRUE	1808555852	imageset-spread	full_spread
+hitomi.la	FALSE	/	TRUE	1808555732	imageset	fit_vertical
+hitomi.la	FALSE	/	FALSE	1808461374	UGVyc2lzdFN0b3JhZ2U	%7B%22CAIFRQ%22%3A%22ADqXXgAAAAAAAAABADSIlQAAAAAAAAAB%22%2C%22CAIFRT%22%3A%22ADqXXgAAAABpvSiwADSIlQAAAABpvSiw%22%7D
+hitomi.la	FALSE	/	TRUE	1808555956	artistcg-spread	single_page
+hitomi.la	FALSE	/	TRUE	0	x89Bqq9MkBGvxH2u	1
+hitomi.la	FALSE	/	TRUE	1774609970	pve	0
+hitomi.la	FALSE	/	TRUE	1774525076	a0e_date	Thu%20Mar%2026%202026%2020:37:56%20GMT+0900%20(%E6%97%A5%E6%9C%AC%E6%A8%99%E6%BA%96%E6%99%82)
+hitomi.la	FALSE	/	TRUE	1774525076	pvp_date	Thu%20Mar%2026%202026%2020:37:56%20GMT+0900%20(%E6%97%A5%E6%9C%AC%E6%A8%99%E6%BA%96%E6%99%82)
+hitomi.la	FALSE	/	TRUE	1774524529	last_visited_recently	1773997418618
+hitomi.la	FALSE	/	TRUE	1809083329	last_visited_epoch	1774523329053
+hitomi.la	FALSE	/	TRUE	1774525076	pvp	13
+hitomi.la	FALSE	/	TRUE	1774525076	a0e	18

@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+﻿import 'dart:typed_data';
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
@@ -30,6 +30,20 @@ class RepositoryCapabilities {
     required this.canBatchUpload,
     required this.canAssignImportTags,
   });
+}
+
+class UrlImportResult {
+  final int importedCount;
+  final int skippedCount;
+  final int failedCount;
+
+  const UrlImportResult({
+    required this.importedCount,
+    this.skippedCount = 0,
+    this.failedCount = 0,
+  });
+
+  bool get hasChanges => importedCount > 0;
 }
 
 enum ImportSourceKind {
@@ -74,6 +88,210 @@ class ImportRequest {
   });
 }
 
+enum UrlImportMediaType {
+  images,
+  videos,
+  imagesVideos,
+  all,
+}
+
+extension UrlImportMediaTypeValue on UrlImportMediaType {
+  String get apiValue => switch (this) {
+    UrlImportMediaType.images => 'images',
+    UrlImportMediaType.videos => 'videos',
+    UrlImportMediaType.imagesVideos => 'images_videos',
+    UrlImportMediaType.all => 'all',
+  };
+}
+
+enum UrlImportCookieMode {
+  auto,
+  none,
+  projectKemono,
+  projectCoomer,
+  projectCombined,
+  customFile,
+}
+
+extension UrlImportCookieModeValue on UrlImportCookieMode {
+  String get apiValue => switch (this) {
+    UrlImportCookieMode.auto => 'auto',
+    UrlImportCookieMode.none => 'none',
+    UrlImportCookieMode.projectKemono => 'project_kemono',
+    UrlImportCookieMode.projectCoomer => 'project_coomer',
+    UrlImportCookieMode.projectCombined => 'project_combined',
+    UrlImportCookieMode.customFile => 'custom',
+  };
+}
+
+class UrlImportOptions {
+  final UrlImportCookieMode cookieMode;
+  final String? cookieFilePath;
+  final String? urlListFilePath;
+  final List<String> favoriteSites;
+  final bool favoritePosts;
+  final List<String> favoriteUserServices;
+  final UrlImportMediaType mediaType;
+  final int parallelDownloads;
+  final bool includeInlineImages;
+  final bool includePostContent;
+  final bool includeComments;
+  final bool saveJson;
+  final bool overwriteExistingFiles;
+  final bool verbose;
+  final bool convertHitomiToPdf;
+
+  const UrlImportOptions({
+    this.cookieMode = UrlImportCookieMode.auto,
+    this.cookieFilePath,
+    this.urlListFilePath,
+    this.favoriteSites = const <String>[],
+    this.favoritePosts = false,
+    this.favoriteUserServices = const <String>[],
+    this.mediaType = UrlImportMediaType.all,
+    this.parallelDownloads = 6,
+    this.includeInlineImages = false,
+    this.includePostContent = false,
+    this.includeComments = false,
+    this.saveJson = false,
+    this.overwriteExistingFiles = false,
+    this.verbose = false,
+    this.convertHitomiToPdf = true,
+  });
+
+  List<String> collectSourceUrls(String sourceUrl) {
+    final urls = <String>[];
+    final seen = <String>{};
+    for (final segment in sourceUrl.split(RegExp(r'[\r\n,]+'))) {
+      final trimmed = segment.trim();
+      if (trimmed.isEmpty) continue;
+      if (seen.add(trimmed)) {
+        urls.add(trimmed);
+      }
+    }
+    return urls;
+  }
+
+  String? get normalizedCookieFilePath {
+    final trimmed = cookieFilePath?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  String? get normalizedUrlListFilePath {
+    final trimmed = urlListFilePath?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  List<String> get normalizedFavoriteSites {
+    final sites = <String>[];
+    final seen = <String>{};
+    for (final site in favoriteSites) {
+      final normalized = site.trim().toLowerCase();
+      if (normalized.isEmpty) continue;
+      if (seen.add(normalized)) {
+        sites.add(normalized);
+      }
+    }
+    return sites;
+  }
+
+  List<String> get normalizedFavoriteUserServices {
+    final services = <String>[];
+    final seen = <String>{};
+    for (final service in favoriteUserServices) {
+      final normalized = service.trim().toLowerCase();
+      if (normalized.isEmpty) continue;
+      if (seen.add(normalized)) {
+        services.add(normalized);
+      }
+    }
+    return services;
+  }
+
+  bool get hasFavoriteTargets {
+    return favoritePosts || normalizedFavoriteUserServices.isNotEmpty;
+  }
+
+  bool get usesCustomCookieFile => cookieMode == UrlImportCookieMode.customFile;
+
+  bool get hasCookieSelection => switch (cookieMode) {
+    UrlImportCookieMode.none => false,
+    UrlImportCookieMode.customFile => normalizedCookieFilePath != null,
+    _ => true,
+  };
+
+  int get effectiveParallelDownloads =>
+      parallelDownloads < 1 ? 1 : parallelDownloads;
+
+  List<String> inferCookieSites(String sourceUrl) {
+    final sites = <String>[];
+    final seen = <String>{};
+
+    void addSite(String site) {
+      if (seen.add(site)) {
+        sites.add(site);
+      }
+    }
+
+    for (final site in normalizedFavoriteSites) {
+      if (site == 'kemono' || site == 'coomer') {
+        addSite(site);
+      }
+    }
+
+    for (final url in collectSourceUrls(sourceUrl)) {
+      final lower = url.toLowerCase();
+      if (lower.contains('kemono.')) {
+        addSite('kemono');
+      } else if (lower.contains('coomer.')) {
+        addSite('coomer');
+      }
+    }
+
+    return sites;
+  }
+
+  String? resolveProjectCookieProfile(String sourceUrl) {
+    switch (cookieMode) {
+      case UrlImportCookieMode.none:
+      case UrlImportCookieMode.customFile:
+        return null;
+      case UrlImportCookieMode.projectKemono:
+        return 'kemono';
+      case UrlImportCookieMode.projectCoomer:
+        return 'coomer';
+      case UrlImportCookieMode.projectCombined:
+        return 'combined';
+      case UrlImportCookieMode.auto:
+        final sites = inferCookieSites(sourceUrl);
+        final hasKemono = sites.contains('kemono');
+        final hasCoomer = sites.contains('coomer');
+        if (hasKemono && hasCoomer) {
+          return 'combined';
+        }
+        if (hasKemono) {
+          return 'kemono';
+        }
+        if (hasCoomer) {
+          return 'coomer';
+        }
+        return null;
+    }
+  }
+
+  bool hasAnySource(String sourceUrl) {
+    return collectSourceUrls(sourceUrl).isNotEmpty ||
+        normalizedUrlListFilePath != null ||
+        hasFavoriteTargets;
+  }
+}
+
 class ThumbPair {
   final Uint8List front;
   final Uint8List? back;
@@ -94,6 +312,7 @@ class MediaTransferProgress {
   final int completedFiles;
   final int totalFiles;
   final String? currentFileName;
+  final String? statusLabel;
 
   const MediaTransferProgress({
     required this.sentBytes,
@@ -101,6 +320,7 @@ class MediaTransferProgress {
     required this.completedFiles,
     required this.totalFiles,
     this.currentFileName,
+    this.statusLabel,
   });
 
   double get fraction {
@@ -118,6 +338,7 @@ abstract class MediaRepository {
 
   bool get isRemoteMode => appMode == AppMode.client;
   bool get isHostMode => appMode == AppMode.host;
+  bool get canImportFromUrl => false;
 
   Future<void> reloadSettings() async {}
 
@@ -145,6 +366,16 @@ abstract class MediaRepository {
     ImportRequest? request,
     void Function(MediaTransferProgress progress)? onProgress,
   });
+
+  Future<UrlImportResult> importFromUrlIntoFolder(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    throw UnsupportedError('URL import is not supported in this repository');
+  }
 
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360});
 
@@ -186,3 +417,9 @@ abstract class MediaRepository {
     void Function(int processed, int total)? onProgress,
   });
 }
+
+
+
+
+
+

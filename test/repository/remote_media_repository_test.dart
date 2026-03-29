@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+﻿import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdf_viewer/models/folder.dart';
@@ -142,6 +142,42 @@ void main() {
     });
   });
 
+  group('RemoteMediaRepository.importFromUrlIntoFolder', () {
+    test('forwards the URL import request to the host API', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: const _StubMediaRepository(),
+      );
+      final metadata = ImportMetadata(
+        artistTag: 'Artist',
+        seriesTag: 'Series',
+        freeTags: const <String>['free-1'],
+        characterTags: const <String>['heroine'],
+        targetCollection: 'library',
+        organizeAfterImport: true,
+      );
+
+      final result = await repository.importFromUrlIntoFolder(
+        const FolderHandle(r'C:\library'),
+        'https://kemono.su/patreon/user/123/post/456',
+        importMetadata: metadata,
+      );
+
+      expect(result.importedCount, 3);
+      expect(result.skippedCount, 1);
+      expect(result.failedCount, 0);
+      expect(apiClient.lastDownloadUrlFolderRaw, r'C:\library');
+      expect(apiClient.lastDownloadUrl, 'https://kemono.su/patreon/user/123/post/456');
+      expect(apiClient.lastDownloadUrlMetadata?.artistTag, 'Artist');
+      expect(apiClient.lastDownloadUrlMetadata?.seriesTag, 'Series');
+      expect(apiClient.lastDownloadUrlMetadata?.freeTags, const <String>['free-1']);
+      expect(apiClient.lastDownloadUrlMetadata?.characterTags, const <String>['heroine']);
+      expect(apiClient.lastDownloadUrlMetadata?.targetCollection, 'library');
+      expect(apiClient.lastDownloadUrlMetadata?.organizeAfterImport, isTrue);
+    });
+  });
   group('RemoteMediaRepository.importItemsIntoFolder', () {
     test('forwards import metadata to the upload api', () async {
       final apiClient = _FakeRemoteMediaApiClient();
@@ -266,6 +302,10 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
   String? lastUploadFolderRaw;
   List<RemoteUploadFile> lastUploadFiles = const <RemoteUploadFile>[];
   ImportMetadata? lastUploadMetadata;
+  String? lastDownloadUrlFolderRaw;
+  String? lastDownloadUrl;
+  ImportMetadata? lastDownloadUrlMetadata;
+  UrlImportOptions? lastDownloadUrlOptions;
 
   Object? renameError;
   Object? deleteError;
@@ -352,6 +392,19 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
   }
 
   @override
+  Future<UrlImportResult> downloadUrl({
+    required String folderRaw,
+    required String sourceUrl,
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+  }) async {
+    lastDownloadUrlFolderRaw = folderRaw;
+    lastDownloadUrl = sourceUrl;
+    lastDownloadUrlMetadata = importMetadata;
+    lastDownloadUrlOptions = options;
+    return const UrlImportResult(importedCount: 3, skippedCount: 1);
+  }
+  @override
   Future<RemoteUploadResponse> uploadFiles({
     required String folderRaw,
     required List<RemoteUploadFile> files,
@@ -399,6 +452,9 @@ class _StubMediaRepository implements MediaRepository {
 
   @override
   bool get isHostMode => appMode == AppMode.host;
+
+  @override
+  bool get canImportFromUrl => false;
 
   const _StubMediaRepository({
     this.capabilities = const RepositoryCapabilities(
@@ -458,6 +514,15 @@ class _StubMediaRepository implements MediaRepository {
   }) async => 0;
 
   @override
+  Future<UrlImportResult> importFromUrlIntoFolder(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async => const UrlImportResult(importedCount: 0);
+
+  @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
     return ThumbPair(front: Uint8List(0));
   }
@@ -510,3 +575,7 @@ class _StubMediaRepository implements MediaRepository {
     void Function(int processed, int total)? onProgress,
   }) async => const PagedMediaResult(items: <MediaItem>[], total: 0);
 }
+
+
+
+

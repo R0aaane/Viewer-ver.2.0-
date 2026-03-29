@@ -21,6 +21,7 @@ import '../repository/mediaRepository.dart';
 import 'artistTagIndex.dart';
 import 'detailImage.dart';
 import 'metadata_settings_dialog.dart';
+import 'url_import_dialog.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
 
@@ -29,6 +30,7 @@ enum _MainPage { home, gallery, search }
 enum _HomeMenuAction {
   addFolder,
   importToLibrary,
+  importUrlToLibrary,
   artistTagIndex,
   metadataSettings,
   refreshFavorites,
@@ -38,6 +40,7 @@ enum _HomeMenuAction {
 enum _GalleryMenuAction {
   addFolder,
   addFile,
+  importUrl,
   exportPdf,
   organizeLibrary,
   folderTileMode,
@@ -46,15 +49,13 @@ enum _GalleryMenuAction {
 }
 
 enum FolderTileMode {
-  labelOnly,      // 繝輔か繝ｫ繝繧｢繧､繧ｳ繝ｳ・句錐蜑阪□縺托ｼ域怙霆ｽ驥擾ｼ・
-  preview,        // 繝輔か繝ｫ繝蜀・・陦ｨ邏吶・繝ｬ繝薙Η繝ｼ・祈OLDER繝舌ャ繧ｸ・磯㍾繧・ｼ・
+  labelOnly,
+  preview,
 }
 
 class _PrefsKeys {
-  // 譌ｧ繧ｭ繝ｼ
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
 
-  // 隍・焚繝輔か繝ｫ繝邂｡逅・畑
   static const String folders = 'prefs.folders';
   static const String currentFolder = 'prefs.currentFolder';
   static const String fitMode = 'prefs.readerFitMode';
@@ -72,6 +73,55 @@ class _FolderNavState {
   const _FolderNavState(this.folder, this.pageIndex);
 }
 
+enum _UrlImportQueueStatus {
+  queued,
+  running,
+  completed,
+  empty,
+  failed,
+}
+
+class _UrlImportQueueEntry {
+  final String id;
+  final String title;
+  final String folderLabel;
+  final _UrlImportQueueStatus status;
+  final MediaTransferProgress? progress;
+  final String? message;
+  final DateTime startedAt;
+  final DateTime? finishedAt;
+
+  const _UrlImportQueueEntry({
+    required this.id,
+    required this.title,
+    required this.folderLabel,
+    required this.status,
+    required this.startedAt,
+    this.progress,
+    this.message,
+    this.finishedAt,
+  });
+
+  _UrlImportQueueEntry copyWith({
+    _UrlImportQueueStatus? status,
+    MediaTransferProgress? progress,
+    bool clearProgress = false,
+    String? message,
+    bool clearMessage = false,
+    DateTime? finishedAt,
+  }) {
+    return _UrlImportQueueEntry(
+      id: id,
+      title: title,
+      folderLabel: folderLabel,
+      status: status ?? this.status,
+      startedAt: startedAt,
+      progress: clearProgress ? null : (progress ?? this.progress),
+      message: clearMessage ? null : (message ?? this.message),
+      finishedAt: finishedAt ?? this.finishedAt,
+    );
+  }
+}
 class GalleryGridPage extends StatefulWidget {
   final MediaRepository repo;
   final TagService tagService;
@@ -92,15 +142,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   FolderHandle? _folder;
   List<MediaItem> _items = const [];
   bool _loading = false;
+  bool _initializing = true;
+  String? _initializationErrorMessage;
+  String? _galleryLoadErrorMessage;
+  String? _homeSearchErrorMessage;
+  final List<_UrlImportQueueEntry> _urlImportQueue = <_UrlImportQueueEntry>[];
+  bool _showUrlImportQueue = true;
 
   int _loadProcessed = 0;
   int _loadTotal = 0;
   bool _thumbsEnabled = true;
 
-  // --- 繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ荳ｭ縺ｯ繧ｵ繝繝咲函謌舌ｒ豁｢繧√ｋ ---
   Timer? _thumbResumeDebounce;
 
-  // --- 繝輔か繝ｫ繝陦ｨ邏吶・繝ｬ繝薙Η繝ｼ・哭RU繧ｭ繝｣繝・す繝･ + 蜷梧凾螳溯｡梧焚蛻ｶ髯・---
   final LinkedHashMap<String, Uint8List?> _folderPreviewCache = LinkedHashMap();
   int _folderPreviewCacheBytes = 0;
   static const int _folderPreviewCacheMaxEntries = 120;
@@ -132,7 +186,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Uint8List? _folderPreviewCacheGet(String key) {
     final v = _folderPreviewCache.remove(key);
     if (v == null && !_folderPreviewCache.containsKey(key)) return null;
-    // null 繧ゅ御ｸｭ霄ｫ縺ｪ縺励阪く繝｣繝・す繝･縺ｨ縺励※謇ｱ縺・ｼ亥酔縺俶爾邏｢繧堤ｹｰ繧願ｿ斐＆縺ｪ縺・ｼ・
     _folderPreviewCache[key] = v;
     return v;
   }
@@ -160,10 +213,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
 
   String _parentDirOfFullPath(String fullPath) {
-    // Windows縺ｧ縺ｮ"C:\a\b\c.jpg" / "C:/a/b/c.jpg" 縺ｩ縺｡繧峨ｂ蟇ｾ蠢・
     final p = fullPath.replaceAll('/', '\\');
     final idx = p.lastIndexOf('\\');
-    if (idx <= 0) return p; // 蠢ｵ縺ｮ縺溘ａ縺ｭ
+    if (idx <= 0) return p;
     return p.substring(0, idx);
   }
 
@@ -174,29 +226,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Map<String, List<TagWithId>> _tagDetailsById = <String, List<TagWithId>>{};
   bool _currentPageMetadataAvailable = true;
 
-  _MainPage _page = _MainPage.home; // 襍ｷ蜍墓凾縺ｯ繝帙・繝・医％縺薙〒縺ｩ縺薙ｒ襍ｷ蜍輔☆繧九°謖・ｮ壹＠縺ｦ縺・ｋ縲ゑｼ・
+  _MainPage _page = _MainPage.home;
 
-  // 隍・焚繝輔か繝ｫ繝
-  List<String> _foldersRaw = const []; // 逋ｻ骭ｲ貂医∩繝輔か繝ｫ繝荳隕ｧ・・aw・・
-  String? _currentFolderRaw; // 迴ｾ蝨ｨ驕ｸ謚橸ｼ・aw・・
+  List<String> _foldersRaw = const [];
+  String? _currentFolderRaw;
 
-  // 陦ｨ遉ｺ險ｭ螳夲ｼ域ｰｸ邯壼喧・・
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
   bool _twoPage = false;
 
-  // 繝帙・繝逕ｻ髱｢讀懃ｴ｢ (縺吶∋縺ｦ縺ｮ繝輔か繝ｫ繝繧貞盾辣ｧ)
   final TextEditingController _homeSearchCtrl = TextEditingController();
   String _homeQuery = '';
   bool _homeSearching = false;
   List<MediaItem> _homeSearchResults = const [];
 
-  // 讀懃ｴ｢谺・・蜉帙・縺溘・縺ｫ蜈ｨ繝輔か繝ｫ繝讀懃ｴ｢縺悟虚縺上・繧帝亟縺・
   Timer? _homeSearchDebounce;
 
-  // Home讀懃ｴ｢逕ｨ縲．B縺九ｉ蠑輔＞縺溘ち繧ｰ繧ｭ繝｣繝・す繝･・・temId -> tagNames・・
   Map<String, List<String>> _dbTagsByItemId = <String, List<String>>{};
 
-  // 繝輔か繝ｫ繝髫主ｱ､繝翫ン・医ぐ繝｣繝ｩ繝ｪ繝ｼ蜀・ｼ・
   final List<_FolderNavState> _dirStack = <_FolderNavState>[];
 
   bool get _canGoUp => _dirStack.isNotEmpty;
@@ -205,10 +251,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _enterFolder(MediaItem folderItem) async { 
     if (_folder == null) return;  
 
-    // 縺・∪隕九※縺・ｋ繝輔か繝ｫ繝 + 縺昴・譎ゅ・繝壹・繧ｸ繧堤ｩ阪・遨阪・
     _dirStack.add(_FolderNavState(_folder!, _galleryPageIndex));
 
-    // 蜈･縺｣縺溷・縺ｯ蠕捺擂騾壹ｊ繝壹・繧ｸ1縺九ｉ
     await _loadFolder(FolderHandle(folderItem.id), saveAsLast: false, pageIndex: 0);
   }
 
@@ -216,7 +260,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (_dirStack.isEmpty) return;
     final prev = _dirStack.removeLast();
 
-    // 謌ｻ繧区凾縺ｯ縲悟・縺ｮ繝輔か繝ｫ繝縲阪°縺､縲悟・縺ｮ繝壹・繧ｸ縲阪↓蠕ｩ蟶ｰ
     await _loadFolder(prev.folder, saveAsLast: false, pageIndex: prev.pageIndex);
   }
 
@@ -225,18 +268,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   _SortMode _sortMode = _SortMode.name;
 
-  // raw -> 陦ｨ遉ｺ蜷・
   Map<String, String> _folderAliases = <String, String>{};
 
-  // 蜈ｨ繝輔か繝ｫ繝繧堤屮隕悶√♀豌励↓蜈･繧願｡ｨ遉ｺ逕ｨ
   final Map<String, List<MediaItem>> _folderItemsCache = {};
   List<MediaItem> _favoriteItemsAll = const [];
   bool _loadingFavAll = false;
 
-  // Home讀懃ｴ｢逕ｨ・亥・蟶ｰ・九ヵ繧｡繧､繝ｫ縺ｮ縺ｿ・・
   final Map<String, List<MediaItem>> _folderItemsCacheRecursive = {};
 
-  // ---- 隍・焚驕ｸ謚槭Δ繝ｼ繝・----
   bool _selectMode = false;
   final Set<String> _selectedIds = <String>{};
 
@@ -300,18 +339,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .toList(growable: false);
   }
 
-  // TabController縺ｮlistener繧剃ｺ碁㍾逋ｻ骭ｲ縺励↑縺・◆繧・
   bool _tabListenerInstalled = false;
 
-  //ID 螟臥ｨｮ逕滓・
   Set<String> _idVariants(String id) {
     final s = <String>{id};
 
-    // Windows逕ｨ
     s.add(id.replaceAll('/', '\\'));
     s.add(id.replaceAll('\\', '/'));
 
-    // Windows逕ｨ縺ｫ縺ｩ縺｣縺｡縺ｧ繧よ鏡縺医ｋ
     final lower = id.toLowerCase();
     s.add(lower);
     s.add(lower.replaceAll('/', '\\'));
@@ -320,7 +355,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return s;
   }
 
-  // ---- 繧ｵ繧､繝峨ヰ繝ｼ・壻ｽ懆・ち繧ｰ荳隕ｧ ----
   bool _loadingArtistTags = false;
   List<TagWithId> _artistTagMasters = const [];
   Map<String, int> _tagCountCache = const {};
@@ -375,7 +409,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _openTagGalleryFromDrawer(String tagName) async {
     Navigator.pop(context);
 
-    // 繧ｿ繧ｰ讀懃ｴ｢縺ｨ縺励※讀懃ｴ｢邨先棡繝壹・繧ｸ縺ｸ・域里蟄倥・讀懃ｴ｢繧ｰ繝ｪ繝・ラ繧貞・蛻ｩ逕ｨ・・
     _exitSelectMode();
     setState(() {
       _page = _MainPage.search;
@@ -404,64 +437,250 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
+  void _logUiError(String label, Object error, StackTrace stackTrace) {
+    debugPrint('[GalleryGridPage][$label] $error');
+    debugPrintStack(label: '[GalleryGridPage][$label]', stackTrace: stackTrace);
+  }
+
+  Widget _buildStatusBody({
+    required IconData icon,
+    required String title,
+    String? message,
+    Widget? indicator,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  indicator ??
+                      Icon(
+                        icon,
+                        size: 40,
+                        color: theme.colorScheme.primary,
+                      ),
+                  const SizedBox(height: 16),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  if (message != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ],
+                  if (actionLabel != null && onAction != null) ...[
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: onAction,
+                      child: Text(actionLabel),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingBody({
+    required String title,
+    String? message,
+    double? progress,
+  }) {
+    Widget indicator = const SizedBox(
+      width: 32,
+      height: 32,
+      child: CircularProgressIndicator(),
+    );
+    if (progress != null) {
+      indicator = Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: 220,
+            child: LinearProgressIndicator(
+              value: progress.clamp(0.0, 1.0).toDouble(),
+            ),
+          ),
+        ],
+      );
+    }
+    return _buildStatusBody(
+      icon: Icons.hourglass_top_rounded,
+      title: title,
+      message: message,
+      indicator: indicator,
+    );
+  }
+
+  Widget _buildErrorBody({
+    required String title,
+    required String message,
+    String actionLabel = '再試行',
+    VoidCallback? onAction,
+  }) {
+    return _buildStatusBody(
+      icon: Icons.error_outline,
+      title: title,
+      message: message,
+      actionLabel: onAction == null ? null : actionLabel,
+      onAction: onAction,
+    );
+  }
+
+  Widget _buildEmptyBody({
+    required String title,
+    required String message,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    return _buildStatusBody(
+      icon: Icons.inbox_outlined,
+      title: title,
+      message: message,
+      actionLabel: actionLabel,
+      onAction: onAction,
+    );
+  }
+
+  Widget _buildGuardedBody(String label, Widget Function() builder) {
+    try {
+      return builder();
+    } catch (error, stackTrace) {
+      _logUiError('build:$label', error, stackTrace);
+      return _buildErrorBody(
+        title: '画面の描画に失敗しました',
+        message: '$label の build 中に例外が発生しました。\n$error',
+      );
+    }
+  }
+
+  Future<void> _retryInitialization() async {
+    if (_initializing) return;
+    await _loadPrefsAndAutoOpenFolder();
+  }
+
   Future<void> _loadPrefsAndAutoOpenFolder() async {
-    final prefs = await SharedPreferences.getInstance();
-    Map<String, String> aliases = <String, String>{};
-    var aliasesUpdated = false;
-    final aliasesJson = prefs.getString(_PrefsKeys.folderAliasesJson);
-    if (aliasesJson != null && aliasesJson.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(aliasesJson);
-        if (decoded is Map) {
-          for (final e in decoded.entries) {
-            final k = e.key?.toString();
-            final v = e.value?.toString();
-            if (k == null || v == null) continue;
-            final sanitized = _sanitizeFolderAlias(v, fallbackRaw: k);
-            if (sanitized != null) {
-              aliases[k] = sanitized;
-            }
-            if (sanitized != v) {
-              aliasesUpdated = true;
+    if (mounted) {
+      setState(() {
+        _initializing = true;
+        _initializationErrorMessage = null;
+      });
+    } else {
+      _initializing = true;
+      _initializationErrorMessage = null;
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      Map<String, String> aliases = <String, String>{};
+      var aliasesUpdated = false;
+      final aliasesJson = prefs.getString(_PrefsKeys.folderAliasesJson);
+      if (aliasesJson != null && aliasesJson.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(aliasesJson);
+          if (decoded is Map) {
+            for (final e in decoded.entries) {
+              final k = e.key?.toString();
+              final v = e.value?.toString();
+              if (k == null || v == null) continue;
+              final sanitized = _sanitizeFolderAlias(v, fallbackRaw: k);
+              if (sanitized != null) {
+                aliases[k] = sanitized;
+              }
+              if (sanitized != v) {
+                aliasesUpdated = true;
+              }
             }
           }
-        }
-      } catch (_) {}
-    }
-    final favList =
-        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
-    _tagsById = <String, List<String>>{};
-    _tagDetailsById = <String, List<TagWithId>>{};
-    final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
-    final two = prefs.getBool(_PrefsKeys.twoPage);
-    List<String> folders =
-        prefs.getStringList(_PrefsKeys.folders) ?? const <String>[];
-    String? current = prefs.getString(_PrefsKeys.currentFolder);
-    if (folders.isEmpty) {
-      final legacy = prefs.getString(_PrefsKeys.lastFolderRaw);
-      if (legacy != null && legacy.isNotEmpty) {
-        if (Platform.isWindows) {
-          folders = <String>[legacy];
-          current = legacy;
-          await prefs.setStringList(_PrefsKeys.folders, folders);
-          await prefs.setString(_PrefsKeys.currentFolder, legacy);
-        } else {
-          await prefs.remove(_PrefsKeys.lastFolderRaw);
+        } catch (_) {}
+      }
+      final favList =
+          prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+      _tagsById = <String, List<String>>{};
+      _tagDetailsById = <String, List<TagWithId>>{};
+      final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
+      final two = prefs.getBool(_PrefsKeys.twoPage);
+      List<String> folders =
+          prefs.getStringList(_PrefsKeys.folders) ?? const <String>[];
+      String? current = prefs.getString(_PrefsKeys.currentFolder);
+      if (folders.isEmpty) {
+        final legacy = prefs.getString(_PrefsKeys.lastFolderRaw);
+        if (legacy != null && legacy.isNotEmpty) {
+          if (Platform.isWindows) {
+            folders = <String>[legacy];
+            current = legacy;
+            await prefs.setStringList(_PrefsKeys.folders, folders);
+            await prefs.setString(_PrefsKeys.currentFolder, legacy);
+          } else {
+            await prefs.remove(_PrefsKeys.lastFolderRaw);
+          }
         }
       }
-    }
-    final modeIndex = prefs.getInt(_PrefsKeys.folderTileMode);
-    if (modeIndex != null &&
-        modeIndex >= 0 &&
-        modeIndex < FolderTileMode.values.length) {
-      _folderTileMode = FolderTileMode.values[modeIndex];
-    }
-    if (widget.repo.isRemoteMode) {
-      List<FolderHandle> remoteFolders = const <FolderHandle>[];
-      try {
-        remoteFolders = await widget.repo.listAvailableFolders();
-      } catch (error) {
-        if (!mounted) return;
+      final modeIndex = prefs.getInt(_PrefsKeys.folderTileMode);
+      if (modeIndex != null &&
+          modeIndex >= 0 &&
+          modeIndex < FolderTileMode.values.length) {
+        _folderTileMode = FolderTileMode.values[modeIndex];
+      }
+      if (widget.repo.isRemoteMode) {
+        List<FolderHandle> remoteFolders = const <FolderHandle>[];
+        try {
+          remoteFolders = await widget.repo.listAvailableFolders();
+        } catch (error, stackTrace) {
+          _logUiError('remote-folders', error, stackTrace);
+          final message = 'ホストに接続できません: $error';
+          if (!mounted) return;
+          setState(() {
+            if (fitIndex != null &&
+                fitIndex >= 0 &&
+                fitIndex < ReaderFitMode.values.length) {
+              _fitMode = ReaderFitMode.values[fitIndex];
+            }
+            if (two != null) _twoPage = two;
+            _favorites = favList.toSet();
+            _foldersRaw = const <String>[];
+            _currentFolderRaw = null;
+            _folderAliases = aliases;
+            _items = const [];
+            _folder = null;
+            _galleryLoadErrorMessage = null;
+            _initializationErrorMessage = message;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message)),
+          );
+          return;
+        }
+        final remoteRaws = remoteFolders
+            .map((entry) => entry.raw)
+            .where((entry) => entry.trim().isNotEmpty)
+            .toList(growable: false);
+        if (current == null || !remoteRaws.contains(current)) {
+          current = remoteRaws.isNotEmpty ? remoteRaws.first : null;
+        }
         setState(() {
           if (fitIndex != null &&
               fitIndex >= 0 &&
@@ -470,23 +689,64 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
           if (two != null) _twoPage = two;
           _favorites = favList.toSet();
-          _foldersRaw = const <String>[];
-          _currentFolderRaw = null;
+          _foldersRaw = remoteRaws;
+          _currentFolderRaw = current;
           _folderAliases = aliases;
-          _items = const [];
-          _folder = null;
+          _initializationErrorMessage = null;
+          if (current == null) {
+            _items = const [];
+            _folder = null;
+            _galleryLoadErrorMessage = null;
+          }
         });
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('ホストに接続できません: $error')));
+        if (current == null) return;
+        await _loadFolder(FolderHandle(current), saveAsLast: false);
         return;
       }
-      final remoteRaws = remoteFolders
-          .map((entry) => entry.raw)
-          .where((entry) => entry.trim().isNotEmpty)
-          .toList(growable: false);
-      if (current == null || !remoteRaws.contains(current)) {
-        current = remoteRaws.isNotEmpty ? remoteRaws.first : null;
+      final lib = await widget.repo.getAppLibraryFolder();
+      final libRaw = lib.raw;
+      if (!folders.contains(libRaw)) {
+        folders = <String>[libRaw, ...folders];
+        await prefs.setStringList(_PrefsKeys.folders, folders);
+      }
+      if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
+        aliases[libRaw] = '保管庫';
+        aliasesUpdated = true;
+      }
+      final existsFolders = <String>{};
+      for (final p in folders) {
+        if (p.startsWith('content://')) {
+          existsFolders.add(p);
+          continue;
+        }
+        try {
+          final d = Directory(p);
+          if (await d.exists()) existsFolders.add(p);
+        } catch (_) {}
+      }
+      if (current == null || !existsFolders.contains(current)) {
+        if (existsFolders.contains(libRaw)) {
+          current = libRaw;
+        } else {
+          current = existsFolders.isNotEmpty ? existsFolders.first : null;
+        }
+      }
+      await prefs.setStringList(_PrefsKeys.folders, existsFolders.toList());
+      if (current != null) {
+        await prefs.setString(_PrefsKeys.currentFolder, current);
+      } else {
+        await prefs.remove(_PrefsKeys.currentFolder);
+      }
+      if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
+        aliases[libRaw] = '保管庫';
+        aliasesUpdated = true;
+      }
+      if (!folders.contains(libRaw)) {
+        folders = List<String>.from(folders)..insert(0, libRaw);
+        await prefs.setStringList(_PrefsKeys.folders, folders);
+      }
+      if (aliasesUpdated) {
+        await prefs.setString(_PrefsKeys.folderAliasesJson, jsonEncode(aliases));
       }
       setState(() {
         if (fitIndex != null &&
@@ -496,77 +756,33 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
         if (two != null) _twoPage = two;
         _favorites = favList.toSet();
-        _foldersRaw = remoteRaws;
+        _foldersRaw = existsFolders.toList(growable: false);
         _currentFolderRaw = current;
         _folderAliases = aliases;
-        if (current == null) {
-          _items = const [];
-          _folder = null;
-        }
+        _initializationErrorMessage = null;
       });
       if (current == null) return;
       await _loadFolder(FolderHandle(current), saveAsLast: false);
-      return;
-    }
-    final lib = await widget.repo.getAppLibraryFolder();
-    final libRaw = lib.raw;
-    if (!folders.contains(libRaw)) {
-      folders = <String>[libRaw, ...folders];
-      await prefs.setStringList(_PrefsKeys.folders, folders);
-    }
-    if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
-      aliases[libRaw] = '保管庫';
-      aliasesUpdated = true;
-    }
-    final existsFolders = <String>{};
-    for (final p in folders) {
-      if (p.startsWith('content://')) {
-        existsFolders.add(p);
-        continue;
-      }
-      try {
-        final d = Directory(p);
-        if (await d.exists()) existsFolders.add(p);
-      } catch (_) {}
-    }
-    if (current == null || !existsFolders.contains(current)) {
-      if (existsFolders.contains(libRaw)) {
-        current = libRaw;
+    } catch (error, stackTrace) {
+      _logUiError('init', error, stackTrace);
+      final message = 'アプリの初期化に失敗しました: $error';
+      if (!mounted) return;
+      setState(() {
+        _folder = null;
+        _items = const [];
+        _galleryLoadErrorMessage = null;
+        _initializationErrorMessage = message;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _initializing = false);
       } else {
-        current = existsFolders.isNotEmpty ? existsFolders.first : null;
+        _initializing = false;
       }
     }
-    await prefs.setStringList(_PrefsKeys.folders, existsFolders.toList());
-    if (current != null) {
-      await prefs.setString(_PrefsKeys.currentFolder, current);
-    } else {
-      await prefs.remove(_PrefsKeys.currentFolder);
-    }
-    if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
-      aliases[libRaw] = '保管庫';
-      aliasesUpdated = true;
-    }
-    if (!folders.contains(libRaw)) {
-      folders = List<String>.from(folders)..insert(0, libRaw);
-      await prefs.setStringList(_PrefsKeys.folders, folders);
-    }
-    if (aliasesUpdated) {
-      await prefs.setString(_PrefsKeys.folderAliasesJson, jsonEncode(aliases));
-    }
-    setState(() {
-      if (fitIndex != null &&
-          fitIndex >= 0 &&
-          fitIndex < ReaderFitMode.values.length) {
-        _fitMode = ReaderFitMode.values[fitIndex];
-      }
-      if (two != null) _twoPage = two;
-      _favorites = favList.toSet();
-      _foldersRaw = existsFolders.toList(growable: false);
-      _currentFolderRaw = current;
-      _folderAliases = aliases;
-    });
-    if (current == null) return;
-    await _loadFolder(FolderHandle(current), saveAsLast: false);
   }
   Future<void> _saveFolderTileMode(FolderTileMode m) async {
   setState(() => _folderTileMode = m);
@@ -575,12 +791,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<Uint8List?> _getFolderPreviewBytes(MediaItem folderItem) {
-    // 繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ荳ｭ / 蛻晄悄謠冗判荳ｭ縺ｯ逕滓・縺励↑縺・
     //if (!_thumbsEnabled) return Future.value(null);
 
     final key = folderItem.id;
 
-    // bytes繧貞━蜈・
     if (_folderPreviewCache.containsKey(key)) {
       return Future.value(_folderPreviewCacheGet(key));
     }
@@ -590,7 +804,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     Future<MediaItem?> pickCandidateInFolder(String folderRaw) async {
       const int pageLimit = 60;
-      const int maxPages = 4; // 譛螟ｧ240莉ｶ縺縺題ｦ九ｋ・磯㍾縺上＠縺ｪ縺・ｼ・
+      const int maxPages = 4;
 
       MediaItem? firstImage;
 
@@ -608,7 +822,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
         }
 
-        // 譛ｫ蟆ｾ縺ｾ縺ｧ譚･縺・
         if (res.items.length < pageLimit) break;
       }
 
@@ -616,9 +829,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     final fut = () async {
-      await _acquireFolderPreviewSlot(1); // 繝輔か繝ｫ繝陦ｨ邏吶・蜷梧凾1縺ｫ謚代∴繧・
+      await _acquireFolderPreviewSlot(1);
       try {
-        // 1) 縺ｾ縺夂峩荳九°繧牙呵｣懊ｒ謗｢縺呻ｼ・B繧､繝ｳ繝・ャ繧ｯ繧ｹ邨檎罰縺ｧ騾溘＞・・
         final cand = await pickCandidateInFolder(folderItem.id);
         if (cand != null) {
           final pair = await widget.repo.readThumbPair(cand, maxWidth: 240);
@@ -626,7 +838,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           return pair.front;
         }
 
-        // 2) 逶ｴ荳九↓辟｡縺・ｴ蜷茨ｼ壹し繝悶ヵ繧ｩ繝ｫ繝繧貞ｰ代＠縺縺題ｦ九ｋ・・谿ｵ縺縺代∵怙螟ｧ3蛟具ｼ・
         final firstPage = await widget.repo.listMediaPage(
           FolderHandle(folderItem.id),
           offset: 0,
@@ -712,7 +923,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final q = qRaw.trim().toLowerCase();
     if (q.isEmpty) return true;
 
-    // 遨ｺ逋ｽ繧貞玄蛻・▲縺ｦ縲、ND繧定ｿｽ蜉
     final tokens = q.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
     final name = item.displayName.toLowerCase();
 
@@ -741,14 +951,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
       }
 
-      // #tag 縺ｯ繧ｿ繧ｰ縺ｮ縺ｿ蟇ｾ雎｡
       if (t.startsWith('#')) {
         final needle = t.substring(1);
         if (needle.isEmpty) return true;
         return tags.any((x) => x.contains(needle));
       }
 
-      // 騾壼ｸｸ縺ｯ 繝輔ぃ繧､繝ｫ蜷・or 繧ｿ繧ｰ
       return name.contains(t) || tags.any((x) => x.contains(t));
     }
 
@@ -765,6 +973,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       setState(() {
         _homeSearching = false;
         _homeSearchResults = const [];
+        _homeSearchErrorMessage = null;
       });
       return;
     }
@@ -774,12 +983,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       setState(() {
         _homeSearching = false;
         _homeSearchResults = const [];
+        _homeSearchErrorMessage = null;
       });
       return;
     }
 
     if (!mounted) return;
-    setState(() => _homeSearching = true);
+    setState(() {
+      _homeSearching = true;
+      _homeSearchErrorMessage = null;
+    });
 
     try {
       for (final raw in _foldersRaw) {
@@ -900,16 +1113,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       setState(() {
         _homeSearching = false;
         _homeSearchResults = sorted.take(50).toList(growable: false);
+        _homeSearchErrorMessage = null;
       });
     } catch (e, st) {
-      // 縺ｪ繧薙〒讀懃ｴ｢縺ｧ縺阪↑縺・・縺九ｏ縺九ｉ縺ｪ縺・
-      // 縺薙％縺瑚ｦ九∴縺ｪ縺・→蜴溷屏縺梧ｰｸ驕縺ｫ蛻・°繧峨↑縺・・縺ｧ繝ｭ繧ｰ縺ｫ蜃ｺ縺・
-      print('[HOME SEARCH] error: $e\n$st');
+      _logUiError('home-search', e, st);
 
       if (!mounted) return;
       setState(() {
         _homeSearching = false;
         _homeSearchResults = const [];
+        _homeSearchErrorMessage = 'ホーム検索でエラーが発生しました: $e';
       });
 
       ScaffoldMessenger.of(
@@ -927,14 +1140,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       if (!mounted) return;
 
-      // 陦ｨ遉ｺ譖ｴ譁ｰ・壻ｻ願ｦ九※繧九ヵ繧ｩ繝ｫ繝縺御ｿ晉ｮ｡蠎ｫ驟堺ｸ九↑繧峨Μ繝ｭ繝ｼ繝・
       if (_currentFolderRaw != null && _currentFolderRaw!.startsWith(lib.raw)) {
         await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false);
       }
 
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('菫晉ｮ｡蠎ｫ謨ｴ逅・ 遘ｻ蜍・${moved.length} 莉ｶ')));
+      ).showSnackBar(SnackBar(content: Text('ライブラリ整理完了: 移動 ${moved.length} 件')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -978,6 +1190,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Widget _buildHomeBody() {
+    if (_initializing) {
+      return _buildLoadingBody(
+        title: '初期化中です',
+        message: '設定とフォルダ情報を読み込んでいます。',
+      );
+    }
+
+    if (_initializationErrorMessage != null) {
+      return _buildErrorBody(
+        title: '初期化に失敗しました',
+        message: _initializationErrorMessage!,
+        onAction: _retryInitialization,
+      );
+    }
+
     final folderCount = _foldersRaw.length;
     final currentLabel = _currentFolderRaw == null
         ? '未選択'
@@ -986,7 +1213,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        // Home縺ｮ讀懃ｴ｢
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1021,7 +1247,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                             ),
                     ),
                     onChanged: (v) {
-                      // Home讀懃ｴ｢縺ｯ _homeQuery 繧呈峩譁ｰ縺励※ Home讀懃ｴ｢繧定ｵｰ繧峨○繧・
                       setState(() => _homeQuery = v);
 
                       _homeSearchDebounce?.cancel();
@@ -1042,6 +1267,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     child: Padding(
                       padding: EdgeInsets.symmetric(vertical: 12),
                       child: CircularProgressIndicator(),
+                    ),
+                  )
+                else if (!_repoCapabilities.canRecursiveSearch)
+                  const Text('このモードでは全フォルダ検索は利用できません。')
+                else if (_homeSearchErrorMessage != null)
+                  Text(
+                    _homeSearchErrorMessage!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
                     ),
                   )
                 else if (_homeQuery.trim().isEmpty)
@@ -1179,15 +1413,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // 繧ｵ繝繝搾ｼ磯ｫ倥＆繧貞・繧後ｋ・・
                               SizedBox(
-                                height: 120, // 竊・縺薙％繧貞､峨∴繧九→螟ｧ縺阪＆縺悟､峨ｏ繧・
+                                height: 120,
                                 child: _homeFavThumb(item),
                               ),
 
                               const SizedBox(width: 12),
 
-                              // 繝・く繧ｹ繝磯伜沺
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1295,33 +1527,65 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Widget _buildHomeSearchGalleryBody() {
+    if (_initializing) {
+      return _buildLoadingBody(
+        title: '検索の準備中です',
+        message: '設定とフォルダ情報を読み込んでいます。',
+      );
+    }
+
+    if (_initializationErrorMessage != null) {
+      return _buildErrorBody(
+        title: '初期化に失敗しました',
+        message: _initializationErrorMessage!,
+        onAction: _retryInitialization,
+      );
+    }
+
+    if (!_repoCapabilities.canRecursiveSearch) {
+      return _buildEmptyBody(
+        title: '全フォルダ検索は利用できません',
+        message: 'このモードでは現在のフォルダ内の表示だけが利用できます。',
+      );
+    }
+
     if (_homeSearching) {
-      return const Center(child: CircularProgressIndicator());
+      return _buildLoadingBody(
+        title: '検索中です',
+        message: '全フォルダを検索しています。',
+      );
+    }
+
+    if (_homeSearchErrorMessage != null) {
+      return _buildErrorBody(
+        title: '検索に失敗しました',
+        message: _homeSearchErrorMessage!,
+        onAction: _runHomeSearch,
+      );
     }
 
     final q = _homeQuery.trim();
     if (q.isEmpty) {
-      return const Center(
-        child: Text('Home の検索欄にキーワード、タグ、#tag を入力してください。'),
+      return _buildEmptyBody(
+        title: 'キーワードを入力してください',
+        message: 'Home の検索欄にキーワード、タグ、#tag を入力してください。',
       );
     }
 
     if (_homeSearchResults.isEmpty) {
-      return const Center(child: Text('該当するアイテムがありません'));
+      return _buildEmptyBody(
+        title: '該当するアイテムがありません',
+        message: '別のキーワード、タグ、artist / series 指定を試してください。',
+      );
     }
 
-    // Home讀懃ｴ｢邨先棡縺ｯ蜈ｨ繝輔か繝ｫ繝縺縺九ｉ縲＼items・育樟蝨ｨ繝輔か繝ｫ繝・峨ｒ菴ｿ繧上★
-    // 讀懃ｴ｢邨先棡繝ｪ繧ｹ繝医ｒ縺昴・縺ｾ縺ｾ貂｡縺励※隧ｳ邏ｰ繝壹・繧ｸ縺ｧ蜑榊ｾ檎ｧｻ蜍輔〒縺阪ｋ繧医≧縺ｫ縺吶ｋ
     return _buildGridFromList(_homeSearchResults, showFolderLabel: true);
   }
 
   // --------------------
-  // 繝輔か繝ｫ繝陦ｨ遉ｺ蜷崎ｨｭ螳・
   // --------------------
   String _basename(String raw) {
     String s = raw;
-    //縲繧｢繝ｳ繝峨Ο繧､繝牙ｯｾ蠢懊′繧・ｄ縺薙＠縺・・縺ｧ・托ｼ搾ｼ斐・鬆・分騾壹ｊ縺ｫ繧・ｋ縲・
-    // 1) SAF縺ｮ content://... 縺ｮ蝣ｴ蜷医・ tree/document 縺ｮ谺｡縺ｮsegs・医そ繧ｰ繝｡繝ｳ繝茨ｼ峨ｒ蜿悶ｊ蜃ｺ縺・
     if (s.startsWith('content://')) {
       try {
         final u = Uri.parse(s);
@@ -1338,15 +1602,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
         }
         if (encoded != null && encoded.isNotEmpty) {
-          s = encoded; // 萓・ primary%3ADocuments%2Fexperiment・・ndroid縺ｮ蝣ｴ蜷医∝ｮ滄ｨ薙ヵ繧ｩ繝ｫ繝繧剃ｽｿ縺・ｼ・
+          s = encoded;
         }
       } catch (_) {
-        // 螟ｱ謨励＠縺溘ｉ s=raw 縺ｮ縺ｾ縺ｾ繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ
       }
     }
 
-    // 2) 縲継rimary%3A...縲阪∩縺溘＞縺ｫ繧ｨ繝ｳ繧ｳ繝ｼ繝画枚蟄怜・縺縺台ｿ晏ｭ倥＆繧後※縺・ｋ繧ｱ繝ｼ繧ｹ縺ｫ繧ょｯｾ蠢・
-    //    莠碁㍾繧ゅ≠繧雁ｾ励ｋ縺ｮ縺ｧ譛螟ｧ2蝗槫屓縺吶・
     for (int i = 0; i < 2; i++) {
       if (!s.contains('%')) break;
       try {
@@ -1356,7 +1617,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
-    // 3) "primary:" 縺ｪ縺ｩ繝懊Μ繝･繝ｼ繝蜷阪ｒ關ｽ縺ｨ縺・竊・譛蠕後・繝代せ隕∫ｴ縺縺代↓縺吶ｋ
     final colon = s.indexOf(':');
     if (colon >= 0) s = s.substring(colon + 1);
 
@@ -1364,7 +1624,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final slash = s.lastIndexOf('/');
     if (slash >= 0) s = s.substring(slash + 1);
 
-    // 4) 遨ｺ縺ｪ繧牙・縺ｮ raw 繧定ｿ斐☆
     return s.trim().isEmpty ? raw : s.trim();
   }
 
@@ -1394,32 +1653,42 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   bool _looksLikeMojibake(String value) {
-    const patterns = <String>[
-      '繝',
-      '繧',
-      '縺',
-      '荳',
-      '譛',
-      '逋ｻ',
-      '讀懃ｴ｢',
-      '驕',
-      '蜑',
-      '隧',
-      '邏',
-      '陦',
-      '遉',
-      '莉ｶ',
-      '蠖',
-      '閾',
-      '髢',
-      '繝帙',
-      '･',
-      '｢',
-      '｣',
-    ];
-    return patterns.any(value.contains);
-  }
+    const suspiciousCodePoints = <int>{
+      0x7E5D,
+      0x7E67,
+      0x7E3A,
+      0x8373,
+      0x8B5B,
+      0x900B,
+      0x8B80,
+      0x9A55,
+      0x8711,
+      0x96A7,
+      0x908F,
+      0x9666,
+      0x9049,
+      0x8389,
+      0x8816,
+      0x95BE,
+      0x9AE2,
+    };
 
+    var suspiciousHits = 0;
+    var halfwidthHits = 0;
+    for (final rune in value.runes) {
+      if (rune == 0xFFFD) {
+        return true;
+      }
+      if (rune >= 0xFF61 && rune <= 0xFF9F) {
+        halfwidthHits++;
+      }
+      if (suspiciousCodePoints.contains(rune)) {
+        suspiciousHits++;
+      }
+    }
+
+    return suspiciousHits >= 2 || halfwidthHits >= 2;
+  }
   Future<void> _persistFolderAliases() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
@@ -1474,7 +1743,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   // --------------------
-  // 豌ｸ邯壼喧・夊｡ｨ遉ｺ險ｭ螳・
   // --------------------
   Future<void> _saveFitMode(ReaderFitMode mode) async {
     setState(() => _fitMode = mode);
@@ -1489,7 +1757,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   // --------------------
-  // 縺頑ｰ励↓蜈･繧奇ｼ遺・・・
   // --------------------
   Future<void> _reloadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
@@ -1522,7 +1789,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _openDetailFromHome(MediaItem item) async {
     final folderRaw = item.folderRaw;
 
-    // 繝輔か繝ｫ繝縺梧悴逋ｻ骭ｲ縺ｪ繧臥匳骭ｲ
     if (!_foldersRaw.contains(folderRaw)) {
       final next = List<String>.from(_foldersRaw)..add(folderRaw);
       setState(() {
@@ -1532,7 +1798,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       await _persistFolders();
     } else {
-      // 逋ｻ骭ｲ貂医∩縺ｪ繧・current 繧偵ヵ繧ｩ繝ｫ繝繝ｼ縺ｫ蜷医ｏ縺帙ｋ
       if (_currentFolderRaw != folderRaw) {
         setState(() {
           _currentFolderRaw = folderRaw;
@@ -1542,19 +1807,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
-    // 蟇ｾ雎｡繝輔か繝ｫ繝繧偵Ο繝ｼ繝会ｼ医く繝｣繝・す繝･縺後≠繧後・縺昴ｌ繧剃ｽｿ縺・ｼ・
     if (_folderItemsCache.containsKey(folderRaw)) {
       setState(() {
         _items = _folderItemsCache[folderRaw] ?? const [];
         _folder = FolderHandle(folderRaw);
+        _galleryLoadErrorMessage = null;
       });
     } else {
       await _loadFolder(FolderHandle(folderRaw), saveAsLast: false);
-      // _loadFolder 縺・_items 繧呈峩譁ｰ縺吶ｋ縺ｨ縺阪↓繧ｭ繝｣繝・す繝･縺ｫ繧ょ・繧後※縺翫￥
       _folderItemsCache[folderRaw] = _items;
     }
 
-    // 蟄伜惠縺励※縺・ｋindex 繧呈爾縺呻ｼ医↑縺・ｴ蜷医・Snackbar縺ｧ繝・く繧ｹ繝医ｒ霑斐☆・・
     final idx = _items.indexWhere((e) => e.id == item.id);
     if (idx < 0) {
       if (!mounted) return;
@@ -1564,7 +1827,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    // 隧ｳ邏ｰ繝壹・繧ｸ縺ｸ荳逋ｺ縺ｧ驕ｷ遘ｻ縺吶ｋ縲・
     final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -1578,20 +1840,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ),
     );
 
-    // detail繝壹・繧ｸ縺ｧ縺頑ｰ励↓蜈･繧翫′螟峨ｏ縺｣縺溷ｴ蜷医√・繝ｼ繝縺ｮ荳隕ｧ縺ｮ縺頑ｰ励↓蜈･繧翫ｂ譖ｴ譁ｰ
     if (changed == true) {
       await _reloadFavorites();
       await _refreshAllFavoritesItems();
       if (_homeQuery.trim().isNotEmpty) {
-        await _runHomeSearch(); // 繧ｿ繧ｰ螟画峩繧辿ome讀懃ｴ｢縺ｫ蜿肴丐
+        await _runHomeSearch();
       }
     }
   }
 
-  /// 縺頑ｰ励↓蜈･繧贋ｸ隕ｧ縺ｪ縺ｩ縺ｧ縲後％縺ｮ繧｢繧､繝・Β縺悟ｱ槭☆繧九ヵ繧ｩ繝ｫ繝縺ｮ陦ｨ遉ｺ蜷阪阪ｒ霑斐☆
   String _folderLabelForItem(MediaItem item) {
-    // 縺頑ｰ励↓蜈･繧翫・縲悟・繝輔か繝ｫ繝讓ｪ譁ｭ縲阪↑縺ｮ縺ｧ縲・
-    // 逋ｻ骭ｲ貂医∩繝輔か繝ｫ繝・・foldersRaw・峨・縺ｩ繧後↓螻槭☆繧九°繧呈耳螳壹＠縺ｦ陦ｨ遉ｺ縺吶ｋ縲・
     final itemNorm = _normalizePath(item.id);
 
     String? bestMatchRaw;
@@ -1600,7 +1858,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     for (final raw in _foldersRaw) {
       final folderNorm = _normalizePath(raw);
 
-      // "C:\pics" 縺ｨ "C:\pics2" 縺ｮ隱､荳閾ｴ繧帝∩縺代ｋ縺溘ａ縲∵怙蠕後・蛹ｺ蛻・ｊ縺ｾ縺ｧ隕九ｋ縲・
       final ok = itemNorm == folderNorm || itemNorm.startsWith('$folderNorm\\');
       if (!ok) continue;
 
@@ -1611,25 +1868,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     if (bestMatchRaw != null) {
-      return _folderLabel(bestMatchRaw); // alias 縺後≠繧後・ alias縲∫┌縺代ｌ縺ｰ basename
+      return _folderLabel(bestMatchRaw);
     }
 
-    // 逋ｻ骭ｲ螟悶・繝輔か繝ｫ繝縺九ｉ譚･縺溷ｴ蜷医・縺吶＄荳翫・繝輔か繝ｫ繝蜷阪ｒ陦ｨ遉ｺ
     final parentRaw = _parentDirOfFullPath(item.id);
     return _basename(parentRaw);
   }
 
   String _normalizePath(String p) {
-    // Windows逕ｨ
     var s = p.replaceAll('/', '\\');
     while (s.endsWith('\\')) {
       s = s.substring(0, s.length - 1);
     }
     return s.toLowerCase();
   }
-
   // --------------------
-  // 繝輔か繝ｫ繝繝ｼ邂｡逅・
   // --------------------
   Future<void> _saveLastFolder(FolderHandle folder) async {
     if (widget.repo.isRemoteMode) return;
@@ -1646,6 +1899,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _folder = folder;
       _loading = true;
       _items = const [];
+      _galleryLoadErrorMessage = null;
       _loadProcessed = 0;
       _loadTotal = 0;
       _galleryPageIndex = pageIndex;
@@ -1674,16 +1928,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) return;
 
       setState(() {
-        _galleryTotal = res.total; 
+        _galleryTotal = res.total;
         _items = res.items;
         _loading = false;
+        _galleryLoadErrorMessage = null;
       });
 
       widget.tagService.rememberItems(res.items);
       unawaited(_refreshCurrentPageTags(res.items));
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-       // 荳隕ｧ繧貞・縺ｫ謠冗判縺輔○縺ｦ縺九ｉ繧ｵ繝繝埼幕蟋・
         await Future<void>.delayed(const Duration(milliseconds: 250));
         if (!mounted) return;
         setState(() => _thumbsEnabled = true);
@@ -1691,11 +1945,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       _folderItemsCache[folder.raw] = _items;
       await _refreshAllFavoritesItems();
-    } catch (e) {
+    } catch (e, st) {
+      _logUiError('load-folder', e, st);
+      final message = 'フォルダの読み込みに失敗しました: $e';
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _galleryLoadErrorMessage = message;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('フォルダの読み込みに失敗しました: $e')),
+        SnackBar(content: Text(message)),
       );
     }
   }
@@ -1710,6 +1969,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _thumbsEnabled = false;
       _loading = true;
       _items = const [];
+      _galleryLoadErrorMessage = null;
       _loadProcessed = 0;
       _loadTotal = 0;
     });
@@ -1733,6 +1993,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _galleryPageIndex = pageIndex;
         _items = res.items;
         _loading = false;
+        _galleryLoadErrorMessage = null;
       });
 
       widget.tagService.rememberItems(res.items);
@@ -1743,11 +2004,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         if (!mounted) return;
         setState(() => _thumbsEnabled = true);
       });
-    } catch (e) {
+    } catch (e, st) {
+      _logUiError('load-gallery-page', e, st);
+      final message = 'ページの読み込みに失敗しました: $e';
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _galleryLoadErrorMessage = message;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ページの読み込みに失敗しました: $e')),
+        SnackBar(content: Text(message)),
       );
     }
   }
@@ -1929,6 +2195,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _currentFolderRaw = nextCurrent;
       _folder = nextCurrent == null ? null : FolderHandle(nextCurrent);
       _items = const [];
+      _galleryLoadErrorMessage = null;
     });
 
     _folderItemsCache.remove(raw);
@@ -2041,7 +2308,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       final lib = await widget.repo.getAppLibraryFolder();
       final libRaw = lib.raw;
 
-      // folders 縺ｫ菫晉ｮ｡蠎ｫ縺後↑縺代ｌ縺ｰ蜈･繧後ｋ・亥ｿｵ縺ｮ縺溘ａ・・
       if (!_foldersRaw.contains(libRaw)) {
         setState(() {
           _foldersRaw = <String>[libRaw, ..._foldersRaw];
@@ -2049,7 +2315,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         await _persistFolders();
       }
 
-      // 蜿悶ｊ霎ｼ縺ｿ蜑阪・繧ｹ繝翫ャ繝励す繝ｧ繝・ヨ
       final before = await widget.repo.listMedia(lib);
       final beforeIds = before.map((e) => e.id).toSet();
 
@@ -2091,7 +2356,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ),
       );
 
-      // 蜿悶ｊ霎ｼ縺ｿ螳溯｡・
       final importedCount = await widget.repo.importIntoFolder(
         lib,
         onProgress: (next) => progress.value = next,
@@ -2109,25 +2373,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         await widget.tagService.requestRescan();
       } catch (_) {}
 
-      // 蜿悶ｊ霎ｼ縺ｿ蠕鯉ｼ壼ｷｮ蛻・歓蜃ｺ
       final after = await widget.repo.listMedia(lib);
       final newItems = after
           .where((e) => e.kind != MediaKind.folder && !beforeIds.contains(e.id))
           .toList(growable: false);
 
-      // 縺ｾ縺壻ｿ晉ｮ｡蠎ｫ繧帝幕縺擾ｼ医ち繧ｰ逕ｻ髱｢縺ｮ蜑阪↓縲御ｿ晉ｮ｡蠎ｫ縺檎樟蝨ｨ繝輔か繝ｫ繝縲阪↓縺ｪ繧九ｈ縺・↓・・
       _dirStack.clear();
       setState(() {
         _currentFolderRaw = libRaw;
-        _page = _MainPage.gallery; // 菫晉ｮ｡蠎ｫ縺ｸ蜿悶ｊ霎ｼ繧薙□繧峨ぐ繝｣繝ｩ繝ｪ繝ｼ陦ｨ遉ｺ縺ｫ蟇・○繧・
+        _page = _MainPage.gallery;
       });
       await _persistFolders();
 
-      // 繧ｮ繝｣繝ｩ繝ｪ繝ｼ繧剃ｿ晉ｮ｡蠎ｫ縺ｧ譖ｴ譁ｰ陦ｨ遉ｺ
       await _loadFolder(lib, saveAsLast: false);
       if (!mounted) return;
 
-      // 蟾ｮ蛻・′蜿悶ｌ縺ｪ縺・ｴ蜷医〒繧ゅ∝叙繧願ｾｼ縺ｿ謌仙粥縺ｮ騾夂衍縺ｯ蜃ｺ縺・
       if (newItems.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('ライブラリへ取り込み: $importedCount 件（差分なし）')),
@@ -2135,7 +2395,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
       }
 
-      // 繧ｿ繧ｰ莉倥￠逕ｻ髱｢繧貞・縺・
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => TagAssignAfterImportPage(
@@ -2147,7 +2406,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       if (!mounted) return;
 
-      // 繧ｿ繧ｰ莉倥￠蠕鯉ｼ唏ome讀懃ｴ｢繧・ｻｶ謨ｰ陦ｨ遉ｺ縺ｫ繧ょ渚譏縺輔○縺溘＞縺ｮ縺ｧ繧ｭ繝｣繝・す繝･譖ｴ譁ｰ
       if (_homeQuery.trim().isNotEmpty) {
         await _runHomeSearch();
       }
@@ -2170,6 +2428,195 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
+  Future<void> _importUrlToCurrentFolder() async {
+    if (!widget.repo.canImportFromUrl) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('このモードでは URL 取り込みは未対応です')));
+      return;
+    }
+    if (_currentFolderRaw == null) return;
+
+    await _runUrlImport(
+      folder: FolderHandle(_currentFolderRaw!),
+      dialogTitle: widget.repo.isRemoteMode
+          ? 'URLからホストへ取り込み'
+          : 'URLから現在フォルダへ取り込み',
+      dialogDescription:
+          'Kemono / Coomer / Hitomi の URL を複数入力するか、お気に入り取得条件を指定して現在のフォルダ配下へ保存します。',
+      progressTitle: 'URL をダウンロードして取り込み中...',
+      successLabel: 'URL取り込み',
+    );
+  }
+
+  Future<void> _importUrlToLibrary() async {
+    if (!widget.repo.canImportFromUrl) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('このモードでは URL 取り込みは未対応です')));
+      return;
+    }
+
+    final lib = await widget.repo.getAppLibraryFolder();
+    final libRaw = lib.raw;
+    if (!_foldersRaw.contains(libRaw)) {
+      setState(() {
+        _foldersRaw = <String>[libRaw, ..._foldersRaw];
+      });
+      await _persistFolders();
+    }
+
+    await _runUrlImport(
+      folder: lib,
+      dialogTitle: widget.repo.isRemoteMode
+          ? 'URLからホストへ取り込み'
+          : 'URLからライブラリへ取り込み',
+      dialogDescription:
+          'Kemono / Coomer / Hitomi の URL 複数入力や favorites 取得に対応し、creator / post フォルダ構成のままライブラリへ保存します。',
+      progressTitle: 'URL をダウンロードして取り込み中...',
+      successLabel: 'ライブラリへ URL 取り込み',
+      activateFolder: true,
+    );
+  }
+
+  Future<void> _runUrlImport({
+    required FolderHandle folder,
+    required String dialogTitle,
+    required String dialogDescription,
+    required String progressTitle,
+    required String successLabel,
+    bool activateFolder = false,
+  }) async {
+    final importRequest = await UrlImportDialog.show(
+      context,
+      title: dialogTitle,
+      description: dialogDescription,
+    );
+    if (importRequest == null || !importRequest.hasAnySource) {
+      return;
+    }
+
+    final queueId = _nextUrlImportQueueId();
+    _addUrlImportQueueEntry(
+      _UrlImportQueueEntry(
+        id: queueId,
+        title: dialogTitle,
+        folderLabel: _folderLabel(folder.raw),
+        status: _UrlImportQueueStatus.queued,
+        startedAt: DateTime.now(),
+        message: progressTitle,
+      ),
+    );
+
+    try {
+      _updateUrlImportQueueEntry(
+        queueId,
+        (current) => current.copyWith(
+          status: _UrlImportQueueStatus.running,
+          clearMessage: true,
+        ),
+      );
+
+      final result = await widget.repo.importFromUrlIntoFolder(
+        folder,
+        importRequest.sourceUrl,
+        options: importRequest.options,
+        onProgress: (next) {
+          _updateUrlImportQueueEntry(
+            queueId,
+            (current) => current.copyWith(
+              status: _UrlImportQueueStatus.running,
+              progress: next,
+              message: next.statusLabel,
+            ),
+          );
+        },
+      );
+      if (!mounted) return;
+
+      if (!result.hasChanges) {
+        final message = result.failedCount > 0
+            ? 'URL取り込みに失敗しました（失敗: ${result.failedCount} 件）'
+            : result.skippedCount > 0
+                ? '新規取り込みはありませんでした（スキップ: ${result.skippedCount} 件）'
+                : '取り込み対象がありませんでした';
+        _updateUrlImportQueueEntry(
+          queueId,
+          (current) => current.copyWith(
+            status: result.failedCount > 0
+                ? _UrlImportQueueStatus.failed
+                : _UrlImportQueueStatus.empty,
+            clearProgress: true,
+            message: message,
+            finishedAt: DateTime.now(),
+          ),
+        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+        return;
+      }
+
+      _folderItemsCache.clear();
+      _folderItemsCacheRecursive.clear();
+      _dirStack.clear();
+
+      if (activateFolder) {
+        setState(() {
+          _currentFolderRaw = folder.raw;
+          _folder = folder;
+          _page = _MainPage.gallery;
+        });
+        await _persistFolders();
+      }
+
+      await _loadFolder(folder, saveAsLast: false);
+      if (!mounted) return;
+
+      if (_homeQuery.trim().isNotEmpty) {
+        await _runHomeSearch();
+      }
+      await _refreshCurrentPageTags();
+      await _refreshArtistTagCounts();
+
+      final parts = <String>[
+        '${result.importedCount} 件',
+        if (result.skippedCount > 0) 'スキップ ${result.skippedCount} 件',
+        if (result.failedCount > 0) '失敗 ${result.failedCount} 件',
+      ];
+      final message = '$successLabel: ${parts.join(' / ')}';
+      _updateUrlImportQueueEntry(
+        queueId,
+        (current) => current.copyWith(
+          status: _UrlImportQueueStatus.completed,
+          clearProgress: true,
+          message: message,
+          finishedAt: DateTime.now(),
+        ),
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      final message = 'URL取り込みに失敗しました: $e';
+      _updateUrlImportQueueEntry(
+        queueId,
+        (current) => current.copyWith(
+          status: _UrlImportQueueStatus.failed,
+          clearProgress: true,
+          message: message,
+          finishedAt: DateTime.now(),
+        ),
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
   Future<void> _refreshAllFavoritesItems() async {
     if (_loadingFavAll) return;
     if (_foldersRaw.isEmpty) {
@@ -2181,14 +2628,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() => _loadingFavAll = true);
 
     try {
-      // 譛ｪ繧ｭ繝｣繝・す繝･縺ｮ繝輔か繝ｫ繝縺縺題ｪｭ縺ｿ霎ｼ繧
       for (final raw in _foldersRaw) {
         if (_folderItemsCache.containsKey(raw)) continue;
         final items = await widget.repo.listMedia(FolderHandle(raw));
         _folderItemsCache[raw] = items;
       }
 
-      // 蜈ｨ繝輔か繝ｫ繝蛻・°繧峨♀豌励↓蜈･繧翫□縺第歓蜃ｺ
       final all = <MediaItem>[];
       for (final raw in _foldersRaw) {
         final items = _folderItemsCache[raw] ?? const <MediaItem>[];
@@ -2270,10 +2715,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     if (pdfOnly != null) {
       if (pdfOnly) {
-        // 笨・folder 縺ｯ蟶ｸ縺ｫ谿九＠縺､縺､縲｝df 繧定｡ｨ遉ｺ
         out = out.where((e) => e.kind == MediaKind.folder || e.kind == MediaKind.pdf);
       } else {
-        // 笨・folder 縺ｯ蟶ｸ縺ｫ谿九＠縺､縺､縲（mage 繧定｡ｨ遉ｺ
         out = out.where((e) => e.kind == MediaKind.folder || e.kind == MediaKind.image);
       }
     }
@@ -2360,7 +2803,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return list.toList(growable: false);
   }
 
-  /// 縲後ち繧ｰ縺ｪ縺励阪ち繝也畑: 繝輔か繝ｫ繝縺ｯ髯､螟悶＠縲√ち繧ｰ縺・縺､繧ゆｻ倥＞縺ｦ縺・↑縺・判蜒・PDF縺ｮ縺ｿ陦ｨ遉ｺ
   List<MediaItem> _applyUntagged(List<MediaItem> input) {
     if (!_currentPageMetadataAvailable) {
       return const <MediaItem>[];
@@ -2410,6 +2852,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       case _HomeMenuAction.importToLibrary:
         await _importToLibraryAndTag();
         return;
+      case _HomeMenuAction.importUrlToLibrary:
+        await _importUrlToLibrary();
+        return;
       case _HomeMenuAction.artistTagIndex:
         Navigator.push(
           context,
@@ -2442,6 +2887,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       case _GalleryMenuAction.addFile:
         if (_currentFolderRaw == null) return;
         _importToCurrentFolder();
+        return;
+      case _GalleryMenuAction.importUrl:
+        if (_currentFolderRaw == null) return;
+        await _importUrlToCurrentFolder();
         return;
       case _GalleryMenuAction.exportPdf:
         if (!_repoCapabilities.canExportPdf) {
@@ -2499,6 +2948,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     ? 'ライブラリへ取り込み'
                     : 'ライブラリへ取り込み（未対応）',
               ),
+            ),
+          ),
+        if (widget.repo.canImportFromUrl)
+          const PopupMenuItem(
+            value: _HomeMenuAction.importUrlToLibrary,
+            child: ListTile(
+              leading: Icon(Icons.download_for_offline_outlined),
+              title: Text('URLからライブラリへ取り込み'),
             ),
           ),
         PopupMenuItem(
@@ -2574,6 +3031,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     ? _galleryAddFileLabel
                     : '$_galleryAddFileLabel（未対応）',
               ),
+            ),
+          ),
+        if (widget.repo.canImportFromUrl)
+          PopupMenuItem(
+            value: _GalleryMenuAction.importUrl,
+            enabled: _currentFolderRaw != null,
+            child: const ListTile(
+              leading: Icon(Icons.download_for_offline_outlined),
+              title: Text('URLから取り込み'),
             ),
           ),
         PopupMenuItem(
@@ -2679,7 +3145,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PDF菫晏ｭ伜ｮ御ｺ・ ${created.name}')),
+          SnackBar(content: Text('PDF を保存しました: ${created.name}')),
         );
       }
     } catch (e) {
@@ -2695,7 +3161,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final mode = await showDialog<FolderTileMode>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: const Text('繝輔か繝ｫ繝陦ｨ遉ｺ'),
+        title: const Text('フォルダ表示設定'),
         children: [
           SimpleDialogOption(
             onPressed: () => Navigator.pop(context, FolderTileMode.labelOnly),
@@ -2710,7 +3176,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
 
     if (mode == null) return;
-    _saveFolderTileMode(mode); // 竊舌≠縺ｪ縺溘′謖√▲縺ｦ繧区里蟄倬未謨ｰ繧貞他縺ｶ諠ｳ螳・
+    _saveFolderTileMode(mode);
   }
 
   // --- UI: responsive sidebar (Windows/desktop friendly) ---
@@ -2720,7 +3186,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       MediaQuery.of(context).size.width >= 980;
 
   void _closeSidebar() {
-    // Drawer陦ｨ遉ｺ譎ゅ・縺ｿ髢峨§繧具ｼ医ョ繧ｹ繧ｯ繝医ャ繝励・蟶ｸ險ｭ繧ｵ繧､繝峨ヰ繝ｼ縺ｧ縺ｯ pop 縺励↑縺・ｼ・
     if (!_isWideLayout(context)) {
       Navigator.pop(context);
     }
@@ -2770,216 +3235,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
-  Widget _buildSidebarListView() {
-    return ListView(
-      padding: EdgeInsets.zero,
-      children: [
-            _sidebarHeader(),
-            ListTile(
-              leading: const Icon(Icons.home_outlined),
-              title: const Text('ホーム'),
-              selected: _page == _MainPage.home,
-              onTap: () {
-                _closeSidebar();
-                _exitSelectMode();
-                setState(() => _page = _MainPage.home);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.grid_view),
-              title: const Text('ギャラリー'),
-              selected: _page == _MainPage.gallery,
-              onTap: () async {
-                _closeSidebar();
-
-                // 繝輔か繝ｫ繝譛ｪ驕ｸ謚槭↑繧峨・繝ｼ繝縺ｧ譯亥・・医∪縺溘・繝輔か繝ｫ繝霑ｽ蜉・・
-                if (_currentFolderRaw == null) {
-                  _exitSelectMode();
-                  setState(() => _page = _MainPage.home);
-                  return;
-                }
-                _exitSelectMode();
-                setState(() => _page = _MainPage.gallery);
-              },
-            ),
-            const Divider(),
-            _sidebarSectionLabel('作家タグ'),
-            if (_loadingArtistTags)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: LinearProgressIndicator(),
-              )
-            else
-              ExpansionTile(
-                leading: const Icon(Icons.person_outline),
-                title: const Text('作家（カテゴリ）'),
-                children: [
-                  if (_artistTagMasters.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
-                      child: Text('作家タグがまだありません'),
-                    )
-                  else
-                    ..._artistTagMasters.map((tw) {
-                      final name = tw.tag.name;
-                      final count = _tagCountCache[name.toLowerCase()] ?? 0;
-
-                      return ListTile(
-                        leading: const Icon(Icons.label_outline),
-                        title: Text(name),
-                        trailing: Text('$count'),
-                        onTap: () => _openTagGalleryFromDrawer(name),
-                      );
-                    }),
-                ],
-              ),
-
-            _sidebarSectionLabel('表示設定'),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: '表示フィット',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<ReaderFitMode>(
-                    value: _fitMode,
-                    isDense: true,
-                    items: const [
-                      DropdownMenuItem(
-                        value: ReaderFitMode.vertical,
-                        child: Text('縦フィット'),
-                      ),
-                      DropdownMenuItem(
-                        value: ReaderFitMode.horizontal,
-                        child: Text('横フィット'),
-                      ),
-                      DropdownMenuItem(
-                        value: ReaderFitMode.contain,
-                        child: Text('全体表示 (Contain)'),
-                      ),
-                    ],
-                    onChanged: (v) async {
-                      if (v == null) return;
-                      setState(() => _fitMode = v);
-                      await _saveFitMode(v);
-                    },
-                  ),
-                ),
-              ),
-            ),
-            SwitchListTile(
-              title: const Text('見開き表示 (ON/OFF)'),
-              value: _twoPage,
-              onChanged: (v) async {
-                setState(() => _twoPage = v);
-                await _saveTwoPage(v);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings_ethernet),
-              title: const Text('メタデータ設定'),
-              subtitle: Text(
-                widget.tagService.isRemoteMode
-                    ? '現在: リモート API モード'
-                    : '現在: ローカル DB モード',
-              ),
-              onTap: () async {
-                _closeSidebar();
-                await _openMetadataSettings();
-              },
-            ),
-            const Divider(),
-            _sidebarSectionLabel('フォルダ'),
-
-            // 霑ｽ蜉繝懊ち繝ｳ
-            ListTile(
-              leading: Icon(_primaryAddActionIcon),
-              title: Text(_primaryAddActionLabel),
-              onTap: () async {
-                _closeSidebar();
-                await _addFolder();
-              },
-            ),
-
-            if (_foldersRaw.isEmpty)
-              Padding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: Text(
-                  '登録フォルダがありません。上の「$_primaryAddActionLabel」から追加してください。',
-                ),
-              )
-            else ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 6, 16, 6),
-                child: Text('タップで切替 / ゴミ箱で削除'),
-              ),
-              for (final raw in _foldersRaw)
-                ListTile(
-                  leading: Icon(
-                    raw == _currentFolderRaw
-                        ? Icons.folder
-                        : Icons.folder_outlined,
-                  ),
-                  title: Text(
-                    _folderLabel(raw),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    raw,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  selected: raw == _currentFolderRaw,
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: '名前を変更',
-                        icon: const Icon(Icons.edit_outlined),
-                        onPressed: () async {
-                          _closeSidebar();
-                          await _renameFolder(raw);
-                        },
-                      ),
-                      IconButton(
-                        tooltip: 'このフォルダを削除',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () async {
-                          _closeSidebar();
-                          await _removeFolder(raw);
-                        },
-                      ),
-                    ],
-                  ),
-
-                  onTap: () async {
-                    _closeSidebar();
-                    await _switchFolder(raw);
-                  },
-                ),
-
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: Text(
-                  '登録フォルダと選択中フォルダは別管理です。必要に応じて切り替えてください。',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ],
-          ],
-    );
-  }
-
-  Drawer _buildSidebar() => Drawer(
-        child: SafeArea(child: _buildSidebarListView()),
-      );
+  Drawer _buildSidebar() =>
+      Drawer(child: SafeArea(child: _buildSidebarListView()));
 
   Widget _buildSidebarPanel() {
     final scheme = Theme.of(context).colorScheme;
@@ -2989,11 +3246,634 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  Widget _buildSidebarListView() {
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        _sidebarHeader(),
+        ListTile(
+          leading: const Icon(Icons.home_outlined),
+          title: const Text('ホーム'),
+          selected: _page == _MainPage.home,
+          onTap: () {
+            _closeSidebar();
+            _exitSelectMode();
+            setState(() => _page = _MainPage.home);
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.grid_view),
+          title: const Text('ギャラリー'),
+          selected: _page == _MainPage.gallery,
+          onTap: () async {
+            _closeSidebar();
+            if (_currentFolderRaw == null) {
+              _exitSelectMode();
+              setState(() => _page = _MainPage.home);
+              return;
+            }
+            _exitSelectMode();
+            setState(() => _page = _MainPage.gallery);
+          },
+        ),
+        const Divider(),
+        _sidebarSectionLabel('作家タグ'),
+        if (_loadingArtistTags)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: LinearProgressIndicator(),
+          )
+        else
+          ExpansionTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('作家（カテゴリ）'),
+            children: [
+              if (_artistTagMasters.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Text('作家タグがまだありません'),
+                )
+              else
+                ..._artistTagMasters.map((tagWithId) {
+                  final name = tagWithId.tag.name;
+                  final count = _tagCountCache[name.toLowerCase()] ?? 0;
+                  return ListTile(
+                    leading: const Icon(Icons.label_outline),
+                    title: Text(name),
+                    trailing: Text('$count'),
+                    onTap: () => _openTagGalleryFromDrawer(name),
+                  );
+                }),
+            ],
+          ),
+        _sidebarSectionLabel('表示設定'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: InputDecorator(
+            decoration: const InputDecoration(
+              labelText: '表示フィット',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<ReaderFitMode>(
+                value: _fitMode,
+                isDense: true,
+                items: const [
+                  DropdownMenuItem(
+                    value: ReaderFitMode.vertical,
+                    child: Text('縦フィット'),
+                  ),
+                  DropdownMenuItem(
+                    value: ReaderFitMode.horizontal,
+                    child: Text('横フィット'),
+                  ),
+                  DropdownMenuItem(
+                    value: ReaderFitMode.contain,
+                    child: Text('全体表示 (Contain)'),
+                  ),
+                ],
+                onChanged: (value) async {
+                  if (value == null) return;
+                  setState(() => _fitMode = value);
+                  await _saveFitMode(value);
+                },
+              ),
+            ),
+          ),
+        ),
+        SwitchListTile(
+          title: const Text('見開き表示 (ON/OFF)'),
+          value: _twoPage,
+          onChanged: (value) async {
+            setState(() => _twoPage = value);
+            await _saveTwoPage(value);
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.settings_ethernet),
+          title: const Text('メタデータ設定'),
+          subtitle: Text(
+            widget.tagService.isRemoteMode
+                ? '現在: リモート API モード'
+                : '現在: ローカル DB モード',
+          ),
+          onTap: () async {
+            _closeSidebar();
+            await _openMetadataSettings();
+          },
+        ),
+        const Divider(),
+        _sidebarSectionLabel('フォルダ'),
+        ListTile(
+          leading: Icon(_primaryAddActionIcon),
+          title: Text(_primaryAddActionLabel),
+          onTap: () async {
+            _closeSidebar();
+            await _addFolder();
+          },
+        ),
+        if (widget.repo.canImportFromUrl)
+          ListTile(
+            leading: const Icon(Icons.download_for_offline_outlined),
+            title: const Text('URLからライブラリへ取り込み'),
+            onTap: () async {
+              _closeSidebar();
+              await _importUrlToLibrary();
+            },
+          ),
+        if (_foldersRaw.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Text(
+              '登録フォルダがありません。上の「$_primaryAddActionLabel」から追加してください。',
+            ),
+          )
+        else ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 6, 16, 6),
+            child: Text('タップで切替 / ゴミ箱で削除'),
+          ),
+          for (final raw in _foldersRaw)
+            ListTile(
+              leading: Icon(
+                raw == _currentFolderRaw ? Icons.folder : Icons.folder_outlined,
+              ),
+              title: Text(
+                _folderLabel(raw),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                raw,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              selected: raw == _currentFolderRaw,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '名前を変更',
+                    icon: const Icon(Icons.edit_outlined),
+                    onPressed: () async {
+                      _closeSidebar();
+                      await _renameFolder(raw);
+                    },
+                  ),
+                  IconButton(
+                    tooltip: 'このフォルダを削除',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () async {
+                      _closeSidebar();
+                      await _removeFolder(raw);
+                    },
+                  ),
+                ],
+              ),
+              onTap: () async {
+                _closeSidebar();
+                await _switchFolder(raw);
+              },
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Text(
+              '登録フォルダと選択中フォルダは別管理です。必要に応じて切り替えてください。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
 
+  String _nextUrlImportQueueId() =>
+      'url-import-${DateTime.now().microsecondsSinceEpoch}';
+
+  void _addUrlImportQueueEntry(_UrlImportQueueEntry entry) {
+    setState(() {
+      _urlImportQueue.insert(0, entry);
+      while (_urlImportQueue.length > 8) {
+        _urlImportQueue.removeLast();
+      }
+      _showUrlImportQueue = true;
+    });
+  }
+
+  void _updateUrlImportQueueEntry(
+    String id,
+    _UrlImportQueueEntry Function(_UrlImportQueueEntry current) update,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      final index = _urlImportQueue.indexWhere((entry) => entry.id == id);
+      if (index < 0) return;
+      _urlImportQueue[index] = update(_urlImportQueue[index]);
+    });
+  }
+
+  void _removeUrlImportQueueEntry(String id) {
+    if (!mounted) return;
+    setState(() {
+      _urlImportQueue.removeWhere((entry) => entry.id == id);
+    });
+  }
+
+  String _queueStatusLabel(_UrlImportQueueEntry entry) {
+    switch (entry.status) {
+      case _UrlImportQueueStatus.queued:
+        return '待機中';
+      case _UrlImportQueueStatus.running:
+        return entry.progress?.statusLabel ?? 'ダウンロード中';
+      case _UrlImportQueueStatus.completed:
+        return '完了';
+      case _UrlImportQueueStatus.empty:
+        return '差分なし';
+      case _UrlImportQueueStatus.failed:
+        return '失敗';
+    }
+  }
+
+  Color _queueStatusColor(BuildContext context, _UrlImportQueueEntry entry) {
+    switch (entry.status) {
+      case _UrlImportQueueStatus.completed:
+        return Colors.green.shade400;
+      case _UrlImportQueueStatus.empty:
+        return Theme.of(context).colorScheme.primary;
+      case _UrlImportQueueStatus.failed:
+        return Theme.of(context).colorScheme.error;
+      case _UrlImportQueueStatus.queued:
+      case _UrlImportQueueStatus.running:
+        return Theme.of(context).colorScheme.outline;
+    }
+  }
+
+  Widget _buildUrlImportQueueOverlay() {
+    if (_urlImportQueue.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final theme = Theme.of(context);
+    return Positioned(
+      right: 16,
+      bottom: 16,
+      child: SafeArea(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360, maxHeight: 420),
+          child: Card(
+            elevation: 6,
+            child: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.download_outlined),
+                    title: Text('ダウンロードキュー (${_urlImportQueue.length})'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: _showUrlImportQueue ? '折りたたむ' : '展開',
+                          onPressed: () {
+                            setState(() => _showUrlImportQueue = !_showUrlImportQueue);
+                          },
+                          icon: Icon(
+                            _showUrlImportQueue
+                                ? Icons.expand_more
+                                : Icons.chevron_left,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '完了済みを閉じる',
+                          onPressed: () {
+                            setState(() {
+                              _urlImportQueue.removeWhere(
+                                (entry) =>
+                                    entry.status != _UrlImportQueueStatus.running &&
+                                    entry.status != _UrlImportQueueStatus.queued,
+                              );
+                            });
+                          },
+                          icon: const Icon(Icons.clear_all),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_showUrlImportQueue)
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 320),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        itemCount: _urlImportQueue.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          final entry = _urlImportQueue[index];
+                          final progress = entry.progress;
+                          final total = progress?.totalFiles ?? 0;
+                          final completed = progress?.completedFiles ?? 0;
+                          final showLinear =
+                              entry.status == _UrlImportQueueStatus.running;
+                          final linearValue = total > 0 ? progress?.fraction : null;
+
+                          return Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: _queueStatusColor(context, entry),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            entry.title,
+                                            style: theme.textTheme.titleSmall,
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            entry.folderLabel,
+                                            style: theme.textTheme.bodySmall,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      tooltip: '閉じる',
+                                      onPressed: () =>
+                                          _removeUrlImportQueueEntry(entry.id),
+                                      icon: const Icon(Icons.close, size: 18),
+                                    ),
+                                  ],
+                                ),
+                                Text(
+                                  _queueStatusLabel(entry),
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: _queueStatusColor(context, entry),
+                                  ),
+                                ),
+                                if (showLinear) ...[
+                                  const SizedBox(height: 8),
+                                  LinearProgressIndicator(value: linearValue),
+                                  const SizedBox(height: 6),
+                                  Text(total == 0 ? '準備中...' : '$completed / $total'),
+                                ],
+                                if (progress?.currentFileName != null) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    progress!.currentFileName!,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodySmall,
+                                  ),
+                                ],
+                                if (entry.message != null) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    entry.message!,
+                                    style: theme.textTheme.bodySmall,
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _wrapBodyWithUrlImportQueue(Widget body) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        body,
+        _buildUrlImportQueueOverlay(),
+      ],
+    );
+  }
+
+  List<MediaItem> _gallerySelectionView(int tabIndex) {
+    switch (tabIndex) {
+      case 1:
+        return _applyUntagged(_items);
+      case 2:
+        return _favoriteItemsAll;
+      default:
+        return _applyFilter(_items, pdfOnly: null);
+    }
+  }
+
+  List<Widget> _buildSearchAppBarActions() {
+    if (_selectMode) {
+      return [
+        IconButton(
+          tooltip: '選択解除',
+          onPressed: _exitSelectMode,
+          icon: const Icon(Icons.close),
+        ),
+        IconButton(
+          tooltip: '全選択',
+          onPressed: () => _selectAll(_homeSearchResults),
+          icon: const Icon(Icons.select_all),
+        ),
+        IconButton(
+          tooltip: 'クリア',
+          onPressed: _clearSelection,
+          icon: const Icon(Icons.clear_all),
+        ),
+        IconButton(
+          tooltip: '選択中に一括タグ付け',
+          onPressed: () {
+            final targets = _selectedFrom(_homeSearchResults);
+            _bulkAddTagToItems(targets);
+          },
+          icon: const Icon(Icons.label_outline),
+        ),
+        IconButton(
+          tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
+          onPressed: () {
+            final targets = _selectedFrom(_homeSearchResults);
+            _importSelectedToLibrary(targets);
+          },
+          icon: const Icon(Icons.archive_outlined),
+        ),
+      ];
+    }
+
+    return [
+      IconButton(
+        tooltip: 'ホームへ',
+        onPressed: () {
+          _exitSelectMode();
+          setState(() => _page = _MainPage.home);
+        },
+        icon: const Icon(Icons.home_outlined),
+      ),
+      IconButton(
+        tooltip: 'ギャラリーへ',
+        onPressed: () {
+          _exitSelectMode();
+          setState(() => _page = _MainPage.gallery);
+        },
+        icon: const Icon(Icons.photo_library_outlined),
+      ),
+    ];
+  }
+
+  List<Widget> _buildGalleryAppBarActions(TabController controller) {
+    if (!_selectMode) {
+      return <Widget>[_buildGalleryOverflowMenu()];
+    }
+
+    return [
+      IconButton(
+        tooltip: '選択解除',
+        onPressed: _exitSelectMode,
+        icon: const Icon(Icons.close),
+      ),
+      IconButton(
+        tooltip: '全選択（現在タブ）',
+        onPressed: () {
+          final view = _gallerySelectionView(controller.index);
+          _selectAll(view);
+        },
+        icon: const Icon(Icons.select_all),
+      ),
+      IconButton(
+        tooltip: 'クリア',
+        onPressed: _clearSelection,
+        icon: const Icon(Icons.clear_all),
+      ),
+      IconButton(
+        tooltip: '選択中に一括タグ付け',
+        onPressed: () {
+          final view = _gallerySelectionView(controller.index);
+          final targets = _selectedFrom(view);
+          _bulkAddTagToItems(targets);
+        },
+        icon: const Icon(Icons.label_outline),
+      ),
+      IconButton(
+        tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
+        onPressed: () {
+          final view = _gallerySelectionView(controller.index);
+          final targets = _selectedFrom(view);
+          _importSelectedToLibrary(targets);
+        },
+        icon: const Icon(Icons.archive_outlined),
+      ),
+    ];
+  }
+
+  Widget _buildGalleryMainBody() {
+    if (_initializing) {
+      return _buildLoadingBody(
+        title: '初期化中です',
+        message: '設定とフォルダ情報を読み込んでいます。',
+      );
+    }
+
+    if (_initializationErrorMessage != null) {
+      return _buildErrorBody(
+        title: '初期化に失敗しました',
+        message: _initializationErrorMessage!,
+        onAction: _retryInitialization,
+      );
+    }
+
+    if (_folder == null) {
+      if (_foldersRaw.isEmpty) {
+        return _buildEmptyBody(
+          title: '表示できるフォルダがありません',
+          message: 'まずは $_primaryAddActionLabel を実行してください。',
+          actionLabel: _primaryAddActionLabel,
+          onAction: _addFolder,
+        );
+      }
+      return _buildEmptyBody(
+        title: 'フォルダが未選択です',
+        message: 'サイドバーまたはホーム画面から表示するフォルダを選択してください。',
+        actionLabel: 'ホームを開く',
+        onAction: () => setState(() => _page = _MainPage.home),
+      );
+    }
+
+    if (_galleryLoadErrorMessage != null && !_loading) {
+      return _buildErrorBody(
+        title: 'フォルダを読み込めませんでした',
+        message: _galleryLoadErrorMessage!,
+        onAction: () => _loadFolder(
+          _folder!,
+          saveAsLast: false,
+          pageIndex: _galleryPageIndex,
+        ),
+      );
+    }
+
+    if (_loading) {
+      final progress = _loadTotal > 0 ? _loadProcessed / _loadTotal : null;
+      final message = _loadTotal > 0
+          ? '$_loadProcessed / $_loadTotal 件を読み込んでいます。'
+          : 'フォルダの内容を読み込んでいます。';
+      return _buildLoadingBody(
+        title: 'フォルダを読み込んでいます',
+        message: message,
+        progress: progress,
+      );
+    }
+
+    if (_items.isEmpty) {
+      return _buildEmptyBody(
+        title: 'このフォルダに画像や PDF がありません',
+        message: '別のフォルダを選ぶか、$_galleryAddFileLabel を実行してください。',
+        actionLabel: _galleryAddFileLabel,
+        onAction: _repoCapabilities.canUpload ? _importToCurrentFolder : null,
+      );
+    }
+
+    return TabBarView(
+      children: [
+        _buildGrid(_applyFilter(_items, pdfOnly: null)),
+        _currentPageMetadataAvailable
+            ? _buildGrid(_applyUntagged(_items))
+            : _buildEmptyBody(
+                title: 'タグ情報を読み込めませんでした',
+                message: 'タグなし一覧はメタデータが取得できたときだけ表示されます。',
+              ),
+        _loadingFavAll
+            ? _buildLoadingBody(
+                title: 'お気に入りを集計しています',
+                message: '登録済みのお気に入りを確認しています。',
+              )
+            : _buildGrid(_favoriteItemsAll, showFolderLabel: true),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    // 繝帙・繝逕ｻ髱｢
     if (_page == _MainPage.home) {
       return Scaffold(
         drawer: _isWideLayout(context) ? null : _buildSidebar(),
@@ -3001,95 +3881,37 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           title: const Text('ホーム'),
           actions: [_buildHomeOverflowMenu()],
         ),
-        body: _withSidebar(context, _buildHomeBody()),
+        body: _wrapBodyWithUrlImportQueue(
+          _withSidebar(context, _buildGuardedBody('home-body', _buildHomeBody)),
+        ),
       );
     }
 
-    // 讀懃ｴ｢邨先棡・・ome讀懃ｴ｢繧偵ぐ繝｣繝ｩ繝ｪ繝ｼ陦ｨ遉ｺ縺吶ｋ縲ゑｼ・
     if (_page == _MainPage.search) {
       return Scaffold(
         drawer: _isWideLayout(context) ? null : _buildSidebar(),
         appBar: AppBar(
           title: const Text('検索結果'),
-          actions: _selectMode
-              ? [
-                  IconButton(
-                    tooltip: '驕ｸ謚櫁ｧ｣髯､',
-                    onPressed: _exitSelectMode,
-                    icon: const Icon(Icons.close),
-                  ),
-                  IconButton(
-                    tooltip: '全選択',
-                    onPressed: () => _selectAll(_homeSearchResults),
-                    icon: const Icon(Icons.select_all),
-                  ),
-                  IconButton(
-                    tooltip: 'クリア',
-                    onPressed: _clearSelection,
-                    icon: const Icon(Icons.clear_all),
-                  ),
-                  IconButton(
-                    tooltip: '選択中に一括タグ付け',
-                    onPressed: () {
-                      final targets = _selectedFrom(_homeSearchResults);
-                      _bulkAddTagToItems(targets);
-                    },
-                    icon: const Icon(Icons.label_outline),
-                  ),
-                  IconButton(
-                    tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
-                   onPressed: () {
-                    // 縺薙％縺ｧ縺昴・蝣ｴ縺ｧ繧ｿ繝也分蜿ｷ繧貞叙繧・
-                    final tabIndex = DefaultTabController.of(context).index;
-
-                    final List<MediaItem> view;
-                    if (tabIndex == 0) {
-                      view = _applyFilter(_items, pdfOnly: null);
-                    } else if (tabIndex == 1) {
-                      view = _applyFilter(_items, pdfOnly: false);
-                    } else {
-                      view = _applyFilter(_items, pdfOnly: true);
-                    }
-
-                    final targets = _selectedFrom(view);
-                    _importSelectedToLibrary(targets);
-                  },
-                    icon: const Icon(Icons.archive_outlined),
-                  ),
-                ]
-              : [
-                  IconButton(
-                    tooltip: 'ホームへ',
-                    onPressed: () {
-                      _exitSelectMode();
-                      setState(() => _page = _MainPage.home);
-                    },
-                    icon: const Icon(Icons.home_outlined),
-                  ),
-                  IconButton(
-                    tooltip: 'ギャラリーへ',
-                    onPressed: () {
-                      _exitSelectMode();
-                      setState(() => _page = _MainPage.gallery);
-                    },
-                    icon: const Icon(Icons.photo_library_outlined),
-                  ),
-                ],
+          actions: _buildSearchAppBarActions(),
         ),
-        body: _withSidebar(context, _buildHomeSearchGalleryBody()),
+        body: _wrapBodyWithUrlImportQueue(
+          _withSidebar(
+            context,
+            _buildGuardedBody('search-body', _buildHomeSearchGalleryBody),
+          ),
+        ),
       );
     }
 
-    // 繧ｮ繝｣繝ｩ繝ｪ繝ｼ逕ｻ髱｢
     return DefaultTabController(
       length: 3,
       child: Builder(
         builder: (context) {
-          final TabController tc = DefaultTabController.of(context);
+          final tabController = DefaultTabController.of(context);
           if (!_tabListenerInstalled) {
             _tabListenerInstalled = true;
-            tc.addListener(() {
-              if (!tc.indexIsChanging && tc.index == 2) {
+            tabController.addListener(() {
+              if (!tabController.indexIsChanging && tabController.index == 2) {
                 _refreshAllFavoritesItems();
               }
             });
@@ -3113,89 +3935,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              actions: _selectMode
-                  ? [
-                      IconButton(
-                        tooltip: '選択解除',
-                        onPressed: _exitSelectMode,
-                        icon: const Icon(Icons.close),
-                      ),
-                      IconButton(
-                        tooltip: '全選択（現在タブ）',
-                        onPressed: () {
-                          final idx = tc.index;
-                          final List<MediaItem> view;
-                          if (idx == 0) {
-                            view = _applyFilter(_items, pdfOnly: null);
-                          } else if (idx == 1) {
-                            view = _applyUntagged(_items);
-                          } else {
-                            view = _favoriteItemsAll;
-                          }
-                          _selectAll(view);
-                        },
-                        icon: const Icon(Icons.select_all),
-                      ),
-                      IconButton(
-                        tooltip: 'クリア',
-                        onPressed: _clearSelection,
-                        icon: const Icon(Icons.clear_all),
-                      ),
-                      IconButton(
-                        tooltip: '選択中に一括タグ付け',
-                        onPressed: () {
-                          final idx = tc.index;
-                          final List<MediaItem> view;
-                          if (idx == 0) {
-                            view = _applyFilter(_items, pdfOnly: null);
-                          } else if (idx == 1) {
-                            view = _applyFilter(_items, pdfOnly: false);
-                          } else if (idx == 2) {
-                            view = _applyFilter(_items, pdfOnly: true);
-                          } else {
-                            view = _favoriteItemsAll;
-                          }
-                          final targets = _selectedFrom(view);
-                          _bulkAddTagToItems(targets);
-                        },
-                        icon: const Icon(Icons.label_outline),
-                      ),
-                      IconButton(
-                        tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
-                        onPressed: () {
-                          // 縺薙％縺ｧ縺昴・蝣ｴ縺ｧ繧ｿ繝也分蜿ｷ繧貞叙繧・
-                            final tabIndex = DefaultTabController.of(context).index;
-
-                          final List<MediaItem> view;
-                          if (tabIndex == 0) {
-                            view = _applyFilter(_items, pdfOnly: null);
-                          } else if (tabIndex == 1) {
-                            view = _applyFilter(_items, pdfOnly: false);
-                          } else {
-                            view = _applyFilter(_items, pdfOnly: true);
-                            }
-
-                          final targets = _selectedFrom(view);
-                          _importSelectedToLibrary(targets);
-                        },
-                        icon: const Icon(Icons.archive_outlined),
-                      ),
-                    ]
-                  : [
-                      _buildGalleryOverflowMenu(),
-                    ],
+              actions: _buildGalleryAppBarActions(tabController),
               bottom: PreferredSize(
-                // 讀懃ｴ｢(邏・6) + 繧ｽ繝ｼ繝・邏・0) + TabBar(邏・8) + 菴咏區
-                //縲= 160蜑榊ｾ後・蠢・ｦ・
                 preferredSize: const Size.fromHeight(160),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // ---- 讀懃ｴ｢繝舌・ ----
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                       child: SizedBox(
-                        height: 44, // 鬮倥＆繧呈ｱｺ螳・
+                        height: 44,
                         child: TextField(
                           controller: _searchCtrl,
                           decoration: InputDecoration(
@@ -3203,10 +3952,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                             hintText: 'タイトル / #タグ / artist:xxx / series:yyy',
                             border: const OutlineInputBorder(),
                             isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(
-                              vertical: 10,
-                            ),
-                            suffixIcon: (_query.trim().isEmpty)
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                            suffixIcon: _query.trim().isEmpty
                                 ? null
                                 : IconButton(
                                     tooltip: 'クリア',
@@ -3217,12 +3964,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                     },
                                   ),
                           ),
-                          onChanged: (v) => setState(() => _query = v),
+                          onChanged: (value) => setState(() => _query = value),
                         ),
                       ),
                     ),
-
-                    // ---- 繧ｽ繝ｼ繝郁｡・----
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: SizedBox(
@@ -3247,9 +3992,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                   child: Text('追加日'),
                                 ),
                               ],
-                              onChanged: (v) {
-                                if (v == null) return;
-                                setState(() => _sortMode = v);
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() => _sortMode = value);
                               },
                             ),
                             const Spacer(),
@@ -3271,8 +4016,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         ),
                       ),
                     ),
-
-                    // ---- 繧ｿ繝・----
                     const TabBar(
                       isScrollable: true,
                       tabs: [
@@ -3285,39 +4028,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
               ),
             ),
-            body: _withSidebar(context, _folder == null
-                ? Center(
-                    child: ElevatedButton(
-                      onPressed: _addFolder,
-                      child: Text(_primaryAddActionLabel),
-                    ),
-                  )
-                : _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _items.isEmpty
-                ? const Center(child: Text('画像や PDF がありません'))
-                : TabBarView(
-                    children: [
-                      _buildGrid(_applyFilter(_items, pdfOnly: null)),
-                      _buildGrid(_applyUntagged(_items)),
-                      _loadingFavAll
-                          ? const Center(child: CircularProgressIndicator())
-                          : _buildGrid(_favoriteItemsAll, showFolderLabel: true),
-                    ],
-                  ),
+            body: _wrapBodyWithUrlImportQueue(
+              _withSidebar(
+                context,
+                _buildGuardedBody('gallery-body', _buildGalleryMainBody),
+              ),
             ),
           );
         },
       ),
     );
   }
-
   String? _normalizeTagName(String raw) {
     var t = raw.trim();
     if (t.isEmpty) return null;
     if (t.startsWith('#')) t = t.substring(1).trim();
     if (t.isEmpty) return null;
-    // 遨ｺ逋ｽ縺ｯ遖∵ｭ｢
     if (t.contains(RegExp(r'\s'))) return null;
     return t;
   }
@@ -3416,7 +4142,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    // 騾ｲ謐励ム繧､繧｢繝ｭ繧ｰ
     if (!mounted) return;
     showDialog(
       context: context,
@@ -3451,7 +4176,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         context,
       ).showSnackBar(SnackBar(content: Text('一括タグ付けに失敗しました: $e')));
     } finally {
-      // 騾ｲ謐励ム繧､繧｢繝ｭ繧ｰ繧帝哩縺倥ｋ
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
     }
   }
@@ -3466,14 +4190,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    // 蜿悶ｊ霎ｼ縺ｿ蜈茨ｼ井ｿ晉ｮ｡蠎ｫ・・
     final lib = await widget.repo.getAppLibraryFolder();
 
-    // 蜿悶ｊ霎ｼ縺ｿ蜑阪せ繝翫ャ繝励す繝ｧ繝・ヨ・域眠隕丞・繧堤音螳壹＠縺ｦ繧ｿ繧ｰ莉倥￠逕ｻ髱｢縺ｫ繧よｸ｡縺帙ｋ・・
     final before = await widget.repo.listMedia(lib);
     final beforeIds = before.map((e) => e.id).toSet();
 
-    // 蜷悟錐縺後≠繧後・繧ｹ繧ｭ繝・・縺吶ｋ・郁ｻｽ驥城㍾隍・屓驕ｿ・・
     final imported = await widget.repo.importItemsIntoFolder(
       lib,
       targets,
@@ -3488,7 +4209,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    // 蜿悶ｊ霎ｼ縺ｿ蠕悟ｷｮ蛻・ｼ昜ｻ雁屓譁ｰ隕上〒蠅励∴縺溘ヵ繧｡繧､繝ｫ
     final after = await widget.repo.listMedia(lib);
     final newItems = after
         .where((e) => e.kind != MediaKind.folder && !beforeIds.contains(e.id))
@@ -3496,7 +4216,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     if (!mounted) return;
 
-    // 蜿悶ｊ霎ｼ縺ｿ逶ｴ蠕後ち繧ｰ莉倥￠・医≠縺ｪ縺溘′蜑阪↓蜈･繧後※縺・ｋ tag_assign_after_import.dart 繧呈ｴｻ逕ｨ・・
     if (newItems.isNotEmpty) {
       await Navigator.of(context).push(
         MaterialPageRoute(
@@ -3508,7 +4227,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     }
 
-    // 驕ｸ謚櫁ｧ｣髯､ + 陦ｨ遉ｺ譖ｴ譁ｰ
     _exitSelectMode();
     setState(() {});
   }
@@ -3518,87 +4236,96 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return const Center(child: Text('該当するアイテムがありません'));
     }
 
-     return Column(
+    return Column(
       children: [
-        // 笘・荳逡ｪ荳翫↓繝壹・繧ｸ繝｣
         _buildPager(),
         Expanded(
-          child: NotificationListener<ScrollNotification>(
-            child: GridView.builder(
-              cacheExtent: 200, // 蜈郁ｪｭ縺ｿ謚大宛
-              padding: const EdgeInsets.all(12),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 220,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 0.75
+          child: GridView.builder(
+            cacheExtent: 200,
+            padding: const EdgeInsets.all(12),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 220,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.75,
             ),
-              itemCount: items.length,
-              itemBuilder: (context, i) {
-                final item = items[i];
-                final isFav = _favorites.contains(item.id);
-                final selected = _selectedIds.contains(item.id);
-  
-                return InkWell(
-                  onLongPress: () {
-                    if (item.kind == MediaKind.folder) return;
-                    if (!_selectMode) {
-                      _enterSelectMode(item);
-                    } else {
-                      _toggleSelect(item);
-                    }
-                  },
-                  onTap: () async {
-                    if (item.kind == MediaKind.folder) {
-                      if (_selectMode) return;
-                      _exitSelectMode();
-                      await _enterFolder(item);
-                      return;
-                    }
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final item = items[index];
+              return _buildGridTile(
+                item,
+                showFolderLabel: showFolderLabel,
+                detailItemsSource: _items,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 
-                    if (_selectMode) {
-                      _toggleSelect(item);
-                      return;
-                    }
+  Widget _buildGridTile(
+    MediaItem item, {
+    required bool showFolderLabel,
+    required List<MediaItem> detailItemsSource,
+  }) {
+    final isFavorite = _favorites.contains(item.id);
+    final isSelected = _selectedIds.contains(item.id);
 
-                    final mediaOnly = _items
-                        .where((e) => e.kind != MediaKind.folder)
-                        .toList(growable: false);
-                    final index = mediaOnly.indexWhere((e) => e.id == item.id);
+    return InkWell(
+      onLongPress: () {
+        if (item.kind == MediaKind.folder) return;
+        if (!_selectMode) {
+          _enterSelectMode(item);
+        } else {
+          _toggleSelect(item);
+        }
+      },
+      onTap: () async {
+        if (item.kind == MediaKind.folder) {
+          if (_selectMode) return;
+          _exitSelectMode();
+          await _enterFolder(item);
+          return;
+        }
 
-                    final changed = await Navigator.push<bool>(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ImageDetailPage(
-                          repo: widget.repo,
-                          tagService: widget.tagService,
-                          items: mediaOnly,
-                          initialIndex: index < 0 ? 0 : index,
-                          initialPdfPage: 1,
-                        ),
-                      ),
-                    );
+        if (_selectMode) {
+          _toggleSelect(item);
+          return;
+        }
 
-                    if (changed == true) {
-                      await _reloadFavorites();
-                      await _reloadTags();
-                    }
-                  },
-                  child: _ThumbTile(
-                    repo: widget.repo,
-                    item: item,
-                    isFavorite: isFav,
-                    subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-                    onToggleFavorite: () => _toggleFavorite(item),
-                    selected: selected,
-                    folderTileMode: _folderTileMode,
-                  ),
-                );
-              },
+        final mediaOnly = detailItemsSource
+            .where((entry) => entry.kind != MediaKind.folder)
+            .toList(growable: false);
+        final index = mediaOnly.indexWhere((entry) => entry.id == item.id);
+
+        final changed = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ImageDetailPage(
+              repo: widget.repo,
+              tagService: widget.tagService,
+              items: mediaOnly,
+              initialIndex: index < 0 ? 0 : index,
+              initialPdfPage: 1,
             ),
           ),
-        )
-      ],
+        );
+
+        if (changed == true) {
+          await _reloadFavorites();
+          await _reloadTags();
+        }
+      },
+      child: _ThumbTile(
+        repo: widget.repo,
+        item: item,
+        subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
+        isFavorite: isFavorite,
+        onToggleFavorite: () => _toggleFavorite(item),
+        selected: isSelected,
+        folderTileMode: _folderTileMode,
+      ),
     );
   }
 
@@ -3607,10 +4334,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     final totalPages = (_galleryTotal + _pageSize - 1) ~/ _pageSize;
     final clamped = _galleryPageIndex.clamp(0, totalPages - 1);
-
     final start = clamped * _pageSize + 1;
     final end = ((clamped + 1) * _pageSize).clamp(0, _galleryTotal);
-
     final useDropdown = totalPages > 10;
 
     return Padding(
@@ -3624,14 +4349,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               value: clamped,
               items: List.generate(
                 totalPages,
-                (i) => DropdownMenuItem(
-                  value: i,
-                  child: Text('ページ ${i + 1}'),
+                (index) => DropdownMenuItem<int>(
+                  value: index,
+                  child: Text('ページ ${index + 1}'),
                 ),
               ),
-              onChanged: (v) {
-                if (v == null) return;
-                _loadGalleryPage(v);
+              onChanged: (value) {
+                if (value == null) return;
+                _loadGalleryPage(value);
               },
             )
           else
@@ -3639,14 +4364,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
-                  children: List.generate(totalPages, (i) {
-                    final selected = i == clamped;
+                  children: List.generate(totalPages, (index) {
+                    final selected = index == clamped;
                     return Padding(
                       padding: const EdgeInsets.only(left: 6),
                       child: ChoiceChip(
-                        label: Text('${i + 1}'),
+                        label: Text('${index + 1}'),
                         selected: selected,
-                        onSelected: (_) => _loadGalleryPage(i),
+                        onSelected: (_) => _loadGalleryPage(index),
                       ),
                     );
                   }),
@@ -3667,7 +4392,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     return GridView.builder(
-      cacheExtent: 200, // 蜈郁ｪｭ縺ｿ謚大宛
+      cacheExtent: 200,
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 220,
@@ -3676,67 +4401,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         childAspectRatio: 0.75,
       ),
       itemCount: items.length,
-      itemBuilder: (context, i) {
-        final item = items[i];
-        final isFav = _favorites.contains(item.id);
-
-        final selected = _selectedIds.contains(item.id);
-
-        return InkWell(
-          onLongPress: () {
-            if (item.kind == MediaKind.folder) return;
-            if (!_selectMode) {
-              _enterSelectMode(item);
-            } else {
-              _toggleSelect(item);
-            }
-          },
-          onTap: () async {
-            if (item.kind == MediaKind.folder) {
-              if (_selectMode) return;
-              _exitSelectMode();
-              await _enterFolder(item);
-              return;
-            }
-
-            if (_selectMode) {
-              _toggleSelect(item);
-              return;
-            }
-
-            // folder髯､螟悶〒Detail繝壹・繧ｸ縺ｸ
-            final mediaOnly = items
-                .where((e) => e.kind != MediaKind.folder)
-                .toList(growable: false);
-            final index = mediaOnly.indexWhere((e) => e.id == item.id);
-
-            final changed = await Navigator.push<bool>(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ImageDetailPage(
-                  repo: widget.repo,
-                  tagService: widget.tagService,
-                  items: mediaOnly,
-                  initialIndex: index < 0 ? 0 : index,
-                  initialPdfPage: 1,
-                ),
-              ),
-            );
-
-            if (changed == true) {
-              await _reloadFavorites();
-              await _reloadTags();
-            }
-          },
-          child: _ThumbTile(
-            repo: widget.repo,
-            item: item,
-            isFavorite: isFav,
-            subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
-            onToggleFavorite: () => _toggleFavorite(item),
-            selected: selected,
-            folderTileMode: _folderTileMode,
-          ),
+      itemBuilder: (context, index) {
+        final item = items[index];
+        return _buildGridTile(
+          item,
+          showFolderLabel: showFolderLabel,
+          detailItemsSource: items,
         );
       },
     );
@@ -3764,112 +4434,39 @@ class _ThumbTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // -------------------------
-    // 1) Folder tile
-    // -------------------------
     if (item.kind == MediaKind.folder) {
-    // 竭 霆ｽ驥上Δ繝ｼ繝会ｼ壹・繝ｬ繝薙Η繝ｼ繧剃ｸ蛻・他縺ｰ縺ｪ縺・
-    if (folderTileMode == FolderTileMode.labelOnly) {
-      return Material(
-        elevation: 2,
-        borderRadius: BorderRadius.circular(10),
-        clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: Container(
-                  alignment: Alignment.center,
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Icon(Icons.folder, size: 56),
-                ),
-              ),
-              const Positioned(top: 8, right: 8, child: _FolderBadge()),
-              Positioned(
-                left: 8,
-                right: 8,
-                bottom: 8,
-                child: _TitleChip(title: item.displayName, subtitle: subtitle),
-              ),
-              if (selected)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black.withOpacity(0.35),
-                    alignment: Alignment.topRight,
-                    padding: const EdgeInsets.all(8),
-                    child: const Icon(Icons.check_circle, size: 26),
-                  ),
-                ),
-            ],
-          ),
-        );
+      if (folderTileMode == FolderTileMode.labelOnly) {
+        return _buildFolderLabelTile(context);
       }
-
-      // 竭｡ 繝励Ξ繝薙Η繝ｼ繝｢繝ｼ繝会ｼ夊｡ｨ邏吶ｒ蜿門ｾ励＠縺ｦ陦ｨ遉ｺ
-      final st = context.findAncestorStateOfType<_GalleryGridPageState>();
-      final enabled = st?._thumbsEnabled ?? true;
-      
-      return Material(
-        elevation: 2,
-        borderRadius: BorderRadius.circular(10),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: !enabled
-                  ? Container(
-                      alignment: Alignment.center,
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      child: const Icon(Icons.folder, size: 56),
-                    )
-                  : FutureBuilder<Uint8List?>(
-                      future: st?._getFolderPreviewBytes(item),
-                      builder: (context, snap) {
-                        final bytes = snap.data;
-                        if (bytes != null && bytes.isNotEmpty) {
-                          return Image.memory(
-                            bytes,
-                            fit: BoxFit.cover,
-                            gaplessPlayback: true,
-                            filterQuality: FilterQuality.low,
-                          );
-                        }
-                        return Container(
-                          alignment: Alignment.center,
-                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                          child: const Icon(Icons.folder, size: 56),
-                        );
-                      },
-                    ),
-            ),
-            const Positioned(top: 8, right: 8, child: _FolderBadge()),
-            Positioned(
-              left: 8,
-              right: 8,
-              bottom: 8,
-              child: _TitleChip(title: item.displayName, subtitle: subtitle),
-            ),
-      
-            // 笨・selected overlay・医％縺薙〒 readThumbPair 繧貞他縺ｰ縺ｪ縺・ｼ・
-            if (selected)
-              Positioned.fill(
-                child: Container(
-                  color: Colors.black.withOpacity(0.35),
-                  alignment: Alignment.topRight,
-                  padding: const EdgeInsets.all(8),
-                  child: const Icon(Icons.check_circle, size: 26),
-                ),
-              ),
-          ],
-        ),
-      );
+      return _buildFolderPreviewTile(context);
     }
+    return _buildMediaTile(context);
+  }
 
-    // -------------------------
-    // 2) PDF / Image tile
-    // -------------------------
+  Widget _buildFolderLabelTile(BuildContext context) {
+    return Material(
+      elevation: 2,
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(child: _buildFolderPlaceholder(context)),
+          const Positioned(top: 8, right: 8, child: _FolderBadge()),
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 8,
+            child: _TitleChip(title: item.displayName, subtitle: subtitle),
+          ),
+          if (selected) _buildSelectionOverlay(),
+        ],
+      ),
+    );
+  }
 
-    final st = context.findAncestorStateOfType<_GalleryGridPageState>();
-    final enabled = st?._thumbsEnabled ?? true;
+  Widget _buildFolderPreviewTile(BuildContext context) {
+    final galleryState = context.findAncestorStateOfType<_GalleryGridPageState>();
+    final thumbsEnabled = galleryState?._thumbsEnabled ?? true;
 
     return Material(
       elevation: 2,
@@ -3877,32 +4474,64 @@ class _ThumbTile extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          // NOTE: _thumbsEnabled 縺・false 縺ｮ髢薙・ FutureBuilder 閾ｪ菴薙ｒ菴懊ｉ縺ｪ縺・ｼ・ 繧ｵ繝繝咲函謌舌ｒ髢句ｧ九＠縺ｪ縺・ｼ・
           Positioned.fill(
-            child: (() {
-              final st = context.findAncestorStateOfType<_GalleryGridPageState>();
-              final enabled = st?._thumbsEnabled ?? true;
-
-              if (!enabled) {
-                return _TileShell(loading: true);
-              }
-
-              return FutureBuilder<ThumbPair>(
-                future: repo.readThumbPair(item, maxWidth: 240),
-                builder: (context, snap) {
-                  if (snap.hasError) {
-                    return const _TileShell();
-                  }
-                  if (!snap.hasData) {
-                    return _TileShell(loading: true);
-                  }
-                  return _ThumbImage(bytes: snap.data!.front);
-                },
-              );
-            })(),
+            child: !thumbsEnabled
+                ? _buildFolderPlaceholder(context)
+                : FutureBuilder<Uint8List?>(
+                    future: galleryState?._getFolderPreviewBytes(item),
+                    builder: (context, snapshot) {
+                      final bytes = snapshot.data;
+                      if (bytes != null && bytes.isNotEmpty) {
+                        return Image.memory(
+                          bytes,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          filterQuality: FilterQuality.low,
+                        );
+                      }
+                      return _buildFolderPlaceholder(context);
+                    },
+                  ),
           ),
+          const Positioned(top: 8, right: 8, child: _FolderBadge()),
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 8,
+            child: _TitleChip(title: item.displayName, subtitle: subtitle),
+          ),
+          if (selected) _buildSelectionOverlay(),
+        ],
+      ),
+    );
+  }
 
-          // 蜿ｳ荳奇ｼ啀DF繝舌ャ繧ｸ + 笘・
+  Widget _buildMediaTile(BuildContext context) {
+    final galleryState = context.findAncestorStateOfType<_GalleryGridPageState>();
+    final thumbsEnabled = galleryState?._thumbsEnabled ?? true;
+
+    return Material(
+      elevation: 2,
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: !thumbsEnabled
+                ? const _TileShell(loading: true)
+                : FutureBuilder<ThumbPair>(
+                    future: repo.readThumbPair(item, maxWidth: 240),
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) {
+                        return const _TileShell();
+                      }
+                      if (!snapshot.hasData) {
+                        return const _TileShell(loading: true);
+                      }
+                      return _ThumbImage(bytes: snapshot.data!.front);
+                    },
+                  ),
+          ),
           Positioned(
             top: 8,
             right: 8,
@@ -3911,35 +4540,44 @@ class _ThumbTile extends StatelessWidget {
               children: [
                 if (item.kind == MediaKind.pdf) const _PdfBadge(),
                 const SizedBox(width: 6),
-                _FavButton(isFavorite: isFavorite, onPressed: onToggleFavorite),
+                _FavButton(
+                  isFavorite: isFavorite,
+                  onPressed: onToggleFavorite,
+                ),
               ],
             ),
           ),
-
-          // 繧ｿ繧､繝医Ν
           Positioned(
             left: 8,
             right: 8,
             bottom: 8,
             child: _TitleChip(title: item.displayName, subtitle: subtitle),
           ),
-
-          // 驕ｸ謚樊凾
-          if (selected)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withOpacity(0.35),
-                alignment: Alignment.topRight,
-                padding: const EdgeInsets.all(8),
-                child: const Icon(Icons.check_circle, size: 26),
-              ),
-            ),
+          if (selected) _buildSelectionOverlay(),
         ],
       ),
     );
   }
-}
 
+  Widget _buildFolderPlaceholder(BuildContext context) {
+    return Container(
+      alignment: Alignment.center,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: const Icon(Icons.folder, size: 56),
+    );
+  }
+
+  Widget _buildSelectionOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.35),
+        alignment: Alignment.topRight,
+        padding: const EdgeInsets.all(8),
+        child: const Icon(Icons.check_circle, size: 26),
+      ),
+    );
+  }
+}
 class _FavButton extends StatelessWidget {
   final bool isFavorite;
   final VoidCallback onPressed;
@@ -4091,7 +4729,6 @@ class _ThumbImage extends StatelessWidget {
         gaplessPlayback: true,
         filterQuality: FilterQuality.low,
         errorBuilder: (context, error, stack) {
-          // 縺薙％縺ｧ螟ｱ謨励ｒ蜃ｺ蜉・
           return Container(
             alignment: Alignment.center,
             color: Theme.of(context).colorScheme.surfaceContainerHighest,

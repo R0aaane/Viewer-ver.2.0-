@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:path_provider/path_provider.dart';
@@ -11,11 +12,11 @@ import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
 /// ------------------------------
-/// LRU メモリキャッシュ（容量/件数制限）
-/// ------------------------------
+/// LRU 繝｡繝｢繝ｪ繧ｭ繝｣繝・す繝･・亥ｮｹ驥・莉ｶ謨ｰ蛻ｶ髯撰ｼ・/// ------------------------------
 class _LruCache<K, V> {
   final int maxBytes;
   final int maxEntries;
@@ -33,7 +34,7 @@ class _LruCache<K, V> {
   V? get(K key) {
     final v = _map.remove(key);
     if (v == null) return null;
-    // アクセスされたものを末尾へ
+    // 繧｢繧ｯ繧ｻ繧ｹ縺輔ｌ縺溘ｂ縺ｮ繧呈忰蟆ｾ縺ｸ
     _map[key] = v;
     return v;
   }
@@ -83,6 +84,9 @@ class _FsPageEntry {
 class WindowsFolderRepository implements MediaRepository {
   static const _pdfExt = '.pdf';
 
+  final UrlImportDownloaderService _urlImportDownloader =
+      UrlImportDownloaderService();
+
   @override
   RepositoryCapabilities get capabilities => const RepositoryCapabilities(
     canRename: true,
@@ -108,6 +112,9 @@ class WindowsFolderRepository implements MediaRepository {
   bool get isHostMode => false;
 
   @override
+  bool get canImportFromUrl => true;
+
+  @override
   Future<void> reloadSettings() async {}
 
   @override
@@ -125,9 +132,9 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   // ------------------------------
-  // サムネイル：メモリLRUキャッシュ
+  // 繧ｵ繝繝阪う繝ｫ・壹Γ繝｢繝ｪLRU繧ｭ繝｣繝・す繝･
   // ------------------------------
-  // 目安: 64MB / 最大400件
+  // 逶ｮ螳・ 64MB / 譛螟ｧ400莉ｶ
   // （どちらか先に達したら古いものから破棄）
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
     maxBytes: 64 * 1024 * 1024,
@@ -136,7 +143,7 @@ class WindowsFolderRepository implements MediaRepository {
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
 
-  // 同一サムネの同時要求を1回にまとめ、急なスクロールに対応できるように
+  // 蜷御ｸ繧ｵ繝繝阪・蜷梧凾隕∵ｱゅｒ1蝗槭↓縺ｾ縺ｨ繧√∵･縺ｪ繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ縺ｫ蟇ｾ蠢懊〒縺阪ｋ繧医≧縺ｫ
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
 
   // PDF キャッシュ（ページ送り高速化）
@@ -249,7 +256,7 @@ class WindowsFolderRepository implements MediaRepository {
       return MediaFileTypes.imageExtensions.contains(ext) || ext == _pdfExt;
     }
 
-    // 表示用は「直下のみ」＋ Directory も返す
+    // 陦ｨ遉ｺ逕ｨ縺ｯ縲檎峩荳九・縺ｿ縲搾ｼ・Directory 繧りｿ斐☆
     final entries = <FileSystemEntity>[];
     await for (final e in dir.list(recursive: false, followLinks: false)) {
       entries.add(e);
@@ -262,11 +269,10 @@ class WindowsFolderRepository implements MediaRepository {
     final files = <MediaItem>[];
 
     for (final e in entries) {
-      // 直下サブフォルダ
+      // 逶ｴ荳九し繝悶ヵ繧ｩ繝ｫ繝
       if (e is Directory) {
         final stat = await e.stat();
-        final name = _fileName(e.path); // 既存のヘルパー流用（末尾名取得）
-
+        final name = _fileName(e.path); // 譌｢蟄倥・繝倥Ν繝代・豬∫畑・域忰蟆ｾ蜷榊叙蠕暦ｼ・
         folders.add(
           MediaItem(
             id: e.path,
@@ -336,12 +342,12 @@ class WindowsFolderRepository implements MediaRepository {
     int total = 0;
     await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is Directory) {
-        total++; // フォルダも表示対象
+        total++; // 繝輔か繝ｫ繝繧り｡ｨ遉ｺ蟇ｾ雎｡
       } else if (ent is File) {
         final name = ent.uri.pathSegments.isNotEmpty
             ? ent.uri.pathSegments.last
             : ent.path;
-        if (_isTargetFileName(name)) total++; // 画像/PDFのみ
+        if (_isTargetFileName(name)) total++; // 逕ｻ蜒・PDF縺ｮ縺ｿ
       }
     }
     return total;
@@ -450,7 +456,7 @@ class WindowsFolderRepository implements MediaRepository {
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
-    // Windowsは常にファイルパス前提
+    // Windows縺ｯ蟶ｸ縺ｫ繝輔ぃ繧､繝ｫ繝代せ蜑肴署
     return _listMediaFsRecursiveFiles(folder, onProgress: onProgress);
   }
   
@@ -576,7 +582,42 @@ class WindowsFolderRepository implements MediaRepository {
     return _withFsRetry(item.id, () => File(item.id).readAsBytes());
   }
 
-  // ---- ページ数を取得 ----
+  bool _isAvifPath(String path) => _lowerExt(path) == '.avif';
+
+  Future<Uint8List> _makeImageThumb(Uint8List src, int targetWidth) async {
+    if (src.isEmpty) return src;
+    final codec = await ui.instantiateImageCodec(src, targetWidth: targetWidth);
+    try {
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      try {
+        final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+        if (byteData == null) return src;
+        return byteData.buffer.asUint8List();
+      } finally {
+        image.dispose();
+      }
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  Future<Uint8List> _readImageBytesForDisplay(
+    MediaItem item, {
+    required int maxWidth,
+  }) async {
+    final bytes = await readBytes(item);
+    if (!_isAvifPath(item.id)) {
+      return bytes;
+    }
+    try {
+      return await _makeImageThumb(bytes, maxWidth);
+    } catch (_) {
+      return bytes;
+    }
+  }
+
+  // ---- 繝壹・繧ｸ謨ｰ繧貞叙蠕・----
   @override
   Future<int> getPageCount(MediaItem item) async {
     if (item.kind != MediaKind.pdf) return 1;
@@ -584,7 +625,7 @@ class WindowsFolderRepository implements MediaRepository {
     return doc.pagesCount;
   }
 
-  // ---- 任意ページをPNGとして取得できるように ----
+  // ---- 莉ｻ諢上・繝ｼ繧ｸ繧単NG縺ｨ縺励※蜿門ｾ励〒縺阪ｋ繧医≧縺ｫ ----
   @override
   Future<Uint8List> renderPageBytes(
     MediaItem item,
@@ -592,7 +633,7 @@ class WindowsFolderRepository implements MediaRepository {
     int maxWidth = 1600,
   }) async {
     if (item.kind != MediaKind.pdf) {
-      return readBytes(item);
+      return _readImageBytesForDisplay(item, maxWidth: maxWidth);
     }
 
     final doc = await _openPdf(item.id);
@@ -631,6 +672,14 @@ class WindowsFolderRepository implements MediaRepository {
   Future<ThumbPair> _buildThumbPair(MediaItem item, int maxWidth) async {
     if (item.kind == MediaKind.image) {
       final bytes = await _withFsRetry(item.id, () => File(item.id).readAsBytes());
+      if (_isAvifPath(item.id)) {
+        try {
+          final thumb = await _makeImageThumb(bytes, maxWidth);
+          return ThumbPair(front: thumb, back: null);
+        } catch (_) {
+          return ThumbPair(front: bytes, back: null);
+        }
+      }
       return ThumbPair(front: bytes, back: null);
     }
 
@@ -683,7 +732,7 @@ class WindowsFolderRepository implements MediaRepository {
     return img.bytes;
   }
 
-  /// フォルダ切替・アプリ終了時に呼ぶとメモリリークしにくい
+  /// 繝輔か繝ｫ繝蛻・崛繝ｻ繧｢繝励Μ邨ゆｺ・凾縺ｫ蜻ｼ縺ｶ縺ｨ繝｡繝｢繝ｪ繝ｪ繝ｼ繧ｯ縺励↓縺上＞
   Future<void> dispose() async {
     _thumbInFlight.clear();
     _thumbCache.clear();
@@ -749,7 +798,7 @@ class WindowsFolderRepository implements MediaRepository {
 
     final renamed = await oldFile.rename(newPath);
 
-    // ファイルパスは変わるので id も更新する
+    // 繝輔ぃ繧､繝ｫ繝代せ縺ｯ螟峨ｏ繧九・縺ｧ id 繧よ峩譁ｰ縺吶ｋ
     return MediaItem(
       id: renamed.path,
       displayName: fixedName,
@@ -761,6 +810,38 @@ class WindowsFolderRepository implements MediaRepository {
     );
   }
 
+  @override
+  Future<UrlImportResult> importFromUrlIntoFolder(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    final trimmedUrl = sourceUrl.trim();
+    final effectiveOptions = options ?? const UrlImportOptions();
+    if (!effectiveOptions.hasAnySource(trimmedUrl)) {
+      throw Exception('URL、URL 一覧ファイル、またはお気に入り条件を入力してください');
+    }
+
+    final destDir = Directory(folder.raw);
+    if (!await destDir.exists()) {
+      await destDir.create(recursive: true);
+    }
+
+    final result = await _urlImportDownloader.downloadUrl(
+      sourceUrl: trimmedUrl,
+      destinationFolder: destDir.path,
+      options: effectiveOptions,
+      onProgress: onProgress,
+    );
+
+    return UrlImportResult(
+      importedCount: result.importedCount,
+      skippedCount: result.skippedCount,
+      failedCount: result.failedCount,
+    );
+  }
   @override
   Future<int> importIntoFolder(
     FolderHandle folder, {
@@ -864,14 +945,14 @@ class WindowsFolderRepository implements MediaRepository {
     for (final it in items) {
       if (it.kind == MediaKind.folder) continue;
 
-      final src = File(it.id); // Windowsではid=フルパス
+      final src = File(it.id); // Windows縺ｧ縺ｯid=繝輔Ν繝代せ
       if (!await src.exists()) continue;
 
       final name = it.displayName;
       final lower = name.toLowerCase();
 
       if (skipIfExists && existingLowerNames.contains(lower)) {
-        continue; // 同名が既に保管庫にあるのでスキップ
+        continue; // 蜷悟錐縺梧里縺ｫ菫晉ｮ｡蠎ｫ縺ｫ縺ゅｋ縺ｮ縺ｧ繧ｹ繧ｭ繝・・
       }
 
       // 競合する場合は unique 名で保存（skip=false の時の挙動）

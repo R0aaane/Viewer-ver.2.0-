@@ -1,0 +1,1524 @@
+import requests
+from requests.adapters import HTTPAdapter, Retry
+import re
+import os
+import html
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
+import warnings
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
+import time
+import datetime
+from PIL import Image
+from io import BytesIO
+import json
+from numbers import Number
+import pathlib
+import itertools
+import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from .args import get_args
+from .logger import logger
+from .version import __version__
+from .helper import get_file_hash, print_download_bar, check_date, parse_url, compile_post_path, compile_file_path, RefererSession
+from .hitomi import (
+    HITOMI_GG_URL,
+    build_hitomi_file,
+    collect_hitomi_names,
+    extract_hitomi_gallery_info,
+    parse_hitomi_gg,
+    parse_hitomi_url,
+)
+# from .my_yt_dlp import my_yt_dlp
+
+class downloader:
+    IMAGE_EXTENSIONS = {
+        'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif'
+    }
+    VIDEO_EXTENSIONS = {
+        'mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'wmv', 'flv', 'mpeg', 'mpg', 'ts', 'm2ts'
+    }
+
+    def __init__(self, args):
+        self.input_urls = args['links'] + args['from_file']
+        if args['replace_tld']:
+            for n,i in enumerate(self.input_urls):
+                i = re.sub("kemono.(party|su)","kemono.cr",i)
+                i = re.sub("coomer.(party|su)","coomer.st",i)
+                self.input_urls[n] = i
+        self.re_tld = re.compile(".(party|su|cr|st)")
+        # list of completed posts from current session
+        self.comp_posts = []
+        # list of creators info
+        self.creators = []
+
+        # requests variables
+        self.headers = {'User-Agent': args['user_agent']} if args['user_agent'] else {}
+        self.headers['Accept'] = 'text/css'
+        self.cookies = args['cookies']
+        self.timeout = 300
+
+        self.headcheck = args['head_check']
+
+        for i in ('/v1','/v0'):
+            self.api_ver = i
+            if requests.get(f'https://kemono.cr/api{self.api_ver}/app_version', headers=self.headers).status_code == 200:
+                break
+
+        # file/folder naming
+        self.name_templates_glop = ''
+
+        self.download_path_template = args['dirname_pattern']
+        self.name_templates_glop += args['dirname_pattern']
+
+        self.filename_template = args['filename_pattern']
+        self.name_templates_glop += args['filename_pattern']
+
+        self.inline_filename_template = args['inline_filename_pattern']
+        self.name_templates_glop += args['inline_filename_pattern']
+
+        self.other_filename_template = args['other_filename_pattern']
+        self.name_templates_glop += args['other_filename_pattern']
+
+        self.user_filename_template = args['user_filename_pattern']
+        self.name_templates_glop += args['user_filename_pattern']
+
+        self.date_strf_pattern = args['date_strf_pattern']
+        self.yt_dlp_args = args['yt_dlp_args']
+        self.restrict_ascii = args['restrict_names']
+
+        self.archive_file = args['archive']
+        self.archive_list = []
+        self.post_errors = 0
+
+        # controls what to download/save
+        self.attachments = not args['skip_attachments']
+        self.media_type = args['media_type']
+        self.inline = args['inline']
+        self.content = args['content']
+        self.extract_links = args['extract_links']
+        self.extract_all_links = args['extract_all_links']
+        self.comments = args['comments']
+        self.json = args['json']
+        self.yt_dlp = args['yt_dlp']
+        self.fav_posts_sites = args['fav_posts_sites']
+        self.fav_users_by_site = args['fav_users_by_site']
+        self.icon_banner = []
+        if args['icon']:
+            self.icon_banner.append('icon')
+        if args['banner']:
+            self.icon_banner.append('banner')
+        self.dms = args['dms']
+        self.announcements = args['announcements']
+
+        # controls files to ignore
+        self.overwrite = args['overwrite']
+        self.only_ext = args['only_filetypes']
+        self.not_ext = args['skip_filetypes']
+        self.max_size = args['max_filesize']
+        self.min_size = args['min_filesize']
+        self.only_filename = args['only_filename']
+        self.not_filename = args['skip_filename']
+
+        # controlls posts to ignore
+        self.date = args['date']
+        self.datebefore = args['datebefore']
+        self.dateafter = args['dateafter']
+        self.user_up_datebefore = args['user_updated_datebefore']
+        self.user_up_dateafter = args['user_updated_dateafter']
+        self.only_postname = args['only_postname']
+        self.not_postname = args['skip_postname']
+
+        # other
+        self.retry = args['retry']
+        self.parallel_downloads = args['parallel_downloads']
+        self.part_files = args['part_files']
+        self.ratelimit_sleep = args['ratelimit_sleep']
+        self.ratelimit_ms = args['ratelimit_ms']
+        self.post_timeout = args['post_timeout']
+        self.simulate = args['simulate']
+        self.local_hash = args['local_hash']
+        self.dupe_check = args['dupe_check']
+
+        self.dupe_check_template = args['dupe_check_pattern']
+        self.name_templates_glop += args['dupe_check_pattern']
+
+        self.force_unlisted = args['force_unlisted']
+        self.retry_403 = args['retry_403']
+        self.fp_added = args['fp_added']
+        self.fancards = args['fancards']
+        self.cookie_domains = args['cookie_domains']
+        self.proxy_agent = args['proxy_agent']
+        self.force_dss = args['force_dss']
+        self.archives_password = args['archives_password']
+        self.cache_creators = args['cache_creators']
+        self.cache_creators_expire = int(args['cache_creators_expire'])
+        self.state_lock = threading.Lock()
+        self.progress = {
+            'total': 0,
+            'completed': 0,
+            'success': 0,
+            'failed': 0,
+            'skipped': 0,
+            'current_kind': None,
+            'current_file': None,
+            'status': 'idle',
+        }
+        self.hitomi_gg = None
+
+        self.session = RefererSession(
+            proxy_agent = self.proxy_agent,
+            max_retries_429 = self.retry,
+            sleep_429 = self.ratelimit_sleep
+        )
+        retries = Retry(
+            total=self.retry,
+            backoff_factor=0.1,
+            status_forcelist=[ 500, 502, 503, 504 ]
+        )
+        self.session.mount('https://', HTTPAdapter(max_retries=retries))
+        self.session.mount('http://', HTTPAdapter(max_retries=retries))
+
+        self.proxies = {'http': args['proxy'], 'https': args['proxy']}
+        self.session.proxies = self.proxies
+
+        self.start_download()
+
+    def emit_ui_event(self, event_type:str, **data):
+        event = {'type': event_type}
+        event.update(data)
+        print(f"__KEMONO_DL_UI__{json.dumps(event, ensure_ascii=False)}", flush=True)
+
+    def emit_progress(self, **updates):
+        with self.state_lock:
+            self.progress.update(updates)
+            total = self.progress['total']
+            completed = self.progress['completed']
+            success = self.progress['success']
+            failed = self.progress['failed']
+            skipped = self.progress['skipped']
+            current_kind = self.progress['current_kind']
+            current_file = self.progress['current_file']
+            status = self.progress['status']
+        percent = round((completed / total) * 100, 1) if total else 0.0
+        self.emit_ui_event(
+            'progress',
+            total=total,
+            completed=completed,
+            success=success,
+            failed=failed,
+            skipped=skipped,
+            current_kind=current_kind,
+            current_file=current_file,
+            status=status,
+            percent=percent,
+        )
+
+    def get_file_kind(self, file:dict):
+        ext = file['file_variables']['ext'].lower()
+        if ext in self.IMAGE_EXTENSIONS:
+            return 'image'
+        if ext in self.VIDEO_EXTENSIONS:
+            return 'video'
+        return 'other'
+
+    def media_type_allows(self, kind:str):
+        if self.media_type == 'all':
+            return True
+        if self.media_type == 'images':
+            return kind == 'image'
+        if self.media_type == 'videos':
+            return kind == 'video'
+        if self.media_type == 'images_videos':
+            return kind in {'image', 'video'}
+        return True
+
+    def register_post_files(self, post:dict):
+        count = 0
+        for file in itertools.chain(post['attachments'], post['inline_images']):
+            if self.media_type_allows(self.get_file_kind(file)):
+                count += 1
+        if count:
+            with self.state_lock:
+                self.progress['total'] += count
+            self.emit_progress(status='collecting')
+
+    def mark_file_started(self, file:dict):
+        self.emit_progress(
+            status='downloading',
+            current_kind=self.get_file_kind(file),
+            current_file=os.path.split(file['file_path'])[1],
+        )
+
+    def mark_file_outcome(self, file:dict, outcome:str):
+        with self.state_lock:
+            self.progress['completed'] += 1
+            self.progress[outcome] += 1
+        self.emit_progress(
+            status='downloading',
+            current_kind=self.get_file_kind(file),
+            current_file=os.path.split(file['file_path'])[1],
+        )
+
+    def mark_file_failed(self, file:dict):
+        with self.state_lock:
+            self.post_errors += 1
+        self.mark_file_outcome(file, 'failed')
+
+    def classify_input_url(self, url:str):
+        domain = parse_url(url)
+        if domain:
+            return {
+                'backend': 'kemono',
+                'url': url,
+                'domain': domain,
+            }
+
+        hitomi = parse_hitomi_url(url)
+        if hitomi:
+            return {
+                'backend': 'hitomi',
+                'url': hitomi['normalized_url'],
+                **hitomi,
+            }
+
+        return None
+
+    def get_post_source_url(self, post:dict):
+        return post.get('source_url') or "https://{site}/{service}/user/{user_id}/post/{id}".format(**post['post_variables'])
+
+    def get_hitomi_gg(self):
+        if self.hitomi_gg is not None:
+            return self.hitomi_gg
+
+        response = self.session.get(
+            url=HITOMI_GG_URL,
+            headers=dict(self.headers, Referer='https://hitomi.la/'),
+            timeout=self.timeout,
+        )
+        if not response.ok:
+            raise Exception(f"Unable to fetch Hitomi gg.js | {response.status_code} {response.reason}")
+
+        self.hitomi_gg = parse_hitomi_gg(response.text)
+        return self.hitomi_gg
+
+    def build_hitomi_post(self, gallery:dict, info:dict):
+        gallery_id = gallery['gallery_id']
+        japanese_title = info.get('japanese_title')
+        english_title = info.get('title')
+        title = japanese_title or english_title or f"gallery_{gallery_id}"
+        artists = collect_hitomi_names(info, 'artists', 'artist')
+        groups = collect_hitomi_names(info, 'groups', 'group')
+        series = collect_hitomi_names(info, 'parodys', 'parody')
+        characters = collect_hitomi_names(info, 'characters', 'character')
+        tags = [item.get('tag') for item in (info.get('tags') or []) if item.get('tag')]
+
+        owner_name = artists[0] if artists else (groups[0] if groups else title)
+        published_raw = info.get('date')
+        if published_raw and isinstance(published_raw, str) and published_raw.count(':') == 1:
+            published_raw = f"{published_raw}:00"
+        published = self.format_time_by_type(published_raw) if published_raw else None
+
+        post_variables = {
+            'title': title,
+            'id': gallery_id,
+            'user_id': gallery_id,
+            'username': owner_name,
+            'site': 'hitomi.la',
+            'service': 'hitomi',
+            'added': published,
+            'updated': published,
+            'user_updated': published,
+            'published': published,
+            'language': info.get('language'),
+            'type': info.get('type'),
+            'english_title': english_title,
+            'japanese_title': japanese_title,
+            'artist': ', '.join(artists),
+            'group': ', '.join(groups),
+            'series': ', '.join(series),
+            'characters': ', '.join(characters),
+            'tags': ', '.join(tags),
+        }
+
+        post = {
+            'post_variables': post_variables,
+            'post_path': compile_post_path(post_variables, self.download_path_template, self.restrict_ascii),
+            'attachments': [],
+            'inline_images': [],
+            'content': {'text': None, 'file_variables': None, 'file_path': None},
+            'links': {'text': None, 'file_variables': None, 'file_path': None},
+            'source_url': gallery['normalized_url'],
+            'supports_comments': False,
+            'raw': info,
+        }
+
+        if self.content:
+            metadata = {
+                'source_url': gallery['normalized_url'],
+                'reader_url': gallery['reader_url'],
+                'title': title,
+                'english_title': english_title,
+                'japanese_title': japanese_title,
+                'type': info.get('type'),
+                'language': info.get('language'),
+                'artists': artists,
+                'groups': groups,
+                'series': series,
+                'characters': characters,
+                'tags': tags,
+                'date': published_raw,
+            }
+            post['content']['text'] = (
+                "<html><head><meta charset=\"utf-8\"></head><body><pre>"
+                f"{html.escape(json.dumps(metadata, ensure_ascii=False, indent=2))}"
+                "</pre></body></html>"
+            )
+            post['content']['file_variables'] = {
+                'filename': 'content',
+                'ext': 'html',
+            }
+            post['content']['file_path'] = compile_file_path(
+                post['post_path'],
+                post['post_variables'],
+                post['content']['file_variables'],
+                self.other_filename_template,
+                self.restrict_ascii,
+            )
+
+        gg_map, gg_base, gg_default = self.get_hitomi_gg()
+        files = info.get('files') or []
+        index_width = len(str(len(files))) if files else 1
+        for index, file_info in enumerate(files, start=1):
+            file_variables = build_hitomi_file(file_info, gg_map, gg_base, gg_default)
+            file_variables.update({
+                'index': str(index).zfill(index_width),
+                'referer': gallery['reader_url'],
+            })
+            file_path = compile_file_path(
+                post['post_path'],
+                post['post_variables'],
+                file_variables,
+                self.filename_template,
+                self.restrict_ascii,
+            )
+            post['attachments'].append({
+                'file_variables': file_variables,
+                'file_path': file_path,
+            })
+
+        self.register_post_files(post)
+        return post
+
+    def get_hitomi_gallery(self, gallery:dict, retry:int):
+        logger.debug(f"Requesting Hitomi gallery info from {gallery['galleryinfo_url']}")
+        try:
+            response = self.session.get(
+                url=gallery['galleryinfo_url'],
+                headers=dict(self.headers, Referer=gallery['reader_url']),
+                timeout=self.timeout,
+            )
+            if not response.ok:
+                raise Exception(f"{response.status_code} {response.reason}")
+            post = self.build_hitomi_post(gallery, extract_hitomi_gallery_info(response.text))
+        except Exception as exc:
+            logger.debug(f"{type(exc)}: {exc}")
+            if retry > 0:
+                logger.warning(f"Failed to get Hitomi gallery {gallery['gallery_id']} | Retrying")
+                self.get_hitomi_gallery(gallery=gallery, retry=retry-1)
+                return
+            logger.exception(f"Unable to get Hitomi gallery info | gallery_id:{gallery['gallery_id']}")
+            return
+
+        if self.skip_post(post):
+            return
+
+        try:
+            self.download_post(post)
+            if self.post_timeout:
+                logger.info(f"Sleeping for {self.post_timeout} seconds.")
+                time.sleep(self.post_timeout)
+        except:
+            logger.exception(f"Unable to download Hitomi gallery | gallery_id:{gallery['gallery_id']}")
+
+        self.comp_posts.append(self.get_post_source_url(post))
+
+    def get_creators(self, domain:str):
+        # get site creators
+        creators_api = f"https://{domain}/api{self.api_ver}/creators"
+        logger.debug(f"Getting creator json from {creators_api}")
+        if self.force_unlisted:
+            return []
+        if self.cache_creators:
+            cache_dir = pathlib.Path(tempfile.gettempdir())
+            cache_ts = int(time.time())
+            cache_prefix = f"kemono-dl_{domain}_creators_".replace('.','-')
+            previous_caches = list(cache_dir.glob(cache_prefix + '*'))
+            previous_cache = None
+            previous_cache_ts = 0
+            for i in previous_caches:
+                i_ts = int(i.name[len(cache_prefix):])
+                if i_ts > previous_cache_ts:
+                    previous_cache_ts = i_ts
+                    previous_cache = i
+            # the creators list changes frequently, so I think doing the length check will result in frequent "expiration" and is oppose to my purpose of caching.
+            # plus, the length in the header is gzip-ed length, it will be another headache to deal with.
+            # creators_len = self.session.head(url=creators_api, cookies=self.cookies, headers=self.headers, timeout=self.timeout).headers.get('Content-Length','')
+            if not previous_cache or cache_ts - previous_cache_ts > self.cache_creators_expire:
+                with open(cache_dir / (cache_prefix + str(cache_ts)), 'w', encoding='utf-8') as cache_writing:
+                    resp = self.session.get(url=creators_api, cookies=self.cookies, headers=self.headers, timeout=self.timeout)
+                    resp_content_decode = resp.content.decode('utf-8')
+                    cache_writing.write(resp_content_decode)
+            else:
+                with open(previous_cache, 'r', encoding='utf-8') as cache_reading:
+                    resp_content_decode = cache_reading.read()
+        else:
+            resp = self.session.get(url=creators_api, cookies=self.cookies, headers=self.headers, timeout=self.timeout)
+            # json.loads accepts bytes as well, I'm not sure if leave it like auto-detect (text encoding) is a good idea or not
+            resp_content_decode = resp.content.decode('utf-8')
+        return json.loads(resp_content_decode)
+
+    def get_user(self, user_id:str, service:str):
+        for creator in self.creators:
+            if creator['id'] == user_id and creator['service'] == service:
+                return creator
+        return None
+
+    def get_favorites(self, domain:str, fav_type:str, retry:int, services:list = None):
+        fav_api = f'https://{domain}/api{self.api_ver}/account/favorites?type={fav_type}'
+        logger.debug(f"Getting favorite json from {fav_api}")
+        response = self.session.get(url=fav_api, headers=self.headers, cookies=self.cookies, timeout=self.timeout)
+        if response.status_code == 401:
+            logger.error(f"Failed to get favorites: {response.status_code} {response.reason} | Bad cookie file")
+            return
+        if not response.ok:
+            if retry>0:
+                logger.exception(f"Failed to get favorites: {response.status_code} {response.reason} | Retrying")
+                self.get_favorites(domain=domain, fav_type=fav_type, retry=retry-1, services=services)
+                return
+            logger.error(f"Failed to get favorites: {response.status_code} {response.reason} | All retries failed")
+            return
+        favorites = response.json()
+        if not favorites:
+            if fav_type == 'post':
+                logger.info(
+                    f"No favorite posts found for {domain} | "
+                    "If you want favorite creators, use --fav-users with a service like fanbox or all"
+                )
+            else:
+                logger.info(f"No favorite users found for {domain}")
+            return
+
+        matched = 0
+        for favorite in favorites:
+            if fav_type == 'post':
+                matched += 1
+                self.get_post(f"https://{domain}/{favorite['service']}/user/{favorite['user']}/post/{favorite['id']}", retry=self.retry)
+            if fav_type == 'artist':
+                if not (favorite['service'] in services or 'all' in services):
+                    logger.info(f"Skipping user {favorite['name']} | Service {favorite['service']} was not requested")
+                    continue
+                matched += 1
+                self.get_post(f"https://{domain}/{favorite['service']}/user/{favorite['id']}", retry=self.retry)
+
+        if fav_type == 'artist' and matched == 0:
+            logger.info(f"No favorite users matched the requested services for {domain}")
+
+    def get_post(self, url:str, retry:int, chunk=0, first=True):
+        found = re.search(r'(https://((?:kemono|coomer)\.(?:party|su|cr|st))/)(([^/]+)/user/([^/]+)($|/post/[^/]+)($|/revision/[^/]+))', url)
+        if not found:
+            logger.error(f"Unable to find url parameters for {url}")
+            return
+        api = f"{found.group(1)}api{self.api_ver}/{found.group(3)}"
+        site = found.group(2)
+        service = found.group(4)
+        user_id = found.group(5)
+        is_post = found.group(6)
+        is_revision = found.group(7)
+        user = self.get_user(user_id, service)
+        if not user:
+            if self.force_unlisted:
+                user={'favorited': 0, 'id': user_id, 'indexed': 1666666666, 'name': user_id, 'service': service, 'updated': 1666666666}
+            else:
+                logger.error(f"Unable to find user info in creators list | {service} | {user_id}")
+                return
+        if not is_post:
+            if self.skip_user(user):
+                return
+        logger.info(f"Downloading posts from {site} | {service} | {user['name']} | {user['id']}")
+        while True:
+            if is_post:
+                logger.debug(f"Requesting post json from: {api}")
+                response = self.session.get(url=f"{api}", cookies=self.cookies, headers=self.headers, timeout=self.timeout)
+                if response.status_code == 429:
+                    logger.warning(f"Failed to request post json from: {api} | 429 Too Many Requests | All retries failed")
+                    return
+            else:
+                logger.debug(f"Requesting user json from: {api}?o={chunk}")
+                response = self.session.get(url=f"{api}/posts?o={chunk}", cookies=self.cookies, headers=self.headers, timeout=self.timeout)
+                if response.status_code == 429:
+                    logger.warning(f"Failed to request user json from: {api}?o={chunk} | 429 Too Many Requests | All retries failed")
+                    return
+            json = response.json()
+            if not json:
+                if is_post:
+                    logger.error(f"Unable to find post json for {api}")
+                elif chunk == 0:
+                    logger.error(f"Unable to find user json for {api}?o={chunk}")
+                return # completed
+            if is_post and isinstance(json, dict) and json.get('post'):
+                json = json.get('post')
+            if not isinstance(json,list):
+                json=[json]
+            for post in json:
+                # only download once
+                if not is_post and first:
+                    if ('{added}' in self.name_templates_glop or '{updated}' in self.name_templates_glop):
+                        logger.debug(f"Requesting full post json from {api}/post/{post['id']}")
+                        try:
+                            post = self.session.get(url=f"{api}/post/{post['id']}", cookies=self.cookies, headers=self.headers, timeout=self.timeout)
+                            post = post.json().get('post')
+                        except Exception as exc:
+                            logger.error(f"Failed to get full post json for first post, {type(exc)}: {exc}")
+                            first = False
+                            continue
+                    try:
+                        post_tmp = self.clean_post(post, user, site)
+                        logger.debug(f"Downloading icon and/or banner | {user['name']} | {user['id']}")
+                        self.download_icon_banner(post_tmp, self.icon_banner, retry=self.retry)
+                        if self.dms:
+                            logger.debug(f"Writting dms | {user['name']} | {user['id']}")
+                            self.write_dms(post_tmp,retry=self.retry)
+                        if self.fancards:
+                            logger.debug(f"Downloading fancards | {user['name']} | {user['id']}")
+                            self.download_fancards(post_tmp,retry=self.retry)
+                        if self.announcements:
+                            logger.debug(f"Writting announcements | {user['name']} | {user['id']}")
+                            self.write_announcements(post_tmp,retry=self.retry)
+                        first = False
+                    except Exception as exc:
+                        logger.debug(f"{type(exc)}: {exc}")
+                        if retry > 0:
+                            logger.warning(f"Failed to get icon, banner, dms, fancards or announcements | Retrying")
+                            self.get_post(url=url, retry=retry-1, chunk=chunk, first=True)
+                        else:
+                            logger.error(f"Failed to get icon, banner, dms, fancards or announcements | All retries failed")
+                        return
+                comments_original=self.comments
+                self.comments=False
+                post_tmp = self.clean_post(post, user, site)
+                if ret := self.skip_post(post_tmp):
+                    if ret == 2:
+                        return
+                    continue
+                self.comments=comments_original
+                if not is_post and (self.content or self.inline or self.comments or self.extract_links or self.extract_all_links
+                                    or '{added}' in self.name_templates_glop or '{updated}' in self.name_templates_glop):
+                    logger.debug(f"Requesting full post json from {api}/post/{post['id']}")
+                    post_jr = post
+                    try:
+                        post = self.session.get(url=f"{api}/post/{post['id']}", cookies=self.cookies, headers=self.headers, timeout=self.timeout)
+                        post = post.json().get('post')
+                        post = self.clean_post(post, user, site, post_jr)
+                    except Exception as exc:
+                        logger.error(f"Failed to get full post json for post {post['id']}, {type(exc)}: {exc}")
+                        continue
+                else:
+                    post = self.clean_post(post, user, site)
+                try:
+                    self.download_post(post)
+                    if self.post_timeout:
+                        logger.info(f"Sleeping for {self.post_timeout} seconds.")
+                        time.sleep(self.post_timeout)
+                except:
+                    logger.exception("Unable to download post | service:{service} user_id:{user_id} post_id:{id}".format(**post['post_variables']))
+                self.comp_posts.append(self.get_post_source_url(post))
+            chunk_size = 50
+            if len(json) < chunk_size:
+                return # completed
+            chunk += chunk_size
+
+
+    def download_icon_banner(self, post:dict, img_types:list, retry:int):
+        for img_type in img_types:
+            if post['post_variables']['service'] in {'dlsite'}:
+                logger.warning(f"Profile {img_type}s are not supported for {post['post_variables']['service']} users")
+                continue
+            if post['post_variables']['service'] in {'gumroad'} and img_type == 'banner':
+                logger.warning(f"Profile {img_type}s are not supported for {post['post_variables']['service']} users")
+                continue
+            image_url = "https://{site}/{img_type}s/{service}/{user_id}".format(img_type=img_type, **post['post_variables'])
+            response = self.session.get(url=image_url,headers=self.headers, cookies=self.cookies, timeout=self.timeout)
+            if response.status_code == 429:
+                logger.error(f"Unable to download profile {img_type} for {post['post_variables']['username']} | 429 Too Many Requests | All retries failed")
+                return
+            try:
+                image = Image.open(BytesIO(response.content))
+                file_variables = {
+                    'filename':img_type,
+                    'ext':image.format.lower()
+                }
+                file_path = compile_file_path(post['post_path'], post['post_variables'], file_variables, self.user_filename_template, self.restrict_ascii)
+                if os.path.exists(file_path):
+                    logger.info(f"Skipping: {os.path.split(file_path)[1]} | File already exists")
+                    continue
+                logger.info(f"Downloading: {os.path.split(file_path)[1]}")
+                logger.debug(f"Downloading to: {file_path}")
+                if not self.simulate:
+                    if not os.path.exists(os.path.split(file_path)[0]):
+                        os.makedirs(os.path.split(file_path)[0])
+                    image.save(file_path, format=image.format)
+            except:
+                logger.error(f"Unable to download profile {img_type} for {post['post_variables']['username']}")
+
+    def write_dms(self, post:dict, retry:int):
+        if post['post_variables']['service'] != 'patreon':
+            logger.debug("Skipping dms for non patreon user https://{site}/{service}/user/{user_id}".format(**post['post_variables']))
+            return
+        post_url = "https://{site}/api{api_ver}/{service}/user/{user_id}/dms".format(**post['post_variables'],api_ver=self.api_ver)
+        response = self.session.get(url=post_url, allow_redirects=True, headers=self.headers, cookies=self.cookies, timeout=self.timeout)
+        if not response.ok:
+            if response.status_code==429:
+                logger.warning("Unable to download DMs for {service} {user_id} | 429 | All retries failed".format(**post['post_variables']))
+                return
+            else:
+                logger.warning("Unable to download DMs for {service} {user_id} | {code} | Retrying.".format(core=response.status_code,**post['post_variables']))
+            if retry > 0:
+                self.write_dms(post=post,retry=retry-1)
+            else:
+                logger.error("Unable to download DMs for {service} {user_id} | {code} | All retries failed.".format(core=response.status_code,**post['post_variables']))
+            return
+        dms_json = response.json()
+        dmc = len(dms_json)
+        if dmc == 0:
+            logger.info("No DMs found for https://{site}/{service}/user/{user_id}".format(**post['post_variables']))
+            return
+        file_variables = {
+            'filename':f'{dmc} direct messages',
+            'ext':'json'
+        }
+        if isinstance(dms_json,list):
+            dms_json = dict(enumerate(dms_json))
+        file_path = compile_file_path(post['post_path'], post['post_variables'], file_variables, self.user_filename_template, self.restrict_ascii)
+        self.write_to_file(file_path, dms_json)
+
+    def download_fancards(self, post:dict, retry:int):
+        if post['post_variables']['service'] != 'fanbox':
+            logger.debug("Skipping fancards for non fanbox user https://{site}/{service}/user/{user_id}".format(**post['post_variables']))
+            return
+        post_url = "https://{site}/api{api_ver}/{service}/user/{user_id}/fancards".format(**post['post_variables'],api_ver=self.api_ver)
+        logger.info(f"Downloading fancards {post_url}")
+        response = self.session.get(url=post_url, allow_redirects=True, headers=self.headers, cookies=self.cookies, timeout=self.timeout)
+        if not response.ok:
+            if response.status_code==429:
+                logger.warning("Unable to find Fancards for {service} {user_id} | 429 | All retries failed".format(**post['post_variables']))
+                return
+            else:
+                logger.warning("Unable to find Fancards for {service} {user_id} | {code} | Retrying.".format(core=response.status_code,**post['post_variables']))
+            if retry > 0:
+                self.download_fancards(post=post,retry=retry-1)
+            else:
+                logger.error("Unable to find Fancards for {service} {user_id} | {code} | All retries failed.".format(core=response.status_code,**post['post_variables']))
+            return
+        page_json = response.json()
+        fancards_json = page_json if isinstance(page_json, list) else [page_json]
+        if not len(fancards_json):
+            logger.info("No fancards found for https://{site}/{service}/user/{user_id}".format(**post['post_variables']))
+            return
+        for fancard in fancards_json:
+            fancard_added = self.get_date_by_type(fancard.get('added'))
+            fancard_title = datetime.datetime.strftime(fancard_added,'Added %Y-%m')
+            fancard_url = fancard.get('server') + fancard.get('path')
+            fancard_filename = fancard.get('hash')
+            fancard_ext = fancard.get('ext').strip('.')
+            file_variables = {
+                'filename':'{title}_{name}'.format(title=fancard_title,name=fancard_filename),
+                'ext':fancard_ext,
+                'url':fancard_url,
+                'hash':fancard_filename,
+                'referer':post_url
+            }
+            file_path = compile_file_path(os.path.join(post['post_path'],'Fancards'), post['post_variables'], file_variables, self.user_filename_template, self.restrict_ascii)
+            self.download_file({"file_path":file_path,"file_variables":file_variables}, retry=self.retry, post=post) #dummy postid
+
+    def write_announcements(self, post:dict, retry:int):
+        post_url = "https://{site}/api{api_ver}/{service}/user/{user_id}/announcements".format(**post['post_variables'],api_ver=self.api_ver)
+        response = self.session.get(url=post_url, allow_redirects=True, headers=self.headers, cookies=self.cookies, timeout=self.timeout)
+        if not response.ok:
+            if response.status_code==429:
+                logger.warning("Unable to get announcements for {service} {user_id} | 429 | All retries failed".format(**post['post_variables']))
+                return
+            else:
+                logger.warning("Unable to get announcements for {service} {user_id} | {code} | Retrying.".format(core=response.status_code,**post['post_variables']))
+            if retry > 0:
+                self.write_announcements(post=post,retry=retry-1)
+            else:
+                logger.error("Unable to get announcements for {service} {user_id} | {code} | All retries failed.".format(core=response.status_code,**post['post_variables']))
+            return
+        if not len(response.json()):
+            logger.info("No announcements found for https://{site}/{service}/user/{user_id}".format(**post['post_variables']))
+            return
+
+        announcements = ""
+        for announcement in response.json():
+            ann_pub_date = f'published: {announcement.get("published")}'
+            ann_add_date = f'added: {announcement.get("added")}'
+            announcements += f'# {ann_pub_date} | {ann_add_date}\n\n'
+            announcements += f'{announcement["content"].strip()}\n\n'
+
+        file_variables = {
+            'filename':'announcements',
+            'ext':'txt'
+        }
+        file_path = compile_file_path(post['post_path'], post['post_variables'], file_variables, self.user_filename_template, self.restrict_ascii)
+        overwrite_original = self.overwrite
+        if os.path.exists(file_path) and os.path.getsize(file_path) < len(announcements):
+            self.overwrite = True
+        self.write_to_file(file_path, announcements)
+        self.overwrite = overwrite_original
+
+    def get_inline_images(self, post, content_soup):
+        # only get images that are hosted by the .party site
+        inline_images = [inline_image for inline_image in content_soup.find_all("img") 
+                            if inline_image.get('src') and inline_image.get('src')[0] == '/']
+        for index, inline_image in enumerate(inline_images):
+            file = {}
+            filename, file_extension = os.path.splitext(inline_image['src'].rsplit('/')[-1])
+            m = re.search(r'[a-zA-Z0-9]{64}', inline_image['src'])
+            file_hash = m.group(0) if m else None
+            file['file_variables'] = {
+                'filename': filename,
+                'ext': file_extension[1:],
+                'url': f"https://{post['post_variables']['site']}/data{inline_image['src']}",
+                'hash': file_hash,
+                'index': f"{index + 1}".zfill(len(str(len(inline_images)))),
+                'referer': f"https://{post['post_variables']['site']}/{post['post_variables']['service']}/user/{post['post_variables']['user_id']}/post/{post['post_variables']['id']}"
+            }
+            file['file_path'] = compile_file_path(post['post_path'], post['post_variables'], file['file_variables'], self.inline_filename_template, self.restrict_ascii)
+            html_loc = pathlib.Path(compile_file_path(post['post_path'], post['post_variables'], {'filename':'dummy','ext':'html'}, self.other_filename_template, self.restrict_ascii)).parent
+            # set local image location in html
+            inline_image['src'] = os.path.relpath(file['file_path'],html_loc)
+            post['inline_images'].append(file)
+        return content_soup
+
+    def compile_content_links(self, post, content_soup, embed_links):
+        href_links = content_soup.find_all(href=True)
+        post['links']['text'] = embed_links
+        for href_link in href_links:
+            post['links']['text'] += f"{href_link['href']}\n"
+        post['links']['file_variables'] = {
+            'filename':'links',
+            'ext':'txt'
+        }
+        post['links']['file_path'] = compile_file_path(post['post_path'], post['post_variables'], post['links']['file_variables'], self.other_filename_template, self.restrict_ascii)
+
+    def get_comments(self, post:dict):
+        try:
+            post_url = "https://{site}/api{api_ver}/{service}/user/{user_id}/post/{id}/comments".format(**post['post_variables'],api_ver=self.api_ver)
+            response = self.session.get(url=post_url, allow_redirects=True, headers=self.headers, cookies=self.cookies, timeout=self.timeout)
+            if response.status_code == 429:
+                logger.warning(f"Failed to get post comments | 429 Too Many Requests | All retries failed")
+            page_json = response.json()
+            no_comments = isinstance(page_json, dict) and page_json.get('error')
+            if no_comments:
+                logger.debug(page_json.get('error'))
+                return ''
+            comments_json = page_json if isinstance(page_json, list) else []
+            file_variables = {
+                'filename':'{dmc} comments'.format(dmc=len(comments_json)),
+                'ext':'json'
+            }
+            if isinstance(comments_json,list):
+                comments_json = dict(enumerate(comments_json))
+            file_path = compile_file_path(post['post_path'], post['post_variables'], file_variables, self.other_filename_template, self.restrict_ascii)
+            if len(comments_json):
+                self.write_to_file(file_path, comments_json)
+            return True
+        except:
+            self.post_errors += 1
+            logger.exception("Failed to get post comments")
+
+    def compile_post_content(self, post, content_soup, comment_soup, embed):
+        post['content']['text'] = f"{content_soup}\n{embed}\n{comment_soup}"
+        post['content']['file_variables'] = {
+            'filename':'content',
+            'ext':'html'
+        }
+        post['content']['file_path'] = compile_file_path(post['post_path'], post['post_variables'], post['content']['file_variables'], self.other_filename_template, self.restrict_ascii)
+
+    def clean_post(self, post:dict, user:dict, domain:str, post_jr:dict = None):
+        new_post = {}
+        # set post variables
+        new_post['post_variables'] = {}
+        new_post['post_variables']['title'] = post['title']
+        new_post['post_variables']['id'] = post['id']
+        new_post['post_variables']['user_id'] = post['user']
+        new_post['post_variables']['username'] = user['name']
+        new_post['post_variables']['site'] = domain
+        new_post['post_variables']['service'] = post['service']
+        new_post['post_variables']['added'] = self.format_time_by_type(post.get('added'))
+        new_post['post_variables']['updated'] = self.format_time_by_type(post.get('edited'))
+        new_post['post_variables']['user_updated'] = self.format_time_by_type(user.get('updated'))
+        new_post['post_variables']['published'] = self.format_time_by_type(post.get('published'))
+        if not new_post['post_variables']['published'] and post_jr:
+            new_post['post_variables']['published'] = self.format_time_by_type(post_jr.get('published'))
+        if post.get('tags'): new_post['post_variables']['tags'] = post.get('tags')
+        if post.get('poll'): new_post['post_variables']['poll'] = post.get('poll')
+
+        new_post['post_path'] = compile_post_path(new_post['post_variables'], self.download_path_template, self.restrict_ascii)
+
+        new_post['attachments'] = []
+        if self.attachments:
+            # add post file to front of attachments list if it doesn't already exist
+            if post['file'] and not post['file'] in post['attachments']:
+                post['attachments'].insert(0, post['file'])
+            # loop over attachments and set file variables
+            for index, attachment in enumerate(post['attachments']):
+                file = {}
+                if not isinstance(attachment, dict):
+                    try:
+                        attachment = json.loads(attachment)
+                    except:
+                        logger.error(f"Unrecognized attachment format")
+                        continue
+                if attachment.get('name') and isinstance(attachment.get('name'),str):
+                    filename, file_extension = os.path.splitext(attachment['name'])
+                elif attachment.get('path') and isinstance(attachment.get('path'),str):
+                    filename, file_extension = os.path.splitext(attachment['path'].split('/')[-1])
+                else:
+                    continue
+                m = re.search(r'[a-zA-Z0-9]{64}', attachment['path'])
+                file_hash = m.group(0) if m else None
+                file['file_variables'] = {
+                    'filename': filename,
+                    'ext': file_extension[1:],
+                    'url': f"https://{domain}/data{attachment['path']}",
+                    'hash': file_hash,
+                    'index': f"{index + 1}".zfill(len(str(len(post['attachments'])))),
+                    'referer': f"https://{domain}/{post['service']}/user/{post['user']}/post/{post['id']}"
+                }
+                file['file_path'] = compile_file_path(new_post['post_path'], new_post['post_variables'], file['file_variables'], self.filename_template, self.restrict_ascii)
+                new_post['attachments'].append(file)
+
+        new_post['inline_images'] = []
+        content_soup = None
+        if post.get('content') is not None:
+            content_soup = BeautifulSoup(post.get('content'), 'html.parser')
+            if self.inline:
+                content_soup = self.get_inline_images(new_post, content_soup)
+
+        comment_soup = ''
+
+        new_post['content'] = {'text':None,'file_variables':None, 'file_path':None}
+        embed = "{subject}\n{url}\n{description}".format(**post.get('embed')) if post.get('embed') else ''
+        if (self.content or self.comments) and (content_soup or comment_soup or embed):
+            self.compile_post_content(new_post, content_soup.prettify(), comment_soup, embed)
+
+        new_post['links'] = {'text':None,'file_variables':None, 'file_path':None}
+        embed_url = "{url}\n".format(**post.get('embed')) if post.get('embed') else ''
+        if (self.extract_links or self.extract_all_links) and content_soup:
+            self.compile_content_links(new_post, content_soup, embed_url)
+
+        self.register_post_files(new_post)
+        return new_post
+
+    def download_post(self, post:dict):
+        # might look buggy if title has new lines in it
+        logger.info("Downloading Post | {title}".format(**post['post_variables']))
+        logger.debug(f"Post URL: {self.get_post_source_url(post)}")
+        self.download_media(post)
+        self.write_content(post)
+        if self.comments and post.get('supports_comments', True):
+            self.get_comments(post)
+        self.write_links(post)
+        if self.json:
+            self.write_json(post)
+        self.download_yt_dlp(post)
+        self.write_archive(post)
+        with self.state_lock:
+            self.post_errors = 0
+
+    def download_media(self, post:dict):
+        files = post['attachments'] + post['inline_images']
+        if not files:
+            return
+        max_workers = min(self.parallel_downloads, len(files))
+        if max_workers <= 1:
+            for file in files:
+                self.download_file_safe(file, post)
+            return
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(self.download_file_safe, file, post) for file in files]
+            for future in as_completed(futures):
+                future.result()
+
+    def download_file_safe(self, file:dict, post:dict):
+        try:
+            self.download_file(file, retry=self.retry, post=post)
+        except:
+            self.mark_file_failed(file)
+            logger.exception(f"Failed to download: {file['file_path']}")
+
+    def write_content(self, post:dict):
+        # write post content
+        if post['content']['text']:
+            try:
+                self.write_to_file(post['content']['file_path'], post['content']['text'])
+            except:
+                self.post_errors += 1
+                logger.exception(f"Failed to save content")
+
+    def write_links(self, post:dict):
+        # Write post content links
+        if post['links']['text']:
+            try:
+                if self.extract_all_links:
+                    self.write_links_to_file(f"./{post['post_variables']['username']}.txt", post['links']['text'])
+                if self.extract_links:
+                    self.write_to_file(post['links']['file_path'], post['links']['text'])
+            except:
+                self.post_errors += 1
+                logger.exception(f"Failed to save content links")
+
+
+    def write_json(self, post:dict):
+        try:
+            # add this to clean post function
+            file_variables = {
+                'filename':'json',
+                'ext':'json'
+            }
+            file_path = compile_file_path(post['post_path'], post['post_variables'], file_variables, self.other_filename_template, self.restrict_ascii)
+            self.write_to_file(file_path, post)
+        except:
+            self.post_errors += 1
+            logger.exception(f"Failed to save json")
+
+    def write_to_file(self, file_path, file_content):
+        # check if file exists and if should overwrite
+        if os.path.exists(file_path) and not self.overwrite:
+            logger.info(f"Skipping: {os.path.split(file_path)[1]} | File already exists")
+            return
+        logger.info(f"Writing: {os.path.split(file_path)[1]}")
+        logger.debug(f"Writing to: {file_path}")
+        if not self.simulate:
+            # create folder path if it doesn't exist
+            os.makedirs(os.path.split(file_path)[0], exist_ok=True)
+            # write to file
+            if isinstance(file_content, dict):
+                with open(file_path,'w') as f:
+                    json.dump(file_content, f, indent=4, sort_keys=True)
+            else:
+                with open(file_path,'wb') as f:
+                    f.write(file_content.encode("utf-8"))
+
+    def write_links_to_file(self, file_path, file_content):
+        with open(file_path,'a') as f:
+            print(file_content, file=f)
+
+    def download_file(self, file:dict, retry:int, post:dict):
+        # download a file
+
+        # try archives password before skipping
+        if self.archives_password and file['file_variables']['ext'] in ('zip','7z','rar'):
+            passwd_filevar = dict(file['file_variables'])
+            passwd_filevar.update({'ext':'pw'})
+            passwd_filepath = compile_file_path(post['post_path'], post['post_variables'], passwd_filevar, self.filename_template, self.restrict_ascii)
+            if not os.path.exists(passwd_filepath):
+                try:
+                    passwd_api = "https://{site}/api{api_ver}/file/{hash}".format(**post['post_variables'],**file['file_variables'],api_ver=self.api_ver)
+                    passwd_resp = self.session.get(url=passwd_api, allow_redirects=True, headers=self.headers, cookies=self.cookies, timeout=self.timeout)
+                    passwd_json = passwd_resp.json()
+                except:
+                    passwd_json = None
+                if passwd_json:
+                    if passwd_json.get('password'):
+                        self.write_to_file(passwd_filepath, passwd_json.get('password'))
+
+        if self.skip_file(file,post=post):
+            self.mark_file_outcome(file, 'skipped')
+            return
+
+        part_file = f"{file['file_path']}.part" if self.part_files else file['file_path']
+
+        logger.info(f"Downloading: {os.path.split(file['file_path'])[1]}")
+        logger.debug(f"Downloading from: {file['file_variables']['url']}")
+        logger.debug(f"Downloading to: {part_file}")
+        self.mark_file_started(file)
+
+        request_headers={'Referer':file['file_variables']['referer']}
+        candidate_urls = [file['file_variables']['url']]
+        candidate_urls.extend(file['file_variables'].get('fallback_urls', []))
+        candidate_urls = list(dict.fromkeys(url for url in candidate_urls if url))
+
+        if self.force_dss:
+            dss_letter=isinstance(self.force_dss,str) and self.force_dss[0]
+            url_pre_redir=file['file_variables']['url']
+            url_redir=None
+            if url_pre_redir.startswith('https://kemono') or url_pre_redir.startswith('https://coomer'):
+                resp=self.session.get(url=url_pre_redir, stream=False, headers=dict(**self.headers,**request_headers), cookies=self.cookies, timeout=self.timeout, allow_redirects=False)
+                if resp.status_code == 302:
+                    url_redir = resp.headers['Location']
+                    url_match = re.match('(https://[a-z])[0-9]\\.',url_redir)
+                    if url_match:
+                        url_redir=url_redir.replace(url_match.group(1),'https://'+dss_letter)
+                    file['file_variables']['url'] = url_redir
+
+        # try to resume part file
+        resume_size = 0
+        if os.path.exists(part_file) and not self.overwrite and os.path.getsize(part_file):
+            resume_size = os.path.getsize(part_file)
+            logger.info(f"Trying to resuming partial download | Resume size: {resume_size} bytes")
+            request_headers['Range']=f"bytes={resume_size}-"
+
+        response = None
+        head_ref = None
+        selected_url = file['file_variables']['url']
+        for index, candidate_url in enumerate(candidate_urls):
+            is_last_candidate = index == len(candidate_urls) - 1
+            try:
+                if self.headcheck:
+                    head_ref = self.session.get(
+                        url=candidate_url,
+                        stream=False,
+                        headers=dict(**self.headers,**{'Range':f'bytes={resume_size}-{resume_size+1023}'}),
+                        cookies=self.cookies,
+                        timeout=self.timeout,
+                    ).content
+                response = self.session.get(
+                    url=candidate_url,
+                    stream=True,
+                    headers=dict(**self.headers,**request_headers),
+                    cookies=self.cookies,
+                    timeout=self.timeout,
+                )
+            except:
+                if not is_last_candidate:
+                    logger.warning(f"Failed to access candidate url, trying fallback | {candidate_url}")
+                    continue
+                logger.exception(f"Failed to get responce: {candidate_url} | Retrying")
+                if retry > 0:
+                    self.download_file(file, retry=retry-1, post=post)
+                    return
+                logger.error(f"Failed to get responce: {candidate_url} | All retries failed")
+                self.mark_file_failed(file)
+                return
+
+            selected_url = candidate_url
+            if response.status_code in {403, 404} and not is_last_candidate:
+                logger.warning(f"Candidate url returned {response.status_code}, trying fallback | {candidate_url}")
+                continue
+            break
+
+        file['file_variables']['url'] = selected_url
+
+        # responce status code checking
+        if response.status_code == 404:
+            logger.error(f"Failed to download: {file['file_variables']['url']} | 404 Not Found")
+            self.mark_file_failed(file)
+            return
+
+        if response.status_code == 403:
+            for _ in range(self.retry_403):
+                logger.info('A 403 encountered, retry without session.')
+                try:
+                    response = requests.get(url=file['file_variables']['url'], stream=True, headers=request_headers, timeout=self.timeout,proxies=self.proxies)
+                except:
+                    logger.exception(f"Failed to get responce: {file['file_variables']['url']} | Retrying")
+                    if retry > 0:
+                        self.download_file(file, retry=retry-1, post=post)
+                        return
+                    logger.error(f"Failed to get responce: {file['file_variables']['url']} | All retries failed")
+                    self.mark_file_failed(file)
+                    return
+                if response.status_code != 403:
+                    break
+            if response.status_code == 403:
+                logger.error(f"Failed to download: {file['file_variables']['url']} | 403 Forbidden")
+                self.mark_file_failed(file)
+                return
+
+        if response.status_code == 416:
+            logger.warning(f"Failed to download: {file['file_variables']['url']} | 416 Range Not Satisfiable | Assuming broken server hash value")
+            content_length = self.session.get(url=file['file_variables']['url'], stream=True, headers=self.headers, cookies=self.cookies, timeout=self.timeout).headers.get('content-length', '')
+            if int(content_length) == resume_size:
+                logger.debug("Correct amount of bytes downloaded | Assuming download completed successfully")
+                if self.overwrite:
+                    os.replace(part_file, file['file_path'])
+                else:
+                    os.rename(part_file, file['file_path'])
+                self.mark_file_outcome(file, 'success')
+                return
+            logger.error("Incorrect amount of bytes downloaded | Something went so wrong I have no idea what happened | Saving file with suffix in name")
+            # os.remove(part_file)
+            filepath=os.path.splitext(file['file_path'])
+            filepath=filepath[0]+'_statuscode416'+filepath[1]
+            if self.overwrite:
+                os.replace(part_file, filepath)
+            else:
+                os.rename(part_file, filepath)
+            self.mark_file_failed(file)
+            return
+
+        if response.status_code == 429:
+            # already retried for 429
+            logger.error(f"Failed to download: {file['file_variables']['url']} | 429 Too Many Requests | All retries failed")
+            self.mark_file_failed(file)
+            return
+        if not response.ok:
+            logger.error(f"Failed to download: {file['file_variables']['url']} | {response.status_code} {response.reason}")
+            self.mark_file_failed(file)
+            return
+
+        total = int(response.headers.get('content-length', 0))
+        if total:
+            total += resume_size
+
+        if not self.simulate:
+            try:
+                os.makedirs(os.path.split(file['file_path'])[0], exist_ok=True)
+                first_chunk=True
+                with open(part_file, 'wb' if resume_size == 0 else 'ab') as f:
+                    start = time.time()
+                    downloaded = resume_size
+                    print_download_bar(total, downloaded, resume_size, start)
+                    iter_chunk_size = 256<<10
+                    puff = bytes()
+                    for chunk in response.iter_content(chunk_size=iter_chunk_size):
+                        if first_chunk:
+                            first_chunk=False
+                            if self.headcheck:
+                                if chunk[:len(head_ref)]!=head_ref:
+                                    raise Exception("Head Check Mismatch")
+                        puff += chunk
+                        downloaded += len(chunk)
+                        if len(puff) >= (32<<20)//iter_chunk_size*iter_chunk_size:
+                            f.write(puff)
+                            puff = bytes()
+                        print_download_bar(total, downloaded, resume_size, start)
+                    if puff:
+                        f.write(puff)
+                        puff = bytes()
+                print()
+            except Exception as exc:
+                # assuming puffered content is good
+                with open(part_file, 'ab') as f:
+                    f.write(puff)
+                    puff = bytes()
+                if retry > 0:
+                    logger.error(f"Failed to download: {os.path.split(file['file_path'])[1]} | Exception: {exc} | Retrying")
+                    self.download_file(file, retry=retry-1, post=post)
+                    return
+                logger.error(f"Failed to download: {os.path.split(file['file_path'])[1]} | Exception: {exc} | All retries failed")
+                self.mark_file_failed(file)
+                return
+
+            # verify download
+            server_hash = file['file_variables'].get('hash')
+            if server_hash is not None:
+                local_hash = get_file_hash(part_file)
+                logger.debug(f"Local File hash: {local_hash}")
+                logger.debug(f"Sever File hash: {server_hash}")
+                if local_hash != server_hash:
+                    logger.warning(f"File hash did not match server! | Retrying")
+                    if os.path.getsize(part_file)==total:
+                        os.remove(part_file)
+                    if retry > 0:
+                        self.download_file(file, retry=retry-1, post=post)
+                        return
+                    logger.error(f"File hash did not match server! | All retries failed")
+                    self.mark_file_failed(file)
+                    return
+            # remove .part from file name
+            if self.overwrite:
+                os.replace(part_file, file['file_path'])
+            else:
+                os.rename(part_file, file['file_path'])
+            self.mark_file_outcome(file, 'success')
+
+    def download_yt_dlp(self, post:dict):
+        # download from video streaming site
+        # if self.yt_dlp and post['embed']:
+            pass
+            # my_yt_dlp(post['embed']['url'], post['post_path'], self.yt_dlp_args)
+
+    def load_archive(self):
+        # load archived posts
+        if self.archive_file and os.path.exists(self.archive_file):
+            with open(self.archive_file,'r') as f:
+                self.archive_list = f.read().splitlines()
+            self.archive_list = [self.normalize_archive_entry(i) for i in self.archive_list]
+            self.archive_list = set(self.archive_list) # "in" check has lower time complexity for sets
+
+    def normalize_archive_entry(self, entry:str):
+        return self.re_tld.sub("", entry)
+
+    def write_archive(self, post:dict):
+        if self.archive_file and self.post_errors == 0 and not self.simulate:
+            with open(self.archive_file,'a') as f:
+                f.write(self.get_post_source_url(post) + '\n')
+
+    def skip_user(self, user:dict):
+        # check last update date
+        if self.user_up_datebefore or self.user_up_dateafter:
+            if check_date(self.get_date_by_type(user['updated']), None, self.user_up_datebefore, self.user_up_dateafter):
+                logger.info(f"Skipping user {user['id']} | user updated date not in range")
+                return True
+        return False
+
+    def skip_post(self, post:dict):
+        # check if the post should be downloaded
+        if self.archive_file:
+            post_url = self.normalize_archive_entry(self.get_post_source_url(post))
+            if post_url in self.archive_list:
+                logger.info(f"Skipping post {post['post_variables']['id']} | post already archived") # add some numbers to indicate that the script isn't frozen when a lot of posts skipped and your screen is full of this message
+                return True
+
+        if self.date or self.datebefore or self.dateafter:
+            if not post['post_variables']['published']:
+                logger.info(f"Skipping post {post['post_variables']['id']} | post published date not in range")
+                return True
+            elif ret := check_date(self.get_date_by_type(post['post_variables']['published' if not self.fp_added else 'added'], self.date_strf_pattern), self.date, self.datebefore, self.dateafter):
+                logger.info(f"Skipping post {post['post_variables']['id']} | post published date not in range")
+                return ret
+
+        if self.get_post_source_url(post) in self.comp_posts:
+            logger.info(f"Skipping post {post['post_variables']['id']} | post was already downloaded this session")
+            return True
+
+        # check post title
+        if self.only_postname:
+            skip = True
+            for w in self.only_postname:
+                if w.lower() in post['post_variables']['title'].lower():
+                    skip = False
+                    break
+            if skip:
+                logger.info(f"Skipping post {post['post_variables']['id']} | post title does not contain any of the given word(s): {self.only_postname}")
+                return True
+                
+        if self.not_postname:
+            for w in self.not_postname:
+                if w.lower() in post['post_variables']['title'].lower():
+                    logger.info(f"Skipping post {post['post_variables']['id']} | post title contains word: {w}")
+                    return True
+        
+        return False
+
+    def skip_file(self, file:dict, post:dict):
+        file_kind = self.get_file_kind(file)
+        if not self.media_type_allows(file_kind):
+            logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File type {file_kind} not selected by media filter {self.media_type}")
+            return True
+
+        # check if file exists
+        if not self.overwrite:
+            if os.path.exists(file['file_path']):
+                confirm_msg = ''
+                if 'hash' in file['file_variables'] and file['file_variables']['hash'] != None and self.local_hash:
+                    local_hash = get_file_hash(file['file_path'])
+                    if local_hash != file['file_variables']['hash']:
+                        logger.warning(f"Corrupted file detected, remove this file and try to redownload | path: {file['file_path']} " + 
+                                        f"local hash: {local_hash} server hash: {file['file_variables']['hash']}")
+                        os.remove(file['file_path'])
+                        return False
+                    confirm_msg = ' | Hash confirmed'
+                logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File already exists{confirm_msg}")
+                return True
+            if self.dupe_check:
+                if file["file_variables"].get("index") is not None:
+                    fp_cur=pathlib.Path(file['file_path'])
+                    fp_par=fp_cur.parent
+                    templates=self.dupe_check_template.split(',')
+                    pattern=templates[0].format(**file['file_variables'], **post['post_variables'])
+                    pattern2=templates[1].format(**file['file_variables'], **post['post_variables'])
+                    similar=fp_par.glob(pattern)
+                    similar2=fp_par.parent.glob(pattern2)
+                    for x in itertools.chain(similar,similar2):
+                        if 'hash' in file['file_variables'] and file['file_variables']['hash'] != None:
+                            sim_hash = get_file_hash(str(x))
+                            if sim_hash == file['file_variables']['hash']:
+                                if x.suffix == '.part':
+                                    os.rename(x,x.parent/x.stem)
+                                logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | Same hash file exists")
+                                return True
+
+        # check file name extention
+        if self.only_ext:
+            if not file['file_variables']['ext'].lower() in self.only_ext:
+                logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File extention {file['file_variables']['ext']} not found in include list {self.only_ext}")
+                return True
+        if self.not_ext:
+            if file['file_variables']['ext'].lower() in self.not_ext:
+                logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File extention {file['file_variables']['ext']} found in exclude list {self.not_ext}")
+                return True
+
+        # check file name 
+        if self.only_filename:
+            skip = True
+            for w in self.only_filename:
+                if w.lower() in file['file_variables']['filename'].lower():
+                    skip = False
+            if skip:
+                logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File name does not contain any of the given word(s): {self.only_filename} ")
+                return True
+                
+        if self.not_filename:
+            for w in self.not_filename:
+                if w.lower() in file['file_variables']['filename'].lower():
+                    logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File name contains word: {w}")
+                    return True
+
+        # check file size
+        if self.min_size or self.max_size:
+            file_size = requests.get(file['file_variables']['url'], cookies=self.cookies, stream=True,proxies=self.proxies).headers.get('content-length', 0)
+            if int(file_size) == 0:
+                    logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File size not included in file header")
+                    return True
+            if self.min_size and self.max_size:
+                if not (self.min_size <= int(file_size) <= self.max_size):
+                    logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File size in bytes {file_size} was not between {self.min_size} and {self.max_size}")
+                    return True
+            elif self.min_size:
+                if not (self.min_size <= int(file_size)):
+                    logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File size in bytes {file_size} was not >= {self.min_size}")
+                    return True
+            elif self.max_size:
+                if not (int(file_size) <= self.max_size):
+                    logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File size in bytes {file_size} was not <= {self.max_size}")
+                    return True
+        return False
+
+
+
+    def start_download(self):
+        # start the download process
+        self.emit_progress(status='starting')
+        self.load_archive()
+
+        kemono_jobs = []
+        hitomi_jobs = []
+        domains = []
+
+        for url in self.input_urls:
+            parsed = self.classify_input_url(url)
+            if not parsed:
+                logger.warning(f"URL is not downloadable | {url}")
+                continue
+            if parsed['backend'] == 'kemono':
+                domain = parsed['domain']
+                if domain not in self.cookie_domains.values() and self.cookies is not None:
+                    logger.warning(f"Domain not in cookie files, cookie won't work properly | {url}")
+                kemono_jobs.append(parsed)
+                if domain not in domains:
+                    domains.append(domain)
+                continue
+            hitomi_jobs.append(parsed)
+
+        for site in self.fav_posts_sites:
+            if self.cookie_domains[site] and self.cookie_domains[site] not in domains:
+                domains.append(self.cookie_domains[site])
+        for site, services in self.fav_users_by_site.items():
+            if services and self.cookie_domains[site] and self.cookie_domains[site] not in domains:
+                domains.append(self.cookie_domains[site])
+
+        has_kemono_work = bool(kemono_jobs or self.fav_posts_sites or any(self.fav_users_by_site.values()))
+        if has_kemono_work:
+            for domain in domains:
+                try:
+                    self.creators += self.get_creators(domain)
+                except:
+                    logger.exception(f"Unable to get list of creators from {domain}")
+            if not self.creators and not self.force_unlisted:
+                logger.error("No creator information was retrieved. | exiting")
+                exit()
+
+        for site in self.fav_posts_sites:
+            try:
+                self.get_favorites(self.cookie_domains[site], 'post', retry=self.retry)
+            except:
+                logger.exception(f"Unable to get favorite posts from {self.cookie_domains[site]}")
+        for site, services in self.fav_users_by_site.items():
+            if not services:
+                continue
+            try:
+                self.get_favorites(self.cookie_domains[site], 'artist', retry=self.retry, services=services)
+            except:
+                logger.exception(f"Unable to get favorite users from {self.cookie_domains[site]}")
+
+        for job in kemono_jobs:
+            try:
+                self.get_post(job['url'], retry=self.retry)
+            except:
+                logger.exception(f"Unable to get posts for {job['url']}")
+        for gallery in hitomi_jobs:
+            try:
+                self.get_hitomi_gallery(gallery, retry=self.retry)
+            except:
+                logger.exception(f"Unable to get Hitomi gallery for {gallery['url']}")
+        finished_status = 'finished_with_errors' if self.progress['failed'] else 'finished'
+        self.emit_progress(status=finished_status)
+        self.emit_ui_event(
+            'finished',
+            total=self.progress['total'],
+            completed=self.progress['completed'],
+            success=self.progress['success'],
+            failed=self.progress['failed'],
+            skipped=self.progress['skipped'],
+            status=finished_status,
+        )
+
+    def normalize_datetime_string(self, value:str):
+        value = value.strip()
+        if value.endswith('Z'):
+            value = value[:-1] + '+00:00'
+        value = re.sub(r'([+-]\d{2})$', r'\1:00', value)
+        value = re.sub(r'([+-]\d{2})(\d{2})$', r'\1:\2', value)
+        return value
+
+    def parse_datetime_string(self, value:str):
+        normalized = self.normalize_datetime_string(value)
+        try:
+            return datetime.datetime.fromisoformat(normalized)
+        except ValueError:
+            pass
+
+        for pattern in (
+            r'%Y-%m-%d %H:%M:%S%z',
+            r'%Y-%m-%d %H:%M%z',
+            r'%Y-%m-%dT%H:%M:%S%z',
+            r'%Y-%m-%dT%H:%M%z',
+            r'%Y-%m-%d %H:%M:%S',
+            r'%Y-%m-%d %H:%M',
+            r'%Y-%m-%dT%H:%M:%S',
+            r'%Y-%m-%dT%H:%M',
+            r'%Y%m%d',
+        ):
+            try:
+                return datetime.datetime.strptime(normalized, pattern)
+            except ValueError:
+                continue
+
+        raise ValueError(f"Unrecognized datetime format: {value}")
+
+    def get_date_by_type(self, time, date_format = None):
+        if isinstance(time, Number):
+            t = datetime.datetime.fromtimestamp(time)
+        elif isinstance(time, str):
+            if date_format is None:
+                t = self.parse_datetime_string(time)
+            else:
+                t = datetime.datetime.strptime(time, date_format)
+        elif time == None:
+            return None
+        else:
+            raise Exception(f'Can not format time {time}')
+        return t
+                
+    def format_time_by_type(self, time):
+        t = self.get_date_by_type(time)
+        return t.strftime(self.date_strf_pattern) if t != None else t
+
+def main():
+    downloader(get_args())

@@ -6,6 +6,7 @@ class MediaFileTypes {
     'png',
     'webp',
     'bmp',
+    'avif',
   ];
 
   static const List<String> mediaPickerExtensions = <String>[
@@ -19,6 +20,7 @@ class MediaFileTypes {
     '.png',
     '.webp',
     '.bmp',
+    '.avif',
   };
 
   static const Set<String> mediaExtensions = <String>{
@@ -51,6 +53,8 @@ class MediaFileTypes {
         return 'image/webp';
       case '.bmp':
         return 'image/bmp';
+      case '.avif':
+        return 'image/avif';
       default:
         return 'image/jpeg';
     }

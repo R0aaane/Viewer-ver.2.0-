@@ -1,0 +1,10 @@
+# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+.kemono.cr	TRUE	/	FALSE	1785596399	__ddg1_	Clrb3ylwjiAR8532awvR
+kemono.cr	FALSE	/	FALSE	1788882275	thumbSize	180
+kemono.cr	FALSE	/	FALSE	1809002845	session	eyJfcGVybWFuZW50Ijp0cnVlLCJhY2NvdW50X2lkIjoyNDQzNzk5fQ.acPZXQ.YLDrQGMyxriq72QB3g_JjKtaPtc
+.kemono.cr	TRUE	/	FALSE	1774539328	__ddg9_	115.39.173.169
+.kemono.cr	TRUE	/	FALSE	1774539328	__ddg10_	1774538125
+.kemono.cr	TRUE	/	FALSE	1774539328	__ddg8_	qsz4WZsNysyNuFWP

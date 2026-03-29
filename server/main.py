@@ -17,6 +17,7 @@ from server.services.media_index_service import MediaIndexService
 from server.services.media_stream_service import MediaStreamService
 from server.services.metadata_store import MetadataStore
 from server.services.thumbnail_service import ThumbnailService
+from server.services.url_download_service import UrlDownloadService
 
 
 settings = load_settings()
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     index_service = MediaIndexService(sqlite_store)
     stream_service = MediaStreamService(metadata_store, settings)
     thumbnail_service = ThumbnailService(metadata_store, settings.thumbs_dir)
+    url_download_service = UrlDownloadService()
 
     app.state.settings = settings
     app.state.sqlite_store = sqlite_store
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI):
     app.state.index_service = index_service
     app.state.stream_service = stream_service
     app.state.thumbnail_service = thumbnail_service
+    app.state.url_download_service = url_download_service
 
     if settings.startup_rescan and settings.media_roots:
         index_service.rescan_configured_roots(settings.media_roots)
@@ -68,3 +71,4 @@ app.include_router(tags_router)
 app.include_router(search_router)
 app.include_router(actions_router)
 app.include_router(media_router)
+

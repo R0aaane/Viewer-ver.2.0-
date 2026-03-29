@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import os
@@ -7,8 +7,12 @@ from pathlib import Path
 import pypdfium2 as pdfium
 from PIL import Image
 
+from server.services.pillow_plugins import ensure_pillow_plugins
+
 from server.core.errors import bad_request, not_found
 from server.services.metadata_store import MetadataStore
+
+ensure_pillow_plugins()
 
 
 def _hash_key(source: str) -> str:
