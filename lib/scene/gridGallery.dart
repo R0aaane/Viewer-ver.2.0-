@@ -1,6 +1,6 @@
 ﻿import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, Platform;
+import 'dart:io' show Directory, File, Platform;
 import 'dart:typed_data';
 import 'dart:collection';
 
@@ -13,6 +13,7 @@ import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
 import '../services/host_api_server_service.dart';
+import '../services/import_tag_rule_service.dart';
 import 'import_to_host_dialog.dart';
 import 'tag_assign_after_import.dart';
 
@@ -73,12 +74,39 @@ class _FolderNavState {
   const _FolderNavState(this.folder, this.pageIndex);
 }
 
+class _GeneratedPdfPostProcessResult {
+  final MediaItem? item;
+  final List<Tag> inferredTags;
+  final String? relativePathHint;
+  final String? tagErrorMessage;
+  final String? organizeErrorMessage;
+  final String? organizedPath;
+
+  const _GeneratedPdfPostProcessResult({
+    this.item,
+    this.inferredTags = const <Tag>[],
+    this.relativePathHint,
+    this.tagErrorMessage,
+    this.organizeErrorMessage,
+    this.organizedPath,
+  });
+
+  bool get hasTagFailure => tagErrorMessage != null;
+  bool get hasOrganizeFailure => organizeErrorMessage != null;
+  bool get organized => organizedPath != null;
+}
+
 enum _UrlImportQueueStatus {
   queued,
   running,
   completed,
   empty,
   failed,
+}
+
+enum _RegisteredFolderRemovalAction {
+  unregisterOnly,
+  deleteFiles,
 }
 
 class _UrlImportQueueEntry {
@@ -1882,6 +1910,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
     return s.toLowerCase();
   }
+
+  bool _sameFolderLocation(String left, String right) {
+    final lhs = left.trim();
+    final rhs = right.trim();
+    if (lhs.isEmpty || rhs.isEmpty) {
+      return false;
+    }
+    if (lhs.startsWith('content://') || rhs.startsWith('content://')) {
+      return lhs == rhs;
+    }
+    return _normalizePath(lhs) == _normalizePath(rhs);
+  }
   // --------------------
   // --------------------
   Future<void> _saveLastFolder(FolderHandle folder) async {
@@ -2183,7 +2223,46 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _removeFolder(String raw) async {
+    final action = await _confirmRegisteredFolderRemoval(raw);
+    if (action == null) {
+      return;
+    }
+
+    if (action == _RegisteredFolderRemovalAction.deleteFiles) {
+      final existingItems = await _loadFolderItemsForDeletion(raw);
+      final deleted = await widget.repo.deleteItem(
+        MediaItem(
+          id: raw,
+          displayName: _folderLabel(raw),
+          kind: MediaKind.folder,
+          folderRaw: _registeredFolderParentRaw(raw),
+        ),
+      );
+      if (!mounted) return;
+      if (!deleted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('フォルダ本体の削除に失敗しました')),
+        );
+        return;
+      }
+      if (existingItems.isNotEmpty) {
+        try {
+          await widget.tagService.handleDeletedItems(existingItems);
+        } catch (_) {}
+      }
+    }
+
+    await _removeFolderRegistration(raw);
+    if (!mounted) return;
+    final message = action == _RegisteredFolderRemovalAction.deleteFiles
+        ? '登録フォルダと実ファイルを削除しました'
+        : '登録フォルダを一覧から削除しました';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _removeFolderRegistration(String raw) async {
     final next = List<String>.from(_foldersRaw)..remove(raw);
+    _dirStack.clear();
 
     String? nextCurrent = _currentFolderRaw;
     if (nextCurrent == raw) {
@@ -2200,11 +2279,109 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     _folderItemsCache.remove(raw);
     await _refreshAllFavoritesItems();
+    if (_homeQuery.trim().isNotEmpty) {
+      await _runHomeSearch();
+    }
+    await _refreshCurrentPageTags();
+    await _refreshArtistTagCounts();
 
     await _persistFolders();
 
     if (nextCurrent == null) return;
     await _loadFolder(FolderHandle(nextCurrent), saveAsLast: false);
+  }
+
+  Future<_RegisteredFolderRemovalAction?> _confirmRegisteredFolderRemoval(
+    String raw,
+  ) {
+    final canHardDelete = _canHardDeleteRegisteredFolder(raw);
+    return showDialog<_RegisteredFolderRemovalAction>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('登録フォルダを削除'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('本当に削除しますか？'),
+              const SizedBox(height: 8),
+              const Text(
+                '登録のみ解除するのか、フォルダ本体と実ファイルまで削除するのかを確認してから実行してください。',
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _folderLabel(raw),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                raw,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (!canHardDelete) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'このフォルダでは実ファイル削除は使えないため、登録解除のみ行えます。',
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('キャンセル'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(
+                context,
+                _RegisteredFolderRemovalAction.unregisterOnly,
+              ),
+              child: const Text('登録のみ削除'),
+            ),
+            if (canHardDelete)
+              FilledButton(
+                onPressed: () => Navigator.pop(
+                  context,
+                  _RegisteredFolderRemovalAction.deleteFiles,
+                ),
+                child: const Text('実ファイルも削除'),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  bool _canHardDeleteRegisteredFolder(String raw) {
+    if (widget.repo.isRemoteMode || !_repoCapabilities.canDelete) {
+      return false;
+    }
+    if (raw.startsWith('content://') || raw.startsWith('remote://')) {
+      return false;
+    }
+    return Directory(raw).existsSync();
+  }
+
+  Future<List<MediaItem>> _loadFolderItemsForDeletion(String raw) async {
+    try {
+      return await widget.repo.listMediaRecursiveFiles(FolderHandle(raw));
+    } catch (_) {
+      return const <MediaItem>[];
+    }
+  }
+
+  String _registeredFolderParentRaw(String raw) {
+    if (raw.startsWith('content://') || raw.startsWith('remote://')) {
+      return raw;
+    }
+    try {
+      return Directory(raw).parent.path;
+    } catch (_) {
+      return raw;
+    }
   }
 
   Future<void> _importToCurrentFolder() async {
@@ -2443,8 +2620,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       dialogTitle: widget.repo.isRemoteMode
           ? 'URLからホストへ取り込み'
           : 'URLから現在フォルダへ取り込み',
-      dialogDescription:
-          'Kemono / Coomer / Hitomi の URL を複数入力するか、お気に入り取得条件を指定して現在のフォルダ配下へ保存します。',
+      dialogDescription: widget.repo.isRemoteMode
+          ? 'Kemono / Coomer / Hitomi の URL を複数入力するか、お気に入り取得条件を指定して取り込みます。hitomi / kemono や作者階層はタグ化して、メディアは現在フォルダ直下へ整理します。'
+          : 'Kemono / Coomer / Hitomi の URL を複数入力するか、お気に入り取得条件を指定して現在のフォルダ配下へ保存します。',
       progressTitle: 'URL をダウンロードして取り込み中...',
       successLabel: 'URL取り込み',
     );
@@ -2473,8 +2651,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       dialogTitle: widget.repo.isRemoteMode
           ? 'URLからホストへ取り込み'
           : 'URLからライブラリへ取り込み',
-      dialogDescription:
-          'Kemono / Coomer / Hitomi の URL 複数入力や favorites 取得に対応し、creator / post フォルダ構成のままライブラリへ保存します。',
+      dialogDescription: widget.repo.isRemoteMode
+          ? 'Kemono / Coomer / Hitomi の URL 複数入力や favorites 取得に対応し、hitomi / kemono や作者階層はタグ化してライブラリ直下へ保存します。'
+          : 'Kemono / Coomer / Hitomi の URL 複数入力や favorites 取得に対応し、creator / post フォルダ構成のままライブラリへ保存します。',
       progressTitle: 'URL をダウンロードして取り込み中...',
       successLabel: 'ライブラリへ URL 取り込み',
       activateFolder: true,
@@ -2496,6 +2675,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
     if (importRequest == null || !importRequest.hasAnySource) {
       return;
+    }
+
+    Set<String> beforeItemIds = const <String>{};
+    if (!widget.repo.isRemoteMode) {
+      try {
+        final beforeItems = await widget.repo.listMediaRecursiveFiles(folder);
+        beforeItemIds = beforeItems
+            .where((item) => item.kind != MediaKind.folder)
+            .map((item) => item.id)
+            .toSet();
+      } catch (error) {
+        debugPrint('[url-import] failed to snapshot current items: $error');
+      }
     }
 
     final queueId = _nextUrlImportQueueId();
@@ -2559,6 +2751,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
       }
 
+      var inferredTaggedCount = 0;
+      if (!widget.repo.isRemoteMode) {
+        inferredTaggedCount = await _applyInferredTagsToImportedItems(
+          folder: folder,
+          beforeItemIds: beforeItemIds,
+          sourceUrl: importRequest.sourceUrl,
+          options: importRequest.options,
+        );
+      }
+
       _folderItemsCache.clear();
       _folderItemsCacheRecursive.clear();
       _dirStack.clear();
@@ -2583,6 +2785,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       final parts = <String>[
         '${result.importedCount} 件',
+        if (inferredTaggedCount > 0) 'タグ ${inferredTaggedCount} 件',
         if (result.skippedCount > 0) 'スキップ ${result.skippedCount} 件',
         if (result.failedCount > 0) '失敗 ${result.failedCount} 件',
       ];
@@ -2614,6 +2817,54 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<int> _applyInferredTagsToImportedItems({
+    required FolderHandle folder,
+    required Set<String> beforeItemIds,
+    required String sourceUrl,
+    required UrlImportOptions options,
+  }) async {
+    try {
+      final afterItems = await widget.repo.listMediaRecursiveFiles(folder);
+      final sourceUrls = options.collectSourceUrls(sourceUrl);
+      var taggedCount = 0;
+
+      for (final item in afterItems) {
+        if (item.kind == MediaKind.folder || beforeItemIds.contains(item.id)) {
+          continue;
+        }
+
+        try {
+          final inferred = ImportTagRuleService.inferForImportedItem(
+            itemPath: item.id,
+            rootFolderRaw: folder.raw,
+            displayName: item.displayName,
+            sourceUrls: sourceUrls,
+          );
+          if (inferred.tags.isEmpty) {
+            continue;
+          }
+
+          await widget.tagService.addTagsToItem(item, inferred.tags);
+          taggedCount++;
+          debugPrint(
+            '[url-import] inferred tags for ${item.displayName}: '
+            '${inferred.tags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')} '
+            '(relative=${inferred.relativePathHint})',
+          );
+        } catch (error) {
+          debugPrint(
+            '[url-import] failed to assign inferred tags to ${item.displayName}: $error',
+          );
+        }
+      }
+
+      return taggedCount;
+    } catch (error) {
+      debugPrint('[url-import] inferred tag assignment failed: $error');
+      return 0;
     }
   }
 
@@ -3087,7 +3338,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _exportCurrentFolderImagesToPdf() async {
     if (_loading) return;
 
-    final images = _applyFilter(_items, pdfOnly: false);
+    final images = _applyFilter(_items, pdfOnly: false)
+        .where((item) => item.kind == MediaKind.image)
+        .toList(growable: false);
     if (images.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3144,8 +3397,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           const SnackBar(content: Text('保存をキャンセルしました')),
         );
       } else {
+        final postProcess = await _postProcessGeneratedPdf(
+          created: created,
+          sourceImages: images,
+          sourceFolderLabel: folderName,
+        );
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PDF を保存しました: ${created.name}')),
+          SnackBar(
+            content: Text(
+              _buildGeneratedPdfResultMessage(
+                created: created,
+                postProcess: postProcess,
+              ),
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -3157,6 +3423,220 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (mounted) setState(() => _loading = false);
     }
   }
+
+  Future<_GeneratedPdfPostProcessResult> _postProcessGeneratedPdf({
+    required PdfExportResult created,
+    required List<MediaItem> sourceImages,
+    required String sourceFolderLabel,
+  }) async {
+    final item = await _buildGeneratedPdfItem(created);
+    if (item == null) {
+      debugPrint('[pdf-export] skipped post-process: generated item not addressable');
+      return const _GeneratedPdfPostProcessResult();
+    }
+
+    final sourceFolderRaw = _currentFolderRaw ??
+        (sourceImages.isNotEmpty ? sourceImages.first.folderRaw : item.folderRaw);
+
+    FolderHandle? libraryFolder;
+    try {
+      libraryFolder = await widget.repo.getAppLibraryFolder();
+    } catch (error) {
+      debugPrint('[pdf-export] getAppLibraryFolder failed: $error');
+    }
+
+    final inferred = ImportTagRuleService.inferForGeneratedPdf(
+      sourceFolderRaw: sourceFolderRaw,
+      sourceFolderLabel: sourceFolderLabel,
+      generatedFileName: created.savedName,
+      libraryRootRaw: libraryFolder?.raw,
+    );
+    final inheritedTags = await _collectGeneratedPdfInheritedTags(sourceImages);
+    final mergedTags = <Tag>[
+      ...inheritedTags,
+      ...inferred.tags,
+    ];
+    debugPrint(
+      '[pdf-export] inferred tags for ${created.savedName}: '
+      '${inferred.tags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')} '
+      '(relative=${inferred.relativePathHint})',
+    );
+    debugPrint(
+      '[pdf-export] inherited tags for ${created.savedName}: '
+      '${inheritedTags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')}',
+    );
+
+    String? tagErrorMessage;
+    if (mergedTags.isNotEmpty) {
+      try {
+        await widget.tagService.addTagsToItem(item, mergedTags);
+      } catch (error) {
+        tagErrorMessage = '$error';
+        debugPrint('[pdf-export] tag assignment failed: $error');
+      }
+    }
+
+    String? organizeErrorMessage;
+    String? organizedPath;
+    var refreshedCurrentFolder = false;
+    if (tagErrorMessage == null &&
+        mergedTags.isNotEmpty &&
+        libraryFolder != null &&
+        _repoCapabilities.canOrganizeLibrary &&
+        ImportTagRuleService.isWithinLibrary(
+          itemPath: item.id,
+          libraryRoot: libraryFolder.raw,
+        )) {
+      try {
+        final moved = await widget.tagService.organizeAppLibrary(
+          libraryRoot: libraryFolder.raw,
+        );
+        organizedPath = moved[item.id];
+        if (organizedPath != null) {
+          _folderItemsCache.clear();
+          _folderItemsCacheRecursive.clear();
+          if (_currentFolderRaw != null &&
+              _currentFolderRaw!.startsWith(libraryFolder.raw)) {
+            refreshedCurrentFolder = true;
+            await _loadFolder(
+              FolderHandle(_currentFolderRaw!),
+              saveAsLast: false,
+              pageIndex: _galleryPageIndex,
+            );
+          }
+        }
+      } catch (error) {
+        organizeErrorMessage = '$error';
+        debugPrint('[pdf-export] organize after export failed: $error');
+      }
+    }
+
+    if (!refreshedCurrentFolder &&
+        _currentFolderRaw != null &&
+        (created.savedFolderRaw?.trim().isNotEmpty ?? false) &&
+        _sameFolderLocation(_currentFolderRaw!, created.savedFolderRaw!)) {
+      _folderItemsCache.remove(_currentFolderRaw!);
+      _folderItemsCacheRecursive.remove(_currentFolderRaw!);
+      await _loadFolder(
+        FolderHandle(_currentFolderRaw!),
+        saveAsLast: false,
+        pageIndex: _galleryPageIndex,
+      );
+    }
+
+    return _GeneratedPdfPostProcessResult(
+      item: item,
+      inferredTags: mergedTags,
+      relativePathHint: inferred.relativePathHint,
+      tagErrorMessage: tagErrorMessage,
+      organizeErrorMessage: organizeErrorMessage,
+      organizedPath: organizedPath,
+    );
+  }
+
+  Future<List<Tag>> _collectGeneratedPdfInheritedTags(
+    List<MediaItem> sourceImages,
+  ) async {
+    final imageSources = sourceImages
+        .where((item) => item.kind == MediaKind.image)
+        .toList(growable: false);
+    if (imageSources.isEmpty) {
+      return const <Tag>[];
+    }
+
+    final knownDetails = <String, List<TagWithId>>{};
+    for (final item in imageSources) {
+      final cached = _tagDetailsById[item.id];
+      if (cached != null) {
+        knownDetails[item.id] = cached;
+      }
+    }
+
+    Map<String, List<TagWithId>> details = knownDetails;
+    if (details.length != imageSources.length) {
+      try {
+        details = await widget.tagService.getDetailedTagsByItems(imageSources);
+      } catch (error) {
+        debugPrint('[pdf-export] source tag lookup failed: $error');
+      }
+    }
+
+    final out = <Tag>[];
+    final seen = <String>{};
+    for (final item in imageSources) {
+      for (final entry in details[item.id] ?? const <TagWithId>[]) {
+        final tag = entry.tag;
+        final isArtist = tag.category == TagCategory.artist;
+        final isImportSourceMediaType = tag.category == TagCategory.mediaType &&
+            (tag.name.toLowerCase() == 'hitomi' ||
+                tag.name.toLowerCase() == 'kemono');
+        if (!isArtist && !isImportSourceMediaType) {
+          continue;
+        }
+        final key = '${tag.category.name}\u0000${tag.name.toLowerCase()}';
+        if (!seen.add(key)) {
+          continue;
+        }
+        out.add(Tag(name: tag.name, category: tag.category));
+      }
+    }
+    return out;
+  }
+
+  Future<MediaItem?> _buildGeneratedPdfItem(PdfExportResult created) async {
+    if ((created.savedPath?.trim().isNotEmpty ?? false)) {
+      final path = created.savedPath!.trim();
+      try {
+        final file = File(path);
+        final stat = await file.stat();
+        return MediaItem(
+          id: file.path,
+          displayName: created.savedName,
+          kind: MediaKind.pdf,
+          folderRaw: created.savedFolderRaw ?? file.parent.path,
+          modified: stat.modified,
+          sizeBytes: stat.size,
+          tags: const <Tag>[],
+        );
+      } catch (error) {
+        debugPrint('[pdf-export] failed to stat generated file: $error');
+      }
+    }
+
+    if ((created.savedUri?.trim().isNotEmpty ?? false)) {
+      return MediaItem(
+        id: created.savedUri!.trim(),
+        displayName: created.savedName,
+        kind: MediaKind.pdf,
+        folderRaw: (created.savedFolderRaw ?? created.savedUri!).trim(),
+        modified: DateTime.now(),
+        tags: const <Tag>[],
+      );
+    }
+
+    return null;
+  }
+
+  String _buildGeneratedPdfResultMessage({
+    required PdfExportResult created,
+    required _GeneratedPdfPostProcessResult postProcess,
+  }) {
+    final parts = <String>['PDF を保存しました: ${created.name}'];
+    if (postProcess.inferredTags.isNotEmpty) {
+      parts.add('タグ ${postProcess.inferredTags.length} 件を付与');
+    }
+    if (postProcess.organized) {
+      parts.add('既存整理で階層反映');
+    }
+    if (postProcess.hasTagFailure) {
+      parts.add('タグ付与失敗: ${postProcess.tagErrorMessage}');
+    }
+    if (postProcess.hasOrganizeFailure) {
+      parts.add('整理失敗: ${postProcess.organizeErrorMessage}');
+    }
+    return parts.join(' / ');
+  }
+
   Future<void> _showFolderTileModeDialog() async {
     final mode = await showDialog<FolderTileMode>(
       context: context,
@@ -3399,10 +3879,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               leading: Icon(
                 raw == _currentFolderRaw ? Icons.folder : Icons.folder_outlined,
               ),
-              title: Text(
-                _folderLabel(raw),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _folderLabel(raw),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (raw == _currentFolderRaw)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 8),
+                      child: Chip(
+                        label: Text('選択中'),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                ],
               ),
               subtitle: Text(
                 raw,

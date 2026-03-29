@@ -1,0 +1,129 @@
+import re
+
+_IMPORT_SITE_TAGS = {
+    "hitomi": "hitomi",
+    "kemono": "kemono",
+}
+
+_IMPORT_SERVICE_SEGMENTS = {
+    "hitomi",
+    "kemono",
+    "coomer",
+    "patreon",
+    "fanbox",
+    "fantia",
+    "gumroad",
+    "subscribestar",
+    "subscribestarad",
+    "dlsite",
+    "onlyfans",
+    "fansly",
+    "discord",
+    "afdian",
+    "boosty",
+    "candfans",
+    "pixiv",
+}
+
+_GENERIC_IMPORT_SEGMENTS = {
+    "download",
+    "downloads",
+    "library",
+    "images",
+    "image",
+    "files",
+    "file",
+    "posts",
+    "post",
+    "gallery",
+    "galleries",
+    "books",
+    "book",
+    "archives",
+    "archive",
+    "pdf",
+    "pdfs",
+}
+
+_BRACKETED_DIGITS_RE = re.compile(r"\[\s*\d+\s*\]")
+
+
+def build_inferred_import_tags(
+    *,
+    relative_path: str | None,
+    source_urls: list[str],
+) -> list[dict[str, str]]:
+    tags: list[dict[str, str]] = []
+    media_type_tag_names: set[str] = set()
+    path_segments = _relative_directory_parts(relative_path)
+
+    lowered_segments = [segment.casefold() for segment in path_segments]
+    lowered_urls = [url.casefold() for url in source_urls]
+    for needle, tag_name in _IMPORT_SITE_TAGS.items():
+        if any(needle in segment for segment in lowered_segments) or any(
+            needle in url for url in lowered_urls
+        ):
+            media_type_tag_names.add(tag_name)
+
+    artist_tag = _infer_artist_tag_from_parts(path_segments)
+    if artist_tag is not None:
+        tags.append({"category": "artist", "name": artist_tag})
+
+    for tag_name in sorted(media_type_tag_names):
+        tags.append({"category": "mediaType", "name": tag_name})
+    return tags
+
+
+def _relative_directory_parts(relative_path: str | None) -> list[str]:
+    raw = (relative_path or "").strip()
+    if not raw:
+        return []
+    parts = [part.strip() for part in re.split(r"[\\/]+", raw) if part.strip()]
+    if len(parts) <= 1:
+        return []
+    return parts[:-1]
+
+
+def _infer_artist_tag_from_parts(parts: list[str]) -> str | None:
+    if not parts:
+        return None
+
+    service_indexes = [
+        index for index, segment in enumerate(parts) if _is_service_segment(segment)
+    ]
+    start_index = service_indexes[-1] + 1 if service_indexes else 0
+
+    for index in range(start_index, len(parts)):
+        candidate = _clean_artist_tag_candidate(parts[index])
+        if candidate is not None:
+            return candidate
+
+    for segment in parts:
+        candidate = _clean_artist_tag_candidate(segment)
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _clean_artist_tag_candidate(segment: str) -> str | None:
+    cleaned = _BRACKETED_DIGITS_RE.sub(" ", segment)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.strip("-_[](){}")
+    if not cleaned:
+        return None
+
+    lowered = cleaned.casefold()
+    if lowered in _IMPORT_SERVICE_SEGMENTS or lowered in _GENERIC_IMPORT_SEGMENTS:
+        return None
+    if re.fullmatch(r"\d+", cleaned):
+        return None
+    return cleaned
+
+
+def _is_service_segment(segment: str) -> bool:
+    lowered = segment.strip().casefold()
+    if not lowered:
+        return False
+    if lowered in _IMPORT_SERVICE_SEGMENTS:
+        return True
+    return any(token in lowered for token in _IMPORT_SITE_TAGS)

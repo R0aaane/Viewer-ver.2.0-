@@ -79,11 +79,18 @@ class _ArtistTagIndexPageState extends State<ArtistTagIndexPage> {
             child: FutureBuilder<List<model.Tag>>(
               future: widget.tagService.listTagsByCategory(model.TagCategory.artist),
               builder: (context, snapshot) {
-                if (!snapshot.hasData) {
+                if (snapshot.connectionState != ConnectionState.done) {
                   return const Center(child: CircularProgressIndicator());
                 }
+                if (snapshot.hasError) {
+                  return SceneEmptyState(
+                    icon: Icons.error_outline,
+                    title: 'アーティストタグの読み込みに失敗しました',
+                    message: '${snapshot.error}',
+                  );
+                }
 
-                final tags = snapshot.data!
+                final tags = (snapshot.data ?? const <model.Tag>[])
                     .map((tag) => tag.name.trim())
                     .where((name) => name.isNotEmpty)
                     .toSet()

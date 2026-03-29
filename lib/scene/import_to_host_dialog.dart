@@ -119,7 +119,7 @@ class _ImportToHostDialogState extends State<ImportToHostDialog> {
         freeTags: _parseTags(_freeTagsController.text),
         characterTags: _parseTags(_characterTagsController.text),
         targetCollection: 'library',
-        organizeAfterImport: true,
+        organizeAfterImport: false,
       ),
     );
   }
@@ -208,6 +208,11 @@ class _ImportToHostDialogState extends State<ImportToHostDialog> {
                 onSelectionChanged: (selection) {
                   setState(() => _sourceKind = selection.first);
                 },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '取り込み時に元フォルダの階層は保持せず、hitomi / kemono や作者名に見える階層はタグとして扱います。',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 16),
               _buildSingleTagField(

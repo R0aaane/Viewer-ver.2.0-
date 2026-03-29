@@ -22,11 +22,13 @@ class RemoteUploadFile {
   final String fileName;
   final Uint8List bytes;
   final String mimeType;
+  final String? sourceRelativePath;
 
   const RemoteUploadFile({
     required this.fileName,
     required this.bytes,
     required this.mimeType,
+    this.sourceRelativePath,
   });
 }
 
@@ -385,6 +387,16 @@ class RemoteMediaApiClient {
 
       writeField('folderRaw', folderRaw);
       writeField('skipIfExists', skipIfExists ? 'true' : 'false');
+      if (files.any((file) => (file.sourceRelativePath?.trim().isNotEmpty ?? false))) {
+        writeField(
+          'sourceRelativePathsJson',
+          jsonEncode(
+            files
+                .map((file) => file.sourceRelativePath?.trim() ?? '')
+                .toList(growable: false),
+          ),
+        );
+      }
       if (importMetadata != null) {
         final artistTag = importMetadata.artistTag?.trim();
         final seriesTag = importMetadata.seriesTag?.trim();

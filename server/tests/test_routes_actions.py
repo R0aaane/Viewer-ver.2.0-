@@ -1,4 +1,4 @@
-ï»¿import asyncio
+import asyncio
 import os
 import tempfile
 from types import SimpleNamespace
@@ -119,7 +119,7 @@ class _UploadMetadataStore:
         if not media_ids:
             return {}
         source = os.path.join(library_root, 'sample.jpg')
-        target = os.path.join(library_root, 'ä½œè€…åˆ¥', 'Artist', 'Series', 'sample.jpg')
+        target = os.path.join(library_root, 'ìŽÒ•Ê', 'Artist', 'Series', 'sample.jpg')
         return {source: target}
 
 
@@ -215,7 +215,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_rename(request, payload)
 
-        self.assertEqual(response.message, 'ãƒªãƒãƒ¼ãƒ ã‚’åæ˜ ã—ã¾ã—ãŸ')
+        self.assertEqual(response.message, 'ƒŠƒl[ƒ€‚ð”½‰f‚µ‚Ü‚µ‚½')
         self.assertEqual(
             store.rename_calls,
             [
@@ -249,7 +249,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_delete(request, payload)
 
-        self.assertEqual(response.message, 'å‰Šé™¤ã‚’åæ˜ ã—ã¾ã—ãŸ (2 ä»¶)')
+        self.assertEqual(response.message, 'íœ‚ð”½‰f‚µ‚Ü‚µ‚½ (2 Œ)')
         self.assertEqual(len(store.delete_calls), 1)
         self.assertTrue(store.delete_calls[0]['hard_delete'])
         self.assertEqual(len(store.delete_calls[0]['items']), 2)
@@ -318,6 +318,39 @@ class ActionsRoutesTest(unittest.TestCase):
                 ],
             )
 
+    def test_upload_files_infers_tags_from_source_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            request = _request(
+                metadata_store,
+                index_service=_RecordingIndexService(),
+                media_roots=[temp_dir],
+            )
+            upload = _FakeUploadFile('sample.pdf', b'%PDF-1.4')
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    freeTagsJson='["manual"]',
+                    sourceRelativePathsJson='["kemono/patreon/[12345] ArtistName/sample.pdf"]',
+                    files=[upload],
+                )
+            )
+
+            self.assertEqual(response['importedCount'], 1)
+            self.assertEqual(response['taggedCount'], 1)
+            self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'free', 'name': 'manual'},
+                    {'category': 'artist', 'name': 'ArtistName'},
+                    {'category': 'mediaType', 'name': 'kemono'},
+                ],
+            )
+
     def test_download_url_applies_tags_after_downloader_creates_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             metadata_store = _UploadMetadataStore()
@@ -368,6 +401,65 @@ class ActionsRoutesTest(unittest.TestCase):
             self.assertEqual(downloader.calls[0]['source_url'], 'https://kemono.su/patreon/user/123/post/456')
             self.assertEqual(downloader.calls[0]['destination_folder'], temp_dir)
             self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'artist', 'name': 'Artist'},
+                    {'category': 'series', 'name': 'Series'},
+                    {'category': 'character', 'name': 'Heroine'},
+                    {'category': 'free', 'name': 'bonus'},
+                    {'category': 'mediaType', 'name': 'kemono'},
+                ],
+            )
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, 'sample.jpg')))
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, 'patreon')))
+
+    def test_download_url_flattens_hitomi_pdf_and_applies_inferred_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            index_service = _RecordingIndexService()
+
+            def _create_downloaded_file(_: str, destination_folder: str) -> None:
+                artist_dir = os.path.join(destination_folder, 'hitomi', '[12345] ArtistName')
+                os.makedirs(artist_dir, exist_ok=True)
+                with open(os.path.join(artist_dir, 'sample.pdf'), 'wb') as handle:
+                    handle.write(b'%PDF-1.4')
+
+            downloader = _FakeUrlDownloadService(
+                result=UrlDownloadResult(imported_count=1, skipped_count=0, failed_count=0),
+                on_call=_create_downloaded_file,
+            )
+            request = _request(
+                metadata_store,
+                index_service=index_service,
+                media_roots=[temp_dir],
+                url_download_service=downloader,
+            )
+
+            response = asyncio.run(
+                download_url(
+                    request,
+                    DownloadUrlRequest(
+                        folderRaw=temp_dir,
+                        url='https://hitomi.la/reader/123456.html',
+                    ),
+                )
+            )
+
+            self.assertEqual(response.importedCount, 1)
+            self.assertEqual(response.taggedCount, 1)
+            self.assertEqual(response.organizedCount, 0)
+            self.assertEqual(response.rescannedCount, 1)
+            self.assertEqual(index_service.scan_calls, [temp_dir])
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, 'sample.pdf')))
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, 'hitomi')))
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'artist', 'name': 'ArtistName'},
+                    {'category': 'mediaType', 'name': 'hitomi'},
+                ],
+            )
 
     def test_download_url_surfaces_downloader_errors_as_api_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -394,5 +486,4 @@ class ActionsRoutesTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
 

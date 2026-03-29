@@ -140,6 +140,34 @@ class TagService {
     await _replaceHostMirrorTagsForItem(item);
   }
 
+  Future<void> addTagsToItem(MediaItem item, Iterable<Tag> tags) async {
+    await initialize();
+    rememberItem(item);
+
+    final uniqueTags = _dedupeTags(tags);
+    if (uniqueTags.isEmpty) {
+      return;
+    }
+
+    if (isRemoteMode) {
+      final identity = await _idResolver.resolve(item);
+      for (final tag in uniqueTags) {
+        await _requireApiClient().addTagToItem(
+          identity.stableId,
+          tag,
+          identity: identity,
+        );
+      }
+      _remoteTagCache.remove(identity.stableId);
+      return;
+    }
+
+    for (final tag in uniqueTags) {
+      await _localStore.addTagToItem(item, tag);
+    }
+    await _replaceHostMirrorTagsForItem(item);
+  }
+
   Future<void> addTagToItems(List<MediaItem> items, Tag tag) async {
     await initialize();
     rememberItems(items);
@@ -168,6 +196,23 @@ class TagService {
     for (final item in items.where((entry) => entry.kind != MediaKind.folder)) {
       await _replaceHostMirrorTagsForItem(item);
     }
+  }
+
+  List<Tag> _dedupeTags(Iterable<Tag> tags) {
+    final out = <Tag>[];
+    final seen = <String>{};
+    for (final tag in tags) {
+      final name = tag.name.trim();
+      if (name.isEmpty) {
+        continue;
+      }
+      final key = '${tag.category.name}\u0000${name.toLowerCase()}';
+      if (!seen.add(key)) {
+        continue;
+      }
+      out.add(Tag(name: name, category: tag.category));
+    }
+    return out;
   }
 
   Future<List<TagWithId>> listTagsForItem(
@@ -511,11 +556,12 @@ class TagService {
   }) async {
     await initialize();
     if (!isRemoteMode) {
-      return _localStore.findMediaItemsByTagGlobal(
+      final items = await _localStore.findMediaItemsByTagGlobal(
         category: category,
         name: name,
         partial: partial,
       );
+      return items.where(_itemStillExists).toList(growable: false);
     }
 
     return const <MediaItem>[];
@@ -531,11 +577,12 @@ class TagService {
     await initialize();
 
     if (!isRemoteMode) {
-      return _localStore.findMediaItemsByTagGlobal(
+      final items = await _localStore.findMediaItemsByTagGlobal(
         category: category,
         name: name,
         partial: partial,
       );
+      return items.where(_itemStillExists).toList(growable: false);
     }
 
     final allItems = await _loadAllMediaAcrossFolders(repo, folderRaws);

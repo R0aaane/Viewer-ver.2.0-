@@ -18,6 +18,7 @@ import 'mediaRepository.dart';
 
 class RemoteMediaRepository implements MediaRepository {
   static final p.Context _winPath = p.Context(style: p.Style.windows);
+  static final p.Context _posixPath = p.Context(style: p.Style.posix);
 
   final RemoteMediaApiClient _client;
   final MediaRepository _localPickerRepository;
@@ -813,6 +814,7 @@ class RemoteMediaRepository implements MediaRepository {
           mimeType: item.kind == MediaKind.pdf
               ? 'application/pdf'
               : _mimeTypeForImage(item.displayName),
+          sourceRelativePath: _sourceRelativePathForUpload(item),
         ),
       );
     }
@@ -829,6 +831,34 @@ class RemoteMediaRepository implements MediaRepository {
 
   String _mimeTypeForImage(String fileName) {
     return MediaFileTypes.imageMimeTypeForFileName(fileName);
+  }
+
+  String? _sourceRelativePathForUpload(MediaItem item) {
+    final rawPath = item.id.trim();
+    final rawRoot = item.folderRaw.trim();
+    if (rawPath.isEmpty || rawRoot.isEmpty) {
+      return null;
+    }
+    if (rawPath.startsWith('content://') || rawRoot.startsWith('content://')) {
+      return null;
+    }
+
+    final ctx = _pathContextFor(rawPath.contains('\\') || rawRoot.contains('\\'));
+    final normalizedPath = ctx.normalize(rawPath);
+    final normalizedRoot = ctx.normalize(rawRoot);
+    if (!ctx.isWithin(normalizedRoot, normalizedPath)) {
+      return item.displayName;
+    }
+
+    final relative = ctx.relative(normalizedPath, from: normalizedRoot).trim();
+    if (relative.isEmpty || relative == '.') {
+      return item.displayName;
+    }
+    return relative.replaceAll('\\', '/');
+  }
+
+  p.Context _pathContextFor(bool looksWindowsPath) {
+    return looksWindowsPath ? _winPath : _posixPath;
   }
 
   @override

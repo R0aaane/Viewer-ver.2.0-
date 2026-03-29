@@ -29,12 +29,29 @@ class TagResultsPage extends StatefulWidget {
 }
 
 class _TagResultsPageState extends State<TagResultsPage> {
-  final Map<String, List<MediaItem>> _folderItemsCache = <String, List<MediaItem>>{};
+  final Map<String, List<MediaItem>> _folderItemsCache =
+      <String, List<MediaItem>>{};
+  late Future<List<MediaItem>> _resultsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _resultsFuture = _loadResults();
+  }
+
+  Future<List<MediaItem>> _loadResults() {
+    return widget.tagService.findMediaItemsByTagAcrossFolders(
+      category: widget.category,
+      name: widget.tagName,
+      repo: widget.repo,
+      folderRaws: widget.folderRaws,
+    );
+  }
 
   String _categoryLabel(model.TagCategory category) {
     switch (category) {
       case model.TagCategory.artist:
-        return '作者';
+        return 'アーティスト';
       case model.TagCategory.series:
         return 'シリーズ';
       case model.TagCategory.mediaType:
@@ -62,6 +79,13 @@ class _TagResultsPageState extends State<TagResultsPage> {
         child: FutureBuilder<ThumbPair>(
           future: widget.repo.readThumbPair(item, maxWidth: 240),
           builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Container(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image_outlined),
+              );
+            }
             if (!snapshot.hasData) {
               return Container(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -83,9 +107,17 @@ class _TagResultsPageState extends State<TagResultsPage> {
   Future<void> _openDetail(MediaItem item) async {
     final folderRaw = item.folderRaw;
     final items = _folderItemsCache.putIfAbsent(folderRaw, () => <MediaItem>[]);
-    if (items.isEmpty) {
-      final loaded = await widget.repo.listMedia(FolderHandle(folderRaw));
-      _folderItemsCache[folderRaw] = loaded;
+    try {
+      if (items.isEmpty) {
+        final loaded = await widget.repo.listMedia(FolderHandle(folderRaw));
+        _folderItemsCache[folderRaw] = loaded;
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('フォルダの読み込みに失敗しました: $error')),
+      );
+      return;
     }
 
     final folderItems = _folderItemsCache[folderRaw]!;
@@ -94,7 +126,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
 
     if (index < 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('対象ファイルが見つからなくなりました')),
+        const SnackBar(content: Text('対象アイテムがフォルダ内に見つかりませんでした')),
       );
       return;
     }
@@ -118,31 +150,42 @@ class _TagResultsPageState extends State<TagResultsPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text('${_categoryLabel(widget.category)}: ${widget.tagName}'),
+        actions: [
+          IconButton(
+            tooltip: '再読み込み',
+            onPressed: () => setState(() => _resultsFuture = _loadResults()),
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
       ),
       body: FutureBuilder<List<MediaItem>>(
-        future: widget.tagService.findMediaItemsByTagAcrossFolders(
-          category: widget.category,
-          name: widget.tagName,
-          repo: widget.repo,
-          folderRaws: widget.folderRaws,
-        ),
+        future: _resultsFuture,
         builder: (context, snapshot) {
-          if (!snapshot.hasData) {
+          if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
+          if (snapshot.hasError) {
+            return SceneEmptyState(
+              icon: Icons.error_outline,
+              title: 'タグ結果の読み込みに失敗しました',
+              message: '${snapshot.error}',
+            );
+          }
 
-          final items = snapshot.data!;
+          final items = snapshot.data ?? const <MediaItem>[];
           if (items.isEmpty) {
             return const SceneEmptyState(
               icon: Icons.label_off_outlined,
-              title: '該当するアイテムがありません',
+              title: 'このタグの作品はありません',
+              message: 'タグだけが残っているか、対象作品が見つかりませんでした。',
             );
           }
 
           final sorted = items.toList(growable: true)
             ..sort(
-              (left, right) =>
-                  left.displayName.toLowerCase().compareTo(right.displayName.toLowerCase()),
+              (left, right) => left.displayName.toLowerCase().compareTo(
+                right.displayName.toLowerCase(),
+              ),
             );
 
           return ListView.separated(
@@ -182,7 +225,9 @@ class _TagResultsPageState extends State<TagResultsPage> {
                                 runSpacing: 8,
                                 children: [
                                   Chip(
-                                    label: Text(item.kind == MediaKind.pdf ? 'PDF' : '画像'),
+                                    label: Text(
+                                      item.kind == MediaKind.pdf ? 'PDF' : '画像',
+                                    ),
                                   ),
                                   Chip(
                                     label: Text(

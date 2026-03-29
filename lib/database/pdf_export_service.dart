@@ -16,11 +16,13 @@ class PdfExportResult {
   final String savedName;
   final String? savedPath;
   final String? savedUri;
+  final String? savedFolderRaw;
 
   const PdfExportResult({
     required this.savedName,
     this.savedPath,
     this.savedUri,
+    this.savedFolderRaw,
   });
 
   // Backward-compatible alias for older call sites still reading `name`.
@@ -73,6 +75,7 @@ class PdfExportService {
             ? out.uri.pathSegments.last
             : '$safeName.pdf',
         savedPath: out.path,
+        savedFolderRaw: out.parent.path,
       );
     }
 
@@ -94,6 +97,7 @@ class PdfExportService {
     return PdfExportResult(
       savedName: created.name ?? '$safeName.pdf',
       savedUri: created.uri,
+      savedFolderRaw: dir.uri,
     );
   }
 
