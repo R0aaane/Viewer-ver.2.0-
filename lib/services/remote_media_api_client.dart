@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../models/mediaItem.dart';
 import '../models/folder.dart';
 import '../repository/mediaRepository.dart';
+import 'media_id_resolver.dart';
 
 class RemoteMediaException implements Exception {
   final String message;
@@ -194,6 +196,58 @@ class RemoteMediaApiClient {
       modifiedAt: _parseDateTime(json['modifiedAt']?.toString()),
       etag: json['etag']?.toString(),
       supportsRange: json['supportsRange'] == true,
+    );
+  }
+
+  Future<void> renameMedia({
+    required MediaItem beforeItem,
+    required MediaItem afterItem,
+    required ResolvedMediaIdentity beforeIdentity,
+    required ResolvedMediaIdentity afterIdentity,
+  }) async {
+    await _sendJsonRequest(
+      'POST',
+      '/rename',
+      body: <String, dynamic>{
+        'oldPath': beforeItem.id,
+        'newPath': afterItem.id,
+        'before': <String, dynamic>{
+          ...beforeIdentity.toJson(),
+          'path': beforeItem.id,
+          'folderRaw': beforeItem.folderRaw,
+          'displayName': beforeItem.displayName,
+        },
+        'after': <String, dynamic>{
+          ...afterIdentity.toJson(),
+          'path': afterItem.id,
+          'folderRaw': afterItem.folderRaw,
+          'displayName': afterItem.displayName,
+        },
+      },
+    );
+  }
+
+  Future<void> deleteMedia(
+    List<(MediaItem, ResolvedMediaIdentity)> items, {
+    required bool hardDelete,
+  }) async {
+    await _sendJsonRequest(
+      'POST',
+      '/delete',
+      body: <String, dynamic>{
+        'hardDelete': hardDelete,
+        'items': items
+            .map(
+              (entry) => <String, dynamic>{
+                ...entry.$2.toJson(),
+                'path': entry.$1.id,
+                'folderRaw': entry.$1.folderRaw,
+                'displayName': entry.$1.displayName,
+                'hardDelete': hardDelete,
+              },
+            )
+            .toList(growable: false),
+      },
     );
   }
 
@@ -416,6 +470,46 @@ class RemoteMediaApiClient {
     return jsonDecode(raw);
   }
 
+  Future<dynamic> _sendJsonRequest(
+    String method,
+    String path, {
+    Map<String, String>? queryParameters,
+    Map<String, dynamic>? body,
+  }) async {
+    final uri = _buildUri(path, queryParameters: queryParameters);
+    final client = HttpClient()
+      ..connectionTimeout = timeout
+      ..idleTimeout = timeout;
+
+    try {
+      final request = await _openRequest(client, method, uri);
+      request.headers.contentType = ContentType.json;
+      _applyHeaders(request.headers);
+      if (body != null) {
+        request.write(jsonEncode(body));
+      }
+
+      final response = await request.close().timeout(timeout);
+      final payload = await response.transform(utf8.decoder).join();
+      final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw RemoteMediaException(
+          _extractErrorMessage(jsonBody) ?? _messageForStatus(response.statusCode),
+          statusCode: response.statusCode,
+        );
+      }
+
+      return jsonBody ?? <String, dynamic>{};
+    } on TimeoutException {
+      throw const RemoteMediaException('サーバー応答がタイムアウトしました');
+    } on SocketException {
+      throw const RemoteMediaException('サーバーに接続できません');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<Uint8List> _getBytes(
     String path, {
     Map<String, String>? queryParameters,
@@ -462,6 +556,23 @@ class RemoteMediaApiClient {
       path: _joinPath(baseUri.path, path),
       queryParameters: queryParameters?.isEmpty == true ? null : queryParameters,
     );
+  }
+
+  Future<HttpClientRequest> _openRequest(
+    HttpClient client,
+    String method,
+    Uri uri,
+  ) {
+    switch (method) {
+      case 'GET':
+        return client.getUrl(uri);
+      case 'POST':
+        return client.postUrl(uri);
+      case 'DELETE':
+        return client.deleteUrl(uri);
+      default:
+        throw UnsupportedError('Unsupported method: $method');
+    }
   }
 
   void _applyHeaders(HttpHeaders headers) {

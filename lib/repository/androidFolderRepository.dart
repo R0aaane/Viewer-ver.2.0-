@@ -10,6 +10,7 @@ import 'package:pdfx/pdfx.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart' as drift;
 
+import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
@@ -20,6 +21,17 @@ import '../database/app_db.dart' as db;
 class AndroidFolderRepository implements MediaRepository {
   final db.AppDb _db;
   AndroidFolderRepository(this._db);
+
+  @override
+  RepositoryCapabilities get capabilities => const RepositoryCapabilities(
+    canRename: true,
+    canDelete: true,
+    canUpload: true,
+    canRecursiveSearch: true,
+    canExportPdf: true,
+    canOrganizeLibrary: true,
+    canPickFolder: true,
+  );
 
   @override
   AppMode get appMode => AppMode.standalone;
@@ -41,7 +53,7 @@ class AndroidFolderRepository implements MediaRepository {
   static const Duration _folderIndexTtl = Duration(minutes: 10);
 
   // 対象ファイルの拡張子（小文字）
-  static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
+  static const Set<String> _imageExt = MediaFileTypes.imageExtensions;
   static const _pdfExt = '.pdf';
   static const Duration _safShallowTtl = Duration(seconds: 15);
 
@@ -429,7 +441,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     bool includePdf = true,
   }) async {
     final extensions = <String>[
-      if (includeImages) ...const ['jpg', 'jpeg', 'png', 'webp', 'bmp'],
+      if (includeImages) ...MediaFileTypes.imagePickerExtensions,
       if (includePdf) 'pdf',
     ];
     if (extensions.isEmpty) return const [];
@@ -1210,7 +1222,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     final picked = await DocMan.pick.files(
-      extensions: const ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'pdf'],
+      extensions: MediaFileTypes.mediaPickerExtensions,
       limit: 200,
     );
       if (picked.isEmpty) return 0;
@@ -1531,10 +1543,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
   String _mimeFor({required String itemExt}) {
     if (itemExt == '.pdf') return 'application/pdf';
-    if (itemExt == '.png') return 'image/png';
-    if (itemExt == '.webp') return 'image/webp';
-    if (itemExt == '.bmp') return 'image/bmp';
-    return 'image/jpeg'; // jpg/jpeg fallback
+    return MediaFileTypes.imageMimeTypeForFileName(itemExt);
   }
 
   Future<_ShallowCacheEntry> _getSafShallowCached(String dirUri) async {

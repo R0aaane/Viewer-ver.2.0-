@@ -239,6 +239,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _selectMode = false;
   final Set<String> _selectedIds = <String>{};
 
+  RepositoryCapabilities get _repoCapabilities => widget.repo.capabilities;
+
   void _exitSelectMode() {
     setState(() {
       _selectMode = false;
@@ -748,6 +750,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _runHomeSearch() async {
     final q = _homeQuery.trim();
+    if (!_repoCapabilities.canRecursiveSearch) {
+      if (!mounted) return;
+      setState(() {
+        _homeSearching = false;
+        _homeSearchResults = const [];
+      });
+      return;
+    }
+
     if (q.isEmpty) {
       if (!mounted) return;
       setState(() {
@@ -1807,6 +1818,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _importToCurrentFolder() async {
+    if (!_repoCapabilities.canUpload) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('このモードでは取り込みは未対応です')));
+      return;
+    }
     if (_currentFolderRaw == null) return;
     final folder = FolderHandle(_currentFolderRaw!);
     final progress = ValueNotifier<MediaTransferProgress?>(null);
@@ -1879,6 +1897,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _importToLibraryAndTag() async {
+    if (!_repoCapabilities.canUpload) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('このモードでは取り込みは未対応です')));
+      return;
+    }
     final progress = ValueNotifier<MediaTransferProgress?>(null);
     var dialogShown = false;
     try {
@@ -2288,20 +2313,20 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _importToCurrentFolder();
         return;
       case _GalleryMenuAction.exportPdf:
-        if (widget.repo.isRemoteMode) {
+        if (!_repoCapabilities.canExportPdf) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f PDF \u66f8\u304d\u51fa\u3057\u306f\u672a\u5bfe\u5fdc\u3067\u3059')),
+            const SnackBar(content: Text('このモードでは PDF 書き出しは未対応です')),
           );
           return;
         }
         await _exportCurrentFolderImagesToPdf();
         return;
       case _GalleryMenuAction.organizeLibrary:
-        if (widget.repo.isRemoteMode) {
+        if (!_repoCapabilities.canOrganizeLibrary) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f\u30e9\u30a4\u30d6\u30e9\u30ea\u6574\u7406\u306f\u672a\u5bfe\u5fdc\u3067\u3059')),
+            const SnackBar(content: Text('このモードではライブラリ整理は未対応です')),
           );
           return;
         }
@@ -2324,8 +2349,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       tooltip: 'メニュー',
       icon: const Icon(Icons.more_vert),
       onSelected: _onHomeMenuSelected,
-      itemBuilder: (context) => const [
-        PopupMenuItem(
+      itemBuilder: (context) => <PopupMenuEntry<_HomeMenuAction>>[
+        const PopupMenuItem(
           value: _HomeMenuAction.addFolder,
           child: ListTile(
             leading: Icon(Icons.create_new_folder_outlined),
@@ -2334,26 +2359,36 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ),
         PopupMenuItem(
           value: _HomeMenuAction.importToLibrary,
+          enabled: _repoCapabilities.canUpload,
           child: ListTile(
             leading: Icon(Icons.archive_outlined),
-            title: Text('ライブラリへ取り込み'),
+            title: Text(
+              _repoCapabilities.canUpload
+                  ? 'ライブラリへ取り込み'
+                  : 'ライブラリへ取り込み（未対応）',
+            ),
           ),
         ),
         PopupMenuItem(
           value: _HomeMenuAction.artistTagIndex,
+          enabled: _repoCapabilities.canRecursiveSearch,
           child: ListTile(
             leading: Icon(Icons.person),
-            title: Text('アーティストタグ一覧'),
+            title: Text(
+              _repoCapabilities.canRecursiveSearch
+                  ? 'アーティストタグ一覧'
+                  : 'アーティストタグ一覧（未対応）',
+            ),
           ),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           value: _HomeMenuAction.metadataSettings,
           child: ListTile(
             leading: Icon(Icons.settings_outlined),
             title: Text('動作モード設定'),
           ),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           value: _HomeMenuAction.refreshFavorites,
           child: ListTile(
             leading: Icon(Icons.star),
@@ -2362,9 +2397,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ),
         PopupMenuItem(
           value: _HomeMenuAction.openSearchGallery,
+          enabled: _repoCapabilities.canRecursiveSearch,
           child: ListTile(
             leading: Icon(Icons.grid_view),
-            title: Text('検索結果（ギャラリー表示）'),
+            title: Text(
+              _repoCapabilities.canRecursiveSearch
+                  ? '検索結果（ギャラリー表示）'
+                  : '検索結果（ギャラリー表示）（未対応）',
+            ),
           ),
         ),
       ],
@@ -2376,7 +2416,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     tooltip: 'メニュー',
     icon: const Icon(Icons.more_vert),
     onSelected: _onGalleryMenuSelected,
-    itemBuilder: (context) => [
+    itemBuilder: (context) => <PopupMenuEntry<_GalleryMenuAction>>[
       const PopupMenuItem(
         value: _GalleryMenuAction.folderTileMode,
         child: ListTile(
@@ -2393,17 +2433,26 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ),
         PopupMenuItem(
           value: _GalleryMenuAction.addFile,
-          enabled: _currentFolderRaw != null,
-          child: const ListTile(
+          enabled: _currentFolderRaw != null && _repoCapabilities.canUpload,
+          child: ListTile(
             leading: Icon(Icons.upload_file_outlined),
-            title: Text('ファイル追加'),
+            title: Text(
+              _repoCapabilities.canUpload
+                  ? 'ファイル追加'
+                  : 'ファイル追加（未対応）',
+            ),
           ),
         ),
         PopupMenuItem(
           value: _GalleryMenuAction.organizeLibrary,
+          enabled: _repoCapabilities.canOrganizeLibrary,
           child: ListTile(
             leading: Icon(Icons.auto_awesome_mosaic_outlined),
-            title: Text('ライブラリ整理（作家・シリーズ）'),
+            title: Text(
+              _repoCapabilities.canOrganizeLibrary
+                  ? 'ライブラリ整理（作家・シリーズ）'
+                  : 'ライブラリ整理（未対応）',
+            ),
           ),
         ),
         const PopupMenuItem(
@@ -2413,11 +2462,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             title: Text('動作モード設定'),
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: _GalleryMenuAction.exportPdf,
+          enabled: _repoCapabilities.canExportPdf,
           child: ListTile(
             leading: Icon(Icons.picture_as_pdf_outlined),
-            title: Text('このフォルダの画像を PDF にまとめる'),
+            title: Text(
+              _repoCapabilities.canExportPdf
+                  ? 'このフォルダの画像を PDF にまとめる'
+                  : 'このフォルダの画像を PDF にまとめる（未対応）',
+            ),
           ),
         ),
         const PopupMenuItem(
@@ -3269,6 +3323,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _importSelectedToLibrary(List<MediaItem> targets) async {
     if (targets.isEmpty) return;
+    if (!_repoCapabilities.canUpload) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('このモードでは取り込みは未対応です')));
+      return;
+    }
 
     // 蜿悶ｊ霎ｼ縺ｿ蜈茨ｼ井ｿ晉ｮ｡蠎ｫ・・
     final lib = await widget.repo.getAppLibraryFolder();

@@ -7,6 +7,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
 
+import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
@@ -80,8 +81,18 @@ class _FsPageEntry {
 }
 
 class WindowsFolderRepository implements MediaRepository {
-  static const _imageExt = <String>{'.jpg', '.jpeg', '.png', '.webp', '.bmp'};
   static const _pdfExt = '.pdf';
+
+  @override
+  RepositoryCapabilities get capabilities => const RepositoryCapabilities(
+    canRename: true,
+    canDelete: true,
+    canUpload: true,
+    canRecursiveSearch: true,
+    canExportPdf: true,
+    canOrganizeLibrary: true,
+    canPickFolder: true,
+  );
 
   @override
   AppMode get appMode => AppMode.standalone;
@@ -174,7 +185,7 @@ class WindowsFolderRepository implements MediaRepository {
     bool includePdf = true,
   }) async {
     final extensions = <String>[
-      if (includeImages) ...const ['jpg', 'jpeg', 'png', 'webp', 'bmp'],
+      if (includeImages) ...MediaFileTypes.imagePickerExtensions,
       if (includePdf) 'pdf',
     ];
     if (extensions.isEmpty) return const [];
@@ -231,7 +242,7 @@ class WindowsFolderRepository implements MediaRepository {
           ? e.uri.pathSegments.last
           : e.path;
       final ext = _lowerExt(name);
-      return _imageExt.contains(ext) || ext == _pdfExt;
+      return MediaFileTypes.imageExtensions.contains(ext) || ext == _pdfExt;
     }
 
     // 表示用は「直下のみ」＋ Directory も返す
@@ -279,7 +290,9 @@ class WindowsFolderRepository implements MediaRepository {
       final name = _fileName(f.path);
       final ext = _lowerExt(name);
 
-      final kind = _imageExt.contains(ext) ? MediaKind.image : MediaKind.pdf;
+      final kind = MediaFileTypes.imageExtensions.contains(ext)
+          ? MediaKind.image
+          : MediaKind.pdf;
       final stat = await f.stat();
 
       files.add(
@@ -448,7 +461,7 @@ class WindowsFolderRepository implements MediaRepository {
       if (e is! File) return false;
       final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
       final ext = _lowerExt(name);
-      return ext == _pdfExt || _imageExt.contains(ext);
+      return ext == _pdfExt || MediaFileTypes.imageExtensions.contains(ext);
     }
 
     int total = 0;
@@ -469,7 +482,7 @@ class WindowsFolderRepository implements MediaRepository {
 
       MediaKind? kind;
       if (ext == _pdfExt) kind = MediaKind.pdf;
-      if (_imageExt.contains(ext)) kind = MediaKind.image;
+      if (MediaFileTypes.imageExtensions.contains(ext)) kind = MediaKind.image;
       if (kind == null) continue;
 
       final stat = await ent.stat();
@@ -690,7 +703,7 @@ class WindowsFolderRepository implements MediaRepository {
 
   bool _isTargetFileName(String name) {
     final ext = _lowerExt(name);
-    return ext == _pdfExt || _imageExt.contains(ext);
+    return ext == _pdfExt || MediaFileTypes.imageExtensions.contains(ext);
   }
 
   Future<MediaItem?> _mediaItemFromPath(String rawPath) async {
@@ -758,7 +771,7 @@ class WindowsFolderRepository implements MediaRepository {
       acceptedTypeGroups: [
         const XTypeGroup(
           label: 'Images/PDF',
-          extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'pdf'],
+          extensions: MediaFileTypes.mediaPickerExtensions,
         ),
       ],
     );

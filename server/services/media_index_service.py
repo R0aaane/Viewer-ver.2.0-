@@ -1,19 +1,16 @@
-﻿from __future__ import annotations
-
-import logging
+﻿import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from server.core.errors import bad_request
+from server.core.media_formats import SUPPORTED_MEDIA_EXTENSIONS, media_kind_for_extension
 from server.repositories.sqlite_store import SqliteStore
 from server.services.metadata_store import build_media_id
 
 
 logger = logging.getLogger(__name__)
-
-_SUPPORTED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _normalize_path(raw: str) -> str:
@@ -22,12 +19,7 @@ def _normalize_path(raw: str) -> str:
 
 
 def _media_kind(path: str) -> str | None:
-    ext = Path(path).suffix.lower()
-    if ext == ".pdf":
-        return "pdf"
-    if ext in {".jpg", ".jpeg", ".png", ".webp"}:
-        return "image"
-    return None
+    return media_kind_for_extension(Path(path).suffix.lower())
 
 
 def _etag_for_file(path: str, size_bytes: int, modified_epoch_ms: int) -> str:
@@ -64,7 +56,7 @@ class MediaIndexService:
         for base, _, files in os.walk(target):
             for file_name in files:
                 ext = Path(file_name).suffix.lower()
-                if ext not in _SUPPORTED_EXTENSIONS:
+                if ext not in SUPPORTED_MEDIA_EXTENSIONS:
                     continue
 
                 full_path = os.path.normpath(os.path.join(base, file_name))

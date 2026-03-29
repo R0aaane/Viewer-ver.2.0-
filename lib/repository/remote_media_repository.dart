@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
 
+import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
@@ -20,7 +21,7 @@ class RemoteMediaRepository implements MediaRepository {
 
   final RemoteMediaApiClient _client;
   final MediaRepository _localPickerRepository;
-  final MediaIdResolver _idResolver = MediaIdResolver();
+  final MediaIdResolver _idResolver;
 
   final Map<String, Future<ThumbPair>> _thumbInFlight =
       <String, Future<ThumbPair>>{};
@@ -36,14 +37,19 @@ class RemoteMediaRepository implements MediaRepository {
   Directory? _cacheRoot;
 
   RemoteMediaRepository({
-    required String baseUrl,
+    String baseUrl = '',
     String? authToken,
     required MediaRepository localPickerRepository,
+    RemoteMediaApiClient? apiClient,
+    MediaIdResolver? idResolver,
   }) : _localPickerRepository = localPickerRepository,
-       _client = RemoteMediaApiClient(
-         baseUrl: baseUrl,
-         authToken: authToken,
-       );
+       _client =
+           apiClient ??
+           RemoteMediaApiClient(
+             baseUrl: baseUrl,
+             authToken: authToken,
+           ),
+       _idResolver = idResolver ?? MediaIdResolver();
 
   factory RemoteMediaRepository.fromSettings(
     MetadataSettings settings, {
@@ -58,6 +64,17 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   AppMode get appMode => AppMode.client;
+
+  @override
+  RepositoryCapabilities get capabilities => const RepositoryCapabilities(
+    canRename: true,
+    canDelete: true,
+    canUpload: true,
+    canRecursiveSearch: true,
+    canExportPdf: false,
+    canOrganizeLibrary: false,
+    canPickFolder: false,
+  );
 
   @override
   bool get isRemoteMode => true;
@@ -123,6 +140,65 @@ class RemoteMediaRepository implements MediaRepository {
     return identity.stableId;
   }
 
+  void _evictMetaCache(String stableId) {
+    _metaCache.remove(stableId);
+    _metaInFlight.remove(stableId);
+  }
+
+  Future<RemoteFolderEntry?> _findFolderChildByPath(
+    String folderRaw,
+    String fullPath,
+  ) async {
+    var offset = 0;
+    const pageSize = 200;
+
+    while (true) {
+      final page = await _client.listFolderChildren(
+        folderRaw,
+        offset: offset,
+        limit: pageSize,
+      );
+      for (final entry in page.items) {
+        final entryPath = entry.fullPath ?? entry.entryId;
+        if (_winPath.equals(entryPath, fullPath)) {
+          return entry;
+        }
+      }
+
+      if (page.items.isEmpty || (offset + page.items.length) >= page.total) {
+        return null;
+      }
+      offset += page.items.length;
+    }
+  }
+
+  MediaKind _mediaKindFromRemote(String rawKind) {
+    switch (rawKind) {
+      case 'pdf':
+        return MediaKind.pdf;
+      case 'image':
+        return MediaKind.image;
+      default:
+        throw RemoteMediaException('未対応のメディア種別です: $rawKind');
+    }
+  }
+
+  Future<void> _assertDeleted(
+    MediaItem item,
+    String stableId,
+  ) async {
+    try {
+      await _client.fetchMediaMeta(stableId);
+    } on RemoteMediaException catch (error) {
+      if (error.statusCode == 404) {
+        return;
+      }
+      rethrow;
+    }
+
+    throw RemoteMediaException('削除結果を確認できませんでした: ${item.displayName}');
+  }
+
   String _cacheHash(String source) {
     var hash = 0x811C9DC5;
     const prime = 0x01000193;
@@ -146,6 +222,9 @@ class RemoteMediaRepository implements MediaRepository {
     }
     if (meta.mimeType == 'image/webp') {
       return '.webp';
+    }
+    if (meta.mimeType == 'image/bmp' || meta.mimeType == 'image/x-ms-bmp') {
+      return '.bmp';
     }
     return '.jpg';
   }
@@ -265,7 +344,9 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<FolderHandle?> pickFolder() async {
-    throw const RemoteMediaException('クライアントモードではホスト側フォルダを直接選択できません');
+    throw const RemoteMediaException(
+      'クライアントモードではホスト側フォルダを直接選択できません',
+    );
   }
 
   @override
@@ -457,16 +538,38 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<bool> deleteItem(MediaItem item) async {
-    return item.kind != MediaKind.folder;
+    final deletedCount = await deleteItems(<MediaItem>[item]);
+    return deletedCount == 1;
   }
 
   @override
   Future<int> deleteItems(List<MediaItem> items) async {
-    return items.where((item) => item.kind != MediaKind.folder).length;
+    final targets = items
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
+    if (targets.isEmpty) {
+      return 0;
+    }
+
+    final payload = <(MediaItem, ResolvedMediaIdentity)>[];
+    for (final item in targets) {
+      payload.add((item, await _idResolver.resolve(item)));
+    }
+
+    await _client.deleteMedia(payload, hardDelete: true);
+    for (final entry in payload) {
+      await _assertDeleted(entry.$1, entry.$2.stableId);
+      _evictMetaCache(entry.$2.stableId);
+      _idResolver.forget(entry.$1);
+    }
+    return payload.length;
   }
 
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
+    if (item.kind == MediaKind.folder) {
+      throw const RemoteMediaException('フォルダ名の変更は未対応です');
+    }
     final trimmed = newDisplayName.trim();
     if (trimmed.isEmpty) {
       throw const RemoteMediaException('新しい名前を入力してください');
@@ -478,13 +581,42 @@ class RemoteMediaRepository implements MediaRepository {
         ? '$trimmed$ext'
         : trimmed;
     final nextPath = _winPath.join(item.folderRaw, fixedName);
-    return MediaItem(
+    final nextItem = MediaItem(
       id: nextPath,
       displayName: fixedName,
       kind: item.kind,
       folderRaw: item.folderRaw,
       modified: item.modified,
       sizeBytes: item.sizeBytes,
+      tags: item.tags,
+    );
+
+    final beforeIdentity = await _idResolver.resolve(item);
+    final afterIdentity = await _idResolver.resolve(nextItem);
+    await _client.renameMedia(
+      beforeItem: item,
+      afterItem: nextItem,
+      beforeIdentity: beforeIdentity,
+      afterIdentity: afterIdentity,
+    );
+
+    final refreshed = await _findFolderChildByPath(nextItem.folderRaw, nextPath);
+    if (refreshed == null) {
+      throw const RemoteMediaException('リネーム後のメディアを再取得できませんでした');
+    }
+
+    _evictMetaCache(beforeIdentity.stableId);
+    _evictMetaCache(afterIdentity.stableId);
+    _idResolver.forget(item);
+    _idResolver.forget(nextItem);
+
+    return MediaItem(
+      id: refreshed.fullPath ?? nextItem.id,
+      displayName: refreshed.displayName,
+      kind: _mediaKindFromRemote(refreshed.kind),
+      folderRaw: refreshed.folderRaw,
+      modified: refreshed.modifiedAt ?? nextItem.modified,
+      sizeBytes: refreshed.sizeBytes ?? nextItem.sizeBytes,
       tags: item.tags,
     );
   }
@@ -502,6 +634,14 @@ class RemoteMediaRepository implements MediaRepository {
         );
     if (uploadTargets.isEmpty) {
       return 0;
+    }
+
+    final unsupported = uploadTargets
+        .where((item) => !MediaFileTypes.isSupportedMediaFileName(item.displayName))
+        .map((item) => item.displayName)
+        .toList(growable: false);
+    if (unsupported.isNotEmpty) {
+      throw RemoteMediaException('未対応のファイル形式です: ${unsupported.join(', ')}');
     }
 
     final binaries = <RemoteUploadFile>[];
@@ -528,17 +668,7 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   String _mimeTypeForImage(String fileName) {
-    final ext = _winPath.extension(fileName).toLowerCase();
-    switch (ext) {
-      case '.png':
-        return 'image/png';
-      case '.webp':
-        return 'image/webp';
-      case '.bmp':
-        return 'image/bmp';
-      default:
-        return 'image/jpeg';
-    }
+    return MediaFileTypes.imageMimeTypeForFileName(fileName);
   }
 
   @override
@@ -625,6 +755,9 @@ class SwitchingMediaRepository implements MediaRepository {
 
   @override
   AppMode get appMode => _settings.appMode;
+
+  @override
+  RepositoryCapabilities get capabilities => _activeRepository.capabilities;
 
   @override
   bool get isRemoteMode => _settings.appMode == AppMode.client;

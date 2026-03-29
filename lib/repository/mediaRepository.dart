@@ -4,6 +4,26 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 
+class RepositoryCapabilities {
+  final bool canRename;
+  final bool canDelete;
+  final bool canUpload;
+  final bool canRecursiveSearch;
+  final bool canExportPdf;
+  final bool canOrganizeLibrary;
+  final bool canPickFolder;
+
+  const RepositoryCapabilities({
+    required this.canRename,
+    required this.canDelete,
+    required this.canUpload,
+    required this.canRecursiveSearch,
+    required this.canExportPdf,
+    required this.canOrganizeLibrary,
+    required this.canPickFolder,
+  });
+}
+
 class ThumbPair {
   final Uint8List front;
   final Uint8List? back;
@@ -42,6 +62,8 @@ class MediaTransferProgress {
 }
 
 abstract class MediaRepository {
+  RepositoryCapabilities get capabilities;
+
   AppMode get appMode => AppMode.standalone;
 
   bool get isRemoteMode => appMode == AppMode.client;

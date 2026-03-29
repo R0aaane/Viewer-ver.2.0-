@@ -91,6 +91,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   MediaItem get _item => _items[_index];
   bool get _isPdf => _item.kind == MediaKind.pdf;
+  bool get _canRenameCurrentItem =>
+      _isPdf && widget.repo.capabilities.canRename;
 
   void _popWithResult() {
     Navigator.of(context).pop(_favChanged || _tagsChanged);
@@ -179,8 +181,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final lib = await widget.repo.getAppLibraryFolder();
     _libraryRootRaw = lib.raw;
     final itemFolder = _item.folderRaw;
-    _canDeleteFromLibrary = widget.tagService.isRemoteMode ||
-        _normPath(itemFolder).startsWith(_normPath(lib.raw));
+    _canDeleteFromLibrary =
+        widget.repo.capabilities.canDelete &&
+        (widget.tagService.isRemoteMode ||
+            _normPath(itemFolder).startsWith(_normPath(lib.raw)));
     await _loadFavoriteForCurrent();
     _reloadForCurrent();
   }
@@ -614,7 +618,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (ok != true) return;
 
     // 螳溷炎髯､
-    final deleted = await widget.repo.deleteItem(item);
+    final bool deleted;
+    try {
+      deleted = await widget.repo.deleteItem(item);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('削除に失敗しました: $error')));
+      return;
+    }
     if (!mounted) return;
 
     if (!deleted) {
@@ -744,11 +757,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             _sidebarSectionLabel('フォルダ'),
             ListTile(
               title: Text(_folder?.raw ?? '\u672a\u9078\u629e'),
-              subtitle: Text(widget.repo.isRemoteMode
+              subtitle: Text(!widget.repo.capabilities.canPickFolder
                   ? '\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f\u73fe\u5728\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u8868\u793a\u4e2d'
                   : '\u8868\u793a\u3059\u308b\u30d5\u30a9\u30eb\u30c0\u306b\u5207\u308a\u66ff\u3048'),
               trailing: const Icon(Icons.folder_open),
-              onTap: widget.repo.isRemoteMode
+              onTap: !widget.repo.capabilities.canPickFolder
                   ? null
                   : () async {
                       _closeSidebar();
@@ -1100,7 +1113,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                         style: const TextStyle(color: Colors.white),
                       ),
                     ),
-                    if (_isPdf)
+                    if (_canRenameCurrentItem)
                       IconButton(
                         tooltip: 'PDF 名を変更',
                         icon: const Icon(Icons.edit, color: Colors.white),

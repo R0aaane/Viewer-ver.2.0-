@@ -1,11 +1,10 @@
-﻿from __future__ import annotations
-
-import os
+﻿import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from server.core.errors import bad_request
+from server.core.media_formats import is_supported_media_extension, normalized_extension
 from server.models.dto import DeleteRequest, MessageResponse, RenameRequest, RescanRequest
 from server.services.auth_service import require_bearer_token
 
@@ -56,6 +55,9 @@ async def upload_files(
         if not file_name:
             skipped_count += 1
             continue
+
+        if not is_supported_media_extension(normalized_extension(file_name)):
+            raise bad_request(f"未対応のファイル形式です: {file_name}")
 
         destination = os.path.join(folder_path, file_name)
         if os.path.exists(destination):
@@ -131,5 +133,3 @@ def _unique_path(folder_path: str, file_name: str) -> str:
         candidate = os.path.join(folder_path, f"{base} ({index}){suffix}")
         index += 1
     return candidate
-
-

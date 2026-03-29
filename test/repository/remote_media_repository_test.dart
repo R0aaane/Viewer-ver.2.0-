@@ -1,0 +1,394 @@
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:pdf_viewer/models/folder.dart';
+import 'package:pdf_viewer/models/mediaItem.dart';
+import 'package:pdf_viewer/models/metadata_settings.dart';
+import 'package:pdf_viewer/repository/mediaRepository.dart';
+import 'package:pdf_viewer/repository/remote_media_repository.dart';
+import 'package:pdf_viewer/services/media_id_resolver.dart';
+import 'package:pdf_viewer/services/remote_media_api_client.dart';
+
+void main() {
+  group('RemoteMediaRepository.rename', () {
+    test('returns the refreshed remote item after a successful rename', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      final idResolver = _FakeMediaIdResolver();
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: idResolver,
+        localPickerRepository: const _StubMediaRepository(),
+      );
+      final item = _imageItem(
+        id: r'C:\library\old.jpg',
+        displayName: 'old.jpg',
+      );
+
+      apiClient.onRename = (afterItem, afterIdentity) {
+        apiClient.folderEntriesByFolder[afterItem.folderRaw] = <RemoteFolderEntry>[
+          RemoteFolderEntry(
+            entryId: afterItem.id,
+            displayName: afterItem.displayName,
+            folderRaw: afterItem.folderRaw,
+            kind: 'image',
+            mediaId: afterIdentity.stableId,
+            fullPath: afterItem.id,
+            sizeBytes: afterItem.sizeBytes,
+            modifiedAt: afterItem.modified,
+          ),
+        ];
+      };
+
+      final renamed = await repository.rename(item, 'new');
+
+      expect(renamed.id, r'C:\library\new.jpg');
+      expect(renamed.displayName, 'new.jpg');
+      expect(renamed.kind, MediaKind.image);
+      expect(apiClient.renameCalls, hasLength(1));
+      expect(apiClient.renameCalls.single.oldPath, item.id);
+      expect(apiClient.renameCalls.single.newPath, r'C:\library\new.jpg');
+      expect(idResolver.forgotten, containsAll(<String>[item.id, renamed.id]));
+    });
+
+    test('throws when the remote rename API fails', () async {
+      final apiClient = _FakeRemoteMediaApiClient()
+        ..renameError = const RemoteMediaException('rename failed');
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: const _StubMediaRepository(),
+      );
+
+      expect(
+        () => repository.rename(_imageItem(), 'new'),
+        throwsA(
+          isA<RemoteMediaException>().having(
+            (error) => error.message,
+            'message',
+            'rename failed',
+          ),
+        ),
+      );
+    });
+  });
+
+  group('RemoteMediaRepository.deleteItem', () {
+    test('returns true only after the remote deletion is confirmed', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      final idResolver = _FakeMediaIdResolver();
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: idResolver,
+        localPickerRepository: const _StubMediaRepository(),
+      );
+      final item = _imageItem();
+
+      final deleted = await repository.deleteItem(item);
+
+      expect(deleted, isTrue);
+      expect(apiClient.deleteCalls, hasLength(1));
+      expect(apiClient.deleteCalls.single, <String>['stable:${item.id}']);
+      expect(idResolver.forgotten, <String>[item.id]);
+    });
+
+    test('throws when the deletion cannot be verified', () async {
+      final apiClient = _FakeRemoteMediaApiClient()..markDeletedOnDelete = false;
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: const _StubMediaRepository(),
+      );
+
+      expect(
+        () => repository.deleteItem(_imageItem()),
+        throwsA(
+          isA<RemoteMediaException>().having(
+            (error) => error.message,
+            'message',
+            contains('削除結果を確認できませんでした'),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('Repository capabilities', () {
+    test('SwitchingMediaRepository exposes the active repository capabilities', () {
+      const localCapabilities = RepositoryCapabilities(
+        canRename: true,
+        canDelete: true,
+        canUpload: true,
+        canRecursiveSearch: true,
+        canExportPdf: true,
+        canOrganizeLibrary: true,
+        canPickFolder: true,
+      );
+      const localRepository = _StubMediaRepository(
+        capabilities: localCapabilities,
+      );
+
+      final standalone = SwitchingMediaRepository(
+        localRepository,
+        initialSettings: const MetadataSettings(appMode: AppMode.standalone),
+      );
+      final remote = SwitchingMediaRepository(
+        localRepository,
+        initialSettings: const MetadataSettings(
+          appMode: AppMode.client,
+          clientApiBaseUrl: 'http://example.com',
+        ),
+      );
+
+      expect(standalone.capabilities.canExportPdf, isTrue);
+      expect(standalone.capabilities.canOrganizeLibrary, isTrue);
+      expect(standalone.capabilities.canPickFolder, isTrue);
+      expect(remote.capabilities.canUpload, isTrue);
+      expect(remote.capabilities.canExportPdf, isFalse);
+      expect(remote.capabilities.canOrganizeLibrary, isFalse);
+      expect(remote.capabilities.canPickFolder, isFalse);
+    });
+  });
+}
+
+MediaItem _imageItem({
+  String id = r'C:\library\old.jpg',
+  String displayName = 'old.jpg',
+}) {
+  return MediaItem(
+    id: id,
+    displayName: displayName,
+    kind: MediaKind.image,
+    folderRaw: r'C:\library',
+    modified: DateTime.utc(2026, 3, 1),
+    sizeBytes: 12,
+  );
+}
+
+class _RenameCall {
+  final String oldPath;
+  final String newPath;
+
+  const _RenameCall({
+    required this.oldPath,
+    required this.newPath,
+  });
+}
+
+class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
+  final Map<String, List<RemoteFolderEntry>> folderEntriesByFolder =
+      <String, List<RemoteFolderEntry>>{};
+  final List<_RenameCall> renameCalls = <_RenameCall>[];
+  final List<List<String>> deleteCalls = <List<String>>[];
+  final Set<String> _deletedStableIds = <String>{};
+
+  Object? renameError;
+  Object? deleteError;
+  bool markDeletedOnDelete = true;
+  void Function(MediaItem afterItem, ResolvedMediaIdentity afterIdentity)?
+      onRename;
+
+  _FakeRemoteMediaApiClient() : super(baseUrl: 'http://example.com');
+
+  @override
+  Future<void> renameMedia({
+    required MediaItem beforeItem,
+    required MediaItem afterItem,
+    required ResolvedMediaIdentity beforeIdentity,
+    required ResolvedMediaIdentity afterIdentity,
+  }) async {
+    final error = renameError;
+    if (error != null) {
+      throw error;
+    }
+    renameCalls.add(_RenameCall(oldPath: beforeItem.id, newPath: afterItem.id));
+    onRename?.call(afterItem, afterIdentity);
+  }
+
+  @override
+  Future<void> deleteMedia(
+    List<(MediaItem, ResolvedMediaIdentity)> items, {
+    required bool hardDelete,
+  }) async {
+    final error = deleteError;
+    if (error != null) {
+      throw error;
+    }
+    final ids = items.map((entry) => entry.$2.stableId).toList(growable: false);
+    deleteCalls.add(ids);
+    if (markDeletedOnDelete) {
+      _deletedStableIds.addAll(ids);
+    }
+  }
+
+  @override
+  Future<RemoteFolderPage> listFolderChildren(
+    String folderRaw, {
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final entries = folderEntriesByFolder[folderRaw] ?? const <RemoteFolderEntry>[];
+    final paged = entries.skip(offset).take(limit).toList(growable: false);
+    return RemoteFolderPage(
+      items: paged,
+      total: entries.length,
+      limit: limit,
+      offset: offset,
+    );
+  }
+
+  @override
+  Future<RemoteMediaMeta> fetchMediaMeta(String mediaId) async {
+    if (_deletedStableIds.contains(mediaId)) {
+      throw const RemoteMediaException('not found', statusCode: 404);
+    }
+    return RemoteMediaMeta(
+      mediaId: mediaId,
+      displayName: 'item.jpg',
+      kind: 'image',
+      mimeType: 'image/jpeg',
+      sizeBytes: 12,
+      modifiedAt: DateTime.utc(2026, 3, 1),
+      etag: 'etag',
+      supportsRange: true,
+    );
+  }
+}
+
+class _FakeMediaIdResolver extends MediaIdResolver {
+  final List<String> forgotten = <String>[];
+
+  @override
+  Future<ResolvedMediaIdentity> resolve(MediaItem item) async {
+    return ResolvedMediaIdentity(
+      stableId: 'stable:${item.id}',
+      aliases: <String>[item.id],
+      sizeBytes: item.sizeBytes,
+      modifiedEpochMs: item.modified?.millisecondsSinceEpoch,
+      normalizedPath: item.id,
+      relativePathHint: item.displayName,
+    );
+  }
+
+  @override
+  void forget(MediaItem item) {
+    forgotten.add(item.id);
+  }
+}
+
+class _StubMediaRepository implements MediaRepository {
+  @override
+  final RepositoryCapabilities capabilities;
+
+  @override
+  final AppMode appMode;
+
+  @override
+  bool get isRemoteMode => appMode == AppMode.client;
+
+  @override
+  bool get isHostMode => appMode == AppMode.host;
+
+  const _StubMediaRepository({
+    this.capabilities = const RepositoryCapabilities(
+      canRename: true,
+      canDelete: true,
+      canUpload: true,
+      canRecursiveSearch: true,
+      canExportPdf: true,
+      canOrganizeLibrary: true,
+      canPickFolder: true,
+    ),
+    this.appMode = AppMode.standalone,
+  });
+
+  @override
+  Future<void> reloadSettings() async {}
+
+  @override
+  Future<List<FolderHandle>> listAvailableFolders() async => const <FolderHandle>[];
+
+  @override
+  Future<FolderHandle?> pickFolder() async => null;
+
+  @override
+  Future<MediaItem?> pickSinglePdf() async => null;
+
+  @override
+  Future<List<MediaItem>> pickExternalMediaFiles({
+    bool allowMultiple = true,
+    bool includeImages = true,
+    bool includePdf = true,
+  }) async => const <MediaItem>[];
+
+  @override
+  Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
+    return const <MediaItem>[];
+  }
+
+  @override
+  Future<FolderHandle> getAppLibraryFolder() async => const FolderHandle(r'C:\library');
+
+  @override
+  Future<List<MediaItem>> listMedia(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async => const <MediaItem>[];
+
+  @override
+  Future<int> importIntoFolder(
+    FolderHandle folder, {
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async => 0;
+
+  @override
+  Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
+    return ThumbPair(front: Uint8List(0));
+  }
+
+  @override
+  Future<Uint8List> readBytes(MediaItem item) async => Uint8List(0);
+
+  @override
+  Future<int> getPageCount(MediaItem item) async => 1;
+
+  @override
+  Future<Uint8List> renderPageBytes(
+    MediaItem item,
+    int page, {
+    int maxWidth = 1600,
+  }) async => Uint8List(0);
+
+  @override
+  Future<bool> deleteItem(MediaItem item) async => false;
+
+  @override
+  Future<int> deleteItems(List<MediaItem> items) async => 0;
+
+  @override
+  Future<MediaItem> rename(MediaItem item, String newDisplayName) async => item;
+
+  @override
+  Future<int> importItemsIntoFolder(
+    FolderHandle dest,
+    List<MediaItem> items, {
+    bool skipIfExists = true,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async => 0;
+
+  @override
+  Future<List<MediaItem>> listMediaRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async => const <MediaItem>[];
+
+  @override
+  Future<int> countMedia(FolderHandle folder) async => 0;
+
+  @override
+  Future<PagedMediaResult> listMediaPage(
+    FolderHandle folder, {
+    required int offset,
+    required int limit,
+    void Function(int processed, int total)? onProgress,
+  }) async => const PagedMediaResult(items: <MediaItem>[], total: 0);
+}

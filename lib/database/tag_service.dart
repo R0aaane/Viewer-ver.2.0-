@@ -562,8 +562,11 @@ class TagService {
     return _localStore.organizeAppLibrary(libraryRoot: libraryRoot);
   }
 
+  // Repository is responsible for the actual filesystem / remote action.
+  // TagService only keeps metadata stores and caches in sync with that result.
   Future<void> handleItemRenamed(MediaItem before, MediaItem after) async {
     await initialize();
+    _forgetKnownItem(before);
     rememberItem(after);
 
     if (!isRemoteMode) {
@@ -574,14 +577,6 @@ class TagService {
 
     final beforeIdentity = await _idResolver.resolve(before);
     final afterIdentity = await _idResolver.resolve(after);
-
-    await _requireApiClient().notifyRename(
-      beforeItem: before,
-      afterItem: after,
-      before: beforeIdentity,
-      after: afterIdentity,
-    );
-
     _remoteTagCache.remove(beforeIdentity.stableId);
     _remoteTagCache.remove(afterIdentity.stableId);
   }
@@ -600,17 +595,16 @@ class TagService {
         targets.map((item) => item.id).toList(growable: false),
       );
       await _mirrorHostDelete(targets);
+      for (final item in targets) {
+        _forgetKnownItem(item);
+      }
       return;
     }
 
-    final payload = <(MediaItem, ResolvedMediaIdentity)>[];
     for (final item in targets) {
-      payload.add((item, await _idResolver.resolve(item)));
-    }
-
-    await _requireApiClient().notifyDelete(payload, hardDelete: true);
-    for (final entry in payload) {
-      _remoteTagCache.remove(entry.$2.stableId);
+      final identity = await _idResolver.resolve(item);
+      _remoteTagCache.remove(identity.stableId);
+      _forgetKnownItem(item);
     }
   }
 
@@ -776,6 +770,12 @@ class TagService {
       }
     }
     return null;
+  }
+
+  void _forgetKnownItem(MediaItem item) {
+    for (final key in _itemLookupKeys(item.id)) {
+      _knownItems.remove(key);
+    }
   }
 
   List<String> _itemLookupKeys(String raw) {
