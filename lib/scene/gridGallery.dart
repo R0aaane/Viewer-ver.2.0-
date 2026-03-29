@@ -941,6 +941,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         child: FutureBuilder<ThumbPair>(
           future: widget.repo.readThumbPair(item, maxWidth: 240),
           builder: (context, snap) {
+            if (snap.hasError) {
+              return Container(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image_outlined),
+              );
+            }
             if (!snap.hasData) {
               return Container(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -3755,6 +3762,9 @@ class _ThumbTile extends StatelessWidget {
               return FutureBuilder<ThumbPair>(
                 future: repo.readThumbPair(item, maxWidth: 240),
                 builder: (context, snap) {
+                  if (snap.hasError) {
+                    return const _TileShell();
+                  }
                   if (!snap.hasData) {
                     return _TileShell(loading: true);
                   }

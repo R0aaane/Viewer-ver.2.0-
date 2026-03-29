@@ -33,6 +33,7 @@ class RemoteMediaRepository implements MediaRepository {
   final Map<String, Future<RemoteMediaMeta>> _metaInFlight =
       <String, Future<RemoteMediaMeta>>{};
   final Map<String, RemoteMediaMeta> _metaCache = <String, RemoteMediaMeta>{};
+  final Map<String, String> _remoteMediaIdsByPath = <String, String>{};
 
   Directory? _cacheRoot;
 
@@ -117,7 +118,7 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<RemoteMediaMeta> _metaForItem(MediaItem item) async {
-    final mediaId = await _stableMediaId(item);
+    final mediaId = await _remoteMediaIdForItem(item);
     final cached = _metaCache[mediaId];
     if (cached != null) {
       return cached;
@@ -126,11 +127,42 @@ class RemoteMediaRepository implements MediaRepository {
     if (inFlight != null) {
       return inFlight;
     }
-    final future = _client.fetchMediaMeta(mediaId).then((meta) {
-      _metaCache[mediaId] = meta;
-      _metaInFlight.remove(mediaId);
-      return meta;
-    });
+    final future = () async {
+      try {
+        try {
+          final meta = await _client.fetchMediaMeta(mediaId);
+          _metaCache[meta.mediaId] = meta;
+          if (meta.mediaId != mediaId) {
+            _metaCache[mediaId] = meta;
+          }
+          _rememberRemoteMediaId(item.id, meta.mediaId);
+          return meta;
+        } on RemoteMediaException catch (error) {
+          if (error.statusCode != 404) {
+            rethrow;
+          }
+
+          _evictMetaCache(mediaId);
+          _forgetRemoteMediaId(item.id);
+          final refreshedId = await _lookupRemoteMediaIdByPath(item);
+          if (refreshedId == null ||
+              refreshedId.isEmpty ||
+              refreshedId == mediaId) {
+            rethrow;
+          }
+
+          final meta = await _client.fetchMediaMeta(refreshedId);
+          _metaCache[meta.mediaId] = meta;
+          if (meta.mediaId != refreshedId) {
+            _metaCache[refreshedId] = meta;
+          }
+          _rememberRemoteMediaId(item.id, meta.mediaId);
+          return meta;
+        }
+      } finally {
+        _metaInFlight.remove(mediaId);
+      }
+    }();
     _metaInFlight[mediaId] = future;
     return future;
   }
@@ -138,6 +170,71 @@ class RemoteMediaRepository implements MediaRepository {
   Future<String> _stableMediaId(MediaItem item) async {
     final identity = await _idResolver.resolve(item);
     return identity.stableId;
+  }
+
+  bool _looksLikeRemoteMediaId(String raw) => raw.startsWith('mid_');
+
+  String _normalizeRemotePath(String raw) {
+    return _winPath.normalize(raw).replaceAll('/', '\\').toLowerCase();
+  }
+
+  void _rememberRemoteMediaId(String fullPath, String mediaId) {
+    final path = fullPath.trim();
+    final id = mediaId.trim();
+    if (path.isEmpty || id.isEmpty || _looksLikeRemoteMediaId(path)) {
+      return;
+    }
+    _remoteMediaIdsByPath[_normalizeRemotePath(path)] = id;
+  }
+
+  void _forgetRemoteMediaId(String fullPath) {
+    final path = fullPath.trim();
+    if (path.isEmpty || _looksLikeRemoteMediaId(path)) {
+      return;
+    }
+    _remoteMediaIdsByPath.remove(_normalizeRemotePath(path));
+  }
+
+  void _rememberRemoteEntry(RemoteFolderEntry entry) {
+    final mediaId = entry.mediaId?.trim();
+    final fullPath = (entry.fullPath ?? entry.entryId).trim();
+    if (mediaId == null || mediaId.isEmpty || fullPath.isEmpty) {
+      return;
+    }
+    _rememberRemoteMediaId(fullPath, mediaId);
+  }
+
+  Future<String?> _lookupRemoteMediaIdByPath(MediaItem item) async {
+    if (item.kind == MediaKind.folder) {
+      return null;
+    }
+    if (_looksLikeRemoteMediaId(item.id)) {
+      return item.id;
+    }
+
+    final remembered = _remoteMediaIdsByPath[_normalizeRemotePath(item.id)];
+    if (remembered != null && remembered.isNotEmpty) {
+      return remembered;
+    }
+
+    final entry = await _findFolderChildByPath(item.folderRaw, item.id);
+    if (entry == null) {
+      return null;
+    }
+    _rememberRemoteEntry(entry);
+    final mediaId = entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty) {
+      return null;
+    }
+    return mediaId;
+  }
+
+  Future<String> _remoteMediaIdForItem(MediaItem item) async {
+    final remembered = await _lookupRemoteMediaIdByPath(item);
+    if (remembered != null && remembered.isNotEmpty) {
+      return remembered;
+    }
+    return _stableMediaId(item);
   }
 
   void _evictMetaCache(String stableId) {
@@ -230,8 +327,8 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<File> _ensureCachedMediaFile(MediaItem item) async {
-    final mediaId = await _stableMediaId(item);
     final meta = await _metaForItem(item);
+    final mediaId = meta.mediaId;
     final fileDir = await _ensureCacheSubdir('files');
     final etagKey =
         (meta.etag == null || meta.etag!.isEmpty)
@@ -325,6 +422,7 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   MediaItem _toMediaItem(RemoteFolderEntry entry) {
+    _rememberRemoteEntry(entry);
     final rawId = entry.fullPath ?? entry.mediaId ?? entry.entryId;
     final kind = switch (entry.kind) {
       'folder' => MediaKind.folder,
@@ -428,8 +526,8 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
-    final mediaId = await _stableMediaId(item);
     final meta = await _metaForItem(item);
+    final mediaId = meta.mediaId;
     final cacheDir = await _ensureCacheSubdir('thumbs');
     final cacheName = '${_cacheHash('$mediaId|${meta.etag}|$maxWidth')}.bin';
     final cacheFile = File(p.join(cacheDir.path, cacheName));
@@ -472,8 +570,8 @@ class RemoteMediaRepository implements MediaRepository {
     MediaItem item, {
     required int maxWidth,
   }) async {
-    final mediaId = await _stableMediaId(item);
     final meta = await _metaForItem(item);
+    final mediaId = meta.mediaId;
     final cacheDir = await _ensureCacheSubdir('previews');
     final targetWidth = maxWidth.clamp(320, 2048).toInt();
     final targetHeight = (targetWidth * 2).clamp(640, 4096).toInt();
@@ -551,15 +649,23 @@ class RemoteMediaRepository implements MediaRepository {
       return 0;
     }
 
-    final payload = <(MediaItem, ResolvedMediaIdentity)>[];
+    final payload = <(MediaItem, ResolvedMediaIdentity, String)>[];
     for (final item in targets) {
-      payload.add((item, await _idResolver.resolve(item)));
+      payload.add((
+        item,
+        await _idResolver.resolve(item),
+        await _remoteMediaIdForItem(item),
+      ));
     }
 
-    await _client.deleteMedia(payload, hardDelete: true);
+    await _client.deleteMedia(
+      payload.map((entry) => (entry.$1, entry.$2)).toList(growable: false),
+      hardDelete: true,
+    );
     for (final entry in payload) {
-      await _assertDeleted(entry.$1, entry.$2.stableId);
-      _evictMetaCache(entry.$2.stableId);
+      await _assertDeleted(entry.$1, entry.$3);
+      _evictMetaCache(entry.$3);
+      _forgetRemoteMediaId(entry.$1.id);
       _idResolver.forget(entry.$1);
     }
     return payload.length;
@@ -591,6 +697,7 @@ class RemoteMediaRepository implements MediaRepository {
       tags: item.tags,
     );
 
+    final beforeRemoteMediaId = await _remoteMediaIdForItem(item);
     final beforeIdentity = await _idResolver.resolve(item);
     final afterIdentity = await _idResolver.resolve(nextItem);
     await _client.renameMedia(
@@ -605,8 +712,13 @@ class RemoteMediaRepository implements MediaRepository {
       throw const RemoteMediaException('リネーム後のメディアを再取得できませんでした');
     }
 
-    _evictMetaCache(beforeIdentity.stableId);
-    _evictMetaCache(afterIdentity.stableId);
+    _evictMetaCache(beforeRemoteMediaId);
+    if (refreshed.mediaId != null && refreshed.mediaId!.isNotEmpty) {
+      _evictMetaCache(refreshed.mediaId!);
+    }
+    _forgetRemoteMediaId(item.id);
+    _forgetRemoteMediaId(nextItem.id);
+    _rememberRemoteEntry(refreshed);
     _idResolver.forget(item);
     _idResolver.forget(nextItem);
 

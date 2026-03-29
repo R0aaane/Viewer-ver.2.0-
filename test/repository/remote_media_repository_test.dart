@@ -112,6 +112,36 @@ void main() {
     });
   });
 
+  group('RemoteMediaRepository.readThumbPair', () {
+    test('uses the server mediaId remembered from folder entries', () async {
+      final apiClient = _FakeRemoteMediaApiClient()
+        ..folderEntriesByFolder[r'C:\library'] = <RemoteFolderEntry>[
+          RemoteFolderEntry(
+            entryId: r'C:\library\old.jpg',
+            displayName: 'old.jpg',
+            folderRaw: r'C:\library',
+            kind: 'image',
+            mediaId: 'server-media-id',
+            fullPath: r'C:\library\old.jpg',
+            sizeBytes: 12,
+            modifiedAt: DateTime.utc(2026, 3, 1),
+          ),
+        ];
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: const _StubMediaRepository(),
+      );
+
+      final items = await repository.listMedia(const FolderHandle(r'C:\library'));
+      final pair = await repository.readThumbPair(items.single, maxWidth: 240);
+
+      expect(pair.front, isNotEmpty);
+      expect(apiClient.metaRequests, <String>['server-media-id']);
+      expect(apiClient.thumbnailRequests, <String>['server-media-id']);
+    });
+  });
+
   group('Repository capabilities', () {
     test('SwitchingMediaRepository exposes the active repository capabilities', () {
       const localCapabilities = RepositoryCapabilities(
@@ -180,6 +210,8 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
   final List<_RenameCall> renameCalls = <_RenameCall>[];
   final List<List<String>> deleteCalls = <List<String>>[];
   final Set<String> _deletedStableIds = <String>{};
+  final List<String> metaRequests = <String>[];
+  final List<String> thumbnailRequests = <String>[];
 
   Object? renameError;
   Object? deleteError;
@@ -238,6 +270,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
 
   @override
   Future<RemoteMediaMeta> fetchMediaMeta(String mediaId) async {
+    metaRequests.add(mediaId);
     if (_deletedStableIds.contains(mediaId)) {
       throw const RemoteMediaException('not found', statusCode: 404);
     }
@@ -251,6 +284,17 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
       etag: 'etag',
       supportsRange: true,
     );
+  }
+
+  @override
+  Future<Uint8List> fetchThumbnail(
+    String mediaId, {
+    int? width,
+    int? height,
+    int? page,
+  }) async {
+    thumbnailRequests.add(mediaId);
+    return Uint8List.fromList(<int>[1, 2, 3]);
   }
 }
 
