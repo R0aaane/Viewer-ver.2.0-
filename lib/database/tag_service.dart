@@ -457,7 +457,11 @@ class TagService {
       throw const MetadataException('タグ ID を解決できないため、削除できません');
     }
 
-    await _requireApiClient().deleteItemTag(identity.stableId, remoteTagId);
+    await _requireApiClient().deleteItemTag(
+      identity.stableId,
+      remoteTagId,
+      identity: identity,
+    );
     _remoteTagCache.remove(identity.stableId);
   }
 
@@ -796,7 +800,10 @@ class TagService {
       return cached;
     }
 
-    final future = _requireApiClient().fetchItemTags(identity.stableId);
+    final future = _requireApiClient().fetchItemTags(
+      identity.stableId,
+      identity: identity,
+    );
     _remoteTagCache[identity.stableId] = future;
     return future;
   }

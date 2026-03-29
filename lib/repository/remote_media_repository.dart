@@ -75,6 +75,10 @@ class RemoteMediaRepository implements MediaRepository {
     canExportPdf: false,
     canOrganizeLibrary: false,
     canPickFolder: false,
+    canAddLocalFolder: false,
+    canImportToHost: true,
+    canBatchUpload: true,
+    canAssignImportTags: true,
   );
 
   @override
@@ -507,19 +511,32 @@ class RemoteMediaRepository implements MediaRepository {
   @override
   Future<int> importIntoFolder(
     FolderHandle folder, {
+    ImportRequest? request,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
-    final localItems = await pickExternalMediaFiles(
-      allowMultiple: true,
-      includeImages: true,
-      includePdf: true,
-    );
+    final resolvedRequest = request ?? const ImportRequest();
+    final localItems = await switch (resolvedRequest.sourceKind) {
+      ImportSourceKind.folder => () async {
+        final sourceFolder = await _localPickerRepository.pickFolder();
+        if (sourceFolder == null) {
+          return const <MediaItem>[];
+        }
+        return _localPickerRepository.listMediaRecursiveFiles(sourceFolder);
+      }(),
+      ImportSourceKind.files => pickExternalMediaFiles(
+        allowMultiple: true,
+        includeImages: true,
+        includePdf: true,
+      ),
+    };
     if (localItems.isEmpty) {
       return 0;
     }
     return importItemsIntoFolder(
       folder,
       localItems,
+      importMetadata: resolvedRequest.metadata,
+      skipIfExists: resolvedRequest.skipIfExists,
       onProgress: onProgress,
     );
   }
@@ -737,6 +754,7 @@ class RemoteMediaRepository implements MediaRepository {
   Future<int> importItemsIntoFolder(
     FolderHandle dest,
     List<MediaItem> items, {
+    ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
@@ -773,6 +791,7 @@ class RemoteMediaRepository implements MediaRepository {
     final response = await _client.uploadFiles(
       folderRaw: dest.raw,
       files: binaries,
+      importMetadata: importMetadata,
       skipIfExists: skipIfExists,
       onProgress: onProgress,
     );
@@ -949,8 +968,13 @@ class SwitchingMediaRepository implements MediaRepository {
   @override
   Future<int> importIntoFolder(
     FolderHandle folder, {
+    ImportRequest? request,
     void Function(MediaTransferProgress progress)? onProgress,
-  }) => _activeRepository.importIntoFolder(folder, onProgress: onProgress);
+  }) => _activeRepository.importIntoFolder(
+    folder,
+    request: request,
+    onProgress: onProgress,
+  );
 
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) {
@@ -987,12 +1011,14 @@ class SwitchingMediaRepository implements MediaRepository {
   Future<int> importItemsIntoFolder(
     FolderHandle dest,
     List<MediaItem> items, {
+    ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) {
     return _activeRepository.importItemsIntoFolder(
       dest,
       items,
+      importMetadata: importMetadata,
       skipIfExists: skipIfExists,
       onProgress: onProgress,
     );

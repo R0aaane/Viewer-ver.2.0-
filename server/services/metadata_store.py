@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +72,39 @@ def build_media_id(
     return f"mid_{_fnv1a64_hex(source)}"
 
 
+def _sanitize_dir_name(input_value: str) -> str:
+    value = input_value.strip()
+    if not value:
+        return "_"
+    value = re.sub(r'[\\/:*?"<>|]', "_", value)
+    value = re.sub(r'[\x00-\x1F]', "_", value)
+    value = re.sub(r'[\. ]+$', "", value)
+    return value or "_"
+
+
+def _unique_path(directory: str, file_name: str) -> str:
+    base = Path(file_name).stem
+    suffix = Path(file_name).suffix
+    index = 1
+    candidate = os.path.join(directory, file_name)
+    while os.path.exists(candidate):
+        candidate = os.path.join(directory, f"{base} ({index}){suffix}")
+        index += 1
+        if index > 999:
+            return os.path.join(directory, f"{base}_{int(datetime.now(tz=timezone.utc).timestamp() * 1000)}{suffix}")
+    return candidate
+
+
+def _pick_first_tag_name(tags: list[dict[str, Any]], category: str) -> str | None:
+    for tag in tags:
+        if tag.get("category") != category:
+            continue
+        name = str(tag.get("name") or "").strip()
+        if name:
+            return name
+    return None
+
+
 @dataclass(frozen=True)
 class SearchQuery:
     q: str | None = None
@@ -134,23 +168,72 @@ class MetadataStore:
 
         return filtered
 
-    def get_tags_for_media(self, media_id: str) -> list[dict[str, Any]]:
-        media = self._db.get_media_record(media_id)
-        if media is None:
-            raise not_found("メディアが見つかりません")
+    def resolve_media_record(
+        self,
+        media_id: str | None,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if media_id:
+            record = self._db.get_media_record(media_id)
+            if record is not None:
+                return record
+
+        normalized_path = None
+        aliases: list[str] = []
+        if identity:
+            normalized_path = identity.get("normalizedPath") or identity.get("normalized_path")
+            raw_aliases = identity.get("aliases") or []
+            aliases = [str(alias).strip() for alias in raw_aliases if str(alias).strip()]
+
+        if normalized_path:
+            record = self._db.get_media_record_by_normalized_path(str(normalized_path))
+            if record is not None:
+                return record
+
+        for alias in aliases:
+            record = self._db.get_media_record_by_path(alias)
+            if record is not None:
+                return record
+
+            record = self._db.get_media_record_by_normalized_path(_normalize_path(alias))
+            if record is not None:
+                return record
+
+        raise not_found("メディアが見つかりません")
+
+    def resolve_media_id(
+        self,
+        media_id: str | None,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> str:
+        return self.resolve_media_record(media_id, identity=identity)["media_id"]
+
+    def get_tags_for_media(
+        self,
+        media_id: str,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
         return [
             {
                 "tagId": row["tag_id"],
                 "name": row["name"],
                 "category": row["category"],
             }
-            for row in self._db.list_tags_for_media(media_id)
+            for row in self._db.list_tags_for_media(resolved_media_id)
         ]
 
-    def add_tags_to_media(self, media_id: str, tags: list[dict[str, str]]) -> None:
-        media = self._db.get_media_record(media_id)
-        if media is None:
-            raise not_found("メディアが見つかりません")
+    def add_tags_to_media(
+        self,
+        media_id: str,
+        tags: list[dict[str, str]],
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> str:
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
 
         for tag in tags:
             name = tag["name"].strip()
@@ -160,25 +243,38 @@ class MetadataStore:
             normalized_name = _normalize_name(name)
             tag_id = f"{category}:{_fnv1a64_hex(f'{category}|{normalized_name}')[:12]}"
             self._db.ensure_tag(tag_id, name, category, normalized_name)
-            self._db.add_media_tag_link(media_id, tag_id)
+            self._db.add_media_tag_link(resolved_media_id, tag_id)
 
-    def replace_tags_for_media(self, media_id: str, tags: list[dict[str, str]]) -> None:
-        media = self._db.get_media_record(media_id)
-        if media is None:
-            raise not_found("メディアが見つかりません")
+        return resolved_media_id
 
-        existing = [row["tag_id"] for row in self._db.list_tags_for_media(media_id)]
+    def replace_tags_for_media(
+        self,
+        media_id: str,
+        tags: list[dict[str, str]],
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> str:
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
+
+        existing = [row["tag_id"] for row in self._db.list_tags_for_media(resolved_media_id)]
         if existing:
-            self._db.remove_media_tag_links(media_id, existing)
+            self._db.remove_media_tag_links(resolved_media_id, existing)
 
         if tags:
-            self.add_tags_to_media(media_id, tags)
+            self.add_tags_to_media(resolved_media_id, tags)
 
-    def remove_tags_from_media(self, media_id: str, tag_ids: list[str]) -> None:
-        media = self._db.get_media_record(media_id)
-        if media is None:
-            raise not_found("メディアが見つかりません")
-        self._db.remove_media_tag_links(media_id, tag_ids)
+        return resolved_media_id
+
+    def remove_tags_from_media(
+        self,
+        media_id: str,
+        tag_ids: list[str],
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> str:
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
+        self._db.remove_media_tag_links(resolved_media_id, tag_ids)
+        return resolved_media_id
 
     def search_media(self, query: SearchQuery) -> tuple[list[dict[str, Any]], int]:
         folder_prefix = _normalize_path(query.folder_raw) if query.folder_raw else None
@@ -360,6 +456,76 @@ class MetadataStore:
             self._db.mark_deleted_by_paths(target_paths, is_deleted=True)
         return len(target_ids)
 
+    def organize_media_by_tags(
+        self,
+        *,
+        library_root: str,
+        media_ids: list[str],
+    ) -> dict[str, str]:
+        moved: dict[str, str] = {}
+        normalized_root = _normalize_path(library_root)
+
+        for media_id in media_ids:
+            current = self._db.get_media_record(media_id)
+            if current is None or current.get("is_deleted"):
+                continue
+
+            source_path = os.path.normpath(current["full_path"])
+            source_norm = _normalize_path(source_path)
+            if source_norm != normalized_root and not source_norm.startswith(normalized_root + "\\"):
+                continue
+
+            tags = self.get_tags_for_media(current["media_id"])
+            artist_name = _pick_first_tag_name(tags, "artist")
+            series_name = _pick_first_tag_name(tags, "series")
+            if not artist_name and not series_name:
+                continue
+
+            destination_dir = self._calc_library_dest_dir(
+                library_root=library_root,
+                artist_name=artist_name,
+                series_name=series_name,
+            )
+            file_name = os.path.basename(source_path)
+            candidate_path = os.path.normpath(os.path.join(destination_dir, file_name))
+            if _normalize_path(source_path) == _normalize_path(candidate_path):
+                continue
+
+            if os.path.exists(candidate_path):
+                target_path = _unique_path(destination_dir, file_name)
+            else:
+                target_path = candidate_path
+
+            updated = self.apply_rename(
+                old_media_id=current["media_id"],
+                new_media_id=None,
+                old_path=source_path,
+                new_path=target_path,
+            )
+            moved[source_path] = updated["fullPath"]
+
+        return moved
+
+    def _calc_library_dest_dir(
+        self,
+        *,
+        library_root: str,
+        artist_name: str | None,
+        series_name: str | None,
+    ) -> str:
+        artist = _sanitize_dir_name(artist_name or "") if artist_name else None
+        series = _sanitize_dir_name(series_name or "") if series_name else None
+
+        if artist:
+            if series:
+                return os.path.join(library_root, "\u4f5c\u8005\u5225", artist, series)
+            return os.path.join(library_root, "\u4f5c\u8005\u5225", artist)
+
+        if series:
+            return os.path.join(library_root, "\u30b7\u30ea\u30fc\u30ba", series)
+
+        return library_root
+
     def _matches_search(
         self,
         media: dict[str, Any],
@@ -422,5 +588,7 @@ class MetadataStore:
             "isDeleted": bool(row["is_deleted"]),
             "modifiedEpochMs": _parse_epoch(row.get("modified_epoch_ms")),
         }
+
+
 
 

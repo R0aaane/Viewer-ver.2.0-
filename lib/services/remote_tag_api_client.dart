@@ -72,8 +72,14 @@ class RemoteTagApiClient {
     }
   }
 
-  Future<List<RemoteTagRecord>> fetchItemTags(String mediaId) async {
-    final json = await _getJson('/tags/item/${Uri.encodeComponent(mediaId)}');
+  Future<List<RemoteTagRecord>> fetchItemTags(
+    String mediaId, {
+    ResolvedMediaIdentity? identity,
+  }) async {
+    final json = await _getJson(
+      '/tags/item/${Uri.encodeComponent(mediaId)}',
+      queryParameters: _identityQueryParameters(identity),
+    );
     final rows = _unwrapList(json, preferredKeys: const ['tags', 'items', 'results']);
     return rows.map(_parseRemoteTagRecord).toList(growable: false);
   }
@@ -106,8 +112,15 @@ class RemoteTagApiClient {
     );
   }
 
-  Future<void> deleteItemTag(String mediaId, String tagId) async {
-    await _deleteJson('/tags/item/${Uri.encodeComponent(mediaId)}/${Uri.encodeComponent(tagId)}');
+  Future<void> deleteItemTag(
+    String mediaId,
+    String tagId, {
+    ResolvedMediaIdentity? identity,
+  }) async {
+    await _deleteJson(
+      '/tags/item/${Uri.encodeComponent(mediaId)}/${Uri.encodeComponent(tagId)}',
+      queryParameters: _identityQueryParameters(identity),
+    );
   }
 
   Future<List<RemoteTagRecord>> fetchMasterTags(
@@ -222,8 +235,11 @@ class RemoteTagApiClient {
     return _requestJson('PUT', path, body: body);
   }
 
-  Future<dynamic> _deleteJson(String path) {
-    return _requestJson('DELETE', path);
+  Future<dynamic> _deleteJson(
+    String path, {
+    Map<String, String>? queryParameters,
+  }) {
+    return _requestJson('DELETE', path, queryParameters: queryParameters);
   }
 
   Future<dynamic> _requestJson(
@@ -365,6 +381,32 @@ class RemoteTagApiClient {
       'name': tag.name,
       'category': tag.category.name,
     };
+  }
+
+  Map<String, String>? _identityQueryParameters(ResolvedMediaIdentity? identity) {
+    if (identity == null) {
+      return null;
+    }
+
+    final queryParameters = <String, String>{
+      if (identity.normalizedPath.trim().isNotEmpty)
+        'normalizedPath': identity.normalizedPath.trim(),
+      if (identity.relativePathHint.trim().isNotEmpty)
+        'relativePathHint': identity.relativePathHint.trim(),
+      if (identity.sizeBytes != null) 'sizeBytes': '${identity.sizeBytes}',
+      if (identity.modifiedEpochMs != null)
+        'modifiedEpochMs': '${identity.modifiedEpochMs}',
+    };
+
+    for (var index = 0; index < identity.aliases.length; index++) {
+      final alias = identity.aliases[index].trim();
+      if (alias.isEmpty) {
+        continue;
+      }
+      queryParameters['alias$index'] = alias;
+    }
+
+    return queryParameters.isEmpty ? null : queryParameters;
   }
 
   List<dynamic> _unwrapList(

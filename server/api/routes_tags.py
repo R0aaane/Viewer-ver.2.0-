@@ -15,6 +15,42 @@ from server.services.auth_service import require_bearer_token
 router = APIRouter(tags=["tags"], dependencies=[Depends(require_bearer_token)])
 
 
+def _identity_from_query(request: Request) -> dict[str, object] | None:
+    aliases = [
+        value.strip()
+        for key, value in sorted(request.query_params.items())
+        if key.startswith("alias") and value.strip()
+    ]
+
+    size_bytes_raw = request.query_params.get("sizeBytes")
+    modified_epoch_ms_raw = request.query_params.get("modifiedEpochMs")
+    identity: dict[str, object] = {
+        "aliases": aliases,
+    }
+
+    normalized_path = request.query_params.get("normalizedPath")
+    if normalized_path:
+        identity["normalizedPath"] = normalized_path
+
+    relative_path_hint = request.query_params.get("relativePathHint")
+    if relative_path_hint:
+        identity["relativePathHint"] = relative_path_hint
+
+    if size_bytes_raw:
+        try:
+            identity["sizeBytes"] = int(size_bytes_raw)
+        except ValueError:
+            pass
+
+    if modified_epoch_ms_raw:
+        try:
+            identity["modifiedEpochMs"] = int(modified_epoch_ms_raw)
+        except ValueError:
+            pass
+
+    return identity if any(identity.values()) else None
+
+
 @router.get("/tags/master", response_model=TagListResponse)
 def list_tag_master(
     request: Request,
@@ -33,8 +69,16 @@ def list_tag_master(
 @router.get("/tags/item/{media_id}", response_model=ItemTagsResponse)
 @router.get("/items/{media_id}/tags", response_model=ItemTagsResponse)
 def get_tags_for_item(request: Request, media_id: str) -> ItemTagsResponse:
-    items = request.app.state.metadata_store.get_tags_for_media(media_id)
-    return ItemTagsResponse(mediaId=media_id, items=items)
+    identity = _identity_from_query(request)
+    resolved_media_id = request.app.state.metadata_store.resolve_media_id(
+        media_id,
+        identity=identity,
+    )
+    items = request.app.state.metadata_store.get_tags_for_media(
+        media_id,
+        identity=identity,
+    )
+    return ItemTagsResponse(mediaId=resolved_media_id, items=items)
 
 
 @router.post("/tags/item/{media_id}", response_model=AddItemTagsResponse)
@@ -47,8 +91,13 @@ def add_tags_to_item(
     tags = [entry.model_dump() for entry in payload.tags]
     if payload.tag is not None:
         tags.append(payload.tag.model_dump())
-    request.app.state.metadata_store.add_tags_to_media(media_id, tags)
-    return AddItemTagsResponse(mediaId=media_id)
+    identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
+    resolved_media_id = request.app.state.metadata_store.add_tags_to_media(
+        media_id,
+        tags,
+        identity=identity,
+    )
+    return AddItemTagsResponse(mediaId=resolved_media_id)
 
 
 @router.put("/tags/item/{media_id}", response_model=AddItemTagsResponse)
@@ -61,8 +110,13 @@ def replace_tags_for_item(
     tags = [entry.model_dump() for entry in payload.tags]
     if payload.tag is not None:
         tags.append(payload.tag.model_dump())
-    request.app.state.metadata_store.replace_tags_for_media(media_id, tags)
-    return AddItemTagsResponse(mediaId=media_id)
+    identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
+    resolved_media_id = request.app.state.metadata_store.replace_tags_for_media(
+        media_id,
+        tags,
+        identity=identity,
+    )
+    return AddItemTagsResponse(mediaId=resolved_media_id)
 
 
 @router.delete("/tags/item/{media_id}", response_model=AddItemTagsResponse)
@@ -71,8 +125,13 @@ def delete_tags_from_item(
     media_id: str,
     payload: DeleteItemTagsRequest,
 ) -> AddItemTagsResponse:
-    request.app.state.metadata_store.remove_tags_from_media(media_id, payload.tagIds)
-    return AddItemTagsResponse(mediaId=media_id)
+    identity = _identity_from_query(request)
+    resolved_media_id = request.app.state.metadata_store.remove_tags_from_media(
+        media_id,
+        payload.tagIds,
+        identity=identity,
+    )
+    return AddItemTagsResponse(mediaId=resolved_media_id)
 
 
 @router.delete("/tags/item/{media_id}/{tag_id}", response_model=AddItemTagsResponse)
@@ -82,5 +141,10 @@ def delete_single_tag_from_item(
     media_id: str,
     tag_id: str,
 ) -> AddItemTagsResponse:
-    request.app.state.metadata_store.remove_tags_from_media(media_id, [tag_id])
-    return AddItemTagsResponse(mediaId=media_id)
+    identity = _identity_from_query(request)
+    resolved_media_id = request.app.state.metadata_store.remove_tags_from_media(
+        media_id,
+        [tag_id],
+        identity=identity,
+    )
+    return AddItemTagsResponse(mediaId=resolved_media_id)

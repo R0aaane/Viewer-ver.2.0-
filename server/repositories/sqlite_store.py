@@ -157,6 +157,17 @@ class SqliteStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def get_media_record_by_normalized_path(
+        self,
+        normalized_full_path: str,
+    ) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            row = cur.execute(
+                "SELECT * FROM media_records WHERE normalized_full_path = ?",
+                (normalized_full_path,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_media_records(
         self,
         *,
@@ -354,3 +365,4 @@ class SqliteStore:
                 "DELETE FROM media_tag_links WHERE media_id = ?",
                 (old_media_id,),
             )
+

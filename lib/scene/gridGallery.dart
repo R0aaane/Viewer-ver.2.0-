@@ -13,6 +13,7 @@ import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
 import '../services/host_api_server_service.dart';
+import 'import_to_host_dialog.dart';
 import 'tag_assign_after_import.dart';
 
 import '../repository/mediaRepository.dart';
@@ -240,6 +241,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   final Set<String> _selectedIds = <String>{};
 
   RepositoryCapabilities get _repoCapabilities => widget.repo.capabilities;
+  bool get _showsRemoteImportAction =>
+      _repoCapabilities.canImportToHost && !_repoCapabilities.canAddLocalFolder;
+  String get _primaryAddActionLabel =>
+      _showsRemoteImportAction ? 'ホストへ取り込み' : 'フォルダ追加';
+  String get _galleryAddFileLabel =>
+      _showsRemoteImportAction ? 'ホストへ取り込み' : 'ファイル追加';
+  IconData get _primaryAddActionIcon => _showsRemoteImportAction
+      ? Icons.cloud_upload_outlined
+      : Icons.create_new_folder_outlined;
 
   void _exitSelectMode() {
     setState(() {
@@ -1116,8 +1126,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   children: [
                     ElevatedButton.icon(
                       onPressed: _addFolder,
-                      icon: const Icon(Icons.create_new_folder_outlined),
-                      label: const Text('フォルダ追加'),
+                      icon: Icon(_primaryAddActionIcon),
+                      label: Text(_primaryAddActionLabel),
                     ),
                     OutlinedButton.icon(
                       onPressed: (_currentFolderRaw == null)
@@ -1233,7 +1243,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
                 const SizedBox(height: 8),
                 if (_foldersRaw.isEmpty)
-                  const Text('登録フォルダがありません。「フォルダを追加」から追加してください。')
+                  Text(
+                    '登録フォルダがありません。「$_primaryAddActionLabel」から追加してください。',
+                  )
                 else
                   ..._foldersRaw.map((raw) {
                     final isCurrent = raw == _currentFolderRaw;
@@ -1751,28 +1763,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
   Future<void> _addFolder() async {
-    if (widget.repo.isRemoteMode) {
-      List<FolderHandle> remoteFolders = const <FolderHandle>[];
-      try {
-        remoteFolders = await widget.repo.listAvailableFolders();
-      } catch (error) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('ホストに接続できません: $error')));
-        return;
-      }
-      if (!mounted) return;
-      final raws = remoteFolders.map((entry) => entry.raw).toList(growable: false);
-      setState(() {
-        _foldersRaw = raws;
-        _currentFolderRaw ??= raws.isNotEmpty ? raws.first : null;
-      });
-      if (_currentFolderRaw != null) {
-        await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false);
-      }
+    if (_repoCapabilities.canImportToHost) {
+      await _importToHostWithTags();
       return;
     }
+    if (!_repoCapabilities.canAddLocalFolder) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('このモードではフォルダ追加は未対応です')));
+      return;
+    }
+
     final folder = await widget.repo.pickFolder();
     if (folder == null) return;
     final raw = folder.raw;
@@ -1787,6 +1789,120 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     });
     await _persistFolders();
     await _loadFolder(folder, saveAsLast: false);
+  }
+
+  Future<void> _importToHostWithTags() async {
+    if (!_repoCapabilities.canImportToHost) {
+      return;
+    }
+
+    final request = await ImportToHostDialog.show(
+      context,
+      tagService: widget.tagService,
+    );
+    if (request == null) {
+      return;
+    }
+
+    final progress = ValueNotifier<MediaTransferProgress?>(null);
+    var dialogShown = false;
+
+    try {
+      final lib = await widget.repo.getAppLibraryFolder();
+      final libRaw = lib.raw;
+      if (!_foldersRaw.contains(libRaw)) {
+        setState(() {
+          _foldersRaw = <String>[libRaw, ..._foldersRaw];
+        });
+      }
+
+      dialogShown = true;
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: const Text('ホストへ取り込み中...'),
+            content: ValueListenableBuilder<MediaTransferProgress?>(
+              valueListenable: progress,
+              builder: (context, value, _) {
+                final fraction = value?.fraction;
+                final completed = value?.completedFiles ?? 0;
+                final total = value?.totalFiles ?? 0;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    LinearProgressIndicator(
+                      value: fraction == null || total == 0 ? null : fraction,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(total == 0 ? '準備中...' : '$completed / $total'),
+                    if (value?.currentFileName != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        value!.currentFileName!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      final importedCount = await widget.repo.importIntoFolder(
+        lib,
+        request: request,
+        onProgress: (next) => progress.value = next,
+      );
+      if (!mounted) return;
+
+      if (importedCount <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('取り込み対象がありませんでした')),
+        );
+        return;
+      }
+
+      _folderItemsCache.clear();
+      _folderItemsCacheRecursive.clear();
+      _dirStack.clear();
+
+      setState(() {
+        _currentFolderRaw = libRaw;
+        _folder = lib;
+        _page = _MainPage.gallery;
+      });
+      await _persistFolders();
+      await _loadFolder(lib, saveAsLast: false);
+
+      if (!mounted) return;
+      if (_homeQuery.trim().isNotEmpty) {
+        await _runHomeSearch();
+      }
+      await _refreshCurrentPageTags();
+      await _refreshArtistTagCounts();
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ホストへ取り込み完了: $importedCount 件')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ホスト取り込みに失敗しました: $e')));
+    } finally {
+      progress.dispose();
+      if (dialogShown &&
+          mounted &&
+          Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
   }
   Future<void> _switchFolder(String raw) async {
     if (_currentFolderRaw == raw) return;
@@ -1825,6 +1941,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _importToCurrentFolder() async {
+    if (_repoCapabilities.canImportToHost) {
+      await _importToHostWithTags();
+      return;
+    }
     if (!_repoCapabilities.canUpload) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1904,6 +2024,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _importToLibraryAndTag() async {
+    if (_repoCapabilities.canImportToHost) {
+      await _importToHostWithTags();
+      return;
+    }
     if (!_repoCapabilities.canUpload) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -2357,25 +2481,26 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       icon: const Icon(Icons.more_vert),
       onSelected: _onHomeMenuSelected,
       itemBuilder: (context) => <PopupMenuEntry<_HomeMenuAction>>[
-        const PopupMenuItem(
+        PopupMenuItem(
           value: _HomeMenuAction.addFolder,
           child: ListTile(
-            leading: Icon(Icons.create_new_folder_outlined),
-            title: Text('フォルダ追加'),
+            leading: Icon(_primaryAddActionIcon),
+            title: Text(_primaryAddActionLabel),
           ),
         ),
-        PopupMenuItem(
-          value: _HomeMenuAction.importToLibrary,
-          enabled: _repoCapabilities.canUpload,
-          child: ListTile(
-            leading: Icon(Icons.archive_outlined),
-            title: Text(
-              _repoCapabilities.canUpload
-                  ? 'ライブラリへ取り込み'
-                  : 'ライブラリへ取り込み（未対応）',
+        if (!_repoCapabilities.canImportToHost)
+          PopupMenuItem(
+            value: _HomeMenuAction.importToLibrary,
+            enabled: _repoCapabilities.canUpload,
+            child: ListTile(
+              leading: const Icon(Icons.archive_outlined),
+              title: Text(
+                _repoCapabilities.canUpload
+                    ? 'ライブラリへ取り込み'
+                    : 'ライブラリへ取り込み（未対応）',
+              ),
             ),
           ),
-        ),
         PopupMenuItem(
           value: _HomeMenuAction.artistTagIndex,
           enabled: _repoCapabilities.canRecursiveSearch,
@@ -2431,25 +2556,26 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           title: Text('フォルダ表示'),
         ),
       ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: _GalleryMenuAction.addFolder,
           child: ListTile(
-            leading: Icon(Icons.create_new_folder_outlined),
-            title: Text('フォルダ追加'),
+            leading: Icon(_primaryAddActionIcon),
+            title: Text(_primaryAddActionLabel),
           ),
         ),
-        PopupMenuItem(
-          value: _GalleryMenuAction.addFile,
-          enabled: _currentFolderRaw != null && _repoCapabilities.canUpload,
-          child: ListTile(
-            leading: Icon(Icons.upload_file_outlined),
-            title: Text(
-              _repoCapabilities.canUpload
-                  ? 'ファイル追加'
-                  : 'ファイル追加（未対応）',
+        if (!_repoCapabilities.canImportToHost)
+          PopupMenuItem(
+            value: _GalleryMenuAction.addFile,
+            enabled: _currentFolderRaw != null && _repoCapabilities.canUpload,
+            child: ListTile(
+              leading: const Icon(Icons.upload_file_outlined),
+              title: Text(
+                _repoCapabilities.canUpload
+                    ? _galleryAddFileLabel
+                    : '$_galleryAddFileLabel（未対応）',
+              ),
             ),
           ),
-        ),
         PopupMenuItem(
           value: _GalleryMenuAction.organizeLibrary,
           enabled: _repoCapabilities.canOrganizeLibrary,
@@ -2773,8 +2899,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
             // 霑ｽ蜉繝懊ち繝ｳ
             ListTile(
-              leading: const Icon(Icons.create_new_folder_outlined),
-              title: const Text('フォルダを追加'),
+              leading: Icon(_primaryAddActionIcon),
+              title: Text(_primaryAddActionLabel),
               onTap: () async {
                 _closeSidebar();
                 await _addFolder();
@@ -2782,9 +2908,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
 
             if (_foldersRaw.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: Text('登録フォルダがありません。上の「フォルダを追加」から追加してください。'),
+                child: Text(
+                  '登録フォルダがありません。上の「$_primaryAddActionLabel」から追加してください。',
+                ),
               )
             else ...[
               const Padding(
@@ -3161,7 +3289,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ? Center(
                     child: ElevatedButton(
                       onPressed: _addFolder,
-                      child: const Text('フォルダを追加'),
+                      child: Text(_primaryAddActionLabel),
                     ),
                   )
                 : _loading

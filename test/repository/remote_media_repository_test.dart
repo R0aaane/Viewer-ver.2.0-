@@ -142,6 +142,48 @@ void main() {
     });
   });
 
+  group('RemoteMediaRepository.importItemsIntoFolder', () {
+    test('forwards import metadata to the upload api', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: const _StubMediaRepository(),
+      );
+      final metadata = ImportMetadata(
+        artistTag: 'Artist',
+        seriesTag: 'Series',
+        freeTags: const <String>['free-1', 'free-2'],
+        characterTags: const <String>['heroine'],
+        targetCollection: 'library',
+        organizeAfterImport: true,
+      );
+
+      final importedCount = await repository.importItemsIntoFolder(
+        const FolderHandle(r'C:\library'),
+        <MediaItem>[_imageItem()],
+        importMetadata: metadata,
+      );
+
+      expect(importedCount, 1);
+      expect(apiClient.lastUploadFolderRaw, r'C:\library');
+      expect(apiClient.lastUploadMetadata?.artistTag, 'Artist');
+      expect(apiClient.lastUploadMetadata?.seriesTag, 'Series');
+      expect(
+        apiClient.lastUploadMetadata?.freeTags,
+        const <String>['free-1', 'free-2'],
+      );
+      expect(
+        apiClient.lastUploadMetadata?.characterTags,
+        const <String>['heroine'],
+      );
+      expect(apiClient.lastUploadMetadata?.targetCollection, 'library');
+      expect(apiClient.lastUploadMetadata?.organizeAfterImport, isTrue);
+      expect(apiClient.lastUploadFiles, hasLength(1));
+      expect(apiClient.lastUploadFiles.single.fileName, 'old.jpg');
+    });
+  });
+
   group('Repository capabilities', () {
     test('SwitchingMediaRepository exposes the active repository capabilities', () {
       const localCapabilities = RepositoryCapabilities(
@@ -152,6 +194,10 @@ void main() {
         canExportPdf: true,
         canOrganizeLibrary: true,
         canPickFolder: true,
+        canAddLocalFolder: true,
+        canImportToHost: false,
+        canBatchUpload: true,
+        canAssignImportTags: true,
       );
       const localRepository = _StubMediaRepository(
         capabilities: localCapabilities,
@@ -172,10 +218,15 @@ void main() {
       expect(standalone.capabilities.canExportPdf, isTrue);
       expect(standalone.capabilities.canOrganizeLibrary, isTrue);
       expect(standalone.capabilities.canPickFolder, isTrue);
+      expect(standalone.capabilities.canAddLocalFolder, isTrue);
+      expect(standalone.capabilities.canImportToHost, isFalse);
       expect(remote.capabilities.canUpload, isTrue);
       expect(remote.capabilities.canExportPdf, isFalse);
       expect(remote.capabilities.canOrganizeLibrary, isFalse);
       expect(remote.capabilities.canPickFolder, isFalse);
+      expect(remote.capabilities.canAddLocalFolder, isFalse);
+      expect(remote.capabilities.canImportToHost, isTrue);
+      expect(remote.capabilities.canAssignImportTags, isTrue);
     });
   });
 }
@@ -212,6 +263,9 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
   final Set<String> _deletedStableIds = <String>{};
   final List<String> metaRequests = <String>[];
   final List<String> thumbnailRequests = <String>[];
+  String? lastUploadFolderRaw;
+  List<RemoteUploadFile> lastUploadFiles = const <RemoteUploadFile>[];
+  ImportMetadata? lastUploadMetadata;
 
   Object? renameError;
   Object? deleteError;
@@ -296,6 +350,20 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
     thumbnailRequests.add(mediaId);
     return Uint8List.fromList(<int>[1, 2, 3]);
   }
+
+  @override
+  Future<RemoteUploadResponse> uploadFiles({
+    required String folderRaw,
+    required List<RemoteUploadFile> files,
+    ImportMetadata? importMetadata,
+    bool skipIfExists = true,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    lastUploadFolderRaw = folderRaw;
+    lastUploadFiles = files;
+    lastUploadMetadata = importMetadata;
+    return const RemoteUploadResponse(importedCount: 1, skippedCount: 0);
+  }
 }
 
 class _FakeMediaIdResolver extends MediaIdResolver {
@@ -341,6 +409,10 @@ class _StubMediaRepository implements MediaRepository {
       canExportPdf: true,
       canOrganizeLibrary: true,
       canPickFolder: true,
+      canAddLocalFolder: true,
+      canImportToHost: false,
+      canBatchUpload: true,
+      canAssignImportTags: true,
     ),
     this.appMode = AppMode.standalone,
   });
@@ -381,6 +453,7 @@ class _StubMediaRepository implements MediaRepository {
   @override
   Future<int> importIntoFolder(
     FolderHandle folder, {
+    ImportRequest? request,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async => 0;
 
@@ -415,6 +488,7 @@ class _StubMediaRepository implements MediaRepository {
   Future<int> importItemsIntoFolder(
     FolderHandle dest,
     List<MediaItem> items, {
+    ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async => 0;

@@ -33,10 +33,16 @@ class RemoteUploadFile {
 class RemoteUploadResponse {
   final int importedCount;
   final int skippedCount;
+  final int taggedCount;
+  final int organizedCount;
+  final int rescannedCount;
 
   const RemoteUploadResponse({
     required this.importedCount,
     required this.skippedCount,
+    this.taggedCount = 0,
+    this.organizedCount = 0,
+    this.rescannedCount = 0,
   });
 }
 
@@ -338,6 +344,7 @@ class RemoteMediaApiClient {
   Future<RemoteUploadResponse> uploadFiles({
     required String folderRaw,
     required List<RemoteUploadFile> files,
+    ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
@@ -376,6 +383,29 @@ class RemoteMediaApiClient {
 
       writeField('folderRaw', folderRaw);
       writeField('skipIfExists', skipIfExists ? 'true' : 'false');
+      if (importMetadata != null) {
+        final artistTag = importMetadata.artistTag?.trim();
+        final seriesTag = importMetadata.seriesTag?.trim();
+        if (artistTag != null && artistTag.isNotEmpty) {
+          writeField('artistTag', artistTag);
+        }
+        if (seriesTag != null && seriesTag.isNotEmpty) {
+          writeField('seriesTag', seriesTag);
+        }
+        if (importMetadata.freeTags.isNotEmpty) {
+          writeField('freeTagsJson', jsonEncode(importMetadata.freeTags));
+        }
+        if (importMetadata.characterTags.isNotEmpty) {
+          writeField('characterTagsJson', jsonEncode(importMetadata.characterTags));
+        }
+        if (importMetadata.targetCollection?.trim().isNotEmpty ?? false) {
+          writeField('targetCollection', importMetadata.targetCollection!.trim());
+        }
+        writeField(
+          'organizeAfterImport',
+          importMetadata.organizeAfterImport ? 'true' : 'false',
+        );
+      }
 
       onProgress?.call(
         MediaTransferProgress(
@@ -448,6 +478,9 @@ class RemoteMediaApiClient {
             _asInt(jsonBody['count']) ??
             files.length,
         skippedCount: _asInt(jsonBody['skippedCount']) ?? 0,
+        taggedCount: _asInt(jsonBody['taggedCount']) ?? 0,
+        organizedCount: _asInt(jsonBody['organizedCount']) ?? 0,
+        rescannedCount: _asInt(jsonBody['rescannedCount']) ?? 0,
       );
     } on TimeoutException {
       throw const RemoteMediaException('アップロードがタイムアウトしました');

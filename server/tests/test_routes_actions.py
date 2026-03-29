@@ -1,7 +1,10 @@
-﻿from types import SimpleNamespace
+﻿import asyncio
+import os
+import tempfile
+from types import SimpleNamespace
 import unittest
 
-from server.api.routes_actions import apply_delete, apply_rename
+from server.api.routes_actions import apply_delete, apply_rename, upload_files
 from server.core.errors import ApiError, bad_request
 from server.models.dto import DeleteItemRequest, DeleteRequest, RenameRequest, RenameSideDto
 
@@ -52,11 +55,100 @@ class _RecordingMetadataStore:
         return self.deleted_count
 
 
-def _request(metadata_store: _RecordingMetadataStore):
+class _RecordingIndexService:
+    def __init__(self) -> None:
+        self.scan_calls: list[str] = []
+
+    def scan_folder(self, folder_raw: str) -> int:
+        self.scan_calls.append(folder_raw)
+        return len(self.scan_calls)
+
+
+class _UploadMetadataStore:
+    def __init__(self) -> None:
+        self.resolve_calls: list[dict[str, object | None]] = []
+        self.add_tag_calls: list[dict[str, object]] = []
+        self.organize_calls: list[dict[str, object]] = []
+
+    def resolve_media_id(
+        self,
+        media_id: str | None,
+        *,
+        identity: dict[str, object] | None = None,
+    ) -> str:
+        self.resolve_calls.append({'media_id': media_id, 'identity': identity})
+        aliases = (identity or {}).get('aliases') or []
+        first_alias = aliases[0] if aliases else media_id or 'unknown'
+        return f"mid:{os.path.basename(str(first_alias))}"
+
+    def add_tags_to_media(
+        self,
+        media_id: str,
+        tags: list[dict[str, str]],
+        *,
+        identity: dict[str, object] | None = None,
+    ) -> str:
+        self.add_tag_calls.append(
+            {
+                'media_id': media_id,
+                'tags': tags,
+                'identity': identity,
+            }
+        )
+        return media_id
+
+    def organize_media_by_tags(
+        self,
+        *,
+        library_root: str,
+        media_ids: list[str],
+    ) -> dict[str, str]:
+        self.organize_calls.append(
+            {
+                'library_root': library_root,
+                'media_ids': media_ids,
+            }
+        )
+        if not media_ids:
+            return {}
+        source = os.path.join(library_root, 'sample.jpg')
+        target = os.path.join(library_root, '作者別', 'Artist', 'Series', 'sample.jpg')
+        return {source: target}
+
+
+class _FakeUploadFile:
+    def __init__(self, filename: str, data: bytes) -> None:
+        self.filename = filename
+        self._data = data
+        self._offset = 0
+        self.closed = False
+
+    async def read(self, size: int = -1) -> bytes:
+        if self._offset >= len(self._data):
+            return b''
+        if size < 0:
+            size = len(self._data) - self._offset
+        start = self._offset
+        end = min(len(self._data), start + size)
+        self._offset = end
+        return self._data[start:end]
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _request(
+    metadata_store: object,
+    *,
+    index_service: object | None = None,
+    media_roots: list[str] | None = None,
+):
     return SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
                 metadata_store=metadata_store,
+                index_service=index_service,
+                settings=SimpleNamespace(media_roots=media_roots or []),
             )
         )
     )
@@ -125,6 +217,62 @@ class ActionsRoutesTest(unittest.TestCase):
 
         with self.assertRaises(ApiError):
             apply_delete(request, payload)
+
+    def test_upload_files_applies_tags_and_organizes_imported_media(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            index_service = _RecordingIndexService()
+            request = _request(
+                metadata_store,
+                index_service=index_service,
+                media_roots=[temp_dir],
+            )
+            upload = _FakeUploadFile('sample.jpg', b'abc123')
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    artistTag='Artist',
+                    seriesTag='Series',
+                    freeTagsJson='["bonus"]',
+                    characterTagsJson='["Heroine"]',
+                    targetCollection='library',
+                    organizeAfterImport=True,
+                    files=[upload],
+                )
+            )
+
+            self.assertEqual(response['importedCount'], 1)
+            self.assertEqual(response['skippedCount'], 0)
+            self.assertEqual(response['taggedCount'], 1)
+            self.assertEqual(response['organizedCount'], 1)
+            self.assertEqual(response['rescannedCount'], 2)
+            self.assertEqual(response['targetCollection'], 'library')
+            self.assertEqual(index_service.scan_calls, [temp_dir, temp_dir])
+            self.assertTrue(upload.closed)
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, 'sample.jpg')))
+            self.assertEqual(len(metadata_store.resolve_calls), 1)
+            self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'artist', 'name': 'Artist'},
+                    {'category': 'series', 'name': 'Series'},
+                    {'category': 'character', 'name': 'Heroine'},
+                    {'category': 'free', 'name': 'bonus'},
+                ],
+            )
+            self.assertEqual(
+                metadata_store.organize_calls,
+                [
+                    {
+                        'library_root': temp_dir,
+                        'media_ids': ['mid:sample.jpg'],
+                    }
+                ],
+            )
 
 
 if __name__ == '__main__':

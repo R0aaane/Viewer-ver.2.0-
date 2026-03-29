@@ -31,6 +31,10 @@ class AndroidFolderRepository implements MediaRepository {
     canExportPdf: true,
     canOrganizeLibrary: true,
     canPickFolder: true,
+    canAddLocalFolder: true,
+    canImportToHost: false,
+    canBatchUpload: true,
+    canAssignImportTags: true,
   );
 
   @override
@@ -1219,8 +1223,25 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   @override
   Future<int> importIntoFolder(
     FolderHandle folder, {
+    ImportRequest? request,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
+    final sourceKind = request?.sourceKind ?? ImportSourceKind.files;
+    if (sourceKind == ImportSourceKind.folder) {
+      final pickedFolder = await pickFolder();
+      if (pickedFolder == null) {
+        return 0;
+      }
+      final items = await listMediaRecursiveFiles(pickedFolder);
+      return importItemsIntoFolder(
+        folder,
+        items,
+        importMetadata: request?.metadata,
+        skipIfExists: request?.skipIfExists ?? true,
+        onProgress: onProgress,
+      );
+    }
+
     final picked = await DocMan.pick.files(
       extensions: MediaFileTypes.mediaPickerExtensions,
       limit: 200,
@@ -1296,6 +1317,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   Future<int> importItemsIntoFolder(
     FolderHandle dest,
     List<MediaItem> items, {
+    ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {

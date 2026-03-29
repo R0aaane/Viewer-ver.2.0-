@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends, Request
 
 from server.models.dto import FolderChildrenResponse, FolderListResponse, SearchResponse
@@ -62,7 +64,25 @@ def list_untagged(
 
 @router.get("/folders", response_model=FolderListResponse)
 def list_folders(request: Request) -> FolderListResponse:
-    items = request.app.state.metadata_store.list_indexed_folders()
+    settings = request.app.state.settings
+    indexed_items = request.app.state.metadata_store.list_indexed_folders()
+    indexed_by_raw = {entry["folderRaw"]: entry for entry in indexed_items}
+
+    items: list[dict[str, object | None]] = []
+    for root in settings.media_roots:
+        entry = indexed_by_raw.pop(root, None)
+        if entry is None:
+            items.append(
+                {
+                    "folderRaw": root,
+                    "displayName": os.path.basename(os.path.normpath(root)) or root,
+                    "lastScannedAt": None,
+                }
+            )
+        else:
+            items.append(entry)
+
+    items.extend(indexed_by_raw.values())
     return FolderListResponse(items=items)
 
 
@@ -87,3 +107,4 @@ def list_folder_children(
         limit=safe_limit,
         offset=safe_offset,
     )
+

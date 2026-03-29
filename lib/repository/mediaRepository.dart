@@ -12,6 +12,10 @@ class RepositoryCapabilities {
   final bool canExportPdf;
   final bool canOrganizeLibrary;
   final bool canPickFolder;
+  final bool canAddLocalFolder;
+  final bool canImportToHost;
+  final bool canBatchUpload;
+  final bool canAssignImportTags;
 
   const RepositoryCapabilities({
     required this.canRename,
@@ -21,6 +25,52 @@ class RepositoryCapabilities {
     required this.canExportPdf,
     required this.canOrganizeLibrary,
     required this.canPickFolder,
+    required this.canAddLocalFolder,
+    required this.canImportToHost,
+    required this.canBatchUpload,
+    required this.canAssignImportTags,
+  });
+}
+
+enum ImportSourceKind {
+  files,
+  folder,
+}
+
+class ImportMetadata {
+  final String? artistTag;
+  final String? seriesTag;
+  final List<String> freeTags;
+  final List<String> characterTags;
+  final String? targetCollection;
+  final bool organizeAfterImport;
+
+  const ImportMetadata({
+    this.artistTag,
+    this.seriesTag,
+    this.freeTags = const <String>[],
+    this.characterTags = const <String>[],
+    this.targetCollection,
+    this.organizeAfterImport = false,
+  });
+
+  bool get hasAssignedTags {
+    return (artistTag?.trim().isNotEmpty ?? false) ||
+        (seriesTag?.trim().isNotEmpty ?? false) ||
+        freeTags.isNotEmpty ||
+        characterTags.isNotEmpty;
+  }
+}
+
+class ImportRequest {
+  final ImportSourceKind sourceKind;
+  final bool skipIfExists;
+  final ImportMetadata metadata;
+
+  const ImportRequest({
+    this.sourceKind = ImportSourceKind.files,
+    this.skipIfExists = true,
+    this.metadata = const ImportMetadata(),
   });
 }
 
@@ -92,6 +142,7 @@ abstract class MediaRepository {
 
   Future<int> importIntoFolder(
     FolderHandle folder, {
+    ImportRequest? request,
     void Function(MediaTransferProgress progress)? onProgress,
   });
 
@@ -116,6 +167,7 @@ abstract class MediaRepository {
   Future<int> importItemsIntoFolder(
     FolderHandle dest,
     List<MediaItem> items, {
+    ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   });

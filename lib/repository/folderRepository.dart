@@ -92,6 +92,10 @@ class WindowsFolderRepository implements MediaRepository {
     canExportPdf: true,
     canOrganizeLibrary: true,
     canPickFolder: true,
+    canAddLocalFolder: true,
+    canImportToHost: false,
+    canBatchUpload: true,
+    canAssignImportTags: true,
   );
 
   @override
@@ -760,11 +764,28 @@ class WindowsFolderRepository implements MediaRepository {
   @override
   Future<int> importIntoFolder(
     FolderHandle folder, {
+    ImportRequest? request,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     final destDir = Directory(folder.raw);
     if (!await destDir.exists()) {
       throw Exception('Folder not found: ${folder.raw}');
+    }
+
+    final sourceKind = request?.sourceKind ?? ImportSourceKind.files;
+    if (sourceKind == ImportSourceKind.folder) {
+      final pickedFolder = await pickFolder();
+      if (pickedFolder == null) {
+        return 0;
+      }
+      final items = await listMediaRecursiveFiles(pickedFolder);
+      return importItemsIntoFolder(
+        folder,
+        items,
+        importMetadata: request?.metadata,
+        skipIfExists: request?.skipIfExists ?? true,
+        onProgress: onProgress,
+      );
     }
 
     final files = await openFiles(
@@ -811,6 +832,7 @@ class WindowsFolderRepository implements MediaRepository {
   Future<int> importItemsIntoFolder(
     FolderHandle dest,
     List<MediaItem> items, {
+    ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {

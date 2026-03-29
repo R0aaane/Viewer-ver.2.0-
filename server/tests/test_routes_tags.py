@@ -1,0 +1,67 @@
+﻿from types import SimpleNamespace
+import unittest
+
+from starlette.datastructures import QueryParams
+
+from server.api.routes_tags import get_tags_for_item
+
+
+class _RecordingMetadataStore:
+    def __init__(self) -> None:
+        self.resolve_calls: list[dict[str, object | None]] = []
+        self.get_tag_calls: list[dict[str, object | None]] = []
+
+    def resolve_media_id(
+        self,
+        media_id: str | None,
+        *,
+        identity: dict[str, object] | None = None,
+    ) -> str:
+        self.resolve_calls.append({'media_id': media_id, 'identity': identity})
+        return 'resolved-media-id'
+
+    def get_tags_for_media(
+        self,
+        media_id: str,
+        *,
+        identity: dict[str, object] | None = None,
+    ) -> list[dict[str, str]]:
+        self.get_tag_calls.append({'media_id': media_id, 'identity': identity})
+        return [{'tagId': 'artist:1', 'name': 'Artist', 'category': 'artist'}]
+
+
+def _request(query: str, metadata_store: _RecordingMetadataStore):
+    return SimpleNamespace(
+        query_params=QueryParams(query),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                metadata_store=metadata_store,
+            )
+        ),
+    )
+
+
+class TagsRoutesTest(unittest.TestCase):
+    def test_get_tags_for_item_resolves_media_from_query_identity(self) -> None:
+        store = _RecordingMetadataStore()
+        request = _request(
+            'normalizedPath=c%3A%5C%5Clibrary%5C%5Csample.jpg&relativePathHint=sample.jpg&sizeBytes=12&modifiedEpochMs=1234&alias0=C%3A%5C%5Clibrary%5C%5Csample.jpg',
+            store,
+        )
+
+        response = get_tags_for_item(request, 'stable-id')
+
+        self.assertEqual(response.mediaId, 'resolved-media-id')
+        self.assertEqual(response.items[0].name, 'Artist')
+        self.assertEqual(len(store.resolve_calls), 1)
+        self.assertEqual(len(store.get_tag_calls), 1)
+        identity = store.resolve_calls[0]['identity']
+        self.assertEqual(identity['normalizedPath'], r'c:\library\sample.jpg')
+        self.assertEqual(identity['relativePathHint'], 'sample.jpg')
+        self.assertEqual(identity['sizeBytes'], 12)
+        self.assertEqual(identity['modifiedEpochMs'], 1234)
+        self.assertEqual(identity['aliases'], [r'C:\library\sample.jpg'])
+
+
+if __name__ == '__main__':
+    unittest.main()
