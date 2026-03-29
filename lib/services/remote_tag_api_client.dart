@@ -33,7 +33,7 @@ class RemoteTagApiClient {
 
   const RemoteTagApiClient({
     required this.baseUrl,
-    this.timeout = const Duration(seconds: 8),
+    this.timeout = const Duration(seconds: 15),
     this.defaultHeadersProvider,
   });
 

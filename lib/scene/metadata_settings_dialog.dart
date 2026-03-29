@@ -275,8 +275,13 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                   enabled: !_saving,
                   decoration: const InputDecoration(
                     labelText: '接続先 URL',
-                    hintText: '例: http://my-host:8080',
+                    hintText: '例: http://100.x.y.z:8080',
                   ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Android では 127.0.0.1 / localhost ではなく、Tailscale IP または MagicDNS 名を指定してください。',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
               ],

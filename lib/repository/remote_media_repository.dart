@@ -25,6 +25,8 @@ class RemoteMediaRepository implements MediaRepository {
   final Map<String, Future<ThumbPair>> _thumbInFlight =
       <String, Future<ThumbPair>>{};
   final Map<String, Future<File>> _downloadInFlight = <String, Future<File>>{};
+  final Map<String, Future<Uint8List>> _previewInFlight =
+      <String, Future<Uint8List>>{};
   final LinkedHashMap<String, PdfDocument> _pdfCache =
       LinkedHashMap<String, PdfDocument>();
   final Map<String, Future<RemoteMediaMeta>> _metaInFlight =
@@ -385,6 +387,50 @@ class RemoteMediaRepository implements MediaRepository {
     return file.readAsBytes();
   }
 
+  Future<Uint8List> _readDisplayImageBytes(
+    MediaItem item, {
+    required int maxWidth,
+  }) async {
+    final mediaId = await _stableMediaId(item);
+    final meta = await _metaForItem(item);
+    final cacheDir = await _ensureCacheSubdir('previews');
+    final targetWidth = maxWidth.clamp(320, 2048).toInt();
+    final targetHeight = (targetWidth * 2).clamp(640, 4096).toInt();
+    final cacheName =
+        '${_cacheHash('$mediaId|${meta.etag}|preview|$targetWidth|$targetHeight')}.jpg';
+    final cacheFile = File(p.join(cacheDir.path, cacheName));
+
+    if (await cacheFile.exists()) {
+      return cacheFile.readAsBytes();
+    }
+
+    final inFlight = _previewInFlight[cacheFile.path];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = _client
+        .fetchThumbnail(
+          mediaId,
+          width: targetWidth,
+          height: targetHeight,
+        )
+        .then((bytes) async {
+          await cacheFile.parent.create(recursive: true);
+          await cacheFile.writeAsBytes(bytes, flush: false);
+          await _trimCacheDirectory(cacheDir, maxEntries: 96);
+          _previewInFlight.remove(cacheFile.path);
+          return bytes;
+        })
+        .catchError((Object error) {
+          _previewInFlight.remove(cacheFile.path);
+          throw error;
+        });
+
+    _previewInFlight[cacheFile.path] = future;
+    return future;
+  }
+
   @override
   Future<int> getPageCount(MediaItem item) async {
     if (item.kind != MediaKind.pdf) {
@@ -401,7 +447,7 @@ class RemoteMediaRepository implements MediaRepository {
     int maxWidth = 1600,
   }) async {
     if (item.kind != MediaKind.pdf) {
-      return readBytes(item);
+      return _readDisplayImageBytes(item, maxWidth: maxWidth);
     }
     final doc = await _openCachedPdf(item);
     final total = doc.pagesCount;

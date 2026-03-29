@@ -390,21 +390,72 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Future<void> _reloadForCurrent() async {
     final item = _item;
 
-    await _loadFavoriteForCurrent();
-
     _readerFutureCache.clear();
     _thumbFutureCache.clear();
+    if (mounted) {
+      setState(() {
+        _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
+        _syncReaderFutures(item);
+      });
+    }
 
-    final total = await widget.repo.getPageCount(item);
-    if (!mounted) return;
+    await _loadFavoriteForCurrent();
 
-    setState(() {
-      _totalPages = total;
-      _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
-      _syncReaderFutures(item);
-    });
+    try {
+      final total = await widget.repo.getPageCount(item);
+      if (!mounted) return;
+
+      setState(() {
+        _totalPages = total;
+        _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
+        _syncReaderFutures(item);
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _totalPages = 1;
+        _page = 1;
+        _syncReaderFutures(item);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ページ情報の取得に失敗しました: $error')),
+      );
+    }
     await _loadTagsForCurrent();
     await _loadMasterTags();
+  }
+
+  Widget _buildLoadError(
+    String message, {
+    required VoidCallback onRetry,
+  }) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.cloud_off_outlined,
+              color: Colors.white70,
+              size: 34,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('再試行'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _next() {
@@ -905,6 +956,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                           ? Alignment.centerRight
                           : Alignment.center,
                       isSpread: isSpread,
+                      pageNumber: _page,
                     ),
                   ),
                   if (isSpread) ...[
@@ -915,6 +967,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                         _rightFuture,
                         align: Alignment.centerLeft,
                         isSpread: isSpread,
+                        pageNumber: _page + 1,
                       ),
                     ),
                   ],
@@ -959,12 +1012,25 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     Future<Uint8List>? future, {
     required Alignment align,
     required bool isSpread,
+    required int pageNumber,
   }) {
     if (future == null) return const SizedBox.shrink();
 
     return FutureBuilder<Uint8List>(
       future: future,
       builder: (context, snap) {
+        if (snap.hasError) {
+          return _buildLoadError(
+            '画像の読み込みに失敗しました。\n${snap.error}',
+            onRetry: () {
+              setState(() {
+                _readerFutureCache.remove(pageNumber);
+                _syncReaderFutures(_item);
+              });
+            },
+          );
+        }
+
         if (!snap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -1400,6 +1466,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               child: FutureBuilder<Uint8List>(
                 future: _loadThumbBytes(item, page),
                 builder: (context, snap) {
+                  if (snap.hasError) {
+                    return _buildLoadError(
+                      'ページ $page のサムネイル取得に失敗しました。',
+                      onRetry: () {
+                        setState(() {
+                          _thumbFutureCache.remove(page);
+                        });
+                      },
+                    );
+                  }
                   if (!snap.hasData) {
                     return const Center(child: CircularProgressIndicator());
                   }
