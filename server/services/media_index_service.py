@@ -53,7 +53,13 @@ class MediaIndexService:
 
     def rescan_configured_roots(self, roots: list[str]) -> list[dict[str, int | str]]:
         results: list[dict[str, int | str]] = []
+        seen_roots: set[str] = set()
         for root in roots:
+            normalized_root = _normalize_path(root)
+            if normalized_root in seen_roots:
+                logger.info('scan skip duplicated root: %s', root)
+                continue
+            seen_roots.add(normalized_root)
             scanned = self.scan_folder(root)
             results.append({'folderRaw': root, 'count': scanned})
         return results
@@ -69,7 +75,7 @@ class MediaIndexService:
         found_paths: set[str] = set()
         scanned = 0
         try:
-            for base, _, files in os.walk(target):
+            for base, _, files in os.walk(target, onerror=lambda error: logger.warning('scan walk warning: %s (%s)', target, error)):
                 for file_name in files:
                     full_path = os.path.normpath(os.path.join(base, file_name))
                     record = self._build_record_for_path(full_path)
@@ -140,24 +146,28 @@ class MediaIndexService:
         if kind is None:
             return None
 
-        stat = os.stat(full_path)
-        size_bytes = int(stat.st_size)
-        modified_epoch_ms = int(stat.st_mtime * 1000)
-        modified_at = datetime.fromtimestamp(
-            stat.st_mtime,
-            tz=timezone.utc,
-        ).isoformat()
-        mime_type, _ = mimetypes.guess_type(full_path)
-        folder_of_item = os.path.dirname(full_path)
-        file_name = os.path.basename(full_path)
-        media_id = build_media_id(
-            kind=kind,
-            full_path=full_path,
-            folder_raw=folder_of_item,
-            display_name=file_name,
-            size_bytes=size_bytes,
-            modified_epoch_ms=modified_epoch_ms,
-        )
+        try:
+            stat = os.stat(full_path)
+            size_bytes = int(stat.st_size)
+            modified_epoch_ms = int(stat.st_mtime * 1000)
+            modified_at = datetime.fromtimestamp(
+                stat.st_mtime,
+                tz=timezone.utc,
+            ).isoformat()
+            mime_type, _ = mimetypes.guess_type(full_path)
+            folder_of_item = os.path.dirname(full_path)
+            file_name = os.path.basename(full_path)
+            media_id = build_media_id(
+                kind=kind,
+                full_path=full_path,
+                folder_raw=folder_of_item,
+                display_name=file_name,
+                size_bytes=size_bytes,
+                modified_epoch_ms=modified_epoch_ms,
+            )
+        except OSError as error:
+            logger.warning('scan skip unreadable file: %s (%s)', full_path, error)
+            return None
 
         return {
             'media_id': media_id,
