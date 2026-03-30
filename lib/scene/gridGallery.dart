@@ -4429,12 +4429,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Widget _wrapBodyWithUrlImportQueue(Widget body) {
-    final overlay = _buildUrlImportQueueOverlay();
     return Stack(
       fit: StackFit.expand,
       children: [
         body,
-        overlay,
+        _buildUrlImportQueueOverlay(),
       ],
     );
   }

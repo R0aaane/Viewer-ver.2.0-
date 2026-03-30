@@ -79,7 +79,7 @@ async def upload_files(
     saved_entries: list[tuple[str, str]] = []
 
     for index, upload in enumerate(files):
-        file_name = (upload.filename or "").strip()
+        file_name = _normalize_upload_file_name(upload.filename or "")
         relative_path_hint = source_relative_paths[index] if index < len(source_relative_paths) else ""
         if not file_name:
             skipped_count += 1
@@ -440,6 +440,37 @@ def _unique_path(folder_path: str, file_name: str) -> str:
         index += 1
     return candidate
 
+
+
+def _normalize_upload_file_name(raw_name: str) -> str:
+    file_name = str(raw_name or "").strip()
+    if not file_name:
+        return ""
+
+    try:
+        decoded = json.loads(file_name)
+    except json.JSONDecodeError:
+        decoded = None
+
+    if isinstance(decoded, list):
+        first = next(
+            (
+                str(entry).strip()
+                for entry in decoded
+                if isinstance(entry, str) and str(entry).strip()
+            ),
+            "",
+        )
+        file_name = first or file_name
+    elif isinstance(decoded, str) and decoded.strip():
+        file_name = decoded.strip()
+
+    file_name = file_name.replace("\\", "/").split("/")[-1].strip()
+    if not file_name or file_name in {".", ".."}:
+        return ""
+    if "\x00" in file_name:
+        raise bad_request("invalid upload filename")
+    return file_name
 
 def _collect_media_paths(folder_path: str) -> set[str]:
     found: set[str] = set()

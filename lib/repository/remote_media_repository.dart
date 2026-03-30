@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
@@ -12,6 +13,7 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 import '../services/app_settings_service.dart';
+import '../services/import_source_normalizer.dart';
 import '../services/media_id_resolver.dart';
 import '../services/remote_media_api_client.dart';
 import 'mediaRepository.dart';
@@ -19,6 +21,7 @@ import 'mediaRepository.dart';
 class RemoteMediaRepository implements MediaRepository {
   static final p.Context _winPath = p.Context(style: p.Style.windows);
   static final p.Context _posixPath = p.Context(style: p.Style.posix);
+  static const Duration _sourceReadTimeout = Duration(minutes: 2);
 
   final RemoteMediaApiClient _client;
   final MediaRepository _localPickerRepository;
@@ -522,13 +525,37 @@ class RemoteMediaRepository implements MediaRepository {
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     final resolvedRequest = request ?? const ImportRequest();
+    onProgress?.call(
+      MediaTransferProgress(
+        sentBytes: 0,
+        totalBytes: 0,
+        completedFiles: 0,
+        totalFiles: 0,
+        statusLabel: resolvedRequest.sourceKind == ImportSourceKind.folder
+            ? '取り込み元フォルダを選択しています'
+            : '取り込みファイルを選択しています',
+      ),
+    );
     final localItems = await switch (resolvedRequest.sourceKind) {
       ImportSourceKind.folder => () async {
         final sourceFolder = await _localPickerRepository.pickFolder();
         if (sourceFolder == null) {
           return const <MediaItem>[];
         }
-        return _localPickerRepository.listMediaRecursiveFiles(sourceFolder);
+        return _localPickerRepository.listMediaRecursiveFiles(
+          sourceFolder,
+          onProgress: (processed, total) {
+            onProgress?.call(
+              MediaTransferProgress(
+                sentBytes: 0,
+                totalBytes: 0,
+                completedFiles: processed,
+                totalFiles: total,
+                statusLabel: '取り込み元フォルダを走査しています',
+              ),
+            );
+          },
+        );
       }(),
       ImportSourceKind.files => pickExternalMediaFiles(
         allowMultiple: true,
@@ -797,27 +824,78 @@ class RemoteMediaRepository implements MediaRepository {
     }
 
     final unsupported = uploadTargets
-        .where((item) => !MediaFileTypes.isSupportedMediaFileName(item.displayName))
-        .map((item) => item.displayName)
+        .map((item) => _sanitizeUploadFileName(item.displayName) ?? item.displayName)
+        .where((name) => !MediaFileTypes.isSupportedMediaFileName(name))
         .toList(growable: false);
     if (unsupported.isNotEmpty) {
       throw RemoteMediaException('未対応のファイル形式です: ${unsupported.join(', ')}');
     }
 
     final binaries = <RemoteUploadFile>[];
+    onProgress?.call(
+      MediaTransferProgress(
+        sentBytes: 0,
+        totalBytes: 0,
+        completedFiles: 0,
+        totalFiles: uploadTargets.length,
+        statusLabel: '取り込み対象を確認しています',
+      ),
+    );
     for (final item in uploadTargets) {
-      final bytes = await _localPickerRepository.readBytes(item);
+      final fileName = _normalizedUploadFileName(item);
+      final sourceKindLabel = _sourceKindLabelForItem(item);
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: 0,
+          totalBytes: 0,
+          completedFiles: binaries.length,
+          totalFiles: uploadTargets.length,
+          currentFileName: fileName,
+          statusLabel: '$sourceKindLabel を読み込み中',
+        ),
+      );
+      final bytes = await _localPickerRepository
+          .readBytes(item)
+          .timeout(
+            _sourceReadTimeout,
+            onTimeout: () => throw RemoteMediaException(
+              '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
+            ),
+          );
+      final sourceRelativePath = _sourceRelativePathForUpload(
+        item,
+        fallbackFileName: fileName,
+      );
+      debugPrint(
+        '[remote-upload] prepared '
+        'name=$fileName sourceKind=$sourceKindLabel '
+        'relative=${sourceRelativePath ?? '-'} bytes=${bytes.length}',
+      );
       binaries.add(
         RemoteUploadFile(
-          fileName: item.displayName,
+          fileName: fileName,
           bytes: bytes,
           mimeType: item.kind == MediaKind.pdf
               ? 'application/pdf'
-              : _mimeTypeForImage(item.displayName),
-          sourceRelativePath: _sourceRelativePathForUpload(item),
+              : _mimeTypeForImage(fileName),
+          sourceRelativePath: sourceRelativePath,
         ),
       );
     }
+
+    final uploadTotalBytes = binaries.fold<int>(
+      0,
+      (sum, file) => sum + file.bytes.length,
+    );
+    onProgress?.call(
+      MediaTransferProgress(
+        sentBytes: 0,
+        totalBytes: uploadTotalBytes,
+        completedFiles: 0,
+        totalFiles: binaries.length,
+        statusLabel: 'ホストへアップロードしています',
+      ),
+    );
 
     final response = await _client.uploadFiles(
       folderRaw: dest.raw,
@@ -826,6 +904,21 @@ class RemoteMediaRepository implements MediaRepository {
       skipIfExists: skipIfExists,
       onProgress: onProgress,
     );
+    onProgress?.call(
+      MediaTransferProgress(
+        sentBytes: uploadTotalBytes,
+        totalBytes: uploadTotalBytes,
+        completedFiles: binaries.length,
+        totalFiles: binaries.length,
+        statusLabel: 'ホスト側の反映が完了しました',
+      ),
+    );
+    debugPrint(
+      '[remote-upload] response '
+      'imported=${response.importedCount} skipped=${response.skippedCount} '
+      'tagged=${response.taggedCount} organized=${response.organizedCount} '
+      'rescanned=${response.rescannedCount}',
+    );
     return response.importedCount;
   }
 
@@ -833,9 +926,62 @@ class RemoteMediaRepository implements MediaRepository {
     return MediaFileTypes.imageMimeTypeForFileName(fileName);
   }
 
-  String? _sourceRelativePathForUpload(MediaItem item) {
-    final rawPath = item.id.trim();
-    final rawRoot = item.folderRaw.trim();
+  String _normalizedUploadFileName(MediaItem item) {
+    final displayName = _sanitizeUploadFileName(item.displayName);
+    if (displayName != null) {
+      return displayName;
+    }
+
+    final fromPath = _sanitizeUploadFileName(
+      ImportSourceNormalizer.basenameFromPathish(item.id),
+    );
+    if (fromPath != null) {
+      return fromPath;
+    }
+
+    throw RemoteMediaException('アップロード対象のファイル名を特定できません: ${item.id}');
+  }
+
+  String? _sanitizeUploadFileName(String raw) {
+    var value = raw.trim();
+    if (value.isEmpty) {
+      return null;
+    }
+
+    if (ImportSourceNormalizer.looksLikeEncodedCollection(value) ||
+        value.contains('/') ||
+        value.contains('\\')) {
+      value = ImportSourceNormalizer.basenameFromPathish(value);
+    }
+
+    value = value.replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+    if (value.isEmpty || value == '.' || value == '..') {
+      return null;
+    }
+    return value;
+  }
+
+  String _sourceKindLabelForItem(MediaItem item) {
+    final normalizedId =
+        ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
+    if (normalizedId.startsWith('content://')) {
+      return 'Android URI';
+    }
+    if (normalizedId.startsWith('file://')) {
+      return 'file URI';
+    }
+    return 'ファイル';
+  }
+
+  String? _sourceRelativePathForUpload(
+    MediaItem item, {
+    required String fallbackFileName,
+  }) {
+    final rawPath =
+        ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
+    final rawRoot =
+        ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
+        item.folderRaw.trim();
     if (rawPath.isEmpty || rawRoot.isEmpty) {
       return null;
     }
@@ -844,15 +990,25 @@ class RemoteMediaRepository implements MediaRepository {
     }
 
     final ctx = _pathContextFor(rawPath.contains('\\') || rawRoot.contains('\\'));
-    final normalizedPath = ctx.normalize(rawPath);
-    final normalizedRoot = ctx.normalize(rawRoot);
+    late final String normalizedPath;
+    late final String normalizedRoot;
+    try {
+      normalizedPath = ctx.normalize(rawPath);
+      normalizedRoot = ctx.normalize(rawRoot);
+    } on ArgumentError catch (error) {
+      debugPrint(
+        '[remote-upload] skipped relative path normalization: '
+        '$error path=$rawPath root=$rawRoot',
+      );
+      return fallbackFileName;
+    }
     if (!ctx.isWithin(normalizedRoot, normalizedPath)) {
-      return item.displayName;
+      return fallbackFileName;
     }
 
     final relative = ctx.relative(normalizedPath, from: normalizedRoot).trim();
     if (relative.isEmpty || relative == '.') {
-      return item.displayName;
+      return fallbackFileName;
     }
     return relative.replaceAll('\\', '/');
   }

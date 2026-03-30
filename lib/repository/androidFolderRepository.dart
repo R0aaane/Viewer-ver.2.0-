@@ -14,6 +14,7 @@ import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../services/import_source_normalizer.dart';
 import 'mediaRepository.dart';
 
 import '../database/app_db.dart' as db;
@@ -470,8 +471,9 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   @override
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
     final items = <MediaItem>[];
-    for (final raw in rawItems) {
-      final item = await _externalItemFromRaw(raw);
+    final normalized = ImportSourceNormalizer.normalizeRawInputs(rawItems);
+    for (final raw in normalized) {
+      final item = await _externalItemFromRaw(raw.normalizedValue);
       if (item != null) {
         items.add(item);
       }

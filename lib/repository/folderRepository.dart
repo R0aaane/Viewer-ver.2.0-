@@ -12,6 +12,7 @@ import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../services/import_source_normalizer.dart';
 import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
@@ -230,8 +231,9 @@ class WindowsFolderRepository implements MediaRepository {
   @override
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
     final items = <MediaItem>[];
-    for (final raw in rawItems) {
-      final item = await _mediaItemFromPath(raw);
+    final normalized = ImportSourceNormalizer.normalizeRawInputs(rawItems);
+    for (final raw in normalized) {
+      final item = await _mediaItemFromPath(raw.normalizedValue);
       if (item != null) {
         items.add(item);
       }

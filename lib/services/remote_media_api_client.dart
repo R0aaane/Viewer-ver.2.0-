@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/mediaItem.dart';
 import '../models/folder.dart';
 import '../repository/mediaRepository.dart';
@@ -371,6 +373,10 @@ class RemoteMediaApiClient {
     const chunkSize = 256 * 1024;
 
     try {
+      debugPrint(
+        '[remote-upload] POST /upload '
+        'folder=$folderRaw files=${files.length}',
+      );
       final request = await client.postUrl(uri);
       _applyHeaders(request.headers);
       request.headers.set(
@@ -427,13 +433,15 @@ class RemoteMediaApiClient {
           totalBytes: totalBytes,
           completedFiles: 0,
           totalFiles: files.length,
+          statusLabel: 'アップロードを開始しています',
         ),
       );
 
       for (final file in files) {
         request.write('--$boundary\r\n');
         request.write(
-          'Content-Disposition: form-data; name="files"; filename="${_escapeQuoted(file.fileName)}"\r\n',
+          'Content-Disposition: form-data; name="files"; '
+          'filename="${_escapeQuoted(_normalizeMultipartFileName(file.fileName))}"\r\n',
         );
         request.write('Content-Type: ${file.mimeType}\r\n\r\n');
         for (var offset = 0; offset < file.bytes.length; offset += chunkSize) {
@@ -449,6 +457,7 @@ class RemoteMediaApiClient {
               completedFiles: completedFiles,
               totalFiles: files.length,
               currentFileName: file.fileName,
+              statusLabel: 'ホストへアップロードしています',
             ),
           );
         }
@@ -462,17 +471,32 @@ class RemoteMediaApiClient {
             completedFiles: completedFiles,
             totalFiles: files.length,
             currentFileName: file.fileName,
+            statusLabel: 'アップロード済みファイルを確認しています',
           ),
         );
       }
 
       request.write('--$boundary--\r\n');
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: sentBytes,
+          totalBytes: totalBytes,
+          completedFiles: completedFiles,
+          totalFiles: files.length,
+          statusLabel: 'サーバー応答を待機しています',
+        ),
+      );
 
       final response = await request.close().timeout(timeout);
       final payload = await response
           .transform(const Utf8Decoder(allowMalformed: true))
-          .join();
+          .join()
+          .timeout(timeout);
       final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
+      debugPrint(
+        '[remote-upload] response status=${response.statusCode} '
+        'bodyType=${jsonBody.runtimeType}',
+      );
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw RemoteMediaException(
@@ -488,6 +512,15 @@ class RemoteMediaApiClient {
         );
       }
 
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: totalBytes,
+          totalBytes: totalBytes,
+          completedFiles: files.length,
+          totalFiles: files.length,
+          statusLabel: 'アップロードが完了しました',
+        ),
+      );
       return RemoteUploadResponse(
         importedCount:
             _asInt(jsonBody['importedCount']) ??
@@ -718,6 +751,16 @@ class RemoteMediaApiClient {
 
   String _escapeQuoted(String value) {
     return value.replaceAll('"', '\\"');
+  }
+
+  String _normalizeMultipartFileName(String value) {
+    final flattened = value
+        .replaceAll('\\', '/')
+        .split('/')
+        .last
+        .replaceAll(RegExp(r'[\r\n]+'), ' ')
+        .trim();
+    return flattened.isEmpty ? 'upload.bin' : flattened;
   }
 
   RemoteFolderEntry _parseFolderEntry(dynamic raw) {
