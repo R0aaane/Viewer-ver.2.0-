@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../models/mediaItem.dart';
+import 'import_source_normalizer.dart';
 
 class ResolvedMediaIdentity {
   final String stableId;
@@ -106,7 +107,8 @@ class MediaIdResolver {
   }
 
   String normalizeLocator(String raw) {
-    final trimmed = raw.trim();
+    final trimmed =
+        ImportSourceNormalizer.normalizeSingleValue(raw)?.trim() ?? raw.trim();
     if (trimmed.isEmpty) {
       return trimmed;
     }
@@ -116,10 +118,21 @@ class MediaIdResolver {
     }
 
     if (_looksLikeWindowsPath(trimmed)) {
-      return _windowsPath.normalize(trimmed).replaceAll('/', '\\').toLowerCase();
+      try {
+        return _windowsPath.normalize(trimmed).replaceAll('/', '\\').toLowerCase();
+      } on ArgumentError {
+        return trimmed.replaceAll('/', '\\').toLowerCase();
+      }
     }
 
-    final normalized = p.normalize(trimmed);
+    late final String normalized;
+    try {
+      normalized = p.normalize(trimmed);
+    } on ArgumentError {
+      return Platform.isWindows
+          ? trimmed.replaceAll('/', '\\').toLowerCase()
+          : trimmed;
+    }
     return Platform.isWindows ? normalized.replaceAll('/', '\\').toLowerCase() : normalized;
   }
 

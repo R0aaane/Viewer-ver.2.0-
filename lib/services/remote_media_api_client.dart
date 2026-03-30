@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../models/mediaItem.dart';
 import '../models/folder.dart';
 import '../repository/mediaRepository.dart';
+import 'import_source_normalizer.dart';
 import 'media_id_resolver.dart';
 
 class RemoteMediaException implements Exception {
@@ -126,11 +127,13 @@ class RemoteMediaApiClient {
   final String baseUrl;
   final String? authToken;
   final Duration timeout;
+  final Duration uploadTimeout;
 
   const RemoteMediaApiClient({
     required this.baseUrl,
     this.authToken,
     this.timeout = const Duration(seconds: 15),
+    this.uploadTimeout = const Duration(minutes: 10),
   });
 
   bool get isConfigured => baseUrl.trim().isNotEmpty;
@@ -360,8 +363,8 @@ class RemoteMediaApiClient {
 
     final uri = _buildUri('/upload');
     final client = HttpClient()
-      ..connectionTimeout = timeout
-      ..idleTimeout = timeout;
+      ..connectionTimeout = uploadTimeout
+      ..idleTimeout = uploadTimeout;
 
     final boundary = '----pdf-viewer-${DateTime.now().millisecondsSinceEpoch}';
     final totalBytes = files.fold<int>(
@@ -487,11 +490,11 @@ class RemoteMediaApiClient {
         ),
       );
 
-      final response = await request.close().timeout(timeout);
+      final response = await request.close().timeout(uploadTimeout);
       final payload = await response
           .transform(const Utf8Decoder(allowMalformed: true))
           .join()
-          .timeout(timeout);
+          .timeout(uploadTimeout);
       final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
       debugPrint(
         '[remote-upload] response status=${response.statusCode} '
@@ -532,7 +535,10 @@ class RemoteMediaApiClient {
         rescannedCount: _asInt(jsonBody['rescannedCount']) ?? 0,
       );
     } on TimeoutException {
-      throw const RemoteMediaException('アップロードがタイムアウトしました');
+      throw RemoteMediaException(
+        'アップロード処理がタイムアウトしました。'
+        'ホスト側で保存またはインデックス更新に時間がかかっています。',
+      );
     } on SocketException {
       throw const RemoteMediaException('サーバーに接続できません');
     } finally {
@@ -754,13 +760,20 @@ class RemoteMediaApiClient {
   }
 
   String _normalizeMultipartFileName(String value) {
-    final flattened = value
-        .replaceAll('\\', '/')
-        .split('/')
-        .last
+    var normalized = value.trim();
+    if (ImportSourceNormalizer.looksLikeEncodedCollection(normalized) ||
+        normalized.contains('/') ||
+        normalized.contains('\\')) {
+      normalized = ImportSourceNormalizer.basenameFromPathish(normalized);
+    }
+    normalized = normalized
+        .replaceAll(RegExp(r'[<>:\"/\\|?*\x00-\x1F]+'), '_')
         .replaceAll(RegExp(r'[\r\n]+'), ' ')
         .trim();
-    return flattened.isEmpty ? 'upload.bin' : flattened;
+    while (normalized.endsWith('.') || normalized.endsWith(' ')) {
+      normalized = normalized.substring(0, normalized.length - 1).trimRight();
+    }
+    return normalized.isEmpty ? 'upload.bin' : normalized;
   }
 
   RemoteFolderEntry _parseFolderEntry(dynamic raw) {

@@ -841,7 +841,15 @@ class TagService {
   }
 
   Future<List<RemoteTagRecord>> _loadRemoteTagsForItem(MediaItem item) async {
-    final identity = await _idResolver.resolve(item);
+    late final ResolvedMediaIdentity identity;
+    try {
+      identity = await _idResolver.resolve(item);
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[metadata] resolve item identity failed: ${item.id}\n$error\n$stackTrace',
+      );
+      throw MetadataException('メディア識別子の解決に失敗しました: ${item.displayName}');
+    }
     final cached = _remoteTagCache[identity.stableId];
     if (cached != null) {
       return cached;

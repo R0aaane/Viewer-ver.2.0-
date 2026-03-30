@@ -2402,28 +2402,40 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
       }
 
-      _folderItemsCache.clear();
-      _folderItemsCacheRecursive.clear();
-      _dirStack.clear();
+      String? refreshWarning;
+      try {
+        _folderItemsCache.clear();
+        _folderItemsCacheRecursive.clear();
+        _dirStack.clear();
 
-      setState(() {
-        _currentFolderRaw = libRaw;
-        _folder = lib;
-        _page = _MainPage.gallery;
-      });
-      await _persistFolders();
-      await _loadFolder(lib, saveAsLast: false);
+        setState(() {
+          _currentFolderRaw = libRaw;
+          _folder = lib;
+          _page = _MainPage.gallery;
+        });
+        await _persistFolders();
+        await _loadFolder(lib, saveAsLast: false);
+
+        if (!mounted) return;
+        if (_homeQuery.trim().isNotEmpty) {
+          await _runHomeSearch();
+        }
+        await _refreshCurrentPageTags();
+        await _refreshArtistTagCounts();
+      } catch (error, stackTrace) {
+        _logUiError('post-import-refresh', error, stackTrace);
+        refreshWarning = '一覧の更新に失敗しました: $error';
+      }
 
       if (!mounted) return;
-      if (_homeQuery.trim().isNotEmpty) {
-        await _runHomeSearch();
-      }
-      await _refreshCurrentPageTags();
-      await _refreshArtistTagCounts();
-
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('ホストへ取り込み完了: $importedCount 件')));
+      if (refreshWarning != null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(refreshWarning)));
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(

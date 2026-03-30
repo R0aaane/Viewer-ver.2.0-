@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
@@ -38,6 +38,16 @@ class MediaIndexService:
     def __init__(self, sqlite_store: SqliteStore) -> None:
         self._db = sqlite_store
 
+    def index_files(self, paths: list[str]) -> int:
+        indexed = 0
+        for raw_path in paths:
+            record = self._build_record_for_path(raw_path)
+            if record is None:
+                continue
+            self._db.upsert_media_record(record)
+            indexed += 1
+        return indexed
+
     def rescan_configured_roots(self, roots: list[str]) -> list[dict[str, int | str]]:
         results: list[dict[str, int | str]] = []
         for root in roots:
@@ -48,7 +58,7 @@ class MediaIndexService:
     def scan_folder(self, folder_raw: str) -> int:
         target = os.path.normpath(folder_raw)
         if not os.path.isdir(target):
-            raise bad_request(f"対象フォルダが存在しません: {folder_raw}")
+            raise bad_request(f"蟇ｾ雎｡繝輔か繝ｫ繝縺悟ｭ伜惠縺励∪縺帙ｓ: {folder_raw}")
 
         normalized_root = _normalize_path(target)
         logger.info("scan start: %s", target)
@@ -57,48 +67,10 @@ class MediaIndexService:
         scanned = 0
         for base, _, files in os.walk(target):
             for file_name in files:
-                ext = Path(file_name).suffix.lower()
-                if ext not in SUPPORTED_MEDIA_EXTENSIONS:
-                    continue
-
                 full_path = os.path.normpath(os.path.join(base, file_name))
-                kind = _media_kind(full_path)
-                if kind is None:
+                record = self._build_record_for_path(full_path)
+                if record is None:
                     continue
-
-                stat = os.stat(full_path)
-                size_bytes = int(stat.st_size)
-                modified_epoch_ms = int(stat.st_mtime * 1000)
-                modified_at = datetime.fromtimestamp(
-                    stat.st_mtime,
-                    tz=timezone.utc,
-                ).isoformat()
-                mime_type, _ = mimetypes.guess_type(full_path)
-                folder_of_item = os.path.dirname(full_path)
-                media_id = build_media_id(
-                    kind=kind,
-                    full_path=full_path,
-                    folder_raw=folder_of_item,
-                    display_name=file_name,
-                    size_bytes=size_bytes,
-                    modified_epoch_ms=modified_epoch_ms,
-                )
-
-                record = {
-                    "media_id": media_id,
-                    "folder_raw": folder_of_item,
-                    "relative_hint": file_name,
-                    "display_name": file_name,
-                    "full_path": full_path,
-                    "normalized_full_path": _normalize_path(full_path),
-                    "kind": kind,
-                    "mime_type": mime_type,
-                    "size_bytes": size_bytes,
-                    "modified_at": modified_at,
-                    "modified_epoch_ms": modified_epoch_ms,
-                    "etag": _etag_for_file(full_path, size_bytes, modified_epoch_ms),
-                    "is_deleted": 0,
-                }
                 self._db.upsert_media_record(record)
                 found_paths.add(record["normalized_full_path"])
                 scanned += 1
@@ -118,3 +90,51 @@ class MediaIndexService:
         )
         logger.info("scan finished: %s (%s files)", target, scanned)
         return scanned
+
+    def _build_record_for_path(self, raw_path: str) -> dict[str, object] | None:
+        full_path = os.path.normpath(raw_path)
+        if not os.path.isfile(full_path):
+            return None
+
+        ext = Path(full_path).suffix.lower()
+        if ext not in SUPPORTED_MEDIA_EXTENSIONS:
+            return None
+
+        kind = _media_kind(full_path)
+        if kind is None:
+            return None
+
+        stat = os.stat(full_path)
+        size_bytes = int(stat.st_size)
+        modified_epoch_ms = int(stat.st_mtime * 1000)
+        modified_at = datetime.fromtimestamp(
+            stat.st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+        mime_type, _ = mimetypes.guess_type(full_path)
+        folder_of_item = os.path.dirname(full_path)
+        file_name = os.path.basename(full_path)
+        media_id = build_media_id(
+            kind=kind,
+            full_path=full_path,
+            folder_raw=folder_of_item,
+            display_name=file_name,
+            size_bytes=size_bytes,
+            modified_epoch_ms=modified_epoch_ms,
+        )
+
+        return {
+            "media_id": media_id,
+            "folder_raw": folder_of_item,
+            "relative_hint": file_name,
+            "display_name": file_name,
+            "full_path": full_path,
+            "normalized_full_path": _normalize_path(full_path),
+            "kind": kind,
+            "mime_type": mime_type,
+            "size_bytes": size_bytes,
+            "modified_at": modified_at,
+            "modified_epoch_ms": modified_epoch_ms,
+            "etag": _etag_for_file(full_path, size_bytes, modified_epoch_ms),
+            "is_deleted": 0,
+        }

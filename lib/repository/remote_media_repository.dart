@@ -186,7 +186,13 @@ class RemoteMediaRepository implements MediaRepository {
   bool _looksLikeRemoteMediaId(String raw) => raw.startsWith('mid_');
 
   String _normalizeRemotePath(String raw) {
-    return _winPath.normalize(raw).replaceAll('/', '\\').toLowerCase();
+    final normalizedRaw =
+        ImportSourceNormalizer.normalizeSingleValue(raw)?.trim() ?? raw.trim();
+    try {
+      return _winPath.normalize(normalizedRaw).replaceAll('/', '\\').toLowerCase();
+    } on ArgumentError {
+      return normalizedRaw.replaceAll('/', '\\').toLowerCase();
+    }
   }
 
   void _rememberRemoteMediaId(String fullPath, String mediaId) {
@@ -841,9 +847,15 @@ class RemoteMediaRepository implements MediaRepository {
         statusLabel: '取り込み対象を確認しています',
       ),
     );
-    for (final item in uploadTargets) {
+    for (final rawItem in uploadTargets) {
+      final item = await _normalizeUploadSourceItem(rawItem);
       final fileName = _normalizedUploadFileName(item);
       final sourceKindLabel = _sourceKindLabelForItem(item);
+      debugPrint(
+        '[remote-upload] source '
+        'rawId=${rawItem.id} normalizedId=${item.id} '
+        'display=${item.displayName} folder=${item.folderRaw}',
+      );
       onProgress?.call(
         MediaTransferProgress(
           sentBytes: 0,
@@ -854,14 +866,26 @@ class RemoteMediaRepository implements MediaRepository {
           statusLabel: '$sourceKindLabel を読み込み中',
         ),
       );
-      final bytes = await _localPickerRepository
-          .readBytes(item)
-          .timeout(
-            _sourceReadTimeout,
-            onTimeout: () => throw RemoteMediaException(
-              '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
-            ),
-          );
+      late final Uint8List bytes;
+      try {
+        bytes = await _localPickerRepository
+            .readBytes(item)
+            .timeout(
+              _sourceReadTimeout,
+              onTimeout: () => throw RemoteMediaException(
+                '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
+              ),
+            );
+      } catch (error) {
+        debugPrint(
+          '[remote-upload] read failed '
+          'name=$fileName sourceKind=$sourceKindLabel '
+          'id=${item.id} folder=${item.folderRaw} error=$error',
+        );
+        throw RemoteMediaException(
+          '取り込み元ファイルを読み込めませんでした: $fileName ($sourceKindLabel)\n$error',
+        );
+      }
       final sourceRelativePath = _sourceRelativePathForUpload(
         item,
         fallbackFileName: fileName,
@@ -942,6 +966,66 @@ class RemoteMediaRepository implements MediaRepository {
     throw RemoteMediaException('アップロード対象のファイル名を特定できません: ${item.id}');
   }
 
+  Future<MediaItem> _normalizeUploadSourceItem(MediaItem item) async {
+    try {
+      final normalizedDisplayName = _normalizedUploadFileName(item);
+      final normalizedFolderRaw =
+          ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
+          item.folderRaw.trim();
+      final normalizedId =
+          ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
+
+      var resolvedId = normalizedId;
+      if (!resolvedId.startsWith('content://')) {
+        final resolvedLocalPath = await _resolveUploadSourcePath(
+          rawId: normalizedId,
+          folderRaw: normalizedFolderRaw,
+          displayName: normalizedDisplayName,
+        );
+        if (resolvedLocalPath != null) {
+          resolvedId = resolvedLocalPath;
+        }
+      }
+
+      final resolvedFolderRaw = resolvedId.startsWith('content://')
+          ? (normalizedFolderRaw.isNotEmpty ? normalizedFolderRaw : resolvedId)
+          : _resolvedFolderForUploadPath(
+                resolvedId,
+                fallbackFolderRaw: normalizedFolderRaw,
+              ) ??
+              normalizedFolderRaw;
+
+      return MediaItem(
+        id: resolvedId,
+        displayName: normalizedDisplayName,
+        kind: item.kind,
+        folderRaw: resolvedFolderRaw,
+        modified: item.modified,
+        sizeBytes: item.sizeBytes,
+        tags: item.tags,
+      );
+    } catch (error, stackTrace) {
+      final fallbackDisplayName = _sanitizeUploadFileName(item.displayName) ??
+          _sanitizeUploadFileName(ImportSourceNormalizer.basenameFromPathish(item.id)) ??
+          'upload.bin';
+      debugPrint(
+        '[remote-upload] source normalization fallback: '
+        '$error rawId=${item.id} folder=${item.folderRaw}\n$stackTrace',
+      );
+      return MediaItem(
+        id: ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim(),
+        displayName: fallbackDisplayName,
+        kind: item.kind,
+        folderRaw:
+            ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
+            item.folderRaw.trim(),
+        modified: item.modified,
+        sizeBytes: item.sizeBytes,
+        tags: item.tags,
+      );
+    }
+  }
+
   String? _sanitizeUploadFileName(String raw) {
     var value = raw.trim();
     if (value.isEmpty) {
@@ -954,11 +1038,95 @@ class RemoteMediaRepository implements MediaRepository {
       value = ImportSourceNormalizer.basenameFromPathish(value);
     }
 
-    value = value.replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+    value = value
+        .replaceAll(RegExp(r'[<>:\"/\\|?*\x00-\x1F]+'), '_')
+        .replaceAll(RegExp(r'[\r\n]+'), ' ')
+        .trim();
+    while (value.endsWith('.') || value.endsWith(' ')) {
+      value = value.substring(0, value.length - 1).trimRight();
+    }
     if (value.isEmpty || value == '.' || value == '..') {
       return null;
     }
     return value;
+  }
+
+  Future<String?> _resolveUploadSourcePath({
+    required String rawId,
+    required String folderRaw,
+    required String displayName,
+  }) async {
+    final candidates = <String>[];
+    void addCandidate(String? value) {
+      final trimmed = (value ?? '').trim();
+      if (trimmed.isEmpty || trimmed.startsWith('content://')) {
+        return;
+      }
+      if (!candidates.contains(trimmed)) {
+        candidates.add(trimmed);
+      }
+    }
+
+    addCandidate(rawId);
+    if (folderRaw.isNotEmpty && !folderRaw.startsWith('content://')) {
+      final looksWindowsPath = rawId.contains('\\') || folderRaw.contains('\\');
+      final ctx = _pathContextFor(looksWindowsPath);
+      final normalizedRawId = rawId.replaceAll('\\', ctx.separator);
+      try {
+        if (normalizedRawId.isNotEmpty && !ctx.isAbsolute(normalizedRawId)) {
+          addCandidate(ctx.join(folderRaw, normalizedRawId));
+        }
+      } catch (_) {}
+      try {
+        addCandidate(ctx.join(folderRaw, displayName));
+      } catch (_) {}
+    }
+
+    for (final candidate in candidates) {
+      final normalizedCandidate = _normalizeLocalPathCandidate(candidate);
+      if (normalizedCandidate == null) {
+        continue;
+      }
+      try {
+        if (await File(normalizedCandidate).exists()) {
+          return normalizedCandidate;
+        }
+      } catch (_) {}
+    }
+
+    return _normalizeLocalPathCandidate(rawId);
+  }
+
+  String? _normalizeLocalPathCandidate(String raw) {
+    final normalized =
+        ImportSourceNormalizer.normalizeSingleValue(raw)?.trim() ?? raw.trim();
+    if (normalized.isEmpty || normalized.startsWith('content://')) {
+      return null;
+    }
+    final ctx = _pathContextFor(normalized.contains('\\'));
+    try {
+      return ctx.normalize(normalized);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  String? _resolvedFolderForUploadPath(
+    String resolvedId, {
+    required String fallbackFolderRaw,
+  }) {
+    if (resolvedId.startsWith('content://')) {
+      return fallbackFolderRaw.isEmpty ? null : fallbackFolderRaw;
+    }
+    final normalized = _normalizeLocalPathCandidate(resolvedId);
+    if (normalized == null) {
+      return fallbackFolderRaw.isEmpty ? null : fallbackFolderRaw;
+    }
+    try {
+      return File(normalized).parent.path;
+    } catch (_) {
+      return fallbackFolderRaw.isEmpty ? null : fallbackFolderRaw;
+    }
   }
 
   String _sourceKindLabelForItem(MediaItem item) {
@@ -977,40 +1145,44 @@ class RemoteMediaRepository implements MediaRepository {
     MediaItem item, {
     required String fallbackFileName,
   }) {
-    final rawPath =
-        ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
-    final rawRoot =
-        ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
-        item.folderRaw.trim();
-    if (rawPath.isEmpty || rawRoot.isEmpty) {
-      return null;
-    }
-    if (rawPath.startsWith('content://') || rawRoot.startsWith('content://')) {
-      return null;
-    }
-
-    final ctx = _pathContextFor(rawPath.contains('\\') || rawRoot.contains('\\'));
-    late final String normalizedPath;
-    late final String normalizedRoot;
     try {
-      normalizedPath = ctx.normalize(rawPath);
-      normalizedRoot = ctx.normalize(rawRoot);
+      final rawPath =
+          ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
+      final rawRoot =
+          ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
+          item.folderRaw.trim();
+      if (rawPath.isEmpty || rawRoot.isEmpty) {
+        return null;
+      }
+      if (rawPath.startsWith('content://') || rawRoot.startsWith('content://')) {
+        return null;
+      }
+
+      final ctx = _pathContextFor(rawPath.contains('\\') || rawRoot.contains('\\'));
+      final normalizedPath = ctx.normalize(rawPath);
+      final normalizedRoot = ctx.normalize(rawRoot);
+      if (!ctx.isWithin(normalizedRoot, normalizedPath)) {
+        return fallbackFileName;
+      }
+
+      final relative = ctx.relative(normalizedPath, from: normalizedRoot).trim();
+      if (relative.isEmpty || relative == '.') {
+        return fallbackFileName;
+      }
+      return relative.replaceAll('\\', '/');
     } on ArgumentError catch (error) {
       debugPrint(
-        '[remote-upload] skipped relative path normalization: '
-        '$error path=$rawPath root=$rawRoot',
+        '[remote-upload] skipped relative path normalization: $error '
+        'item=${item.id} folder=${item.folderRaw}',
+      );
+      return fallbackFileName;
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[remote-upload] relative path fallback failed: '
+        '$error item=${item.id} folder=${item.folderRaw}\n$stackTrace',
       );
       return fallbackFileName;
     }
-    if (!ctx.isWithin(normalizedRoot, normalizedPath)) {
-      return fallbackFileName;
-    }
-
-    final relative = ctx.relative(normalizedPath, from: normalizedRoot).trim();
-    if (relative.isEmpty || relative == '.') {
-      return fallbackFileName;
-    }
-    return relative.replaceAll('\\', '/');
   }
 
   p.Context _pathContextFor(bool looksWindowsPath) {

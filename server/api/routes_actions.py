@@ -114,7 +114,7 @@ async def upload_files(
     if imported_count > 0:
         index_service = request.app.state.index_service
         metadata_store = request.app.state.metadata_store
-        rescanned_count = index_service.scan_folder(folder_path)
+        rescanned_count = index_service.index_files([saved_path for saved_path, _ in saved_entries])
 
         common_tags = _build_import_tags(
             artist_tag=artistTag,
