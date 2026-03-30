@@ -99,6 +99,7 @@ class HostServerStatus {
 
 class HostApiServerService extends ChangeNotifier {
   static const String _foldersPrefsKey = 'prefs.folders';
+  static const String _managedPidPrefsKey = 'host_api_server.pid';
   static const String _installHint =
       'ユーザーのターミナルで `pip install -r requirements.txt` または '
       '`py -m pip install -r requirements.txt` を実行してください';
@@ -116,10 +117,13 @@ class HostApiServerService extends ChangeNotifier {
     final settings = await _settingsService.loadMetadataSettings();
     final networkInfo = await _loadNetworkInfo(settings.hostPort);
     final health = await _checkHealth(settings);
+    final managedPid =
+        await _loadManagedPid() ?? await _findListeningPid(settings.hostPort);
     final externalRunning =
         _process == null &&
         settings.isHostMode &&
         health.state == MetadataConnectionState.connected;
+    final effectivePid = _process?.pid ?? (externalRunning ? managedPid : null);
 
     _status = _status.copyWith(
       state: _process != null
@@ -129,7 +133,12 @@ class HostApiServerService extends ChangeNotifier {
           : (externalRunning ? HostServerState.running : _status.state),
       message: _process != null
           ? health.message
-          : (externalRunning ? '既存の API サーバーに接続できました' : _status.message),
+          : (externalRunning
+                ? (managedPid != null
+                      ? '??? API ????????????'
+                      : '??? API ????????????')
+                : _status.message),
+      pid: effectivePid,
       port: settings.hostPort,
       hostname: networkInfo.hostname,
       localIpv4s: networkInfo.localIpv4s,
@@ -264,15 +273,21 @@ class HostApiServerService extends ChangeNotifier {
         endpoints: networkInfo.endpoints,
       ),
     );
+    await _persistManagedPid(process.pid);
   }
 
   Future<void> stopServer() async {
+    final settings = await _settingsService.loadMetadataSettings();
     final process = _process;
-    if (process == null) {
+    final managedPid =
+        process?.pid ??
+        await _loadManagedPid() ??
+        await _findListeningPid(settings.hostPort);
+    if (process == null && managedPid == null) {
       _setStatus(
         _status.copyWith(
           state: HostServerState.stopped,
-          message: 'サーバーは停止しています',
+          message: '????????????',
           clearPid: true,
         ),
       );
@@ -282,20 +297,53 @@ class HostApiServerService extends ChangeNotifier {
     _setStatus(
       _status.copyWith(
         state: HostServerState.stopping,
-        message: 'API サーバーを停止しています...',
+        message: 'API ????????????...',
       ),
     );
 
     try {
-      process.kill();
-      await process.exitCode.timeout(const Duration(seconds: 5));
-    } catch (_) {}
+      if (managedPid != null) {
+        final terminated = await _terminateProcessTree(managedPid);
+        if (!terminated) {
+          _appendLog('[stop] taskkill failed for PID $managedPid');
+        }
+      }
+      if (process != null) {
+        try {
+          await process.exitCode.timeout(const Duration(seconds: 5));
+        } on TimeoutException {
+          process.kill();
+          await process.exitCode.timeout(const Duration(seconds: 2));
+        }
+      }
+    } catch (error) {
+      _appendLog('[stop] $error');
+    }
 
     await _disposeProcess();
+    await _clearManagedPid();
+    final stopped = await _waitUntilStopped(settings);
+    if (!stopped) {
+      final networkInfo = await _loadNetworkInfo(settings.hostPort);
+      _setStatus(
+        _status.copyWith(
+          state: HostServerState.error,
+          message: 'API ????????????????',
+          pid: managedPid,
+          port: settings.hostPort,
+          hostname: networkInfo.hostname,
+          localIpv4s: networkInfo.localIpv4s,
+          tailscaleIpv4s: networkInfo.tailscaleIpv4s,
+          endpoints: networkInfo.endpoints,
+        ),
+      );
+      return;
+    }
+
     _setStatus(
       _status.copyWith(
         state: HostServerState.stopped,
-        message: 'サーバーを停止しました',
+        message: '???????????',
         clearPid: true,
       ),
     );
@@ -318,11 +366,12 @@ class HostApiServerService extends ChangeNotifier {
       return;
     }
     await _disposeProcess();
+    await _clearManagedPid();
     _setStatus(
       _status.copyWith(
         state: exitCode == 0 ? HostServerState.stopped : HostServerState.error,
         message: exitCode == 0
-            ? 'サーバーが停止しました'
+            ? '???????????'
             : _deriveProcessFailureMessage(exitCode),
         clearPid: true,
       ),
@@ -335,6 +384,90 @@ class HostApiServerService extends ChangeNotifier {
     _stdoutSubscription = null;
     _stderrSubscription = null;
     _process = null;
+  }
+
+  Future<void> _persistManagedPid(int? pid) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (pid == null || pid <= 0) {
+      await prefs.remove(_managedPidPrefsKey);
+      return;
+    }
+    await prefs.setInt(_managedPidPrefsKey, pid);
+  }
+
+  Future<int?> _loadManagedPid() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_managedPidPrefsKey);
+  }
+
+  Future<void> _clearManagedPid() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_managedPidPrefsKey);
+  }
+
+  Future<int?> _findListeningPid(int port) async {
+    if (!Platform.isWindows) {
+      return null;
+    }
+    try {
+      final result = await Process.run(
+        'netstat',
+        <String>['-ano', '-p', 'tcp'],
+        runInShell: true,
+      );
+      if (result.exitCode != 0) {
+        return null;
+      }
+      final lines = const LineSplitter().convert('${result.stdout}');
+      final portSuffix = ':$port';
+      for (final line in lines) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty || !trimmed.contains('LISTENING')) {
+          continue;
+        }
+        final parts = trimmed.split(RegExp(r'\s+'));
+        if (parts.length < 5) {
+          continue;
+        }
+        final localAddress = parts[1];
+        final state = parts[3].toUpperCase();
+        final pid = int.tryParse(parts[4]);
+        if (pid == null || state != 'LISTENING') {
+          continue;
+        }
+        if (localAddress.endsWith(portSuffix)) {
+          return pid;
+        }
+      }
+    } on ProcessException catch (error) {
+      _appendLog('[stop] netstat: ${error.message}');
+    }
+    return null;
+  }
+
+  Future<bool> _terminateProcessTree(int pid) async {
+    if (!Platform.isWindows) {
+      return false;
+    }
+    try {
+      final result = await Process.run(
+        'taskkill',
+        <String>['/PID', '$pid', '/T', '/F'],
+        runInShell: true,
+      );
+      final stdout = _singleLine('${result.stdout}');
+      final stderr = _singleLine('${result.stderr}');
+      if (stdout.isNotEmpty) {
+        _appendLog('[stop] $stdout');
+      }
+      if (stderr.isNotEmpty) {
+        _appendLog('[stop] $stderr');
+      }
+      return result.exitCode == 0;
+    } on ProcessException catch (error) {
+      _appendLog('[stop] taskkill: ${error.message}');
+      return false;
+    }
   }
 
   void _attachLogs(Process process) {
@@ -454,6 +587,17 @@ class HostApiServerService extends ChangeNotifier {
         return true;
       }
       await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    return false;
+  }
+
+  Future<bool> _waitUntilStopped(MetadataSettings settings) async {
+    for (var attempt = 0; attempt < 20; attempt++) {
+      final status = await _checkHealth(settings);
+      if (status.state != MetadataConnectionState.connected) {
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     return false;
   }
