@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
@@ -17,6 +17,23 @@ import '../services/import_source_normalizer.dart';
 import '../services/media_id_resolver.dart';
 import '../services/remote_media_api_client.dart';
 import 'mediaRepository.dart';
+
+enum _UploadSourceKind {
+  contentUri,
+  fileUri,
+  path,
+  unknown,
+}
+
+class _UploadReadResult {
+  final Uint8List bytes;
+  final String strategy;
+
+  const _UploadReadResult({
+    required this.bytes,
+    required this.strategy,
+  });
+}
 
 class RemoteMediaRepository implements MediaRepository {
   static final p.Context _winPath = p.Context(style: p.Style.windows);
@@ -310,7 +327,7 @@ class RemoteMediaRepository implements MediaRepository {
       rethrow;
     }
 
-    throw RemoteMediaException('削除結果を確認できませんでした: ${item.displayName}');
+    throw RemoteMediaException('削除確認に失敗しました: ${item.displayName}');
   }
 
   String _cacheHash(String source) {
@@ -539,7 +556,7 @@ class RemoteMediaRepository implements MediaRepository {
         totalFiles: 0,
         statusLabel: resolvedRequest.sourceKind == ImportSourceKind.folder
             ? '取り込み元フォルダを選択しています'
-            : '取り込みファイルを選択しています',
+            : '取り込み元ファイルを選択しています',
       ),
     );
     final localItems = await switch (resolvedRequest.sourceKind) {
@@ -592,7 +609,9 @@ class RemoteMediaRepository implements MediaRepository {
     final trimmedUrl = sourceUrl.trim();
     final effectiveOptions = options ?? const UrlImportOptions();
     if (!effectiveOptions.hasAnySource(trimmedUrl)) {
-      throw const RemoteMediaException('URL、URL 一覧ファイル、またはお気に入り条件を入力してください');
+      throw const RemoteMediaException(
+        'URL、URL一覧ファイル、またはお気に入り取得のいずれかを指定してください',
+      );
     }
 
     return _client.downloadUrl(
@@ -789,7 +808,7 @@ class RemoteMediaRepository implements MediaRepository {
 
     final refreshed = await _findFolderChildByPath(nextItem.folderRaw, nextPath);
     if (refreshed == null) {
-      throw const RemoteMediaException('リネーム後のメディアを再取得できませんでした');
+      throw const RemoteMediaException('リネーム後のメディア取得に失敗しました');
     }
 
     _evictMetaCache(beforeRemoteMediaId);
@@ -821,129 +840,180 @@ class RemoteMediaRepository implements MediaRepository {
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
-    final uploadTargets =
-        items.where((item) => item.kind != MediaKind.folder).toList(
-          growable: false,
-        );
-    if (uploadTargets.isEmpty) {
-      return 0;
-    }
+    try {
+      final uploadTargets =
+          items.where((item) => item.kind != MediaKind.folder).toList(
+            growable: false,
+          );
+      if (uploadTargets.isEmpty) {
+        return 0;
+      }
 
-    final unsupported = uploadTargets
-        .map((item) => _sanitizeUploadFileName(item.displayName) ?? item.displayName)
-        .where((name) => !MediaFileTypes.isSupportedMediaFileName(name))
-        .toList(growable: false);
-    if (unsupported.isNotEmpty) {
-      throw RemoteMediaException('未対応のファイル形式です: ${unsupported.join(', ')}');
-    }
+      final unsupported = uploadTargets
+          .map(
+            (item) => _sanitizeUploadFileName(item.displayName) ?? item.displayName,
+          )
+          .where((name) => !MediaFileTypes.isSupportedMediaFileName(name))
+          .toList(growable: false);
+      if (unsupported.isNotEmpty) {
+        throw RemoteMediaException('未対応のファイル形式です: ${unsupported.join(', ')}');
+      }
 
-    final binaries = <RemoteUploadFile>[];
-    onProgress?.call(
-      MediaTransferProgress(
-        sentBytes: 0,
-        totalBytes: 0,
-        completedFiles: 0,
-        totalFiles: uploadTargets.length,
-        statusLabel: '取り込み対象を確認しています',
-      ),
-    );
-    for (final rawItem in uploadTargets) {
-      final item = await _normalizeUploadSourceItem(rawItem);
-      final fileName = _normalizedUploadFileName(item);
-      final sourceKindLabel = _sourceKindLabelForItem(item);
-      debugPrint(
-        '[remote-upload] source '
-        'rawId=${rawItem.id} normalizedId=${item.id} '
-        'display=${item.displayName} folder=${item.folderRaw}',
-      );
+      final binaries = <RemoteUploadFile>[];
+      final readFailures = <String>[];
       onProgress?.call(
         MediaTransferProgress(
           sentBytes: 0,
           totalBytes: 0,
-          completedFiles: binaries.length,
+          completedFiles: 0,
           totalFiles: uploadTargets.length,
-          currentFileName: fileName,
-          statusLabel: '$sourceKindLabel を読み込み中',
+          statusLabel: '取り込み対象を確認しています',
         ),
       );
-      late final Uint8List bytes;
-      try {
-        bytes = await _localPickerRepository
-            .readBytes(item)
-            .timeout(
-              _sourceReadTimeout,
-              onTimeout: () => throw RemoteMediaException(
-                '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
-              ),
-            );
-      } catch (error) {
+
+      for (final rawItem in uploadTargets) {
+        final item = await _normalizeUploadSourceItem(rawItem);
+        final fileName = _normalizedUploadFileName(item);
+        final sourceKindLabel = _sourceKindLabelForItem(item, rawId: rawItem.id);
+        final sourceKind = _sourceKindNameForItem(item, rawId: rawItem.id);
         debugPrint(
-          '[remote-upload] read failed '
-          'name=$fileName sourceKind=$sourceKindLabel '
-          'id=${item.id} folder=${item.folderRaw} error=$error',
+          '[remote-upload] source '
+          'sourceKind=${sourceKind} '
+          'rawId=${rawItem.id} normalizedId=${item.id} '
+          'display=${item.displayName} folder=${item.folderRaw}',
         );
-        throw RemoteMediaException(
-          '取り込み元ファイルを読み込めませんでした: $fileName ($sourceKindLabel)\n$error',
+        onProgress?.call(
+          MediaTransferProgress(
+            sentBytes: 0,
+            totalBytes: 0,
+            completedFiles: binaries.length,
+            totalFiles: uploadTargets.length,
+            currentFileName: fileName,
+            statusLabel: '$sourceKindLabel を読み込み中',
+          ),
+        );
+
+        late final _UploadReadResult readResult;
+        try {
+          readResult = await _readUploadSourceBytes(
+            originalItem: rawItem,
+            normalizedItem: item,
+            fileName: fileName,
+            sourceKindLabel: sourceKindLabel,
+          );
+        } catch (error, stackTrace) {
+          debugPrint(
+            '[remote-upload] read failed '
+            'name=$fileName sourceKind=$sourceKindLabel '
+            'rawId=${rawItem.id} normalizedId=${item.id} '
+            'folder=${item.folderRaw} error=$error',
+          );
+          debugPrintStack(
+            label: '[remote-upload] read failed stack',
+            stackTrace: stackTrace,
+          );
+          readFailures.add('$fileName ($sourceKindLabel): $error');
+          continue;
+        }
+
+        final sourceRelativePath = _sourceRelativePathForUpload(
+          item,
+          fallbackFileName: fileName,
+        );
+        debugPrint(
+          '[remote-upload] prepared '
+          'name=$fileName sourceKind=$sourceKindLabel '
+          'strategy=${readResult.strategy} '
+          'relative=${sourceRelativePath ?? '-'} bytes=${readResult.bytes.length}',
+        );
+        binaries.add(
+          RemoteUploadFile(
+            fileName: fileName,
+            bytes: readResult.bytes,
+            mimeType: item.kind == MediaKind.pdf
+                ? 'application/pdf'
+                : _mimeTypeForImage(fileName),
+            sourceRelativePath: sourceRelativePath,
+          ),
         );
       }
-      final sourceRelativePath = _sourceRelativePathForUpload(
-        item,
-        fallbackFileName: fileName,
+
+      if (readFailures.isNotEmpty) {
+        debugPrint(
+          '[remote-upload] aborted before upload due to read failures '
+          'count=${readFailures.length}',
+        );
+        final summary = readFailures.map((entry) => '- $entry').join('\n');
+        throw RemoteMediaException(
+          '取り込み元ファイルの読み込みに失敗したため、アップロードを中止しました。\n'
+          '$summary',
+        );
+      }
+
+      final uploadTotalBytes = binaries.fold<int>(
+        0,
+        (sum, file) => sum + file.bytes.length,
       );
-      debugPrint(
-        '[remote-upload] prepared '
-        'name=$fileName sourceKind=$sourceKindLabel '
-        'relative=${sourceRelativePath ?? '-'} bytes=${bytes.length}',
-      );
-      binaries.add(
-        RemoteUploadFile(
-          fileName: fileName,
-          bytes: bytes,
-          mimeType: item.kind == MediaKind.pdf
-              ? 'application/pdf'
-              : _mimeTypeForImage(fileName),
-          sourceRelativePath: sourceRelativePath,
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: 0,
+          totalBytes: uploadTotalBytes,
+          completedFiles: 0,
+          totalFiles: binaries.length,
+          statusLabel: 'ホストへアップロードしています',
         ),
       );
+
+      debugPrint(
+        '[remote-upload] dispatch '
+        'count=${binaries.length} names=${binaries.map((file) => file.fileName).join(' | ')}',
+      );
+      late final RemoteUploadResponse response;
+      try {
+        response = await _client.uploadFiles(
+          folderRaw: dest.raw,
+          files: binaries,
+          importMetadata: importMetadata,
+          skipIfExists: skipIfExists,
+          onProgress: onProgress,
+        );
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[remote-upload] upload request failed '
+          'count=${binaries.length} folder=${dest.raw} error=$error',
+        );
+        debugPrintStack(
+          label: '[remote-upload] upload request failed stack',
+          stackTrace: stackTrace,
+        );
+        rethrow;
+      }
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: uploadTotalBytes,
+          totalBytes: uploadTotalBytes,
+          completedFiles: binaries.length,
+          totalFiles: binaries.length,
+          statusLabel: 'ホスト側の取り込みが完了しました',
+        ),
+      );
+      debugPrint(
+        '[remote-upload] response '
+        'imported=${response.importedCount} skipped=${response.skippedCount} '
+        'tagged=${response.taggedCount} organized=${response.organizedCount} '
+        'rescanned=${response.rescannedCount}',
+      );
+      return response.importedCount;
+    } on ArgumentError catch (error, stackTrace) {
+      debugPrint(
+        '[remote-upload] invalid path argument during host import: '
+        '$error dest=${dest.raw}\n$stackTrace',
+      );
+      throw RemoteMediaException(
+        '取り込み元パスの解釈に失敗しました。'
+        'ファイル名またはパスに不正な文字列が混ざっている可能性があります。\n$error',
+      );
     }
-
-    final uploadTotalBytes = binaries.fold<int>(
-      0,
-      (sum, file) => sum + file.bytes.length,
-    );
-    onProgress?.call(
-      MediaTransferProgress(
-        sentBytes: 0,
-        totalBytes: uploadTotalBytes,
-        completedFiles: 0,
-        totalFiles: binaries.length,
-        statusLabel: 'ホストへアップロードしています',
-      ),
-    );
-
-    final response = await _client.uploadFiles(
-      folderRaw: dest.raw,
-      files: binaries,
-      importMetadata: importMetadata,
-      skipIfExists: skipIfExists,
-      onProgress: onProgress,
-    );
-    onProgress?.call(
-      MediaTransferProgress(
-        sentBytes: uploadTotalBytes,
-        totalBytes: uploadTotalBytes,
-        completedFiles: binaries.length,
-        totalFiles: binaries.length,
-        statusLabel: 'ホスト側の反映が完了しました',
-      ),
-    );
-    debugPrint(
-      '[remote-upload] response '
-      'imported=${response.importedCount} skipped=${response.skippedCount} '
-      'tagged=${response.taggedCount} organized=${response.organizedCount} '
-      'rescanned=${response.rescannedCount}',
-    );
-    return response.importedCount;
   }
 
   String _mimeTypeForImage(String fileName) {
@@ -963,67 +1033,80 @@ class RemoteMediaRepository implements MediaRepository {
       return fromPath;
     }
 
-    throw RemoteMediaException('アップロード対象のファイル名を特定できません: ${item.id}');
+    throw RemoteMediaException('アップロード元のファイル名を特定できません: ${item.id}');
   }
 
   Future<MediaItem> _normalizeUploadSourceItem(MediaItem item) async {
     try {
       final normalizedDisplayName = _normalizedUploadFileName(item);
-      final normalizedFolderRaw =
-          ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
-          item.folderRaw.trim();
-      final normalizedId =
-          ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
-
-      var resolvedId = normalizedId;
-      if (!resolvedId.startsWith('content://')) {
-        final resolvedLocalPath = await _resolveUploadSourcePath(
-          rawId: normalizedId,
-          folderRaw: normalizedFolderRaw,
-          displayName: normalizedDisplayName,
-        );
-        if (resolvedLocalPath != null) {
-          resolvedId = resolvedLocalPath;
-        }
-      }
-
-      final resolvedFolderRaw = resolvedId.startsWith('content://')
-          ? (normalizedFolderRaw.isNotEmpty ? normalizedFolderRaw : resolvedId)
-          : _resolvedFolderForUploadPath(
-                resolvedId,
-                fallbackFolderRaw: normalizedFolderRaw,
-              ) ??
-              normalizedFolderRaw;
+      final normalizedId = _normalizedUploadId(item.id);
+      final normalizedFolderRaw = _normalizedUploadFolderRaw(
+        item.folderRaw,
+        fallbackId: normalizedId,
+      );
 
       return MediaItem(
-        id: resolvedId,
+        id: normalizedId,
         displayName: normalizedDisplayName,
         kind: item.kind,
-        folderRaw: resolvedFolderRaw,
+        folderRaw: normalizedFolderRaw,
         modified: item.modified,
         sizeBytes: item.sizeBytes,
         tags: item.tags,
       );
     } catch (error, stackTrace) {
       final fallbackDisplayName = _sanitizeUploadFileName(item.displayName) ??
-          _sanitizeUploadFileName(ImportSourceNormalizer.basenameFromPathish(item.id)) ??
+          _sanitizeUploadFileName(
+            ImportSourceNormalizer.basenameFromPathish(item.id),
+          ) ??
           'upload.bin';
       debugPrint(
         '[remote-upload] source normalization fallback: '
-        '$error rawId=${item.id} folder=${item.folderRaw}\n$stackTrace',
+        '$error rawId=${item.id} folder=${item.folderRaw}',
+      );
+      debugPrintStack(
+        label: '[remote-upload] source normalization stack',
+        stackTrace: stackTrace,
       );
       return MediaItem(
-        id: ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim(),
+        id: _normalizedUploadId(item.id),
         displayName: fallbackDisplayName,
         kind: item.kind,
-        folderRaw:
-            ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
-            item.folderRaw.trim(),
+        folderRaw: _normalizedUploadFolderRaw(
+          item.folderRaw,
+          fallbackId: item.id,
+        ),
         modified: item.modified,
         sizeBytes: item.sizeBytes,
         tags: item.tags,
       );
     }
+  }
+
+  String _normalizedUploadId(String rawId) {
+    final trimmed = rawId.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('content://')) {
+      return trimmed;
+    }
+    final normalized =
+        ImportSourceNormalizer.normalizeSingleValue(trimmed)?.trim() ?? trimmed;
+    return normalized.isEmpty ? trimmed : normalized;
+  }
+
+  String _normalizedUploadFolderRaw(
+    String rawFolderRaw, {
+    required String fallbackId,
+  }) {
+    final trimmed = rawFolderRaw.trim();
+    if (trimmed.isEmpty) {
+      return fallbackId.startsWith('content://') ? fallbackId : '';
+    }
+    if (trimmed.startsWith('content://')) {
+      return trimmed;
+    }
+    final normalized =
+        ImportSourceNormalizer.normalizeSingleValue(trimmed)?.trim() ?? trimmed;
+    return normalized;
   }
 
   String? _sanitizeUploadFileName(String raw) {
@@ -1051,50 +1134,284 @@ class RemoteMediaRepository implements MediaRepository {
     return value;
   }
 
-  Future<String?> _resolveUploadSourcePath({
-    required String rawId,
-    required String folderRaw,
-    required String displayName,
+  Future<_UploadReadResult> _readUploadSourceBytes({
+    required MediaItem originalItem,
+    required MediaItem normalizedItem,
+    required String fileName,
+    required String sourceKindLabel,
   }) async {
-    final candidates = <String>[];
-    void addCandidate(String? value) {
-      final trimmed = (value ?? '').trim();
-      if (trimmed.isEmpty || trimmed.startsWith('content://')) {
-        return;
-      }
-      if (!candidates.contains(trimmed)) {
-        candidates.add(trimmed);
+    final rawId = originalItem.id.trim();
+    final normalizedId = normalizedItem.id.trim();
+    final sourceKind = _classifyUploadSource(
+      rawId: rawId,
+      normalizedId: normalizedId,
+    );
+
+    if (sourceKind == _UploadSourceKind.contentUri) {
+      return _readBytesViaLocalPicker(
+        originalItem: originalItem,
+        normalizedItem: normalizedItem,
+        fileName: fileName,
+        sourceKindLabel: sourceKindLabel,
+        strategy: 'content-uri',
+      );
+    }
+
+    final fileUriPath = _filePathFromFileUri(rawId) ??
+        _filePathFromFileUri(normalizedId);
+    if (fileUriPath != null) {
+      return _readBytesViaFilePath(
+        originalItem: originalItem,
+        normalizedItem: normalizedItem,
+        fileName: fileName,
+        sourceKindLabel: sourceKindLabel,
+        strategy: 'file-uri',
+        candidatePath: fileUriPath,
+      );
+    }
+
+    final directPath =
+        _normalizeLocalPathCandidate(normalizedId) ??
+        _normalizeLocalPathCandidate(rawId);
+    if (directPath != null) {
+      try {
+        return await _readBytesViaFilePath(
+          originalItem: originalItem,
+          normalizedItem: normalizedItem,
+          fileName: fileName,
+          sourceKindLabel: sourceKindLabel,
+          strategy: 'path',
+          candidatePath: directPath,
+        );
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[remote-upload] direct path read failed, trying fallback '
+          'rawId=${originalItem.id} normalizedId=${normalizedItem.id} '
+          'candidate=$directPath error=$error',
+        );
+        debugPrintStack(
+          label: '[remote-upload] direct path read failed stack',
+          stackTrace: stackTrace,
+        );
       }
     }
 
-    addCandidate(rawId);
-    if (folderRaw.isNotEmpty && !folderRaw.startsWith('content://')) {
-      final looksWindowsPath = rawId.contains('\\') || folderRaw.contains('\\');
-      final ctx = _pathContextFor(looksWindowsPath);
-      final normalizedRawId = rawId.replaceAll('\\', ctx.separator);
-      try {
-        if (normalizedRawId.isNotEmpty && !ctx.isAbsolute(normalizedRawId)) {
-          addCandidate(ctx.join(folderRaw, normalizedRawId));
-        }
-      } catch (_) {}
-      try {
-        addCandidate(ctx.join(folderRaw, displayName));
-      } catch (_) {}
+    final fallbackPath = await _lastResortUploadPath(
+      originalItem: originalItem,
+      normalizedItem: normalizedItem,
+      fileName: fileName,
+    );
+    if (fallbackPath != null) {
+      return _readBytesViaFilePath(
+        originalItem: originalItem,
+        normalizedItem: normalizedItem,
+        fileName: fileName,
+        sourceKindLabel: sourceKindLabel,
+        strategy: 'fallback-path',
+        candidatePath: fallbackPath,
+      );
     }
 
-    for (final candidate in candidates) {
-      final normalizedCandidate = _normalizeLocalPathCandidate(candidate);
-      if (normalizedCandidate == null) {
-        continue;
+    throw RemoteMediaException(
+      '取り込み元ファイルを特定できませんでした: $fileName '
+      '(sourceKind=${_sourceKindNameForItem(normalizedItem, rawId: originalItem.id)})',
+    );
+  }
+
+  Future<_UploadReadResult> _readBytesViaLocalPicker({
+    required MediaItem originalItem,
+    required MediaItem normalizedItem,
+    required String fileName,
+    required String sourceKindLabel,
+    required String strategy,
+  }) async {
+    _logUploadReadStart(
+      strategy: strategy,
+      originalItem: originalItem,
+      normalizedItem: normalizedItem,
+      fileName: fileName,
+    );
+    final watch = Stopwatch()..start();
+    try {
+      final bytes = await _localPickerRepository.readBytes(normalizedItem).timeout(
+        _sourceReadTimeout,
+        onTimeout: () => throw RemoteMediaException(
+          '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
+        ),
+      );
+      watch.stop();
+      _logUploadReadSuccess(
+        strategy: strategy,
+        originalItem: originalItem,
+        normalizedItem: normalizedItem,
+        fileName: fileName,
+        bytesLength: bytes.length,
+        elapsed: watch.elapsed,
+      );
+      return _UploadReadResult(bytes: bytes, strategy: strategy);
+    } catch (error, stackTrace) {
+      watch.stop();
+      _logUploadReadFailure(
+        strategy: strategy,
+        originalItem: originalItem,
+        normalizedItem: normalizedItem,
+        fileName: fileName,
+        error: error,
+        stackTrace: stackTrace,
+        elapsed: watch.elapsed,
+      );
+      rethrow;
+    }
+  }
+
+  Future<_UploadReadResult> _readBytesViaFilePath({
+    required MediaItem originalItem,
+    required MediaItem normalizedItem,
+    required String fileName,
+    required String sourceKindLabel,
+    required String strategy,
+    required String candidatePath,
+  }) async {
+    _logUploadReadStart(
+      strategy: strategy,
+      originalItem: originalItem,
+      normalizedItem: normalizedItem,
+      fileName: fileName,
+      candidatePath: candidatePath,
+    );
+    final watch = Stopwatch()..start();
+    try {
+      final file = File(candidatePath);
+      final exists = await file.exists().timeout(
+        _sourceReadTimeout,
+        onTimeout: () => throw RemoteMediaException(
+          '$sourceKindLabel の存在確認がタイムアウトしました: $fileName',
+        ),
+      );
+      if (!exists) {
+        throw RemoteMediaException('ファイルが見つかりません: $candidatePath');
       }
-      try {
-        if (await File(normalizedCandidate).exists()) {
-          return normalizedCandidate;
-        }
-      } catch (_) {}
+      final bytes = await file.readAsBytes().timeout(
+        _sourceReadTimeout,
+        onTimeout: () => throw RemoteMediaException(
+          '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
+        ),
+      );
+      watch.stop();
+      _logUploadReadSuccess(
+        strategy: strategy,
+        originalItem: originalItem,
+        normalizedItem: normalizedItem,
+        fileName: fileName,
+        bytesLength: bytes.length,
+        elapsed: watch.elapsed,
+        candidatePath: candidatePath,
+      );
+      return _UploadReadResult(bytes: bytes, strategy: strategy);
+    } catch (error, stackTrace) {
+      watch.stop();
+      _logUploadReadFailure(
+        strategy: strategy,
+        originalItem: originalItem,
+        normalizedItem: normalizedItem,
+        fileName: fileName,
+        error: error,
+        stackTrace: stackTrace,
+        elapsed: watch.elapsed,
+        candidatePath: candidatePath,
+      );
+      rethrow;
     }
+  }
 
-    return _normalizeLocalPathCandidate(rawId);
+  Future<String?> _lastResortUploadPath({
+    required MediaItem originalItem,
+    required MediaItem normalizedItem,
+    required String fileName,
+  }) async {
+    final folderCandidates = <String>{
+      normalizedItem.folderRaw,
+      originalItem.folderRaw,
+    }
+        .map(_normalizeLocalPathCandidate)
+        .whereType<String>()
+        .where((value) => value.isNotEmpty)
+        .toList(growable: false);
+    final nameCandidates = <String>{
+      fileName,
+      normalizedItem.displayName,
+      ImportSourceNormalizer.basenameFromPathish(originalItem.id),
+      ImportSourceNormalizer.basenameFromPathish(normalizedItem.id),
+    }
+        .map(_sanitizeUploadFileName)
+        .whereType<String>()
+        .where((value) => value.isNotEmpty)
+        .toList(growable: false);
+
+    for (final folderPath in folderCandidates) {
+      final ctx = _pathContextFor(folderPath.contains('\\'));
+      for (final name in nameCandidates) {
+        try {
+          final candidate = _normalizeLocalPathCandidate(ctx.join(folderPath, name));
+          if (candidate == null) {
+            continue;
+          }
+          if (await File(candidate).exists()) {
+            return candidate;
+          }
+        } catch (_) {}
+      }
+    }
+    return null;
+  }
+
+  _UploadSourceKind _classifyUploadSource({
+    required String rawId,
+    required String normalizedId,
+  }) {
+    final raw = rawId.trim().toLowerCase();
+    final normalized = normalizedId.trim().toLowerCase();
+    if (raw.contains('content://') || normalized.startsWith('content://')) {
+      return _UploadSourceKind.contentUri;
+    }
+    if (raw.contains('file://') || normalized.startsWith('file://')) {
+      return _UploadSourceKind.fileUri;
+    }
+    if (normalized.isEmpty) {
+      return _UploadSourceKind.unknown;
+    }
+    if (_normalizeLocalPathCandidate(normalizedId) != null) {
+      return _UploadSourceKind.path;
+    }
+    return _UploadSourceKind.unknown;
+  }
+
+  String _sourceKindNameForItem(MediaItem item, {String? rawId}) {
+    final kind = _classifyUploadSource(
+      rawId: rawId ?? item.id,
+      normalizedId: item.id,
+    );
+    return switch (kind) {
+      _UploadSourceKind.contentUri => 'content',
+      _UploadSourceKind.fileUri => 'file',
+      _UploadSourceKind.path => 'path',
+      _UploadSourceKind.unknown => 'unknown',
+    };
+  }
+
+  String? _filePathFromFileUri(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    if (!trimmed.startsWith('file://')) {
+      return null;
+    }
+    try {
+      return Uri.parse(trimmed).toFilePath();
+    } catch (_) {
+      return null;
+    }
   }
 
   String? _normalizeLocalPathCandidate(String raw) {
@@ -1102,6 +1419,9 @@ class RemoteMediaRepository implements MediaRepository {
         ImportSourceNormalizer.normalizeSingleValue(raw)?.trim() ?? raw.trim();
     if (normalized.isEmpty || normalized.startsWith('content://')) {
       return null;
+    }
+    if (normalized.startsWith('file://')) {
+      return _filePathFromFileUri(normalized);
     }
     final ctx = _pathContextFor(normalized.contains('\\'));
     try {
@@ -1111,34 +1431,77 @@ class RemoteMediaRepository implements MediaRepository {
     }
   }
 
-  String? _resolvedFolderForUploadPath(
-    String resolvedId, {
-    required String fallbackFolderRaw,
-  }) {
-    if (resolvedId.startsWith('content://')) {
-      return fallbackFolderRaw.isEmpty ? null : fallbackFolderRaw;
-    }
-    final normalized = _normalizeLocalPathCandidate(resolvedId);
-    if (normalized == null) {
-      return fallbackFolderRaw.isEmpty ? null : fallbackFolderRaw;
-    }
-    try {
-      return File(normalized).parent.path;
-    } catch (_) {
-      return fallbackFolderRaw.isEmpty ? null : fallbackFolderRaw;
-    }
+  String _sourceKindLabelForItem(MediaItem item, {String? rawId}) {
+    final kind = _classifyUploadSource(
+      rawId: rawId ?? item.id,
+      normalizedId: item.id,
+    );
+    return switch (kind) {
+      _UploadSourceKind.contentUri => 'Android URI',
+      _UploadSourceKind.fileUri => 'file URI',
+      _UploadSourceKind.path => 'ファイルパス',
+      _UploadSourceKind.unknown => '不明な入力',
+    };
   }
 
-  String _sourceKindLabelForItem(MediaItem item) {
-    final normalizedId =
-        ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
-    if (normalizedId.startsWith('content://')) {
-      return 'Android URI';
-    }
-    if (normalizedId.startsWith('file://')) {
-      return 'file URI';
-    }
-    return 'ファイル';
+  void _logUploadReadStart({
+    required String strategy,
+    required MediaItem originalItem,
+    required MediaItem normalizedItem,
+    required String fileName,
+    String? candidatePath,
+  }) {
+    debugPrint(
+      '[remote-upload] read start '
+      'strategy=$strategy '
+      'rawId=${originalItem.id} normalizedId=${normalizedItem.id} '
+      'sourceKind=${_sourceKindNameForItem(normalizedItem, rawId: originalItem.id)} '
+      'display=${normalizedItem.displayName} folder=${normalizedItem.folderRaw} '
+      'fileName=$fileName candidate=${candidatePath ?? '-'}',
+    );
+  }
+
+  void _logUploadReadSuccess({
+    required String strategy,
+    required MediaItem originalItem,
+    required MediaItem normalizedItem,
+    required String fileName,
+    required int bytesLength,
+    required Duration elapsed,
+    String? candidatePath,
+  }) {
+    debugPrint(
+      '[remote-upload] read success '
+      'strategy=$strategy bytes=$bytesLength elapsedMs=${elapsed.inMilliseconds} '
+      'rawId=${originalItem.id} normalizedId=${normalizedItem.id} '
+      'display=${normalizedItem.displayName} folder=${normalizedItem.folderRaw} '
+      'fileName=$fileName candidate=${candidatePath ?? '-'}',
+    );
+  }
+
+  void _logUploadReadFailure({
+    required String strategy,
+    required MediaItem originalItem,
+    required MediaItem normalizedItem,
+    required String fileName,
+    required Object error,
+    required StackTrace stackTrace,
+    required Duration elapsed,
+    String? candidatePath,
+  }) {
+    debugPrint(
+      '[remote-upload] read failure '
+      'strategy=$strategy timeout=${error is TimeoutException} '
+      'elapsedMs=${elapsed.inMilliseconds} '
+      'rawId=${originalItem.id} normalizedId=${normalizedItem.id} '
+      'sourceKind=${_sourceKindNameForItem(normalizedItem, rawId: originalItem.id)} '
+      'display=${normalizedItem.displayName} folder=${normalizedItem.folderRaw} '
+      'fileName=$fileName candidate=${candidatePath ?? '-'} error=$error',
+    );
+    debugPrintStack(
+      label: '[remote-upload] read failure stack',
+      stackTrace: stackTrace,
+    );
   }
 
   String? _sourceRelativePathForUpload(

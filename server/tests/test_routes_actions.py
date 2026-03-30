@@ -1,4 +1,5 @@
-import asyncio
+﻿import asyncio
+import json
 import os
 import tempfile
 from types import SimpleNamespace
@@ -119,7 +120,7 @@ class _UploadMetadataStore:
         if not media_ids:
             return {}
         source = os.path.join(library_root, 'sample.jpg')
-        target = os.path.join(library_root, 'ҕ', 'Artist', 'Series', 'sample.jpg')
+        target = os.path.join(library_root, 'ﾒ・, 'Artist', 'Series', 'sample.jpg')
         return {source: target}
 
 
@@ -215,7 +216,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_rename(request, payload)
 
-        self.assertEqual(response.message, 'l[𔽉f܂')
+        self.assertEqual(response.message, 'リネームしました')
         self.assertEqual(
             store.rename_calls,
             [
@@ -249,7 +250,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_delete(request, payload)
 
-        self.assertEqual(response.message, '폜𔽉f܂ (2 )')
+        self.assertEqual(response.message, '削除しました (2 件)')
         self.assertEqual(len(store.delete_calls), 1)
         self.assertTrue(store.delete_calls[0]['hard_delete'])
         self.assertEqual(len(store.delete_calls[0]['items']), 2)
@@ -381,6 +382,66 @@ class ActionsRoutesTest(unittest.TestCase):
                     {'category': 'mediaType', 'name': 'hitomi'},
                 ],
             )
+
+
+    def test_upload_files_prefers_original_display_name_for_unicode_file_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            request = _request(
+                metadata_store,
+                index_service=_RecordingIndexService(),
+                media_roots=[temp_dir],
+            )
+            upload = _FakeUploadFile('upload_001_deadbeef.pdf', b'%PDF-1.4')
+            original_name = 'あいうえお_漢字混在.pdf'
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    originalDisplayNamesJson=json.dumps(
+                        [original_name],
+                        ensure_ascii=False,
+                    ),
+                    files=[upload],
+                )
+            )
+
+            self.assertEqual(response['importedCount'], 1)
+            self.assertTrue(upload.closed)
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, original_name)))
+
+    def test_upload_files_keeps_unicode_name_when_relative_hint_contains_japanese_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            request = _request(
+                metadata_store,
+                index_service=_RecordingIndexService(),
+                media_roots=[temp_dir],
+            )
+            upload = _FakeUploadFile('upload_001_cafebabe.png', b'png')
+            original_name = 'テスト画像.png'
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    originalDisplayNamesJson=json.dumps(
+                        [original_name],
+                        ensure_ascii=False,
+                    ),
+                    sourceRelativePathsJson=json.dumps(
+                        ['日本語フォルダ/テスト画像.png'],
+                        ensure_ascii=False,
+                    ),
+                    files=[upload],
+                )
+            )
+
+            self.assertEqual(response['importedCount'], 1)
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, original_name)))
 
     def test_download_url_applies_tags_after_downloader_creates_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

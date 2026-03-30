@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
 
@@ -581,7 +582,50 @@ class WindowsFolderRepository implements MediaRepository {
 
   @override
   Future<Uint8List> readBytes(MediaItem item) async {
-    return _withFsRetry(item.id, () => File(item.id).readAsBytes());
+    final rawId = item.id.trim();
+    final sourceKind = rawId.startsWith('file://') ? 'file-uri' : 'path';
+    late final String resolvedPath;
+    try {
+      resolvedPath = rawId.startsWith('file://')
+          ? Uri.parse(rawId).toFilePath()
+          : rawId;
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[local-read] uri parse failed source=$sourceKind id=$rawId '
+        'display=${item.displayName} error=$error',
+      );
+      debugPrintStack(
+        label: '[local-read] uri parse failed stack',
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+
+    debugPrint(
+      '[local-read] start source=$sourceKind id=$rawId '
+      'display=${item.displayName} resolved=$resolvedPath',
+    );
+    try {
+      final bytes = await _withFsRetry(
+        resolvedPath,
+        () => File(resolvedPath).readAsBytes(),
+      );
+      debugPrint(
+        '[local-read] success source=$sourceKind bytes=${bytes.length} '
+        'id=$rawId resolved=$resolvedPath',
+      );
+      return bytes;
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[local-read] failure source=$sourceKind id=$rawId '
+        'display=${item.displayName} resolved=$resolvedPath error=$error',
+      );
+      debugPrintStack(
+        label: '[local-read] failure stack',
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
   }
 
   bool _isAvifPath(String path) => _lowerExt(path) == '.avif';

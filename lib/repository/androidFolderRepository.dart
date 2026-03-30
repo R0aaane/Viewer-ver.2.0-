@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'dart:convert';
 
 import 'package:docman/docman.dart';
+import 'package:flutter/foundation.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:drift/drift.dart' as drift;
@@ -15,12 +16,15 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 import '../services/import_source_normalizer.dart';
+import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
 import '../database/app_db.dart' as db;
 
 class AndroidFolderRepository implements MediaRepository {
   final db.AppDb _db;
+  final UrlImportDownloaderService _urlImportDownloader =
+      UrlImportDownloaderService();
   AndroidFolderRepository(this._db);
 
   @override
@@ -48,7 +52,7 @@ class AndroidFolderRepository implements MediaRepository {
   bool get isHostMode => false;
 
   @override
-  bool get canImportFromUrl => false;
+  bool get canImportFromUrl => true;
 
   @override
   Future<void> reloadSettings() async {}
@@ -855,11 +859,72 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }
 
   @override
-  Future<Uint8List> readBytes(MediaItem item) {
-    if (item.id.startsWith('content://')) {
-      return _safReadBytes(item.id);
+  Future<Uint8List> readBytes(MediaItem item) async {
+    final rawId = item.id.trim();
+    if (rawId.startsWith('content://')) {
+      debugPrint(
+        '[android-read] start source=content id=$rawId display=${item.displayName}',
+      );
+      try {
+        final bytes = await _safReadBytes(rawId);
+        debugPrint(
+          '[android-read] success source=content bytes=${bytes.length} '
+          'id=$rawId display=${item.displayName}',
+        );
+        return bytes;
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[android-read] failure source=content id=$rawId '
+          'display=${item.displayName} error=$error',
+        );
+        debugPrintStack(
+          label: '[android-read] failure stack',
+          stackTrace: stackTrace,
+        );
+        rethrow;
+      }
     }
-    return File(item.id).readAsBytes();
+
+    final sourceKind = rawId.startsWith('file://') ? 'file-uri' : 'path';
+    late final String resolvedPath;
+    try {
+      resolvedPath = rawId.startsWith('file://')
+          ? Uri.parse(rawId).toFilePath()
+          : rawId;
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[android-read] uri parse failed source=$sourceKind id=$rawId '
+        'display=${item.displayName} error=$error',
+      );
+      debugPrintStack(
+        label: '[android-read] uri parse failed stack',
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+
+    debugPrint(
+      '[android-read] start source=$sourceKind id=$rawId '
+      'display=${item.displayName} resolved=$resolvedPath',
+    );
+    try {
+      final bytes = await File(resolvedPath).readAsBytes();
+      debugPrint(
+        '[android-read] success source=$sourceKind bytes=${bytes.length} '
+        'id=$rawId resolved=$resolvedPath',
+      );
+      return bytes;
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[android-read] failure source=$sourceKind id=$rawId '
+        'display=${item.displayName} resolved=$resolvedPath error=$error',
+      );
+      debugPrintStack(
+        label: '[android-read] failure stack',
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
   }
 
   @override
@@ -1336,7 +1401,115 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     UrlImportOptions? options,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
-    throw UnsupportedError('URL import is not supported on Android');
+    final trimmedUrl = sourceUrl.trim();
+    final effectiveOptions = options ?? const UrlImportOptions();
+    if (!effectiveOptions.hasAnySource(trimmedUrl)) {
+      throw Exception('URL、URL 一覧ファイル、または favorites 条件を入力してください');
+    }
+
+    if (!folder.raw.startsWith('content://')) {
+      final destDir = Directory(folder.raw);
+      if (!await destDir.exists()) {
+        await destDir.create(recursive: true);
+      }
+      final result = await _urlImportDownloader.downloadUrl(
+        sourceUrl: trimmedUrl,
+        destinationFolder: destDir.path,
+        options: effectiveOptions,
+        onProgress: onProgress,
+      );
+      return UrlImportResult(
+        importedCount: result.importedCount,
+        skippedCount: result.skippedCount,
+        failedCount: result.failedCount,
+      );
+    }
+
+    final stagingRoot = await getTemporaryDirectory();
+    final stagingDir = Directory(
+      '${stagingRoot.path}/url_import_${DateTime.now().millisecondsSinceEpoch}',
+    );
+    await stagingDir.create(recursive: true);
+
+    try {
+      final downloadResult = await _urlImportDownloader.downloadUrl(
+        sourceUrl: trimmedUrl,
+        destinationFolder: stagingDir.path,
+        options: effectiveOptions,
+        onProgress: onProgress,
+      );
+
+      final stagedItems = await _listFilesystemMediaItems(stagingDir);
+      if (stagedItems.isEmpty) {
+        return UrlImportResult(
+          importedCount: downloadResult.importedCount,
+          skippedCount: downloadResult.skippedCount,
+          failedCount: downloadResult.failedCount,
+        );
+      }
+
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: stagedItems.length,
+          totalBytes: stagedItems.length,
+          completedFiles: 0,
+          totalFiles: stagedItems.length,
+          statusLabel: 'ダウンロード済みファイルを保存先へ取り込み中',
+        ),
+      );
+
+      final importedCount = await importItemsIntoFolder(
+        folder,
+        stagedItems,
+        importMetadata: importMetadata,
+        skipIfExists: !effectiveOptions.overwriteExistingFiles,
+        onProgress: onProgress,
+      );
+
+      final stagedCount = stagedItems.where((item) => item.kind != MediaKind.folder).length;
+      final importedSkips = (stagedCount - importedCount).clamp(0, stagedCount).toInt();
+      return UrlImportResult(
+        importedCount: importedCount,
+        skippedCount: downloadResult.skippedCount + importedSkips,
+        failedCount: downloadResult.failedCount,
+      );
+    } finally {
+      if (await stagingDir.exists()) {
+        try {
+          await stagingDir.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<List<MediaItem>> _listFilesystemMediaItems(Directory root) async {
+    final items = <MediaItem>[];
+    await for (final entity in root.list(recursive: true, followLinks: false)) {
+      if (entity is! File) {
+        continue;
+      }
+      final name = entity.uri.pathSegments.isNotEmpty
+          ? entity.uri.pathSegments.last
+          : entity.path;
+      final ext = _lowerExt(name);
+      if (!(ext == _pdfExt || _imageExt.contains(ext))) {
+        continue;
+      }
+      try {
+        final stat = await entity.stat();
+        items.add(
+          MediaItem(
+            id: entity.path,
+            displayName: name,
+            kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+            folderRaw: entity.parent.path,
+            modified: stat.modified,
+            sizeBytes: stat.size,
+          ),
+        );
+      } catch (_) {}
+    }
+    return items;
   }
 
   @override

@@ -1,6 +1,9 @@
-import json
+﻿import json
+import logging
 import os
+import re
 import shutil
+import unicodedata
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -21,6 +24,7 @@ from server.services.url_download_service import UrlDownloadError, UrlDownloadOp
 
 
 router = APIRouter(tags=["actions"], dependencies=[Depends(require_bearer_token)])
+logger = logging.getLogger(__name__)
 
 
 
@@ -52,19 +56,20 @@ async def upload_files(
     freeTagsJson: str | None = Form(None),
     characterTagsJson: str | None = Form(None),
     sourceRelativePathsJson: str | None = Form(None),
+    originalDisplayNamesJson: str | None = Form(None),
     targetCollection: str | None = Form(None),
     organizeAfterImport: bool = Form(False),
     files: list[UploadFile] = File(...),
 ) -> dict[str, object]:
     if not files:
-        raise bad_request("??????????????????")
+        raise bad_request("アップロード対象のファイルがありません")
 
     settings = request.app.state.settings
     folder_path = os.path.normpath(folderRaw)
     if not os.path.isdir(folder_path):
-        raise bad_request(f"??????????????: {folderRaw}")
+        raise bad_request(f"保存先フォルダが存在しません: {folderRaw}")
     if settings.media_roots and not any(_is_inside_root(folder_path, root) for root in settings.media_roots):
-        raise bad_request("?????????????????????")
+        raise bad_request("保存先フォルダが許可されたメディアルートの外にあります")
 
     source_relative_paths = _parse_json_string_list(
         sourceRelativePathsJson,
@@ -72,28 +77,64 @@ async def upload_files(
         preserve_empty=True,
     )
     if source_relative_paths and len(source_relative_paths) != len(files):
-        raise bad_request("sourceRelativePathsJson ????????????????")
+        raise bad_request("sourceRelativePathsJson の件数がファイル数と一致しません")
+
+    original_display_names = _parse_json_string_list(
+        originalDisplayNamesJson,
+        field_name="originalDisplayNamesJson",
+        preserve_empty=True,
+    )
+    if original_display_names and len(original_display_names) != len(files):
+        raise bad_request("originalDisplayNamesJson の件数がファイル数と一致しません")
 
     imported_count = 0
     skipped_count = 0
     saved_entries: list[tuple[str, str]] = []
 
     for index, upload in enumerate(files):
-        file_name = _normalize_upload_file_name(upload.filename or "")
+        multipart_file_name = _normalize_upload_file_name(upload.filename or "")
+        original_display_name = (
+            original_display_names[index] if index < len(original_display_names) else ""
+        )
+        file_name = _resolve_upload_file_name(
+            original_display_name=original_display_name,
+            multipart_file_name=multipart_file_name,
+        )
         relative_path_hint = source_relative_paths[index] if index < len(source_relative_paths) else ""
+
+        logger.info(
+            "[upload] received index=%s multipart_filename=%r original_display_name=%r final_filename=%r utf8_multipart=%s utf8_original=%s",
+            index,
+            upload.filename,
+            original_display_name,
+            file_name,
+            _utf8_hex_preview(upload.filename or ""),
+            _utf8_hex_preview(original_display_name),
+        )
+
         if not file_name:
             skipped_count += 1
+            await upload.close()
             continue
 
         if not is_supported_media_extension(normalized_extension(file_name)):
-            raise bad_request(f"????????????: {file_name}")
+            raise bad_request(f"未対応のファイル形式です: {file_name}")
 
         destination = os.path.join(folder_path, file_name)
         if os.path.exists(destination):
             if skipIfExists:
                 skipped_count += 1
+                await upload.close()
                 continue
             destination = _unique_path(folder_path, file_name)
+
+        logger.info(
+            "[upload] saving index=%s destination=%r final_filename=%r relative_hint=%r",
+            index,
+            destination,
+            file_name,
+            relative_path_hint,
+        )
 
         try:
             with open(destination, "wb") as handle:
@@ -104,6 +145,15 @@ async def upload_files(
                     handle.write(chunk)
             saved_entries.append((os.path.normpath(destination), relative_path_hint))
             imported_count += 1
+        except Exception:
+            logger.exception(
+                "[upload] failed to save index=%s multipart_filename=%r original_display_name=%r final_filename=%r",
+                index,
+                upload.filename,
+                original_display_name,
+                file_name,
+            )
+            raise
         finally:
             await upload.close()
 
@@ -146,13 +196,14 @@ async def upload_files(
                 )
             except Exception:
                 unresolved_paths.append(saved_path)
+                logger.exception("[upload] failed to resolve media id for %r", saved_path)
                 continue
             imported_media_ids.append(media_id)
             resolved_entries.append((media_id, merged_tags))
 
         if unresolved_paths and (has_any_tags or organizeAfterImport):
             failed_name = os.path.basename(unresolved_paths[0])
-            raise bad_request(f"???????????????????: {failed_name}")
+            raise bad_request(f"取り込み後のメディア解決に失敗しました: {failed_name}")
 
         for media_id, merged_tags in resolved_entries:
             if not merged_tags:
@@ -179,7 +230,6 @@ async def upload_files(
     if targetCollection is not None:
         response["targetCollection"] = targetCollection
     return response
-
 
 @router.post("/download-url", response_model=DownloadUrlResponse)
 async def download_url(
@@ -311,7 +361,7 @@ def apply_rename(request: Request, payload: RenameRequest) -> MessageResponse:
         old_path=payload.oldPath or (before.path if before else None),
         new_path=payload.newPath or (after.path if after else None),
     )
-    return MessageResponse(message="???????????")
+    return MessageResponse(message="リネームしました")
 
 
 @router.post("/delete", response_model=MessageResponse)
@@ -331,7 +381,7 @@ def apply_delete(request: Request, payload: DeleteRequest) -> MessageResponse:
         items=items,
         hard_delete=payload.hardDelete,
     )
-    return MessageResponse(message=f"????????? ({deleted} ?)")
+    return MessageResponse(message=f"削除しました ({deleted} 件)")
 
 
 def _build_import_tags(
@@ -396,15 +446,15 @@ def _parse_json_string_list(
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise bad_request(f"{field_name} ? JSON ?????") from error
+        raise bad_request(f"{field_name} は JSON 配列で指定してください") from error
 
     if not isinstance(value, list):
-        raise bad_request(f"{field_name} ????????????")
+        raise bad_request(f"{field_name} は文字列配列で指定してください")
 
     out: list[str] = []
     for entry in value:
         if not isinstance(entry, str):
-            raise bad_request(f"{field_name} ?????????????")
+            raise bad_request(f"{field_name} の各要素は文字列である必要があります")
         trimmed = entry.strip()
         if trimmed or preserve_empty:
             out.append(trimmed)
@@ -465,12 +515,46 @@ def _normalize_upload_file_name(raw_name: str) -> str:
     elif isinstance(decoded, str) and decoded.strip():
         file_name = decoded.strip()
 
-    file_name = file_name.replace("\\", "/").split("/")[-1].strip()
+    return _sanitize_upload_display_name(file_name)
+
+
+
+def _resolve_upload_file_name(
+    *,
+    original_display_name: str,
+    multipart_file_name: str,
+) -> str:
+    original_name = _sanitize_upload_display_name(original_display_name)
+    multipart_name = _sanitize_upload_display_name(multipart_file_name)
+    if original_name:
+        if not normalized_extension(original_name) and normalized_extension(multipart_name):
+            original_name = f"{original_name}{Path(multipart_name).suffix}"
+        return original_name
+    return multipart_name
+
+
+
+def _sanitize_upload_display_name(raw_name: str) -> str:
+    file_name = unicodedata.normalize("NFC", str(raw_name or "").strip())
+    if not file_name:
+        return ""
+
+    file_name = Path(file_name.replace("\\", "/")).name.strip()
+    file_name = re.sub(r'[<>:"/\\|?*\x00-\x1F]+', "_", file_name)
+    file_name = file_name.rstrip(" .")
     if not file_name or file_name in {".", ".."}:
         return ""
-    if "\x00" in file_name:
-        raise bad_request("invalid upload filename")
     return file_name
+
+
+
+def _utf8_hex_preview(value: str) -> str:
+    raw = str(value or "").encode("utf-8", errors="replace")
+    preview = raw[:32].hex()
+    if len(raw) > 32:
+        preview += "..."
+    return preview
+
 
 def _collect_media_paths(folder_path: str) -> set[str]:
     found: set[str] = set()

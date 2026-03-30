@@ -387,15 +387,30 @@ class RemoteMediaApiClient {
         'multipart/form-data; boundary=$boundary',
       );
 
+      void writeAscii(String value) {
+        request.add(ascii.encode(value));
+      }
+
+      void writeUtf8(String value) {
+        request.add(utf8.encode(value));
+      }
+
       void writeField(String name, String value) {
-        request.write('--$boundary\r\n');
-        request.write('Content-Disposition: form-data; name="$name"\r\n\r\n');
-        request.write(value);
-        request.write('\r\n');
+        writeAscii('--$boundary\r\n');
+        writeAscii('Content-Disposition: form-data; name="$name"\r\n');
+        writeAscii('Content-Type: text/plain; charset=utf-8\r\n\r\n');
+        writeUtf8(value);
+        writeAscii('\r\n');
       }
 
       writeField('folderRaw', folderRaw);
       writeField('skipIfExists', skipIfExists ? 'true' : 'false');
+      writeField(
+        'originalDisplayNamesJson',
+        jsonEncode(
+          files.map((file) => file.fileName).toList(growable: false),
+        ),
+      );
       if (files.any((file) => (file.sourceRelativePath?.trim().isNotEmpty ?? false))) {
         writeField(
           'sourceRelativePathsJson',
@@ -440,13 +455,21 @@ class RemoteMediaApiClient {
         ),
       );
 
-      for (final file in files) {
-        request.write('--$boundary\r\n');
-        request.write(
-          'Content-Disposition: form-data; name="files"; '
-          'filename="${_escapeQuoted(_normalizeMultipartFileName(file.fileName))}"\r\n',
+      for (var index = 0; index < files.length; index++) {
+        final file = files[index];
+        final multipartFileName = _safeMultipartFileName(file.fileName, index);
+        debugPrint(
+          '[remote-upload] multipart file '
+          'index=$index multipartName=$multipartFileName '
+          'originalDisplayName=${file.fileName} '
+          'originalUtf8=${_utf8HexPreview(file.fileName)}',
         );
-        request.write('Content-Type: ${file.mimeType}\r\n\r\n');
+        writeAscii('--$boundary\r\n');
+        writeAscii(
+          'Content-Disposition: form-data; name="files"; '
+          'filename="${_escapeQuoted(multipartFileName)}"\r\n',
+        );
+        writeAscii('Content-Type: ${file.mimeType}\r\n\r\n');
         for (var offset = 0; offset < file.bytes.length; offset += chunkSize) {
           final end = (offset + chunkSize) > file.bytes.length
               ? file.bytes.length
@@ -464,7 +487,7 @@ class RemoteMediaApiClient {
             ),
           );
         }
-        request.write('\r\n');
+        writeAscii('\r\n');
 
         completedFiles++;
         onProgress?.call(
@@ -479,7 +502,7 @@ class RemoteMediaApiClient {
         );
       }
 
-      request.write('--$boundary--\r\n');
+      writeAscii('--$boundary--\r\n');
       onProgress?.call(
         MediaTransferProgress(
           sentBytes: sentBytes,
@@ -774,6 +797,43 @@ class RemoteMediaApiClient {
       normalized = normalized.substring(0, normalized.length - 1).trimRight();
     }
     return normalized.isEmpty ? 'upload.bin' : normalized;
+  }
+
+  String _safeMultipartFileName(String originalDisplayName, int index) {
+    final normalized = _normalizeMultipartFileName(originalDisplayName);
+    final ext = _asciiSafeExtension(normalized);
+    final hash = _shortAsciiHash(normalized);
+    final order = (index + 1).toString().padLeft(3, '0');
+    return 'upload_${order}_$hash$ext';
+  }
+
+  String _asciiSafeExtension(String value) {
+    final dotIndex = value.lastIndexOf('.');
+    if (dotIndex <= 0 || dotIndex >= value.length - 1) {
+      return '';
+    }
+    final ext = value.substring(dotIndex).toLowerCase();
+    final sanitized = ext.replaceAll(RegExp(r'[^a-z0-9.]'), '');
+    if (sanitized.isEmpty || !sanitized.startsWith('.')) {
+      return '';
+    }
+    return sanitized;
+  }
+
+  String _shortAsciiHash(String value) {
+    var hash = 0x811C9DC5;
+    const prime = 0x01000193;
+    for (final unit in value.codeUnits) {
+      hash ^= unit;
+      hash = (hash * prime) & 0xFFFFFFFF;
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  String _utf8HexPreview(String value) {
+    final bytes = utf8.encode(value);
+    final preview = bytes.take(32).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+    return bytes.length > 32 ? '$preview...' : preview;
   }
 
   RemoteFolderEntry _parseFolderEntry(dynamic raw) {

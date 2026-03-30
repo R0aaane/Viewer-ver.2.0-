@@ -2363,6 +2363,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 final fraction = value?.fraction;
                 final completed = value?.completedFiles ?? 0;
                 final total = value?.totalFiles ?? 0;
+                final statusLabel = value?.statusLabel?.trim();
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2372,6 +2373,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     ),
                     const SizedBox(height: 12),
                     Text(total == 0 ? '準備中...' : '$completed / $total'),
+                    if (statusLabel != null && statusLabel.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(statusLabel),
+                    ],
                     if (value?.currentFileName != null) ...[
                       const SizedBox(height: 8),
                       Text(
@@ -2436,7 +2441,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           context,
         ).showSnackBar(SnackBar(content: Text(refreshWarning)));
       }
-    } catch (e) {
+    } catch (e, st) {
+      _logUiError('host-import', e, st);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -2862,7 +2868,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           : 'URLから現在フォルダへ取り込み',
       dialogDescription: widget.repo.isRemoteMode
           ? 'Kemono / Coomer / Hitomi の URL を複数入力するか、お気に入り取得条件を指定して取り込みます。hitomi / kemono や作者階層はタグ化して、メディアは現在フォルダ直下へ整理します。'
-          : 'Kemono / Coomer / Hitomi の URL を複数入力するか、お気に入り取得条件を指定して現在のフォルダ配下へ保存します。',
+          : Platform.isAndroid
+              ? '直接メディア URL を複数入力して現在のフォルダへ保存します。Android のスタンドアロン動作では favorites 取得や Cookie 前提のサイト取り込みは未対応です。'
+              : 'Kemono / Coomer / Hitomi の URL を複数入力するか、お気に入り取得条件を指定して現在のフォルダ配下へ保存します。',
       progressTitle: 'URL をダウンロードして取り込み中...',
       successLabel: 'URL取り込み',
     );
@@ -2893,7 +2901,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           : 'URLからライブラリへ取り込み',
       dialogDescription: widget.repo.isRemoteMode
           ? 'Kemono / Coomer / Hitomi の URL 複数入力や favorites 取得に対応し、hitomi / kemono や作者階層はタグ化してライブラリ直下へ保存します。'
-          : 'Kemono / Coomer / Hitomi の URL 複数入力や favorites 取得に対応し、creator / post フォルダ構成のままライブラリへ保存します。',
+          : Platform.isAndroid
+              ? '直接メディア URL を複数入力してライブラリへ保存します。Android のスタンドアロン動作では favorites 取得や Cookie 前提のサイト取り込みは未対応です。'
+              : 'Kemono / Coomer / Hitomi の URL 複数入力や favorites 取得に対応し、creator / post フォルダ構成のままライブラリへ保存します。',
       progressTitle: 'URL をダウンロードして取り込み中...',
       successLabel: 'ライブラリへ URL 取り込み',
       activateFolder: true,

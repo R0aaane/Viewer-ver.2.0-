@@ -59,7 +59,10 @@ class ImportSourceNormalizer {
       return false;
     }
     final decoded = _tryDecodeJson(trimmed);
-    return decoded is List || decoded is String;
+    return decoded is List ||
+        decoded is String ||
+        _looksLikeWrappedScalar(trimmed) ||
+        _looksLikeLooseArray(trimmed);
   }
 
   static String basenameFromPathish(String raw) {
@@ -108,6 +111,14 @@ class ImportSourceNormalizer {
       }
     }
 
+    final looselyExpanded = _expandLooseWrappedValue(
+      trimmed,
+      decodedKind: decodedKind,
+    );
+    if (looselyExpanded != null) {
+      return looselyExpanded;
+    }
+
     final normalizedValue = _normalizeUriLikeValue(trimmed);
     return <NormalizedImportInput>[
       NormalizedImportInput(
@@ -124,6 +135,102 @@ class ImportSourceNormalizer {
     } catch (_) {
       return null;
     }
+  }
+
+  static List<NormalizedImportInput>? _expandLooseWrappedValue(
+    String raw, {
+    ImportInputKind? decodedKind,
+  }) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return const <NormalizedImportInput>[];
+    }
+
+    final unquoted = _unquoteLoose(trimmed);
+    if (unquoted != null && unquoted.trim().isNotEmpty && unquoted != trimmed) {
+      return _expandRawValue(
+        unquoted.trim(),
+        decodedKind: decodedKind ?? ImportInputKind.jsonString,
+      );
+    }
+
+    if (_looksLikeLooseArray(trimmed)) {
+      final inner = trimmed.substring(1, trimmed.length - 1).trim();
+      if (inner.isEmpty) {
+        return const <NormalizedImportInput>[];
+      }
+      final expanded = _splitLooseArray(inner)
+          .expand(
+            (entry) => _expandRawValue(
+              entry,
+              decodedKind: decodedKind ?? ImportInputKind.jsonArrayString,
+            ),
+          )
+          .toList(growable: false);
+      if (expanded.isNotEmpty) {
+        return expanded;
+      }
+    }
+
+    return null;
+  }
+
+  static bool _looksLikeWrappedScalar(String raw) {
+    return _unquoteLoose(raw) != null;
+  }
+
+  static bool _looksLikeLooseArray(String raw) {
+    return raw.length >= 2 && raw.startsWith('[') && raw.endsWith(']');
+  }
+
+  static String? _unquoteLoose(String raw) {
+    if (raw.length < 2) {
+      return null;
+    }
+    final first = raw[0];
+    final last = raw[raw.length - 1];
+    if ((first != '"' && first != "'") || first != last) {
+      return null;
+    }
+    return raw
+        .substring(1, raw.length - 1)
+        .replaceAll(r'\"', '"')
+        .replaceAll(r"\'", "'")
+        .replaceAll(r'\\', '\\');
+  }
+
+  static List<String> _splitLooseArray(String raw) {
+    final parts = <String>[];
+    final current = StringBuffer();
+    String? quote;
+
+    void flush() {
+      final value = current.toString().trim();
+      current.clear();
+      if (value.isNotEmpty) {
+        parts.add(value);
+      }
+    }
+
+    for (var i = 0; i < raw.length; i++) {
+      final char = raw[i];
+      if ((char == '"' || char == "'")) {
+        if (quote == null) {
+          quote = char;
+        } else if (quote == char) {
+          quote = null;
+        }
+        current.write(char);
+        continue;
+      }
+      if (char == ',' && quote == null) {
+        flush();
+        continue;
+      }
+      current.write(char);
+    }
+    flush();
+    return parts;
   }
 
   static String _normalizeUriLikeValue(String raw) {
