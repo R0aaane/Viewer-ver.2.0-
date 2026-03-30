@@ -173,6 +173,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _items = const [];
   bool _loading = false;
   bool _initializing = true;
+  bool _rescanning = false;
   String? _initializationErrorMessage;
   String? _galleryLoadErrorMessage;
   String? _homeSearchErrorMessage;
@@ -886,6 +887,64 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _handlePullToRefresh() async {
     await _refreshVisibleContent(refreshRegisteredFolders: true);
+  }
+
+  bool get _canRequestRescan => !widget.tagService.settings.isStandaloneMode;
+
+  Future<void> _requestRescanFromTopBar() async {
+    if (_rescanning) {
+      return;
+    }
+    if (!_canRequestRescan) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('スタンドアロンモードでは再スキャンは不要です')),
+      );
+      return;
+    }
+
+    setState(() => _rescanning = true);
+    try {
+      await widget.tagService.requestRescan();
+      await _refreshVisibleContent(refreshRegisteredFolders: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('再スキャンが完了しました')));
+    } catch (error, stackTrace) {
+      _logUiError('rescan', error, stackTrace);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('再スキャンに失敗しました: $error')));
+    } finally {
+      if (mounted) {
+        setState(() => _rescanning = false);
+      } else {
+        _rescanning = false;
+      }
+    }
+  }
+
+  Widget _buildRescanAppBarButton() {
+    return IconButton(
+      tooltip: _rescanning ? '再スキャン中...' : '再スキャン',
+      onPressed: _rescanning ? null : _requestRescanFromTopBar,
+      icon: _rescanning
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.sync),
+    );
+  }
+
+  List<Widget> _appendTopBarRescanAction(List<Widget> actions) {
+    return <Widget>[
+      ...actions,
+      _buildRescanAppBarButton(),
+    ];
   }
   Future<void> _saveFolderTileMode(FolderTileMode m) async {
   setState(() => _folderTileMode = m);
@@ -4473,7 +4532,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   List<Widget> _buildSearchAppBarActions() {
     if (_selectMode) {
-      return [
+      return _appendTopBarRescanAction([
         IconButton(
           tooltip: '選択解除',
           onPressed: _exitSelectMode,
@@ -4505,10 +4564,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           },
           icon: const Icon(Icons.archive_outlined),
         ),
-      ];
+      ]);
     }
 
-    return [
+    return _appendTopBarRescanAction([
       IconButton(
         tooltip: 'ホームへ',
         onPressed: () {
@@ -4525,15 +4584,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         },
         icon: const Icon(Icons.photo_library_outlined),
       ),
-    ];
+    ]);
   }
 
   List<Widget> _buildGalleryAppBarActions(TabController controller) {
     if (!_selectMode) {
-      return <Widget>[_buildGalleryOverflowMenu()];
+      return _appendTopBarRescanAction(<Widget>[_buildGalleryOverflowMenu()]);
     }
 
-    return [
+    return _appendTopBarRescanAction([
       IconButton(
         tooltip: '選択解除',
         onPressed: _exitSelectMode,
@@ -4563,14 +4622,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ),
       IconButton(
         tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
-        onPressed: () {
-          final view = _gallerySelectionView(controller.index);
-          final targets = _selectedFrom(view);
-          _importSelectedToLibrary(targets);
-        },
-        icon: const Icon(Icons.archive_outlined),
-      ),
-    ];
+          onPressed: () {
+            final view = _gallerySelectionView(controller.index);
+            final targets = _selectedFrom(view);
+            _importSelectedToLibrary(targets);
+          },
+          icon: const Icon(Icons.archive_outlined),
+        ),
+    ]);
   }
 
   Widget _buildGalleryMainBody() {
@@ -4703,7 +4762,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         drawer: _isWideLayout(context) ? null : _buildSidebar(),
         appBar: AppBar(
           title: const Text('ホーム'),
-          actions: [_buildHomeOverflowMenu()],
+          actions: _appendTopBarRescanAction([_buildHomeOverflowMenu()]),
         ),
         body: _wrapBodyWithUrlImportQueue(
           _withSidebar(context, _buildGuardedBody('home-body', _buildHomeBody)),

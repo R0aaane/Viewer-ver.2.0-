@@ -1,11 +1,11 @@
-﻿import asyncio
+import asyncio
 import json
 import os
 import tempfile
 from types import SimpleNamespace
 import unittest
 
-from server.api.routes_actions import apply_delete, apply_rename, download_url, upload_files
+from server.api.routes_actions import apply_delete, apply_rename, download_url, request_rescan, upload_files
 from server.core.errors import ApiError, bad_request
 from server.models.dto import (
     DeleteItemRequest,
@@ -64,12 +64,31 @@ class _RecordingMetadataStore:
 
 
 class _RecordingIndexService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        scan_error: Exception | None = None,
+        rescan_error: Exception | None = None,
+    ) -> None:
+        self.scan_error = scan_error
+        self.rescan_error = rescan_error
         self.scan_calls: list[str] = []
+        self.rescan_calls: list[list[str]] = []
 
     def scan_folder(self, folder_raw: str) -> int:
         self.scan_calls.append(folder_raw)
+        if self.scan_error is not None:
+            raise self.scan_error
         return len(self.scan_calls)
+
+    def rescan_configured_roots(self, roots: list[str]) -> list[dict[str, int | str]]:
+        self.rescan_calls.append(list(roots))
+        if self.rescan_error is not None:
+            raise self.rescan_error
+        results: list[dict[str, int | str]] = []
+        for root in roots:
+            results.append({'folderRaw': root, 'count': self.scan_folder(root)})
+        return results
 
 
 class _UploadMetadataStore:
@@ -120,7 +139,7 @@ class _UploadMetadataStore:
         if not media_ids:
             return {}
         source = os.path.join(library_root, 'sample.jpg')
-        target = os.path.join(library_root, 'ﾒ・, 'Artist', 'Series', 'sample.jpg')
+        target = os.path.join(library_root, 'artists', 'Artist', 'Series', 'sample.jpg')
         return {source: target}
 
 
@@ -262,6 +281,47 @@ class ActionsRoutesTest(unittest.TestCase):
 
         with self.assertRaises(ApiError):
             apply_delete(request, payload)
+
+    def test_request_rescan_scans_configured_roots(self) -> None:
+        store = _RecordingMetadataStore()
+        index_service = _RecordingIndexService()
+        request = _request(
+            store,
+            index_service=index_service,
+            media_roots=[r'C:\library', r'D:\books'],
+        )
+
+        response = request_rescan(request)
+
+        self.assertEqual(response.message, '再スキャンが完了しました: 3 件')
+        self.assertEqual(index_service.rescan_calls, [[r'C:\library', r'D:\books']])
+        self.assertEqual(index_service.scan_calls, [r'C:\library', r'D:\books'])
+
+    def test_request_rescan_propagates_bad_request(self) -> None:
+        store = _RecordingMetadataStore()
+        index_service = _RecordingIndexService(scan_error=bad_request('missing root'))
+        request = _request(store, index_service=index_service)
+
+        with self.assertRaises(ApiError) as context:
+            request_rescan(request, SimpleNamespace(folderRaw=r'Z:\missing'))
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, 'missing root')
+
+    def test_request_rescan_wraps_unexpected_errors(self) -> None:
+        store = _RecordingMetadataStore()
+        index_service = _RecordingIndexService(rescan_error=RuntimeError('db locked'))
+        request = _request(
+            store,
+            index_service=index_service,
+            media_roots=[r'C:\library'],
+        )
+
+        with self.assertRaises(ApiError) as context:
+            request_rescan(request)
+
+        self.assertEqual(context.exception.status_code, 500)
+        self.assertEqual(context.exception.detail, '再スキャンに失敗しました: db locked')
 
     def test_upload_files_applies_tags_and_organizes_imported_media(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import os
 import re
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
-from server.core.errors import bad_request
+from server.core.errors import ApiError, bad_request, server_error
 from server.core.media_formats import is_supported_media_extension, normalized_extension
 from server.models.dto import (
     DeleteRequest,
@@ -36,14 +36,26 @@ def request_rescan(
     index_service = request.app.state.index_service
     settings = request.app.state.settings
 
-    target = payload.folderRaw if payload else None
-    if target:
-        scanned = index_service.scan_folder(target)
-        return MessageResponse(message=f"???????????????: {scanned} ????")
+    target = (payload.folderRaw if payload else "") or ""
+    target = os.path.normpath(target.strip()) if target.strip() else ""
 
-    results = index_service.rescan_configured_roots(settings.media_roots)
-    total = sum(int(entry["count"]) for entry in results)
-    return MessageResponse(message=f"???????????????: {total} ????")
+    try:
+        if target:
+            logger.info("[rescan] request target=%s", target)
+            scanned = index_service.scan_folder(target)
+            logger.info("[rescan] completed target=%s scanned=%s", target, scanned)
+            return MessageResponse(message=f"再スキャンが完了しました: {scanned} 件")
+
+        logger.info("[rescan] request configured_roots=%s", settings.media_roots)
+        results = index_service.rescan_configured_roots(settings.media_roots)
+        total = sum(int(entry["count"]) for entry in results)
+        logger.info("[rescan] completed configured_roots total=%s details=%s", total, results)
+        return MessageResponse(message=f"再スキャンが完了しました: {total} 件")
+    except ApiError:
+        raise
+    except Exception as error:
+        logger.exception("[rescan] unexpected failure target=%s roots=%s", target or None, settings.media_roots)
+        raise server_error(f"再スキャンに失敗しました: {error}") from error
 
 
 @router.post("/upload")
