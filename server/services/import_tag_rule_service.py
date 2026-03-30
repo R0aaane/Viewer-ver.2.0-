@@ -127,3 +127,36 @@ def _is_service_segment(segment: str) -> bool:
     if lowered in _IMPORT_SERVICE_SEGMENTS:
         return True
     return any(token in lowered for token in _IMPORT_SITE_TAGS)
+
+
+def filter_hitomi_pdf_auto_tags(
+    tags: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    filtered: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    has_hitomi_media_type = False
+
+    for tag in tags:
+        category = str(tag.get("category") or "").strip()
+        name = str(tag.get("name") or "").strip()
+        if not category or not name:
+            continue
+
+        lowered_name = name.casefold()
+        is_artist = category == "artist"
+        is_hitomi_media_type = category == "mediaType" and lowered_name == "hitomi"
+        if not is_artist and not is_hitomi_media_type:
+            continue
+
+        if is_hitomi_media_type:
+            has_hitomi_media_type = True
+
+        key = (category, lowered_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered.append({"category": category, "name": name})
+
+    if not has_hitomi_media_type:
+        return []
+    return filtered

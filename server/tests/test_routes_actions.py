@@ -119,7 +119,7 @@ class _UploadMetadataStore:
         if not media_ids:
             return {}
         source = os.path.join(library_root, 'sample.jpg')
-        target = os.path.join(library_root, 'ìŽÒ•Ê', 'Artist', 'Series', 'sample.jpg')
+        target = os.path.join(library_root, 'Ò•', 'Artist', 'Series', 'sample.jpg')
         return {source: target}
 
 
@@ -215,7 +215,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_rename(request, payload)
 
-        self.assertEqual(response.message, 'ƒŠƒl[ƒ€‚ð”½‰f‚µ‚Ü‚µ‚½')
+        self.assertEqual(response.message, 'l[ð”½‰fÜ‚')
         self.assertEqual(
             store.rename_calls,
             [
@@ -249,7 +249,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_delete(request, payload)
 
-        self.assertEqual(response.message, 'íœ‚ð”½‰f‚µ‚Ü‚µ‚½ (2 Œ)')
+        self.assertEqual(response.message, 'íœð”½‰fÜ‚ (2 )')
         self.assertEqual(len(store.delete_calls), 1)
         self.assertTrue(store.delete_calls[0]['hard_delete'])
         self.assertEqual(len(store.delete_calls[0]['items']), 2)
@@ -318,7 +318,7 @@ class ActionsRoutesTest(unittest.TestCase):
                 ],
             )
 
-    def test_upload_files_infers_tags_from_source_relative_paths(self) -> None:
+    def test_upload_files_skips_inferred_tags_for_non_hitomi_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             metadata_store = _UploadMetadataStore()
             request = _request(
@@ -346,8 +346,39 @@ class ActionsRoutesTest(unittest.TestCase):
                 metadata_store.add_tag_calls[0]['tags'],
                 [
                     {'category': 'free', 'name': 'manual'},
+                ],
+            )
+
+    def test_upload_files_infers_tags_for_hitomi_pdf_from_source_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            request = _request(
+                metadata_store,
+                index_service=_RecordingIndexService(),
+                media_roots=[temp_dir],
+            )
+            upload = _FakeUploadFile('sample.pdf', b'%PDF-1.4')
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    freeTagsJson='["manual"]',
+                    sourceRelativePathsJson='["hitomi/[12345] ArtistName/sample.pdf"]',
+                    files=[upload],
+                )
+            )
+
+            self.assertEqual(response['importedCount'], 1)
+            self.assertEqual(response['taggedCount'], 1)
+            self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'free', 'name': 'manual'},
                     {'category': 'artist', 'name': 'ArtistName'},
-                    {'category': 'mediaType', 'name': 'kemono'},
+                    {'category': 'mediaType', 'name': 'hitomi'},
                 ],
             )
 
@@ -408,7 +439,6 @@ class ActionsRoutesTest(unittest.TestCase):
                     {'category': 'series', 'name': 'Series'},
                     {'category': 'character', 'name': 'Heroine'},
                     {'category': 'free', 'name': 'bonus'},
-                    {'category': 'mediaType', 'name': 'kemono'},
                 ],
             )
             self.assertTrue(os.path.exists(os.path.join(temp_dir, 'sample.jpg')))
@@ -486,4 +516,3 @@ class ActionsRoutesTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

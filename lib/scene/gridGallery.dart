@@ -109,6 +109,8 @@ enum _RegisteredFolderRemovalAction {
   deleteFiles,
 }
 
+enum _ThumbTileMenuAction { deletePdf }
+
 class _UrlImportQueueEntry {
   final String id;
   final String title;
@@ -605,12 +607,35 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-  Future<void> _retryInitialization() async {
-    if (_initializing) return;
-    await _loadPrefsAndAutoOpenFolder();
+  ScrollPhysics get _refreshScrollPhysics =>
+      const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics());
+
+  Widget _buildRefreshableStatusBody({
+    required Future<void> Function() onRefresh,
+    required Widget child,
+  }) {
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            physics: _refreshScrollPhysics,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
   }
 
-  Future<void> _loadPrefsAndAutoOpenFolder() async {
+  Future<void> _retryInitialization() async {
+    if (_initializing) return;
+    await _loadPrefsAndAutoOpenFolder(pageIndex: _galleryPageIndex);
+  }
+
+  Future<void> _loadPrefsAndAutoOpenFolder({int pageIndex = 0}) async {
     if (mounted) {
       setState(() {
         _initializing = true;
@@ -728,7 +753,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
         });
         if (current == null) return;
-        await _loadFolder(FolderHandle(current), saveAsLast: false);
+        await _loadFolder(
+          FolderHandle(current),
+          saveAsLast: false,
+          pageIndex: pageIndex,
+        );
         return;
       }
       final lib = await widget.repo.getAppLibraryFolder();
@@ -790,7 +819,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _initializationErrorMessage = null;
       });
       if (current == null) return;
-      await _loadFolder(FolderHandle(current), saveAsLast: false);
+      await _loadFolder(
+        FolderHandle(current),
+        saveAsLast: false,
+        pageIndex: pageIndex,
+      );
     } catch (error, stackTrace) {
       _logUiError('init', error, stackTrace);
       final message = 'アプリの初期化に失敗しました: $error';
@@ -811,6 +844,48 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _initializing = false;
       }
     }
+  }
+
+  Future<void> _refreshVisibleContent({
+    bool refreshRegisteredFolders = false,
+  }) async {
+    _folderItemsCache.clear();
+    _folderItemsCacheRecursive.clear();
+
+    if (refreshRegisteredFolders) {
+      await _loadPrefsAndAutoOpenFolder(pageIndex: _galleryPageIndex);
+    } else {
+      final currentFolderRaw = _currentFolderRaw;
+      if (currentFolderRaw != null) {
+        await _loadFolder(
+          FolderHandle(currentFolderRaw),
+          saveAsLast: false,
+          pageIndex: _galleryPageIndex,
+        );
+      }
+      await _reloadFavorites();
+    }
+
+    await _refreshAllFavoritesItems();
+    await _reloadArtistTagMasters();
+    await _refreshArtistTagCounts();
+
+    if (_homeQuery.trim().isNotEmpty) {
+      _folderItemsCacheRecursive.clear();
+      await _runHomeSearch();
+    } else if (mounted && _page == _MainPage.search) {
+      setState(() {
+        _homeSearching = false;
+        _homeSearchResults = const <MediaItem>[];
+        _homeSearchErrorMessage = null;
+      });
+    }
+
+    await _refreshCurrentPageTags();
+  }
+
+  Future<void> _handlePullToRefresh() async {
+    await _refreshVisibleContent(refreshRegisteredFolders: true);
   }
   Future<void> _saveFolderTileMode(FolderTileMode m) async {
   setState(() => _folderTileMode = m);
@@ -1219,17 +1294,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Widget _buildHomeBody() {
     if (_initializing) {
-      return _buildLoadingBody(
-        title: '初期化中です',
-        message: '設定とフォルダ情報を読み込んでいます。',
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildLoadingBody(
+          title: '初期化中です',
+          message: '設定とフォルダ情報を読み込んでいます。',
+        ),
       );
     }
 
     if (_initializationErrorMessage != null) {
-      return _buildErrorBody(
-        title: '初期化に失敗しました',
-        message: _initializationErrorMessage!,
-        onAction: _retryInitialization,
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildErrorBody(
+          title: '初期化に失敗しました',
+          message: _initializationErrorMessage!,
+          onAction: _retryInitialization,
+        ),
       );
     }
 
@@ -1238,10 +1319,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ? '未選択'
         : _folderLabel(_currentFolderRaw!);
 
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        Card(
+    return RefreshIndicator(
+      onRefresh: _handlePullToRefresh,
+      child: ListView(
+        physics: _refreshScrollPhysics,
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -1550,64 +1634,90 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 
   Widget _buildHomeSearchGalleryBody() {
     if (_initializing) {
-      return _buildLoadingBody(
-        title: '検索の準備中です',
-        message: '設定とフォルダ情報を読み込んでいます。',
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildLoadingBody(
+          title: '検索の準備中です',
+          message: '設定とフォルダ情報を読み込んでいます。',
+        ),
       );
     }
 
     if (_initializationErrorMessage != null) {
-      return _buildErrorBody(
-        title: '初期化に失敗しました',
-        message: _initializationErrorMessage!,
-        onAction: _retryInitialization,
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildErrorBody(
+          title: '初期化に失敗しました',
+          message: _initializationErrorMessage!,
+          onAction: _retryInitialization,
+        ),
       );
     }
 
     if (!_repoCapabilities.canRecursiveSearch) {
-      return _buildEmptyBody(
-        title: '全フォルダ検索は利用できません',
-        message: 'このモードでは現在のフォルダ内の表示だけが利用できます。',
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildEmptyBody(
+          title: '全フォルダ検索は利用できません',
+          message: 'このモードでは現在のフォルダ内の表示だけが利用できます。',
+        ),
       );
     }
 
     if (_homeSearching) {
-      return _buildLoadingBody(
-        title: '検索中です',
-        message: '全フォルダを検索しています。',
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildLoadingBody(
+          title: '検索中です',
+          message: '全フォルダを検索しています。',
+        ),
       );
     }
 
     if (_homeSearchErrorMessage != null) {
-      return _buildErrorBody(
-        title: '検索に失敗しました',
-        message: _homeSearchErrorMessage!,
-        onAction: _runHomeSearch,
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildErrorBody(
+          title: '検索に失敗しました',
+          message: _homeSearchErrorMessage!,
+          onAction: _runHomeSearch,
+        ),
       );
     }
 
     final q = _homeQuery.trim();
     if (q.isEmpty) {
-      return _buildEmptyBody(
-        title: 'キーワードを入力してください',
-        message: 'Home の検索欄にキーワード、タグ、#tag を入力してください。',
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildEmptyBody(
+          title: 'キーワードを入力してください',
+          message: 'Home の検索欄にキーワード、タグ、#tag を入力してください。',
+        ),
       );
     }
 
     if (_homeSearchResults.isEmpty) {
-      return _buildEmptyBody(
-        title: '該当するアイテムがありません',
-        message: '別のキーワード、タグ、artist / series 指定を試してください。',
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildEmptyBody(
+          title: '該当するアイテムがありません',
+          message: '別のキーワード、タグ、artist / series 指定を試してください。',
+        ),
       );
     }
 
-    return _buildGridFromList(_homeSearchResults, showFolderLabel: true);
+    return _buildGridFromList(
+      _homeSearchResults,
+      showFolderLabel: true,
+      onRefresh: _handlePullToRefresh,
+    );
   }
 
   // --------------------
@@ -1869,11 +1979,116 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
 
     if (changed == true) {
-      await _reloadFavorites();
-      await _refreshAllFavoritesItems();
-      if (_homeQuery.trim().isNotEmpty) {
-        await _runHomeSearch();
+      await _refreshVisibleContent();
+    }
+  }
+
+  bool _canDeletePdfItem(MediaItem item) {
+    return item.kind == MediaKind.pdf && _repoCapabilities.canDelete;
+  }
+
+  Future<bool> _confirmPdfDeletion(MediaItem item) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('この PDF を削除しますか？'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('削除すると元に戻せません。'),
+              const SizedBox(height: 12),
+              Text(
+                item.displayName,
+                style: Theme.of(dialogContext).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                item.id,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(dialogContext).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('削除'),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
+  }
+
+  Future<void> _removeFavoriteFromPrefs(String itemId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final next = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+        .toSet();
+    next.remove(itemId);
+    await prefs.setStringList(
+      _PrefsKeys.favorites,
+      next.toList(growable: false),
+    );
+    if (!mounted) return;
+    setState(() => _favorites = next);
+  }
+
+  Future<void> _deletePdfFromList(MediaItem item) async {
+    if (!_canDeletePdfItem(item)) {
+      return;
+    }
+
+    final confirmed = await _confirmPdfDeletion(item);
+    if (!confirmed || !mounted) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final deleted = await widget.repo.deleteItem(item);
+      if (!deleted) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('PDF の削除に失敗しました')),
+        );
+        return;
       }
+
+      String? metadataWarning;
+      try {
+        await widget.tagService.handleDeletedItems([item]);
+      } catch (error) {
+        metadataWarning = 'メタデータ削除に失敗しました: $error';
+      }
+
+      await _removeFavoriteFromPrefs(item.id);
+      if (!mounted) return;
+
+      setState(() {
+        _selectedIds.remove(item.id);
+      });
+
+      await _refreshVisibleContent();
+      if (!mounted) return;
+
+      messenger.showSnackBar(
+        SnackBar(content: Text('「${item.displayName}」を削除しました')),
+      );
+      if (metadataWarning != null) {
+        messenger.showSnackBar(SnackBar(content: Text(metadataWarning)));
+      }
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('PDF の削除に失敗しました: $error')),
+      );
     }
   }
 
@@ -1967,6 +2182,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
       if (!mounted) return;
 
+      final maxPageIndex = res.total <= 0 ? 0 : (res.total - 1) ~/ _pageSize;
+      if (res.total > 0 && pageIndex > maxPageIndex) {
+        await _loadFolder(folder, saveAsLast: false, pageIndex: maxPageIndex);
+        return;
+      }
+
       setState(() {
         _galleryTotal = res.total;
         _items = res.items;
@@ -2029,8 +2250,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
       if (!mounted) return;
 
+      final maxPageIndex = res.total <= 0 ? 0 : (res.total - 1) ~/ _pageSize;
+      if (res.total > 0 && pageIndex > maxPageIndex) {
+        await _loadGalleryPage(maxPageIndex);
+        return;
+      }
+
       setState(() {
         _galleryPageIndex = pageIndex;
+        _galleryTotal = res.total;
         _items = res.items;
         _loading = false;
         _galleryLoadErrorMessage = null;
@@ -2835,6 +3063,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         if (item.kind == MediaKind.folder || beforeItemIds.contains(item.id)) {
           continue;
         }
+        if (item.kind != MediaKind.pdf) {
+          continue;
+        }
 
         try {
           final inferred = ImportTagRuleService.inferForImportedItem(
@@ -2843,15 +3074,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             displayName: item.displayName,
             sourceUrls: sourceUrls,
           );
-          if (inferred.tags.isEmpty) {
+          final hitomiPdfTags = _filterHitomiPdfAutoTags(inferred.tags);
+          if (hitomiPdfTags.isEmpty) {
             continue;
           }
 
-          await widget.tagService.addTagsToItem(item, inferred.tags);
+          await widget.tagService.addTagsToItem(item, hitomiPdfTags);
           taggedCount++;
           debugPrint(
             '[url-import] inferred tags for ${item.displayName}: '
-            '${inferred.tags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')} '
+            '${hitomiPdfTags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')} '
             '(relative=${inferred.relativePathHint})',
           );
         } catch (error) {
@@ -3452,10 +3684,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       libraryRootRaw: libraryFolder?.raw,
     );
     final inheritedTags = await _collectGeneratedPdfInheritedTags(sourceImages);
-    final mergedTags = <Tag>[
+    final mergedTags = _filterHitomiPdfAutoTags(<Tag>[
       ...inheritedTags,
       ...inferred.tags,
-    ];
+    ]);
     debugPrint(
       '[pdf-export] inferred tags for ${created.savedName}: '
       '${inferred.tags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')} '
@@ -3568,8 +3800,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         final tag = entry.tag;
         final isArtist = tag.category == TagCategory.artist;
         final isImportSourceMediaType = tag.category == TagCategory.mediaType &&
-            (tag.name.toLowerCase() == 'hitomi' ||
-                tag.name.toLowerCase() == 'kemono');
+            tag.name.toLowerCase() == 'hitomi';
         if (!isArtist && !isImportSourceMediaType) {
           continue;
         }
@@ -3579,6 +3810,41 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
         out.add(Tag(name: tag.name, category: tag.category));
       }
+    }
+    return out;
+  }
+
+  List<Tag> _filterHitomiPdfAutoTags(Iterable<Tag> tags) {
+    final out = <Tag>[];
+    final seen = <String>{};
+    var hasHitomiMediaType = false;
+
+    for (final tag in tags) {
+      final normalizedName = tag.name.trim();
+      if (normalizedName.isEmpty) {
+        continue;
+      }
+
+      final isArtist = tag.category == TagCategory.artist;
+      final isHitomiMediaType = tag.category == TagCategory.mediaType &&
+          normalizedName.toLowerCase() == 'hitomi';
+      if (!isArtist && !isHitomiMediaType) {
+        continue;
+      }
+
+      if (isHitomiMediaType) {
+        hasHitomiMediaType = true;
+      }
+
+      final key = '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
+      if (!seen.add(key)) {
+        continue;
+      }
+      out.add(Tag(name: normalizedName, category: tag.category));
+    }
+
+    if (!hasHitomiMediaType) {
+      return const <Tag>[];
     }
     return out;
   }
@@ -3727,10 +3993,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Widget _buildSidebarListView() {
-    return ListView(
-      padding: EdgeInsets.zero,
-      children: [
-        _sidebarHeader(),
+    return RefreshIndicator(
+      onRefresh: _handlePullToRefresh,
+      child: ListView(
+        physics: _refreshScrollPhysics,
+        padding: EdgeInsets.zero,
+        children: [
+          _sidebarHeader(),
         ListTile(
           leading: const Icon(Icons.home_outlined),
           title: const Text('ホーム'),
@@ -3938,7 +4207,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
           ),
         ],
-      ],
+        ],
+      ),
     );
   }
 
@@ -4159,11 +4429,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Widget _wrapBodyWithUrlImportQueue(Widget body) {
+    final overlay = _buildUrlImportQueueOverlay();
     return Stack(
       fit: StackFit.expand,
       children: [
         body,
-        _buildUrlImportQueueOverlay(),
+        overlay,
       ],
     );
   }
@@ -4283,45 +4554,61 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Widget _buildGalleryMainBody() {
     if (_initializing) {
-      return _buildLoadingBody(
-        title: '初期化中です',
-        message: '設定とフォルダ情報を読み込んでいます。',
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildLoadingBody(
+          title: '初期化中です',
+          message: '設定とフォルダ情報を読み込んでいます。',
+        ),
       );
     }
 
     if (_initializationErrorMessage != null) {
-      return _buildErrorBody(
-        title: '初期化に失敗しました',
-        message: _initializationErrorMessage!,
-        onAction: _retryInitialization,
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildErrorBody(
+          title: '初期化に失敗しました',
+          message: _initializationErrorMessage!,
+          onAction: _retryInitialization,
+        ),
       );
     }
 
     if (_folder == null) {
       if (_foldersRaw.isEmpty) {
-        return _buildEmptyBody(
-          title: '表示できるフォルダがありません',
-          message: 'まずは $_primaryAddActionLabel を実行してください。',
-          actionLabel: _primaryAddActionLabel,
-          onAction: _addFolder,
+        return _buildRefreshableStatusBody(
+          onRefresh: _handlePullToRefresh,
+          child: _buildEmptyBody(
+            title: '表示できるフォルダがありません',
+            message: 'まずは $_primaryAddActionLabel を実行してください。',
+            actionLabel: _primaryAddActionLabel,
+            onAction: _addFolder,
+          ),
         );
       }
-      return _buildEmptyBody(
-        title: 'フォルダが未選択です',
-        message: 'サイドバーまたはホーム画面から表示するフォルダを選択してください。',
-        actionLabel: 'ホームを開く',
-        onAction: () => setState(() => _page = _MainPage.home),
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildEmptyBody(
+          title: 'フォルダが未選択です',
+          message:
+              'サイドバーまたはホーム画面から表示するフォルダを選択してください。',
+          actionLabel: 'ホームを開く',
+          onAction: () => setState(() => _page = _MainPage.home),
+        ),
       );
     }
 
     if (_galleryLoadErrorMessage != null && !_loading) {
-      return _buildErrorBody(
-        title: 'フォルダを読み込めませんでした',
-        message: _galleryLoadErrorMessage!,
-        onAction: () => _loadFolder(
-          _folder!,
-          saveAsLast: false,
-          pageIndex: _galleryPageIndex,
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildErrorBody(
+          title: 'フォルダを読み込めませんでした',
+          message: _galleryLoadErrorMessage!,
+          onAction: () => _loadFolder(
+            _folder!,
+            saveAsLast: false,
+            pageIndex: _galleryPageIndex,
+          ),
         ),
       );
     }
@@ -4331,37 +4618,59 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       final message = _loadTotal > 0
           ? '$_loadProcessed / $_loadTotal 件を読み込んでいます。'
           : 'フォルダの内容を読み込んでいます。';
-      return _buildLoadingBody(
-        title: 'フォルダを読み込んでいます',
-        message: message,
-        progress: progress,
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildLoadingBody(
+          title: 'フォルダを読み込んでいます',
+          message: message,
+          progress: progress,
+        ),
       );
     }
 
     if (_items.isEmpty) {
-      return _buildEmptyBody(
-        title: 'このフォルダに画像や PDF がありません',
-        message: '別のフォルダを選ぶか、$_galleryAddFileLabel を実行してください。',
-        actionLabel: _galleryAddFileLabel,
-        onAction: _repoCapabilities.canUpload ? _importToCurrentFolder : null,
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildEmptyBody(
+          title: 'このフォルダに画像や PDF がありません',
+          message: '別のフォルダを選ぶか、$_galleryAddFileLabel を実行してください。',
+          actionLabel: _galleryAddFileLabel,
+          onAction: _repoCapabilities.canUpload ? _importToCurrentFolder : null,
+        ),
       );
     }
 
     return TabBarView(
       children: [
-        _buildGrid(_applyFilter(_items, pdfOnly: null)),
+        _buildGrid(
+          _applyFilter(_items, pdfOnly: null),
+          onRefresh: _handlePullToRefresh,
+        ),
         _currentPageMetadataAvailable
-            ? _buildGrid(_applyUntagged(_items))
-            : _buildEmptyBody(
-                title: 'タグ情報を読み込めませんでした',
-                message: 'タグなし一覧はメタデータが取得できたときだけ表示されます。',
+            ? _buildGrid(
+                _applyUntagged(_items),
+                onRefresh: _handlePullToRefresh,
+              )
+            : _buildRefreshableStatusBody(
+                onRefresh: _handlePullToRefresh,
+                child: _buildEmptyBody(
+                  title: 'タグ情報を読み込めませんでした',
+                  message: 'タグなし一覧はメタデータが取得できたときだけ表示されます。',
+                ),
               ),
         _loadingFavAll
-            ? _buildLoadingBody(
-                title: 'お気に入りを集計しています',
-                message: '登録済みのお気に入りを確認しています。',
+            ? _buildRefreshableStatusBody(
+                onRefresh: _handlePullToRefresh,
+                child: _buildLoadingBody(
+                  title: 'お気に入りを集計しています',
+                  message: '登録済みのお気に入りを確認しています。',
+                ),
               )
-            : _buildGrid(_favoriteItemsAll, showFolderLabel: true),
+            : _buildGrid(
+                _favoriteItemsAll,
+                showFolderLabel: true,
+                onRefresh: _handlePullToRefresh,
+              )
       ],
     );
   }
@@ -4725,36 +5034,50 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() {});
   }
 
-  Widget _buildGrid(List<MediaItem> items, {bool showFolderLabel = false}) {
+  Widget _buildGrid(
+    List<MediaItem> items, {
+    bool showFolderLabel = false,
+    required Future<void> Function() onRefresh,
+  }) {
     if (items.isEmpty) {
-      return const Center(child: Text('該当するアイテムがありません'));
+      return _buildRefreshableStatusBody(
+        onRefresh: onRefresh,
+        child: _buildEmptyBody(
+          title: '該当するアイテムがありません',
+          message: '引っ張って更新するか、別の条件を試してください。',
+        ),
+      );
     }
 
-    return Column(
-      children: [
-        _buildPager(),
-        Expanded(
-          child: GridView.builder(
-            cacheExtent: 200,
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: CustomScrollView(
+        physics: _refreshScrollPhysics,
+        cacheExtent: 200,
+        slivers: [
+          if (_galleryTotal > _pageSize)
+            SliverToBoxAdapter(child: _buildPager()),
+          SliverPadding(
             padding: const EdgeInsets.all(12),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 0.75,
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 220,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: 0.75,
+              ),
+              delegate: SliverChildBuilderDelegate((context, index) {
+                final item = items[index];
+                return _buildGridTile(
+                  item,
+                  showFolderLabel: showFolderLabel,
+                  detailItemsSource: items,
+                );
+              }, childCount: items.length),
             ),
-            itemCount: items.length,
-            itemBuilder: (context, index) {
-              final item = items[index];
-              return _buildGridTile(
-                item,
-                showFolderLabel: showFolderLabel,
-                detailItemsSource: _items,
-              );
-            },
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -4807,8 +5130,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         );
 
         if (changed == true) {
-          await _reloadFavorites();
-          await _reloadTags();
+          await _refreshVisibleContent();
         }
       },
       child: _ThumbTile(
@@ -4819,6 +5141,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         onToggleFavorite: () => _toggleFavorite(item),
         selected: isSelected,
         folderTileMode: _folderTileMode,
+        canDeletePdf: !_selectMode && _canDeletePdfItem(item),
+        onDeletePdf: () => _deletePdfFromList(item),
       ),
     );
   }
@@ -4880,29 +5204,40 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Widget _buildGridFromList(
     List<MediaItem> items, {
     bool showFolderLabel = false,
+    required Future<void> Function() onRefresh,
   }) {
     if (items.isEmpty) {
-      return const Center(child: Text('該当するアイテムがありません'));
+      return _buildRefreshableStatusBody(
+        onRefresh: onRefresh,
+        child: _buildEmptyBody(
+          title: '該当するアイテムがありません',
+          message: '引っ張って更新するか、別の条件を試してください。',
+        ),
+      );
     }
 
-    return GridView.builder(
-      cacheExtent: 200,
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 220,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.75,
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: GridView.builder(
+        physics: _refreshScrollPhysics,
+        cacheExtent: 200,
+        padding: const EdgeInsets.all(12),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 220,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: 0.75,
+        ),
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          final item = items[index];
+          return _buildGridTile(
+            item,
+            showFolderLabel: showFolderLabel,
+            detailItemsSource: items,
+          );
+        },
       ),
-      itemCount: items.length,
-      itemBuilder: (context, index) {
-        final item = items[index];
-        return _buildGridTile(
-          item,
-          showFolderLabel: showFolderLabel,
-          detailItemsSource: items,
-        );
-      },
     );
   }
 }
@@ -4915,6 +5250,8 @@ class _ThumbTile extends StatelessWidget {
   final VoidCallback onToggleFavorite;
   final bool selected;
   final FolderTileMode folderTileMode;
+  final bool canDeletePdf;
+  final VoidCallback? onDeletePdf;
 
   const _ThumbTile({
     required this.repo,
@@ -4924,6 +5261,8 @@ class _ThumbTile extends StatelessWidget {
     required this.onToggleFavorite,
     this.selected = false,
     required this.folderTileMode,
+    this.canDeletePdf = false,
+    this.onDeletePdf,
   });
 
   @override
@@ -5038,6 +5377,28 @@ class _ThumbTile extends StatelessWidget {
                   isFavorite: isFavorite,
                   onPressed: onToggleFavorite,
                 ),
+                if (canDeletePdf && onDeletePdf != null) ...[
+                  const SizedBox(width: 4),
+                  PopupMenuButton<_ThumbTileMenuAction>(
+                    tooltip: 'PDF メニュー',
+                    padding: EdgeInsets.zero,
+                    icon: const Icon(Icons.more_vert, size: 18),
+                    onSelected: (action) {
+                      if (action == _ThumbTileMenuAction.deletePdf) {
+                        onDeletePdf!.call();
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(
+                        value: _ThumbTileMenuAction.deletePdf,
+                        child: ListTile(
+                          leading: Icon(Icons.delete_outline),
+                          title: Text('PDF を削除'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

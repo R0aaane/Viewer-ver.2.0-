@@ -16,7 +16,7 @@ from server.models.dto import (
     RescanRequest,
 )
 from server.services.auth_service import require_bearer_token
-from server.services.import_tag_rule_service import build_inferred_import_tags
+from server.services.import_tag_rule_service import build_inferred_import_tags, filter_hitomi_pdf_auto_tags
 from server.services.url_download_service import UrlDownloadError, UrlDownloadOptions
 
 
@@ -128,10 +128,14 @@ async def upload_files(
         unresolved_paths: list[str] = []
         has_any_tags = bool(common_tags)
         for saved_path, relative_path_hint in saved_entries:
-            inferred_tags = build_inferred_import_tags(
-                relative_path=relative_path_hint,
-                source_urls=[],
-            )
+            inferred_tags = []
+            if normalized_extension(saved_path) == ".pdf":
+                inferred_tags = filter_hitomi_pdf_auto_tags(
+                    build_inferred_import_tags(
+                        relative_path=relative_path_hint,
+                        source_urls=[],
+                    )
+                )
             merged_tags = _merge_import_tags(common_tags, inferred_tags)
             if merged_tags:
                 has_any_tags = True
@@ -246,10 +250,14 @@ async def download_url(
         unresolved_paths: list[str] = []
         has_any_tags = bool(common_tags)
         for saved_path, relative_path_hint in flattened_entries:
-            inferred_tags = build_inferred_import_tags(
-                relative_path=relative_path_hint,
-                source_urls=source_urls,
-            )
+            inferred_tags = []
+            if normalized_extension(saved_path) == ".pdf":
+                inferred_tags = filter_hitomi_pdf_auto_tags(
+                    build_inferred_import_tags(
+                        relative_path=relative_path_hint,
+                        source_urls=source_urls,
+                    )
+                )
             merged_tags = _merge_import_tags(common_tags, inferred_tags)
             if merged_tags:
                 has_any_tags = True
@@ -484,4 +492,3 @@ def _remove_empty_dirs(folder_path: str) -> None:
                 os.rmdir(base)
         except OSError:
             continue
-

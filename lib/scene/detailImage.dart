@@ -180,11 +180,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     setState(() {});
     final lib = await widget.repo.getAppLibraryFolder();
     _libraryRootRaw = lib.raw;
-    final itemFolder = _item.folderRaw;
     _canDeleteFromLibrary =
-        widget.repo.capabilities.canDelete &&
-        (widget.tagService.isRemoteMode ||
-            _normPath(itemFolder).startsWith(_normPath(lib.raw)));
+        widget.repo.capabilities.canDelete && _isPdf;
     await _loadFavoriteForCurrent();
     _reloadForCurrent();
   }
@@ -597,10 +594,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('削除しますか？'),
+        title: const Text('この PDF を削除しますか？'),
         content: Text(
-          '「${item.displayName}」をライブラリから削除します。\n'
-          'この操作は元に戻せません。',
+          '「${item.displayName}」を削除します。\n'
+          '削除すると元に戻せません。',
         ),
         actions: [
           TextButton(
@@ -883,7 +880,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   value: _DetailMenuAction.delete,
                   child: ListTile(
                     leading: Icon(Icons.delete_outline),
-                    title: Text('ライブラリから削除'),
+                    title: Text('PDF を削除'),
                   ),
                 ),
               ],

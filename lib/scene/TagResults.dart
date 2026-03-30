@@ -39,6 +39,16 @@ class _TagResultsPageState extends State<TagResultsPage> {
     _resultsFuture = _loadResults();
   }
 
+  Future<void> _refreshResults() async {
+    final next = _loadResults();
+    if (!mounted) {
+      _resultsFuture = next;
+      return;
+    }
+    setState(() => _resultsFuture = next);
+    await next;
+  }
+
   Future<List<MediaItem>> _loadResults() {
     return widget.tagService.findMediaItemsByTagAcrossFolders(
       category: widget.category,
@@ -131,7 +141,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
       return;
     }
 
-    await Navigator.push(
+    final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (_) => ImageDetailPage(
@@ -143,6 +153,9 @@ class _TagResultsPageState extends State<TagResultsPage> {
         ),
       ),
     );
+    if (changed == true && mounted) {
+      await _refreshResults();
+    }
   }
 
   @override
@@ -153,7 +166,7 @@ class _TagResultsPageState extends State<TagResultsPage> {
         actions: [
           IconButton(
             tooltip: '再読み込み',
-            onPressed: () => setState(() => _resultsFuture = _loadResults()),
+            onPressed: () => _refreshResults(),
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -162,22 +175,61 @@ class _TagResultsPageState extends State<TagResultsPage> {
         future: _resultsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
+            return RefreshIndicator(
+              onRefresh: _refreshResults,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
+                children: const [
+                  SizedBox(
+                    height: 320,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ],
+              ),
+            );
           }
           if (snapshot.hasError) {
-            return SceneEmptyState(
-              icon: Icons.error_outline,
-              title: 'タグ結果の読み込みに失敗しました',
-              message: '${snapshot.error}',
+            return RefreshIndicator(
+              onRefresh: _refreshResults,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.6,
+                    child: SceneEmptyState(
+                      icon: Icons.error_outline,
+                      title: 'タグ結果の読み込みに失敗しました',
+                      message: '${snapshot.error}',
+                    ),
+                  ),
+                ],
+              ),
             );
           }
 
           final items = snapshot.data ?? const <MediaItem>[];
           if (items.isEmpty) {
-            return const SceneEmptyState(
-              icon: Icons.label_off_outlined,
-              title: 'このタグの作品はありません',
-              message: 'タグだけが残っているか、対象作品が見つかりませんでした。',
+            return RefreshIndicator(
+              onRefresh: _refreshResults,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
+                children: const [
+                  SizedBox(
+                    height: 320,
+                    child: SceneEmptyState(
+                      icon: Icons.label_off_outlined,
+                      title: 'このタグの作品はありません',
+                      message: 'タグだけが残っているか、対象作品が見つかりませんでした。',
+                    ),
+                  ),
+                ],
+              ),
             );
           }
 
@@ -188,66 +240,72 @@ class _TagResultsPageState extends State<TagResultsPage> {
               ),
             );
 
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: sorted.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final item = sorted[index];
-              return Card(
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () => _openDetail(item),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: 84,
-                          height: 112,
-                          child: _coverThumb(item),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                item.displayName,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  Chip(
-                                    label: Text(
-                                      item.kind == MediaKind.pdf ? 'PDF' : '画像',
-                                    ),
-                                  ),
-                                  Chip(
-                                    label: Text(
-                                      _shortFolder(item.folderRaw),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+          return RefreshIndicator(
+            onRefresh: _refreshResults,
+            child: ListView.separated(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
+              ),
+              padding: const EdgeInsets.all(16),
+              itemCount: sorted.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final item = sorted[index];
+                return Card(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => _openDetail(item),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 84,
+                            height: 112,
+                            child: _coverThumb(item),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.chevron_right),
-                      ],
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.displayName,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    Chip(
+                                      label: Text(
+                                        item.kind == MediaKind.pdf ? 'PDF' : '画像',
+                                      ),
+                                    ),
+                                    Chip(
+                                      label: Text(
+                                        _shortFolder(item.folderRaw),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.chevron_right),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),
