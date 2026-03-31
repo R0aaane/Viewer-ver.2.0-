@@ -931,6 +931,7 @@ class RemoteMediaRepository implements MediaRepository {
           rawItem.tags,
           item.tags,
           localStoredTagsByItemId[rawItem.id] ?? const <Tag>[],
+          localStoredTagsByItemId[item.id] ?? const <Tag>[],
         );
         debugPrint(
           '[remote-upload] prepared '
@@ -1050,7 +1051,12 @@ class RemoteMediaRepository implements MediaRepository {
     }
   }
 
-  List<Tag> _mergeUploadTags(Iterable<Tag> first, Iterable<Tag> second, Iterable<Tag> third) {
+  List<Tag> _mergeUploadTags(
+    Iterable<Tag> first,
+    Iterable<Tag> second,
+    Iterable<Tag> third,
+    Iterable<Tag> fourth,
+  ) {
     final merged = <Tag>[];
     final seen = <String>{};
 
@@ -1071,6 +1077,7 @@ class RemoteMediaRepository implements MediaRepository {
     appendAll(first);
     appendAll(second);
     appendAll(third);
+    appendAll(fourth);
     return merged;
   }
 

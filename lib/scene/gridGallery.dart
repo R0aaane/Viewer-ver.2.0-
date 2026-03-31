@@ -22,6 +22,7 @@ import '../repository/mediaRepository.dart';
 import 'artistTagIndex.dart';
 import 'detailImage.dart';
 import 'metadata_settings_dialog.dart';
+import 'TagResults.dart';
 import 'url_import_dialog.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
@@ -438,16 +439,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _openTagGalleryFromDrawer(String tagName) async {
-    Navigator.pop(context);
-
+    _closeSidebar();
     _exitSelectMode();
-    setState(() {
-      _page = _MainPage.search;
-      _homeQuery = '#$tagName';
-      _homeSearchCtrl.text = '#$tagName';
-    });
-
-    await _runHomeSearch();
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TagResultsPage(
+          tagService: widget.tagService,
+          repo: widget.repo,
+          folderRaws: _foldersRaw,
+          category: TagCategory.artist,
+          tagName: tagName,
+        ),
+      ),
+    );
   }
 
   @override

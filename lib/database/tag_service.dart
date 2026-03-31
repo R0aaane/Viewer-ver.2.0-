@@ -10,6 +10,7 @@ import '../models/tag.dart';
 import '../models/tag_with_id.dart';
 import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
+import '../services/import_source_normalizer.dart';
 import '../services/media_id_resolver.dart';
 import '../services/remote_tag_api_client.dart';
 import 'app_db.dart';
@@ -561,7 +562,10 @@ class TagService {
 
     final result = <String, List<Tag>>{};
     for (final item in items.where((entry) => entry.kind != MediaKind.folder)) {
-      result[item.id] = await _listLocallyStoredTagsForItemInternal(item);
+      final tags = await _listLocallyStoredTagsForItemInternal(item);
+      for (final key in _localItemLookupKeys(item.id)) {
+        result[key] = tags;
+      }
     }
     return result;
   }
@@ -999,7 +1003,7 @@ class TagService {
 
   Future<List<Tag>> _listLocallyStoredTagsForItemInternal(MediaItem item) async {
     final merged = <String, Tag>{};
-    for (final itemId in _itemLookupKeys(item.id).toSet()) {
+    for (final itemId in _localItemLookupKeys(item.id)) {
       final current = await _localStore.listTagsForItem(itemId);
       for (final entry in current) {
         final normalizedName = entry.tag.name.trim();
@@ -1018,5 +1022,14 @@ class TagService {
       }
     }
     return merged.values.toList(growable: false);
+  }
+
+  Set<String> _localItemLookupKeys(String raw) {
+    final keys = <String>{..._itemLookupKeys(raw)};
+    final normalized = ImportSourceNormalizer.normalizeSingleValue(raw)?.trim();
+    if (normalized != null && normalized.isNotEmpty) {
+      keys.addAll(_itemLookupKeys(normalized));
+    }
+    return keys;
   }
 }
