@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 
 import '../models/mediaItem.dart';
+import '../models/tag.dart';
 import '../models/folder.dart';
 import '../repository/mediaRepository.dart';
 import 'import_source_normalizer.dart';
@@ -26,12 +27,14 @@ class RemoteUploadFile {
   final Uint8List bytes;
   final String mimeType;
   final String? sourceRelativePath;
+  final List<Tag> tags;
 
   const RemoteUploadFile({
     required this.fileName,
     required this.bytes,
     required this.mimeType,
     this.sourceRelativePath,
+    this.tags = const <Tag>[],
   });
 }
 
@@ -417,6 +420,20 @@ class RemoteMediaApiClient {
           jsonEncode(
             files
                 .map((file) => file.sourceRelativePath?.trim() ?? '')
+                .toList(growable: false),
+          ),
+        );
+      }
+      if (files.any((file) => file.tags.isNotEmpty)) {
+        writeField(
+          'fileTagsJson',
+          jsonEncode(
+            files
+                .map(
+                  (file) => file.tags
+                      .map(_tagToJson)
+                      .toList(growable: false),
+                )
                 .toList(growable: false),
           ),
         );
@@ -828,6 +845,13 @@ class RemoteMediaApiClient {
       hash = (hash * prime) & 0xFFFFFFFF;
     }
     return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  Map<String, dynamic> _tagToJson(Tag tag) {
+    return <String, dynamic>{
+      'name': tag.name,
+      'category': tag.category.name,
+    };
   }
 
   String _utf8HexPreview(String value) {

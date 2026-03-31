@@ -3,6 +3,10 @@
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../models/tag.dart';
+
+typedef LocalUploadTagsProvider =
+    Future<Map<String, List<Tag>>> Function(List<MediaItem> items);
 
 class RepositoryCapabilities {
   final bool canRename;

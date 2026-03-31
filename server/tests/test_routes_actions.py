@@ -444,6 +444,45 @@ class ActionsRoutesTest(unittest.TestCase):
             )
 
 
+
+    def test_upload_files_preserves_file_specific_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            request = _request(
+                metadata_store,
+                index_service=_RecordingIndexService(),
+                media_roots=[temp_dir],
+            )
+            upload = _FakeUploadFile('sample.jpg', b'abc123')
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    fileTagsJson=json.dumps(
+                        [[
+                            {'category': 'artist', 'name': 'Local Artist'},
+                            {'category': 'series', 'name': 'Local Series'},
+                            {'category': 'free', 'name': 'bonus'},
+                        ]]
+                    ),
+                    files=[upload],
+                )
+            )
+
+            self.assertEqual(response['importedCount'], 1)
+            self.assertEqual(response['taggedCount'], 1)
+            self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'artist', 'name': 'Local Artist'},
+                    {'category': 'series', 'name': 'Local Series'},
+                    {'category': 'free', 'name': 'bonus'},
+                ],
+            )
+
     def test_upload_files_prefers_original_display_name_for_unicode_file_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             metadata_store = _UploadMetadataStore()

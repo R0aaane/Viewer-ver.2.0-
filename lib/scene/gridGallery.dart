@@ -2485,6 +2485,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           await _runHomeSearch();
         }
         await _refreshCurrentPageTags();
+        await _reloadArtistTagMasters();
         await _refreshArtistTagCounts();
       } catch (error, stackTrace) {
         _logUiError('post-import-refresh', error, stackTrace);

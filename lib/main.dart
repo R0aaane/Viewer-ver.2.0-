@@ -42,7 +42,11 @@ Future<void> main() async {
   final hostServerService = HostApiServerService();
   await hostServerService.refresh();
 
-  final repo = createRepository(appDb, initialSettings: tagService.settings);
+  final repo = createRepository(
+    appDb,
+    initialSettings: tagService.settings,
+    localUploadTagsProvider: tagService.listLocallyStoredTagsForItems,
+  );
 
   runApp(
     MyApp(

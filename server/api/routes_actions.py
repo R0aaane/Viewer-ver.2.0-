@@ -67,6 +67,7 @@ async def upload_files(
     seriesTag: str | None = Form(None),
     freeTagsJson: str | None = Form(None),
     characterTagsJson: str | None = Form(None),
+    fileTagsJson: str | None = Form(None),
     sourceRelativePathsJson: str | None = Form(None),
     originalDisplayNamesJson: str | None = Form(None),
     targetCollection: str | None = Form(None),
@@ -99,9 +100,13 @@ async def upload_files(
     if original_display_names and len(original_display_names) != len(files):
         raise bad_request("originalDisplayNamesJson の件数がファイル数と一致しません")
 
+    file_tag_groups = _parse_json_tag_groups(fileTagsJson, field_name="fileTagsJson")
+    if file_tag_groups and len(file_tag_groups) != len(files):
+        raise bad_request("fileTagsJson length must match files")
+
     imported_count = 0
     skipped_count = 0
-    saved_entries: list[tuple[str, str]] = []
+    saved_entries: list[tuple[str, str, list[dict[str, str]]]] = []
 
     for index, upload in enumerate(files):
         multipart_file_name = _normalize_upload_file_name(upload.filename or "")
@@ -113,6 +118,7 @@ async def upload_files(
             multipart_file_name=multipart_file_name,
         )
         relative_path_hint = source_relative_paths[index] if index < len(source_relative_paths) else ""
+        file_tags = file_tag_groups[index] if index < len(file_tag_groups) else []
 
         logger.info(
             "[upload] received index=%s multipart_filename=%r original_display_name=%r final_filename=%r utf8_multipart=%s utf8_original=%s",
@@ -155,7 +161,7 @@ async def upload_files(
                     if not chunk:
                         break
                     handle.write(chunk)
-            saved_entries.append((os.path.normpath(destination), relative_path_hint))
+            saved_entries.append((os.path.normpath(destination), relative_path_hint, file_tags))
             imported_count += 1
         except Exception:
             logger.exception(
@@ -176,7 +182,7 @@ async def upload_files(
     if imported_count > 0:
         index_service = request.app.state.index_service
         metadata_store = request.app.state.metadata_store
-        rescanned_count = index_service.index_files([saved_path for saved_path, _ in saved_entries])
+        rescanned_count = index_service.index_files([saved_path for saved_path, _, _ in saved_entries])
 
         common_tags = _build_import_tags(
             artist_tag=artistTag,
@@ -189,7 +195,7 @@ async def upload_files(
         imported_media_ids: list[str] = []
         unresolved_paths: list[str] = []
         has_any_tags = bool(common_tags)
-        for saved_path, relative_path_hint in saved_entries:
+        for saved_path, relative_path_hint, file_tags in saved_entries:
             inferred_tags = []
             if normalized_extension(saved_path) == ".pdf":
                 inferred_tags = filter_hitomi_pdf_auto_tags(
@@ -198,7 +204,7 @@ async def upload_files(
                         source_urls=[],
                     )
                 )
-            merged_tags = _merge_import_tags(common_tags, inferred_tags)
+            merged_tags = _merge_import_tags(common_tags, file_tags, inferred_tags)
             if merged_tags:
                 has_any_tags = True
             try:
@@ -445,6 +451,49 @@ def _merge_import_tags(*tag_groups: list[dict[str, str]]) -> list[dict[str, str]
 def _parse_json_tag_list(raw: str | None, *, field_name: str) -> list[str]:
     return _parse_json_string_list(raw, field_name=field_name)
 
+
+
+def _parse_json_tag_groups(
+    raw: str | None,
+    *,
+    field_name: str,
+) -> list[list[dict[str, str]]]:
+    if raw is None or not raw.strip():
+        return []
+
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise bad_request(f"{field_name} must be valid JSON") from error
+
+    if not isinstance(value, list):
+        raise bad_request(f"{field_name} must be a JSON array")
+
+    out: list[list[dict[str, str]]] = []
+    for group in value:
+        if group is None:
+            out.append([])
+            continue
+        if not isinstance(group, list):
+            raise bad_request(f"{field_name} entries must be arrays")
+
+        normalized_group: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for raw_tag in group:
+            if not isinstance(raw_tag, dict):
+                raise bad_request(f"{field_name} tags must be objects")
+            category = str(raw_tag.get("category") or "").strip()
+            name = str(raw_tag.get("name") or "").strip()
+            if not category or not name:
+                continue
+            key = (category, name.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_group.append({"category": category, "name": name})
+        out.append(normalized_group)
+
+    return out
 
 def _parse_json_string_list(
     raw: str | None,

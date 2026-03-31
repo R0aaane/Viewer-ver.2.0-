@@ -12,6 +12,7 @@ import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../models/tag.dart';
 import '../services/app_settings_service.dart';
 import '../services/import_source_normalizer.dart';
 import '../services/media_id_resolver.dart';
@@ -43,6 +44,7 @@ class RemoteMediaRepository implements MediaRepository {
   final RemoteMediaApiClient _client;
   final MediaRepository _localPickerRepository;
   final MediaIdResolver _idResolver;
+  final LocalUploadTagsProvider? _localUploadTagsProvider;
 
   final Map<String, Future<ThumbPair>> _thumbInFlight =
       <String, Future<ThumbPair>>{};
@@ -62,9 +64,11 @@ class RemoteMediaRepository implements MediaRepository {
     String baseUrl = '',
     String? authToken,
     required MediaRepository localPickerRepository,
+    LocalUploadTagsProvider? localUploadTagsProvider,
     RemoteMediaApiClient? apiClient,
     MediaIdResolver? idResolver,
   }) : _localPickerRepository = localPickerRepository,
+       _localUploadTagsProvider = localUploadTagsProvider,
        _client =
            apiClient ??
            RemoteMediaApiClient(
@@ -76,11 +80,13 @@ class RemoteMediaRepository implements MediaRepository {
   factory RemoteMediaRepository.fromSettings(
     MetadataSettings settings, {
     required MediaRepository localPickerRepository,
+    LocalUploadTagsProvider? localUploadTagsProvider,
   }) {
     return RemoteMediaRepository(
       baseUrl: settings.remoteApiBaseUrl,
       authToken: settings.authToken,
       localPickerRepository: localPickerRepository,
+      localUploadTagsProvider: localUploadTagsProvider,
     );
   }
 
@@ -861,6 +867,7 @@ class RemoteMediaRepository implements MediaRepository {
 
       final binaries = <RemoteUploadFile>[];
       final readFailures = <String>[];
+      final localStoredTagsByItemId = await _loadLocalUploadTags(uploadTargets);
       onProgress?.call(
         MediaTransferProgress(
           sentBytes: 0,
@@ -920,11 +927,17 @@ class RemoteMediaRepository implements MediaRepository {
           item,
           fallbackFileName: fileName,
         );
+        final itemTags = _mergeUploadTags(
+          rawItem.tags,
+          item.tags,
+          localStoredTagsByItemId[rawItem.id] ?? const <Tag>[],
+        );
         debugPrint(
           '[remote-upload] prepared '
           'name=$fileName sourceKind=$sourceKindLabel '
           'strategy=${readResult.strategy} '
-          'relative=${sourceRelativePath ?? '-'} bytes=${readResult.bytes.length}',
+          'relative=${sourceRelativePath ?? '-'} bytes=${readResult.bytes.length} '
+          'tags=${itemTags.length}',
         );
         binaries.add(
           RemoteUploadFile(
@@ -934,6 +947,7 @@ class RemoteMediaRepository implements MediaRepository {
                 ? 'application/pdf'
                 : _mimeTypeForImage(fileName),
             sourceRelativePath: sourceRelativePath,
+            tags: itemTags,
           ),
         );
       }
@@ -1014,6 +1028,50 @@ class RemoteMediaRepository implements MediaRepository {
         'ファイル名またはパスに不正な文字列が混ざっている可能性があります。\n$error',
       );
     }
+  }
+
+  Future<Map<String, List<Tag>>> _loadLocalUploadTags(
+    List<MediaItem> items,
+  ) async {
+    final provider = _localUploadTagsProvider;
+    if (provider == null || items.isEmpty) {
+      return const <String, List<Tag>>{};
+    }
+
+    try {
+      return await provider(items);
+    } catch (error, stackTrace) {
+      debugPrint('[remote-upload] local tag lookup failed: $error');
+      debugPrintStack(
+        label: '[remote-upload] local tag lookup stack',
+        stackTrace: stackTrace,
+      );
+      return const <String, List<Tag>>{};
+    }
+  }
+
+  List<Tag> _mergeUploadTags(Iterable<Tag> first, Iterable<Tag> second, Iterable<Tag> third) {
+    final merged = <Tag>[];
+    final seen = <String>{};
+
+    void appendAll(Iterable<Tag> tags) {
+      for (final tag in tags) {
+        final normalizedName = tag.name.trim();
+        if (normalizedName.isEmpty) {
+          continue;
+        }
+        final key = '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
+        if (!seen.add(key)) {
+          continue;
+        }
+        merged.add(Tag(name: normalizedName, category: tag.category));
+      }
+    }
+
+    appendAll(first);
+    appendAll(second);
+    appendAll(third);
+    return merged;
   }
 
   String _mimeTypeForImage(String fileName) {
@@ -1617,6 +1675,7 @@ class RemoteMediaRepository implements MediaRepository {
 
 class SwitchingMediaRepository implements MediaRepository {
   final MediaRepository _localRepository;
+  final LocalUploadTagsProvider? _localUploadTagsProvider;
   final AppSettingsService _settingsService = AppSettingsService();
 
   MetadataSettings _settings;
@@ -1625,11 +1684,14 @@ class SwitchingMediaRepository implements MediaRepository {
   SwitchingMediaRepository(
     this._localRepository, {
     required MetadataSettings initialSettings,
-  }) : _settings = initialSettings {
+    LocalUploadTagsProvider? localUploadTagsProvider,
+  }) : _settings = initialSettings,
+       _localUploadTagsProvider = localUploadTagsProvider {
     _remoteRepository = initialSettings.isClientMode
         ? RemoteMediaRepository.fromSettings(
             initialSettings,
             localPickerRepository: _localRepository,
+            localUploadTagsProvider: _localUploadTagsProvider,
           )
         : null;
   }
@@ -1657,6 +1719,7 @@ class SwitchingMediaRepository implements MediaRepository {
       _remoteRepository = RemoteMediaRepository.fromSettings(
         _settings,
         localPickerRepository: _localRepository,
+        localUploadTagsProvider: _localUploadTagsProvider,
       );
     } else {
       await _remoteRepository?.dispose();

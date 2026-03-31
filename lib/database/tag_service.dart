@@ -549,6 +549,23 @@ class TagService {
     return masters.map((entry) => entry.tag).toList(growable: false);
   }
 
+  Future<List<Tag>> listLocallyStoredTagsForItem(MediaItem item) async {
+    await initialize();
+    return _listLocallyStoredTagsForItemInternal(item);
+  }
+
+  Future<Map<String, List<Tag>>> listLocallyStoredTagsForItems(
+    List<MediaItem> items,
+  ) async {
+    await initialize();
+
+    final result = <String, List<Tag>>{};
+    for (final item in items.where((entry) => entry.kind != MediaKind.folder)) {
+      result[item.id] = await _listLocallyStoredTagsForItemInternal(item);
+    }
+    return result;
+  }
+
   Future<List<MediaItem>> findMediaItemsByTagGlobal({
     required TagCategory category,
     required String name,
@@ -978,5 +995,28 @@ class TagService {
       );
     }
     return chunks;
+  }
+
+  Future<List<Tag>> _listLocallyStoredTagsForItemInternal(MediaItem item) async {
+    final merged = <String, Tag>{};
+    for (final itemId in _itemLookupKeys(item.id).toSet()) {
+      final current = await _localStore.listTagsForItem(itemId);
+      for (final entry in current) {
+        final normalizedName = entry.tag.name.trim();
+        if (normalizedName.isEmpty) {
+          continue;
+        }
+        final key =
+            '${entry.tag.category.name}\u0000${normalizedName.toLowerCase()}';
+        merged.putIfAbsent(
+          key,
+          () => Tag(
+            name: normalizedName,
+            category: entry.tag.category,
+          ),
+        );
+      }
+    }
+    return merged.values.toList(growable: false);
   }
 }

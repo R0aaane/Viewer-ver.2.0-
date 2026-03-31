@@ -17,7 +17,12 @@ MediaRepository _createLocalRepository(AppDb db) {
 MediaRepository createRepository(
   AppDb db, {
   required MetadataSettings initialSettings,
+  LocalUploadTagsProvider? localUploadTagsProvider,
 }) {
   final local = _createLocalRepository(db);
-  return SwitchingMediaRepository(local, initialSettings: initialSettings);
+  return SwitchingMediaRepository(
+    local,
+    initialSettings: initialSettings,
+    localUploadTagsProvider: localUploadTagsProvider,
+  );
 }
