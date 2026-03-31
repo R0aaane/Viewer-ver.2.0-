@@ -226,6 +226,36 @@ class MetadataStore:
             for row in self._db.list_tags_for_media(resolved_media_id)
         ]
 
+    def ensure_exact_tag_id(
+        self,
+        *,
+        category: str,
+        raw_name: str,
+    ) -> str | None:
+        normalized_category = str(category or "").strip()
+        name = str(raw_name or "").strip()
+        if not normalized_category or not name:
+            return None
+
+        normalized_name = _normalize_name(name)
+        if not normalized_name:
+            return None
+
+        existing = self._db.find_tag_exact(
+            category=normalized_category,
+            normalized_name=normalized_name,
+        )
+        if existing is not None:
+            return str(existing["tag_id"])
+
+        tag_id = f"{normalized_category}:{_fnv1a64_hex(f'{normalized_category}|{normalized_name}')[:12]}"
+        self._db.insert_tag(tag_id, name, normalized_category, normalized_name)
+        inserted = self._db.find_tag_exact(
+            category=normalized_category,
+            normalized_name=normalized_name,
+        )
+        return str(inserted["tag_id"]) if inserted is not None else tag_id
+
     def add_tags_to_media(
         self,
         media_id: str,
@@ -236,13 +266,12 @@ class MetadataStore:
         resolved_media_id = self.resolve_media_id(media_id, identity=identity)
 
         for tag in tags:
-            name = tag["name"].strip()
-            category = tag["category"].strip()
-            if not name or not category:
-                raise bad_request("タグ名とカテゴリは必須です")
-            normalized_name = _normalize_name(name)
-            tag_id = f"{category}:{_fnv1a64_hex(f'{category}|{normalized_name}')[:12]}"
-            self._db.ensure_tag(tag_id, name, category, normalized_name)
+            tag_id = self.ensure_exact_tag_id(
+                category=str(tag.get("category") or ""),
+                raw_name=str(tag.get("name") or ""),
+            )
+            if tag_id is None:
+                continue
             self._db.add_media_tag_link(resolved_media_id, tag_id)
 
         return resolved_media_id

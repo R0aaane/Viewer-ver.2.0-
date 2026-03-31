@@ -1,9 +1,12 @@
 ﻿import 'dart:typed_data';
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pdf_viewer/models/folder.dart';
 import 'package:pdf_viewer/models/mediaItem.dart';
 import 'package:pdf_viewer/models/metadata_settings.dart';
+import 'package:pdf_viewer/models/tag.dart';
 import 'package:pdf_viewer/repository/mediaRepository.dart';
 import 'package:pdf_viewer/repository/remote_media_repository.dart';
 import 'package:pdf_viewer/services/media_id_resolver.dart';
@@ -217,6 +220,58 @@ void main() {
       expect(apiClient.lastUploadMetadata?.organizeAfterImport, isTrue);
       expect(apiClient.lastUploadFiles, hasLength(1));
       expect(apiClient.lastUploadFiles.single.fileName, 'old.jpg');
+    });
+
+    test('includes locally stored tags using the normalized upload path key', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      final tempDir = await Directory.systemTemp.createTemp('remote-upload-tags');
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final sourceFile = File('${tempDir.path}${Platform.pathSeparator}old.jpg');
+      await sourceFile.writeAsBytes(<int>[1, 2, 3], flush: true);
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: const _StubMediaRepository(),
+        localUploadTagsProvider: (_) async => <String, List<Tag>>{
+          sourceFile.path: const <Tag>[
+            Tag(name: 'Agua Larson', category: TagCategory.artist),
+            Tag(name: 'Summer Line', category: TagCategory.series),
+            Tag(name: 'Heroine X', category: TagCategory.character),
+            Tag(name: 'bonus', category: TagCategory.free),
+          ],
+        },
+      );
+
+      final importedCount = await repository.importItemsIntoFolder(
+        const FolderHandle(r'C:\library'),
+        <MediaItem>[
+          MediaItem(
+            id: sourceFile.uri.toString(),
+            displayName: 'old.jpg',
+            kind: MediaKind.image,
+            folderRaw: tempDir.path,
+          ),
+        ],
+      );
+
+      expect(importedCount, 1);
+      expect(apiClient.lastUploadFiles, hasLength(1));
+      expect(
+        apiClient.lastUploadFiles.single.tags
+            .map((tag) => '${tag.category.name}:${tag.name}')
+            .toSet(),
+        <String>{
+          'artist:Agua Larson',
+          'series:Summer Line',
+          'character:Heroine X',
+          'free:bonus',
+        },
+      );
     });
   });
 

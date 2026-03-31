@@ -259,19 +259,47 @@ class SqliteStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def ensure_tag(self, tag_id: str, name: str, category: str, normalized_name: str) -> None:
+    def find_tag_exact(
+        self,
+        *,
+        category: str,
+        normalized_name: str,
+    ) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            row = cur.execute(
+                """
+                SELECT *
+                  FROM tag_master
+                 WHERE category = ?
+                   AND normalized_name = ?
+                 LIMIT 1
+                """,
+                (category, normalized_name),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def insert_tag(
+        self,
+        tag_id: str,
+        name: str,
+        category: str,
+        normalized_name: str,
+    ) -> None:
         with self._cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO tag_master (tag_id, name, category, normalized_name)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(tag_id) DO UPDATE SET
+                ON CONFLICT(category, normalized_name) DO UPDATE SET
                     name = excluded.name,
                     category = excluded.category,
                     normalized_name = excluded.normalized_name
                 """,
                 (tag_id, name, category, normalized_name),
             )
+
+    def ensure_tag(self, tag_id: str, name: str, category: str, normalized_name: str) -> None:
+        self.insert_tag(tag_id, name, category, normalized_name)
 
     def list_tag_master(self) -> list[dict[str, Any]]:
         with self._cursor() as cur:
