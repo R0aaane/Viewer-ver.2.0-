@@ -223,6 +223,10 @@ class TagService {
     await initialize();
 
     if (!isRemoteMode) {
+      final resolvedItem = item ?? _lookupKnownItem(itemId);
+      if (isHostMode && resolvedItem != null) {
+        await _mergeHostMirrorTagsIntoLocalStore(resolvedItem);
+      }
       return _localStore.listTagsForItem(itemId);
     }
 
@@ -283,6 +287,11 @@ class TagService {
     rememberItems(targets);
 
     if (!isRemoteMode) {
+      if (isHostMode && targets.isNotEmpty && targets.length <= 20) {
+        for (final item in targets) {
+          await _mergeHostMirrorTagsIntoLocalStore(item);
+        }
+      }
       final result = <String, List<TagWithId>>{};
       for (final item in targets) {
         result[item.id] = await _localStore.listTagsForItem(item.id);
@@ -482,10 +491,25 @@ class TagService {
     await initialize();
 
     if (!isRemoteMode) {
-      await _localStore.removeTagFromItem(itemId, tagId);
       final resolvedItem = item ?? _lookupKnownItem(itemId);
+      Tag? removedTag;
       if (resolvedItem != null) {
-        await _replaceHostMirrorTagsForItem(resolvedItem);
+        final currentTags = await _localStore.listTagsForItem(itemId);
+        for (final entry in currentTags) {
+          if (entry.tagId == tagId) {
+            removedTag = entry.tag;
+            break;
+          }
+        }
+      }
+      await _localStore.removeTagFromItem(itemId, tagId);
+      if (resolvedItem != null) {
+        await _replaceHostMirrorTagsForItem(
+          resolvedItem,
+          excludedTags: removedTag == null
+              ? const <Tag>[]
+              : <Tag>[removedTag],
+        );
       }
       return;
     }
@@ -719,14 +743,28 @@ class TagService {
     }
   }
 
-  Future<void> _replaceHostMirrorTagsForItem(MediaItem item) async {
+  Future<void> _replaceHostMirrorTagsForItem(
+    MediaItem item, {
+    Iterable<Tag> excludedTags = const <Tag>[],
+  }) async {
     final client = _hostMirrorClient;
     if (client == null || item.kind == MediaKind.folder) {
       return;
     }
 
-    final currentTags = await _localStore.listTagsForItem(item.id);
-    final tags = currentTags.map((entry) => entry.tag).toList(growable: false);
+    final excludedKeys = excludedTags
+        .map(_tagLookupKey)
+        .whereType<String>()
+        .toSet();
+    await _mergeHostMirrorTagsIntoLocalStore(
+      item,
+      excludedTagKeys: excludedKeys,
+    );
+    final currentTags = await _listLocallyStoredTagsForItemInternal(item);
+    final tags = currentTags.where((tag) {
+      final key = _tagLookupKey(tag);
+      return key == null || !excludedKeys.contains(key);
+    }).toList(growable: false);
     final identity = await _idResolver.resolve(item);
 
     await _runHostMirror(
@@ -737,6 +775,63 @@ class TagService {
       ),
       retryAfterRescan: true,
     );
+  }
+
+  Future<void> _mergeHostMirrorTagsIntoLocalStore(
+    MediaItem item, {
+    Set<String> excludedTagKeys = const <String>{},
+  }) async {
+    final client = _hostMirrorClient;
+    if (client == null || item.kind == MediaKind.folder) {
+      return;
+    }
+
+    final localTags = await _listLocallyStoredTagsForItemInternal(item);
+    final knownKeys = localTags
+        .map(_tagLookupKey)
+        .whereType<String>()
+        .toSet();
+    final identity = await _idResolver.resolve(item);
+
+    try {
+      final remoteTags = await client.fetchItemTags(
+        identity.stableId,
+        identity: identity,
+      );
+      final missing = <Tag>[];
+      for (final entry in remoteTags) {
+        final normalizedName = entry.tag.name.trim();
+        if (normalizedName.isEmpty) {
+          continue;
+        }
+        final tag = Tag(name: normalizedName, category: entry.tag.category);
+        final key = _tagLookupKey(tag);
+        if (key == null ||
+            excludedTagKeys.contains(key) ||
+            knownKeys.contains(key)) {
+          continue;
+        }
+        knownKeys.add(key);
+        missing.add(tag);
+      }
+
+      for (final tag in missing) {
+        await _localStore.addTagToItem(item, tag);
+      }
+
+      if (missing.isNotEmpty) {
+        debugPrint(
+          '[host-mirror] hydrated local tags item=${item.id} '
+          'added=${missing.map((tag) => '${tag.category.name}:${tag.name}').join(', ')}',
+        );
+      }
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[host-mirror] hydrate failed: $error');
+      debugPrintStack(
+        label: '[host-mirror] hydrate stack',
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<void> _mirrorHostRename(MediaItem before, MediaItem after) async {
@@ -1031,5 +1126,13 @@ class TagService {
       keys.addAll(_itemLookupKeys(normalized));
     }
     return keys;
+  }
+
+  String? _tagLookupKey(Tag tag) {
+    final normalizedName = tag.name.trim();
+    if (normalizedName.isEmpty) {
+      return null;
+    }
+    return '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
   }
 }
