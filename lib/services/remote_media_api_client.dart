@@ -38,12 +38,26 @@ class RemoteUploadFile {
   });
 }
 
+class RemoteUploadedMediaTags {
+  final String mediaId;
+  final List<String> tags;
+
+  const RemoteUploadedMediaTags({
+    required this.mediaId,
+    this.tags = const <String>[],
+  });
+}
+
 class RemoteUploadResponse {
   final int importedCount;
   final int skippedCount;
   final int taggedCount;
   final int organizedCount;
   final int rescannedCount;
+  final String? requestId;
+  final int tagAttachSuccessCount;
+  final int tagAttachFailureCount;
+  final List<RemoteUploadedMediaTags> attachedTagsByMedia;
 
   const RemoteUploadResponse({
     required this.importedCount,
@@ -51,6 +65,10 @@ class RemoteUploadResponse {
     this.taggedCount = 0,
     this.organizedCount = 0,
     this.rescannedCount = 0,
+    this.requestId,
+    this.tagAttachSuccessCount = 0,
+    this.tagAttachFailureCount = 0,
+    this.attachedTagsByMedia = const <RemoteUploadedMediaTags>[],
   });
 }
 
@@ -359,9 +377,15 @@ class RemoteMediaApiClient {
     ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
+    String? requestId,
   }) async {
+    final traceId = _normalizeUploadRequestId(requestId);
     if (files.isEmpty) {
-      return const RemoteUploadResponse(importedCount: 0, skippedCount: 0);
+      return RemoteUploadResponse(
+        importedCount: 0,
+        skippedCount: 0,
+        requestId: traceId,
+      );
     }
 
     final uri = _buildUri('/upload');
@@ -378,10 +402,95 @@ class RemoteMediaApiClient {
     var completedFiles = 0;
     const chunkSize = 256 * 1024;
 
+    final trimmedArtistTag = importMetadata?.artistTag?.trim();
+    final trimmedSeriesTag = importMetadata?.seriesTag?.trim();
+    final trimmedTargetCollection = importMetadata?.targetCollection?.trim();
+    final artistTag =
+        trimmedArtistTag != null && trimmedArtistTag.isNotEmpty
+        ? trimmedArtistTag
+        : null;
+    final seriesTag =
+        trimmedSeriesTag != null && trimmedSeriesTag.isNotEmpty
+        ? trimmedSeriesTag
+        : null;
+    final targetCollection =
+        trimmedTargetCollection != null && trimmedTargetCollection.isNotEmpty
+        ? trimmedTargetCollection
+        : null;
+    final freeTags =
+        importMetadata?.freeTags
+            .map((entry) => entry.trim())
+            .where((entry) => entry.isNotEmpty)
+            .toList(growable: false) ??
+        const <String>[];
+    final characterTags =
+        importMetadata?.characterTags
+            .map((entry) => entry.trim())
+            .where((entry) => entry.isNotEmpty)
+            .toList(growable: false) ??
+        const <String>[];
+    final organizeAfterImport = importMetadata?.organizeAfterImport ?? false;
+    final originalDisplayNamesJson = jsonEncode(
+      files.map((file) => file.fileName).toList(growable: false),
+    );
+    final sourceRelativePaths =
+        files
+            .map((file) => file.sourceRelativePath?.trim() ?? '')
+            .toList(growable: false);
+    final hasSourceRelativePaths = sourceRelativePaths.any(
+      (entry) => entry.isNotEmpty,
+    );
+    final sourceRelativePathsJson = hasSourceRelativePaths
+        ? jsonEncode(sourceRelativePaths)
+        : null;
+    final serializedFileTagGroups =
+        files
+            .map(
+              (file) => file.tags.map(_tagToJson).toList(growable: false),
+            )
+            .toList(growable: false);
+    final hasFileTags = serializedFileTagGroups.any((group) => group.isNotEmpty);
+    final fileTagsJson = hasFileTags ? jsonEncode(serializedFileTagGroups) : null;
+    final freeTagsJson = freeTags.isNotEmpty ? jsonEncode(freeTags) : null;
+    final characterTagsJson =
+        characterTags.isNotEmpty ? jsonEncode(characterTags) : null;
+
+    debugPrint(
+      '[UPLOAD][CLIENT][req:$traceId] start '
+      'targetFolderId=${_debugUploadString(folderRaw)} '
+      'fileNames=${_debugUploadStringList(files.map((file) => file.fileName))} '
+      'targetCollection=${_debugUploadString(targetCollection)} '
+      'organizeAfterImport=$organizeAfterImport '
+      'sourceRelativePathsJsonPresent=$hasSourceRelativePaths',
+    );
+    debugPrint(
+      '[TAG][CLIENT][req:$traceId] metadata '
+      'artist=${_debugUploadString(artistTag)} '
+      'series=${_debugUploadString(seriesTag)} '
+      'character=${_debugUploadStringList(characterTags)} '
+      'free=${_debugUploadStringList(freeTags)}',
+    );
+    debugPrint(
+      '[UPLOAD][CLIENT][req:$traceId] payload summary '
+      'fileCount=${files.length} '
+      'fileTagsPresent=$hasFileTags '
+      'sourceRelativePathsJson=${sourceRelativePathsJson ?? 'null'} '
+      'fileTagsJson=${fileTagsJson ?? 'null'}',
+    );
+    debugPrint(
+      '[TAG][CLIENT][req:$traceId] serialized '
+      'artistTag=${_debugUploadString(artistTag)} '
+      'seriesTag=${_debugUploadString(seriesTag)} '
+      'characterTagsJson=${characterTagsJson ?? 'null'} '
+      'freeTagsJson=${freeTagsJson ?? 'null'} '
+      'targetCollection=${_debugUploadString(targetCollection)} '
+      'organizeAfterImport=$organizeAfterImport',
+    );
+
     try {
       debugPrint(
-        '[remote-upload] POST /upload '
-        'folder=$folderRaw files=${files.length}',
+        '[UPLOAD][CLIENT][req:$traceId] POST /upload '
+        'folder=${_debugUploadString(folderRaw)} files=${files.length}',
       );
       final request = await client.postUrl(uri);
       _applyHeaders(request.headers);
@@ -406,61 +515,52 @@ class RemoteMediaApiClient {
         writeAscii('\r\n');
       }
 
+      writeField('uploadRequestId', traceId);
       writeField('folderRaw', folderRaw);
       writeField('skipIfExists', skipIfExists ? 'true' : 'false');
-      writeField(
-        'originalDisplayNamesJson',
-        jsonEncode(
-          files.map((file) => file.fileName).toList(growable: false),
-        ),
-      );
-      if (files.any((file) => (file.sourceRelativePath?.trim().isNotEmpty ?? false))) {
-        writeField(
-          'sourceRelativePathsJson',
-          jsonEncode(
-            files
-                .map((file) => file.sourceRelativePath?.trim() ?? '')
-                .toList(growable: false),
-          ),
-        );
+      writeField('originalDisplayNamesJson', originalDisplayNamesJson);
+      if (sourceRelativePathsJson != null) {
+        writeField('sourceRelativePathsJson', sourceRelativePathsJson);
       }
-      if (files.any((file) => file.tags.isNotEmpty)) {
-        writeField(
-          'fileTagsJson',
-          jsonEncode(
-            files
-                .map(
-                  (file) => file.tags
-                      .map(_tagToJson)
-                      .toList(growable: false),
-                )
-                .toList(growable: false),
-          ),
-        );
+      if (fileTagsJson != null) {
+        writeField('fileTagsJson', fileTagsJson);
+      }
+      if (artistTag != null) {
+        writeField('artistTag', artistTag);
+      }
+      if (seriesTag != null) {
+        writeField('seriesTag', seriesTag);
+      }
+      if (freeTagsJson != null) {
+        writeField('freeTagsJson', freeTagsJson);
+      }
+      if (characterTagsJson != null) {
+        writeField('characterTagsJson', characterTagsJson);
+      }
+      if (targetCollection != null) {
+        writeField('targetCollection', targetCollection);
       }
       if (importMetadata != null) {
-        final artistTag = importMetadata.artistTag?.trim();
-        final seriesTag = importMetadata.seriesTag?.trim();
-        if (artistTag != null && artistTag.isNotEmpty) {
-          writeField('artistTag', artistTag);
-        }
-        if (seriesTag != null && seriesTag.isNotEmpty) {
-          writeField('seriesTag', seriesTag);
-        }
-        if (importMetadata.freeTags.isNotEmpty) {
-          writeField('freeTagsJson', jsonEncode(importMetadata.freeTags));
-        }
-        if (importMetadata.characterTags.isNotEmpty) {
-          writeField('characterTagsJson', jsonEncode(importMetadata.characterTags));
-        }
-        if (importMetadata.targetCollection?.trim().isNotEmpty ?? false) {
-          writeField('targetCollection', importMetadata.targetCollection!.trim());
-        }
         writeField(
           'organizeAfterImport',
-          importMetadata.organizeAfterImport ? 'true' : 'false',
+          organizeAfterImport ? 'true' : 'false',
         );
       }
+      debugPrint(
+        '[UPLOAD][CLIENT][req:$traceId] multipart '
+        'uploadRequestId=${_debugUploadString(traceId)} '
+        'folderRaw=${_debugUploadString(folderRaw)} '
+        'skipIfExists=$skipIfExists '
+        'originalDisplayNamesJson=$originalDisplayNamesJson '
+        'sourceRelativePathsJson=${sourceRelativePathsJson ?? 'null'} '
+        'fileTagsJson=${fileTagsJson ?? 'null'} '
+        'artistTag=${_debugUploadString(artistTag)} '
+        'seriesTag=${_debugUploadString(seriesTag)} '
+        'characterTagsJson=${characterTagsJson ?? 'null'} '
+        'freeTagsJson=${freeTagsJson ?? 'null'} '
+        'targetCollection=${_debugUploadString(targetCollection)} '
+        'organizeAfterImport=$organizeAfterImport',
+      );
 
       onProgress?.call(
         MediaTransferProgress(
@@ -468,7 +568,7 @@ class RemoteMediaApiClient {
           totalBytes: totalBytes,
           completedFiles: 0,
           totalFiles: files.length,
-          statusLabel: 'アップロードを開始しています',
+          statusLabel: '??????????????',
         ),
       );
 
@@ -476,9 +576,11 @@ class RemoteMediaApiClient {
         final file = files[index];
         final multipartFileName = _safeMultipartFileName(file.fileName, index);
         debugPrint(
-          '[remote-upload] multipart file '
+          '[UPLOAD][CLIENT][req:$traceId] multipart file '
           'index=$index multipartName=$multipartFileName '
-          'originalDisplayName=${file.fileName} '
+          'originalDisplayName=${_debugUploadString(file.fileName)} '
+          'sourceRelativePath=${_debugUploadString(file.sourceRelativePath)} '
+          'tags=${_formatClientTagList(file.tags)} '
           'originalUtf8=${_utf8HexPreview(file.fileName)}',
         );
         writeAscii('--$boundary\r\n');
@@ -500,7 +602,7 @@ class RemoteMediaApiClient {
               completedFiles: completedFiles,
               totalFiles: files.length,
               currentFileName: file.fileName,
-              statusLabel: 'ホストへアップロードしています',
+              statusLabel: '???????????????',
             ),
           );
         }
@@ -514,7 +616,7 @@ class RemoteMediaApiClient {
             completedFiles: completedFiles,
             totalFiles: files.length,
             currentFileName: file.fileName,
-            statusLabel: 'アップロード済みファイルを確認しています',
+            statusLabel: '????????????????????',
           ),
         );
       }
@@ -526,7 +628,7 @@ class RemoteMediaApiClient {
           totalBytes: totalBytes,
           completedFiles: completedFiles,
           totalFiles: files.length,
-          statusLabel: 'サーバー応答を待機しています',
+          statusLabel: '??????????????',
         ),
       );
 
@@ -537,8 +639,8 @@ class RemoteMediaApiClient {
           .timeout(uploadTimeout);
       final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
       debugPrint(
-        '[remote-upload] response status=${response.statusCode} '
-        'bodyType=${jsonBody.runtimeType}',
+        '[UPLOAD][CLIENT][req:$traceId] response '
+        'status=${response.statusCode} body=${payload.trim().isEmpty ? '""' : payload}',
       );
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -552,6 +654,7 @@ class RemoteMediaApiClient {
         return RemoteUploadResponse(
           importedCount: files.length,
           skippedCount: 0,
+          requestId: traceId,
         );
       }
 
@@ -561,10 +664,10 @@ class RemoteMediaApiClient {
           totalBytes: totalBytes,
           completedFiles: files.length,
           totalFiles: files.length,
-          statusLabel: 'アップロードが完了しました',
+          statusLabel: '?????????????',
         ),
       );
-      return RemoteUploadResponse(
+      final parsedResponse = RemoteUploadResponse(
         importedCount:
             _asInt(jsonBody['importedCount']) ??
             _asInt(jsonBody['count']) ??
@@ -573,14 +676,50 @@ class RemoteMediaApiClient {
         taggedCount: _asInt(jsonBody['taggedCount']) ?? 0,
         organizedCount: _asInt(jsonBody['organizedCount']) ?? 0,
         rescannedCount: _asInt(jsonBody['rescannedCount']) ?? 0,
+        requestId: jsonBody['requestId']?.toString() ?? traceId,
+        tagAttachSuccessCount: _asInt(jsonBody['tagAttachSuccessCount']) ?? 0,
+        tagAttachFailureCount: _asInt(jsonBody['tagAttachFailureCount']) ?? 0,
+        attachedTagsByMedia: _parseAttachedTagsByMedia(
+          jsonBody['attachedTagsByMedia'],
+        ),
       );
-    } on TimeoutException {
+      debugPrint(
+        '[UPLOAD][RESULT][req:$traceId] '
+        'responseRequestId=${_debugUploadString(parsedResponse.requestId)} '
+        'imported=${parsedResponse.importedCount} '
+        'skipped=${parsedResponse.skippedCount} '
+        'tagged=${parsedResponse.taggedCount} '
+        'organized=${parsedResponse.organizedCount} '
+        'rescanned=${parsedResponse.rescannedCount} '
+        'tagAttachSuccess=${parsedResponse.tagAttachSuccessCount} '
+        'tagAttachFailure=${parsedResponse.tagAttachFailureCount} '
+        'attachedTagsByMedia=${_formatAttachedTagsByMedia(parsedResponse.attachedTagsByMedia)}',
+      );
+      return parsedResponse;
+    } on TimeoutException catch (error, stackTrace) {
+      debugPrint('[UPLOAD][ERROR][req:$traceId] timeout error=$error');
+      debugPrintStack(
+        label: '[UPLOAD][ERROR][req:$traceId] timeout stack',
+        stackTrace: stackTrace,
+      );
       throw RemoteMediaException(
-        'アップロード処理がタイムアウトしました。'
-        'ホスト側で保存またはインデックス更新に時間がかかっています。',
+        '????????????????????'
+        '??????????????????????????????',
       );
-    } on SocketException {
-      throw const RemoteMediaException('サーバーに接続できません');
+    } on SocketException catch (error, stackTrace) {
+      debugPrint('[UPLOAD][ERROR][req:$traceId] socket error=$error');
+      debugPrintStack(
+        label: '[UPLOAD][ERROR][req:$traceId] socket stack',
+        stackTrace: stackTrace,
+      );
+      throw const RemoteMediaException('????????????');
+    } catch (error, stackTrace) {
+      debugPrint('[UPLOAD][ERROR][req:$traceId] unexpected error=$error');
+      debugPrintStack(
+        label: '[UPLOAD][ERROR][req:$traceId] unexpected stack',
+        stackTrace: stackTrace,
+      );
+      rethrow;
     } finally {
       client.close(force: true);
     }
@@ -852,6 +991,82 @@ class RemoteMediaApiClient {
       'name': tag.name,
       'category': tag.category.name,
     };
+  }
+
+  String _normalizeUploadRequestId(String? raw) {
+    final trimmed = raw?.trim() ?? '';
+    if (trimmed.isNotEmpty) {
+      return trimmed;
+    }
+    final micros = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final hash = _fnv1a32Hex('$baseUrl|$micros');
+    return 'up-$micros-${hash.substring(0, 6)}';
+  }
+
+  String _fnv1a32Hex(String value) {
+    var hash = 0x811C9DC5;
+    const prime = 0x01000193;
+    for (final unit in value.codeUnits) {
+      hash ^= unit;
+      hash = (hash * prime) & 0xFFFFFFFF;
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  String _debugUploadString(String? value) {
+    if (value == null) {
+      return 'null';
+    }
+    return jsonEncode(value);
+  }
+
+  String _debugUploadStringList(Iterable<String> values) {
+    final list = values.toList(growable: false);
+    if (list.isEmpty) {
+      return '[]';
+    }
+    return '[${list.map(_debugUploadString).join(', ')}]';
+  }
+
+  String _formatClientTagList(Iterable<Tag> tags) {
+    final values =
+        tags
+            .map((tag) => '${tag.category.name}:${tag.name.trim()}')
+            .where((entry) => entry.isNotEmpty)
+            .toList(growable: false);
+    return _debugUploadStringList(values);
+  }
+
+  List<RemoteUploadedMediaTags> _parseAttachedTagsByMedia(dynamic raw) {
+    if (raw is! Map) {
+      return const <RemoteUploadedMediaTags>[];
+    }
+    final items = <RemoteUploadedMediaTags>[];
+    for (final entry in raw.entries) {
+      final mediaId = entry.key.toString();
+      final values =
+          entry.value is List
+          ? (entry.value as List)
+                .map((item) => item.toString())
+                .toList(growable: false)
+          : const <String>[];
+      items.add(RemoteUploadedMediaTags(mediaId: mediaId, tags: values));
+    }
+    return items;
+  }
+
+  String _formatAttachedTagsByMedia(List<RemoteUploadedMediaTags> items) {
+    if (items.isEmpty) {
+      return '[]';
+    }
+    final values =
+        items
+            .map(
+              (item) =>
+                  '{mediaId:${_debugUploadString(item.mediaId)}, tags:${_debugUploadStringList(item.tags)}}',
+            )
+            .toList(growable: false);
+    return '[${values.join(', ')}]';
   }
 
   String _utf8HexPreview(String value) {

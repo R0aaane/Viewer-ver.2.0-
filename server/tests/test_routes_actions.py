@@ -96,6 +96,7 @@ class _UploadMetadataStore:
         self.resolve_calls: list[dict[str, object | None]] = []
         self.add_tag_calls: list[dict[str, object]] = []
         self.organize_calls: list[dict[str, object]] = []
+        self.media_tags: dict[str, list[dict[str, str]]] = {}
 
     def resolve_media_id(
         self,
@@ -114,15 +115,44 @@ class _UploadMetadataStore:
         tags: list[dict[str, str]],
         *,
         identity: dict[str, object] | None = None,
+        request_id: str | None = None,
     ) -> str:
         self.add_tag_calls.append(
             {
                 'media_id': media_id,
                 'tags': tags,
                 'identity': identity,
+                'request_id': request_id,
             }
         )
+        current = self.media_tags.setdefault(media_id, [])
+        seen = {(entry['category'], entry['name']) for entry in current}
+        for tag in tags:
+            category = str(tag.get('category') or '').strip()
+            name = str(tag.get('name') or '').strip()
+            if not category or not name:
+                continue
+            key = (category, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            current.append({'category': category, 'name': name})
         return media_id
+
+    def get_tags_for_media(
+        self,
+        media_id: str,
+        *,
+        identity: dict[str, object] | None = None,
+    ) -> list[dict[str, str]]:
+        return [
+            {
+                'tagId': f"{entry['category']}:{entry['name']}",
+                'category': entry['category'],
+                'name': entry['name'],
+            }
+            for entry in self.media_tags.get(media_id, [])
+        ]
 
     def organize_media_by_tags(
         self,
@@ -406,6 +436,20 @@ class ActionsRoutesTest(unittest.TestCase):
             self.assertEqual(response['importedCount'], 1)
             self.assertEqual(response['taggedCount'], 1)
             self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertTrue(str(response['requestId']).startswith('up-'))
+            self.assertEqual(response['tagAttachSuccessCount'], 4)
+            self.assertEqual(response['tagAttachFailureCount'], 0)
+            self.assertEqual(
+                response['attachedTagsByMedia'],
+                {
+                    'mid:sample.pdf': [
+                        'artist:Client Artist',
+                        'series:Client Series',
+                        'character:Heroine',
+                        'free:manual',
+                    ]
+                },
+            )
             self.assertEqual(
                 metadata_store.add_tag_calls[0]['tags'],
                 [
@@ -480,6 +524,18 @@ class ActionsRoutesTest(unittest.TestCase):
             self.assertEqual(response['importedCount'], 1)
             self.assertEqual(response['taggedCount'], 1)
             self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertEqual(response['tagAttachSuccessCount'], 4)
+            self.assertEqual(
+                response['attachedTagsByMedia'],
+                {
+                    'mid:sample.pdf': [
+                        'artist:Local Artist',
+                        'series:Local Series',
+                        'character:Local Heroine',
+                        'free:bonus',
+                    ]
+                },
+            )
             self.assertEqual(
                 metadata_store.add_tag_calls[0]['tags'],
                 [

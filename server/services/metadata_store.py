@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -11,6 +13,9 @@ from server.core.errors import bad_request, not_found
 from server.repositories.sqlite_store import SqliteStore
 
 
+logger = logging.getLogger(__name__)
+
+
 def _normalize_name(name: str) -> str:
     return name.strip().casefold()
 
@@ -18,6 +23,17 @@ def _normalize_name(name: str) -> str:
 def _normalize_path(raw: str) -> str:
     normalized = os.path.normpath(raw).replace("/", "\\")
     return normalized.casefold()
+
+
+def _log_value(value: Any) -> str:
+    if value is None:
+        return "null"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _log_request_id(request_id: str | None) -> str:
+    trimmed = str(request_id or "").strip()
+    return trimmed or "-"
 
 
 def _parse_datetime(raw: str | None) -> datetime | None:
@@ -231,30 +247,94 @@ class MetadataStore:
         *,
         category: str,
         raw_name: str,
+        request_id: str | None = None,
     ) -> str | None:
+        resolved_request_id = _log_request_id(request_id)
         normalized_category = str(category or "").strip()
-        name = str(raw_name or "").strip()
-        if not normalized_category or not name:
-            return None
-
-        normalized_name = _normalize_name(name)
-        if not normalized_name:
-            return None
-
-        existing = self._db.find_tag_exact(
-            category=normalized_category,
-            normalized_name=normalized_name,
+        raw_value = str(raw_name or "")
+        name = raw_value.strip()
+        normalized_name = _normalize_name(name) if name else ""
+        logger.info(
+            '[TAG][RESOLVE][req:%s] category=%s rawName=%s normalizedName=%s lookup=exact',
+            resolved_request_id,
+            _log_value(normalized_category),
+            _log_value(raw_value),
+            _log_value(normalized_name),
         )
+        if not normalized_category or not name or not normalized_name:
+            logger.info(
+                '[TAG][RESOLVE][req:%s] category=%s rawName=%s normalizedName=%s found=false skipped=true reason=empty',
+                resolved_request_id,
+                _log_value(normalized_category),
+                _log_value(raw_value),
+                _log_value(normalized_name),
+            )
+            return None
+
+        try:
+            existing = self._db.find_tag_exact(
+                category=normalized_category,
+                normalized_name=normalized_name,
+            )
+        except Exception:
+            logger.exception(
+                '[TAG][RESOLVE][req:%s] category=%s rawName=%s normalizedName=%s found=error',
+                resolved_request_id,
+                _log_value(normalized_category),
+                _log_value(raw_value),
+                _log_value(normalized_name),
+            )
+            raise
         if existing is not None:
-            return str(existing["tag_id"])
+            logger.info(
+                '[TAG][RESOLVE][req:%s] category=%s rawName=%s normalizedName=%s found=true tagId=%s',
+                resolved_request_id,
+                _log_value(normalized_category),
+                _log_value(raw_value),
+                _log_value(normalized_name),
+                _log_value(existing['tag_id']),
+            )
+            return str(existing['tag_id'])
 
         tag_id = f"{normalized_category}:{_fnv1a64_hex(f'{normalized_category}|{normalized_name}')[:12]}"
-        self._db.insert_tag(tag_id, name, normalized_category, normalized_name)
+        logger.info(
+            '[TAG][RESOLVE][req:%s] category=%s rawName=%s normalizedName=%s found=false action=create',
+            resolved_request_id,
+            _log_value(normalized_category),
+            _log_value(raw_value),
+            _log_value(normalized_name),
+        )
+        try:
+            self._db.insert_tag(tag_id, name, normalized_category, normalized_name)
+            logger.info(
+                '[TAG][CREATE][req:%s] category=%s name=%s tagId=%s success=true',
+                resolved_request_id,
+                _log_value(normalized_category),
+                _log_value(name),
+                _log_value(tag_id),
+            )
+        except Exception:
+            logger.exception(
+                '[TAG][CREATE][req:%s] category=%s name=%s tagId=%s success=false',
+                resolved_request_id,
+                _log_value(normalized_category),
+                _log_value(name),
+                _log_value(tag_id),
+            )
+            raise
         inserted = self._db.find_tag_exact(
             category=normalized_category,
             normalized_name=normalized_name,
         )
-        return str(inserted["tag_id"]) if inserted is not None else tag_id
+        resolved_tag_id = str(inserted['tag_id']) if inserted is not None else tag_id
+        logger.info(
+            '[TAG][CREATE][req:%s] category=%s name=%s tagId=%s verified=true',
+            resolved_request_id,
+            _log_value(normalized_category),
+            _log_value(name),
+            _log_value(resolved_tag_id),
+        )
+        return resolved_tag_id
 
     def add_tags_to_media(
         self,
@@ -262,18 +342,71 @@ class MetadataStore:
         tags: list[dict[str, str]],
         *,
         identity: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> str:
+        resolved_request_id = _log_request_id(request_id)
         resolved_media_id = self.resolve_media_id(media_id, identity=identity)
+        success_count = 0
+        failure_count = 0
 
         for tag in tags:
-            tag_id = self.ensure_exact_tag_id(
-                category=str(tag.get("category") or ""),
-                raw_name=str(tag.get("name") or ""),
-            )
+            category = str(tag.get('category') or '')
+            name = str(tag.get('name') or '')
+            try:
+                tag_id = self.ensure_exact_tag_id(
+                    category=category,
+                    raw_name=name,
+                    request_id=request_id,
+                )
+            except Exception:
+                failure_count += 1
+                logger.exception(
+                    '[TAG][ATTACH][req:%s] itemId=%s category=%s name=%s success=false stage=resolve',
+                    resolved_request_id,
+                    _log_value(resolved_media_id),
+                    _log_value(category),
+                    _log_value(name),
+                )
+                raise
             if tag_id is None:
+                logger.info(
+                    '[TAG][ATTACH][req:%s] itemId=%s category=%s name=%s success=false skipped=true reason=empty',
+                    resolved_request_id,
+                    _log_value(resolved_media_id),
+                    _log_value(category),
+                    _log_value(name),
+                )
                 continue
-            self._db.add_media_tag_link(resolved_media_id, tag_id)
+            try:
+                self._db.add_media_tag_link(resolved_media_id, tag_id)
+                success_count += 1
+                logger.info(
+                    '[TAG][ATTACH][req:%s] itemId=%s tagId=%s category=%s name=%s success=true',
+                    resolved_request_id,
+                    _log_value(resolved_media_id),
+                    _log_value(tag_id),
+                    _log_value(category),
+                    _log_value(name.strip()),
+                )
+            except Exception:
+                failure_count += 1
+                logger.exception(
+                    '[TAG][ATTACH][req:%s] itemId=%s tagId=%s category=%s name=%s success=false',
+                    resolved_request_id,
+                    _log_value(resolved_media_id),
+                    _log_value(tag_id),
+                    _log_value(category),
+                    _log_value(name),
+                )
+                raise
 
+        logger.info(
+            '[UPLOAD][RESULT][req:%s] itemId=%s tagAttachSuccessCount=%s tagAttachFailureCount=%s',
+            resolved_request_id,
+            _log_value(resolved_media_id),
+            success_count,
+            failure_count,
+        )
         return resolved_media_id
 
     def replace_tags_for_media(

@@ -466,6 +466,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
     ImportMetadata? importMetadata,
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
+    String? requestId,
   }) async {
     lastUploadFolderRaw = folderRaw;
     lastUploadFiles = files;

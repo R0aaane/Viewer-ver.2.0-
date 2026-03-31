@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import unicodedata
 from pathlib import Path
@@ -72,41 +73,100 @@ async def upload_files(
     originalDisplayNamesJson: str | None = Form(None),
     targetCollection: str | None = Form(None),
     organizeAfterImport: bool = Form(False),
+    uploadRequestId: str | None = Form(None),
     files: list[UploadFile] = File(...),
 ) -> dict[str, object]:
+    request_id = _normalize_upload_request_id(uploadRequestId)
+    logger.info(
+        '[UPLOAD][SERVER][req:%s] received metadata folderRaw=%s skipIfExists=%s artistTag=%s seriesTag=%s characterTagsJson=%s freeTagsJson=%s fileTagsJson=%s sourceRelativePathsJson=%s targetCollection=%s organizeAfterImport=%s files=%s',
+        request_id,
+        _log_scalar(folderRaw),
+        skipIfExists,
+        _log_scalar(artistTag),
+        _log_scalar(seriesTag),
+        _log_scalar(characterTagsJson),
+        _log_scalar(freeTagsJson),
+        _log_scalar(fileTagsJson),
+        _log_scalar(sourceRelativePathsJson),
+        _log_scalar(targetCollection),
+        organizeAfterImport,
+        len(files),
+    )
     if not files:
-        raise bad_request("アップロード対象のファイルがありません")
+        raise bad_request("?????????????????????????????????")
 
     settings = request.app.state.settings
     folder_path = os.path.normpath(folderRaw)
     if not os.path.isdir(folder_path):
-        raise bad_request(f"保存先フォルダが存在しません: {folderRaw}")
+        raise bad_request(f"???????????????????????: {folderRaw}")
     if settings.media_roots and not any(_is_inside_root(folder_path, root) for root in settings.media_roots):
-        raise bad_request("保存先フォルダが許可されたメディアルートの外にあります")
+        raise bad_request("folderRaw must be inside configured media roots")
 
-    source_relative_paths = _parse_json_string_list(
-        sourceRelativePathsJson,
-        field_name="sourceRelativePathsJson",
-        preserve_empty=True,
-    )
+    try:
+        source_relative_paths = _parse_json_string_list(
+            sourceRelativePathsJson,
+            field_name="sourceRelativePathsJson",
+            preserve_empty=True,
+        )
+        logger.info(
+            '[UPLOAD][SERVER][req:%s] parse_success field=sourceRelativePathsJson value=%s',
+            request_id,
+            _log_string_list(source_relative_paths),
+        )
+    except Exception:
+        logger.exception(
+            '[UPLOAD][ERROR][req:%s] parse_failed field=sourceRelativePathsJson raw=%s',
+            request_id,
+            _log_scalar(sourceRelativePathsJson),
+        )
+        raise
     if source_relative_paths and len(source_relative_paths) != len(files):
-        raise bad_request("sourceRelativePathsJson の件数がファイル数と一致しません")
+        raise bad_request("sourceRelativePathsJson ?????????????????????????????")
 
-    original_display_names = _parse_json_string_list(
-        originalDisplayNamesJson,
-        field_name="originalDisplayNamesJson",
-        preserve_empty=True,
-    )
+    try:
+        original_display_names = _parse_json_string_list(
+            originalDisplayNamesJson,
+            field_name="originalDisplayNamesJson",
+            preserve_empty=True,
+        )
+        logger.info(
+            '[UPLOAD][SERVER][req:%s] parse_success field=originalDisplayNamesJson value=%s',
+            request_id,
+            _log_string_list(original_display_names),
+        )
+    except Exception:
+        logger.exception(
+            '[UPLOAD][ERROR][req:%s] parse_failed field=originalDisplayNamesJson raw=%s',
+            request_id,
+            _log_scalar(originalDisplayNamesJson),
+        )
+        raise
     if original_display_names and len(original_display_names) != len(files):
-        raise bad_request("originalDisplayNamesJson の件数がファイル数と一致しません")
+        raise bad_request("originalDisplayNamesJson ?????????????????????????????")
 
-    file_tag_groups = _parse_json_tag_groups(fileTagsJson, field_name="fileTagsJson")
+    try:
+        file_tag_groups = _parse_json_tag_groups(fileTagsJson, field_name="fileTagsJson")
+        logger.info(
+            '[UPLOAD][SERVER][req:%s] parse_success field=fileTagsJson value=%s',
+            request_id,
+            _log_tag_groups(file_tag_groups),
+        )
+    except Exception:
+        logger.exception(
+            '[UPLOAD][ERROR][req:%s] parse_failed field=fileTagsJson raw=%s',
+            request_id,
+            _log_scalar(fileTagsJson),
+        )
+        raise
     if file_tag_groups and len(file_tag_groups) != len(files):
         raise bad_request("fileTagsJson length must match files")
 
     imported_count = 0
     skipped_count = 0
     saved_entries: list[tuple[str, str, list[dict[str, str]]]] = []
+    attached_tags_by_media: dict[str, list[str]] = {}
+    tag_attach_success_count = 0
+    tag_attach_failure_count = 0
 
     for index, upload in enumerate(files):
         multipart_file_name = _normalize_upload_file_name(upload.filename or "")
@@ -121,11 +181,14 @@ async def upload_files(
         file_tags = file_tag_groups[index] if index < len(file_tag_groups) else []
 
         logger.info(
-            "[upload] received index=%s multipart_filename=%r original_display_name=%r final_filename=%r utf8_multipart=%s utf8_original=%s",
+            '[UPLOAD][SERVER][req:%s] received_file index=%s multipart_filename=%r original_display_name=%r final_filename=%r sourceRelativePath=%s fileTags=%s utf8_multipart=%s utf8_original=%s',
+            request_id,
             index,
             upload.filename,
             original_display_name,
             file_name,
+            _log_scalar(relative_path_hint),
+            _log_tag_list(file_tags),
             _utf8_hex_preview(upload.filename or ""),
             _utf8_hex_preview(original_display_name),
         )
@@ -133,25 +196,28 @@ async def upload_files(
         if not file_name:
             skipped_count += 1
             await upload.close()
+            logger.info('[UPLOAD][SERVER][req:%s] skip index=%s reason=empty_filename', request_id, index)
             continue
 
         if not is_supported_media_extension(normalized_extension(file_name)):
-            raise bad_request(f"未対応のファイル形式です: {file_name}")
+            raise bad_request(f"????????????????????? {file_name}")
 
         destination = os.path.join(folder_path, file_name)
         if os.path.exists(destination):
             if skipIfExists:
                 skipped_count += 1
                 await upload.close()
+                logger.info('[UPLOAD][SERVER][req:%s] skip index=%s destination=%s reason=exists', request_id, index, _log_scalar(destination))
                 continue
             destination = _unique_path(folder_path, file_name)
 
         logger.info(
-            "[upload] saving index=%s destination=%r final_filename=%r relative_hint=%r",
+            '[UPLOAD][SERVER][req:%s] saving index=%s destination=%s final_filename=%s sourceRelativePath=%s',
+            request_id,
             index,
-            destination,
-            file_name,
-            relative_path_hint,
+            _log_scalar(destination),
+            _log_scalar(file_name),
+            _log_scalar(relative_path_hint),
         )
 
         try:
@@ -163,9 +229,11 @@ async def upload_files(
                     handle.write(chunk)
             saved_entries.append((os.path.normpath(destination), relative_path_hint, file_tags))
             imported_count += 1
+            logger.info('[UPLOAD][SERVER][req:%s] save_success index=%s destination=%s', request_id, index, _log_scalar(destination))
         except Exception:
             logger.exception(
-                "[upload] failed to save index=%s multipart_filename=%r original_display_name=%r final_filename=%r",
+                '[UPLOAD][ERROR][req:%s] save_failed index=%s multipart_filename=%r original_display_name=%r final_filename=%r',
+                request_id,
                 index,
                 upload.filename,
                 original_display_name,
@@ -184,42 +252,94 @@ async def upload_files(
         metadata_store = request.app.state.metadata_store
         rescanned_count = index_service.index_files([saved_path for saved_path, _, _ in saved_entries])
 
+        try:
+            free_tags = _parse_json_tag_list(freeTagsJson, field_name="freeTagsJson")
+            logger.info('[UPLOAD][SERVER][req:%s] parse_success field=freeTagsJson value=%s', request_id, _log_string_list(free_tags))
+        except Exception:
+            logger.exception('[UPLOAD][ERROR][req:%s] parse_failed field=freeTagsJson raw=%s', request_id, _log_scalar(freeTagsJson))
+            raise
+        try:
+            character_tags = _parse_json_tag_list(characterTagsJson, field_name="characterTagsJson")
+            logger.info('[UPLOAD][SERVER][req:%s] parse_success field=characterTagsJson value=%s', request_id, _log_string_list(character_tags))
+        except Exception:
+            logger.exception('[UPLOAD][ERROR][req:%s] parse_failed field=characterTagsJson raw=%s', request_id, _log_scalar(characterTagsJson))
+            raise
+
         common_tags = _build_import_tags(
             artist_tag=artistTag,
             series_tag=seriesTag,
-            free_tags=_parse_json_tag_list(freeTagsJson, field_name="freeTagsJson"),
-            character_tags=_parse_json_tag_list(characterTagsJson, field_name="characterTagsJson"),
+            free_tags=free_tags,
+            character_tags=character_tags,
         )
+        logger.info('[TAG][SERVER][req:%s][artist] incoming=%s', request_id, _log_category_values(common_tags, 'artist'))
+        logger.info('[TAG][SERVER][req:%s][series] incoming=%s', request_id, _log_category_values(common_tags, 'series'))
+        logger.info('[TAG][SERVER][req:%s][character] incoming=%s', request_id, _log_category_values(common_tags, 'character'))
+        logger.info('[TAG][SERVER][req:%s][free] incoming=%s', request_id, _log_category_values(common_tags, 'free'))
 
         resolved_entries: list[tuple[str, list[dict[str, str]]]] = []
         imported_media_ids: list[str] = []
         unresolved_paths: list[str] = []
         has_any_tags = bool(common_tags)
-        for saved_path, _, file_tags in saved_entries:
+        for saved_path, relative_path_hint, file_tags in saved_entries:
             merged_tags = _merge_import_tags(common_tags, file_tags)
             if merged_tags:
                 has_any_tags = True
+            logger.info(
+                '[TAG][SERVER][req:%s] item=%s sourceRelativePath=%s mergedTags=%s',
+                request_id,
+                _log_scalar(saved_path),
+                _log_scalar(relative_path_hint),
+                _log_tag_list(merged_tags),
+            )
+            logger.info('[TAG][SERVER][req:%s][artist] incoming=%s item=%s', request_id, _log_category_values(merged_tags, 'artist'), _log_scalar(saved_path))
+            logger.info('[TAG][SERVER][req:%s][series] incoming=%s item=%s', request_id, _log_category_values(merged_tags, 'series'), _log_scalar(saved_path))
+            logger.info('[TAG][SERVER][req:%s][character] incoming=%s item=%s', request_id, _log_category_values(merged_tags, 'character'), _log_scalar(saved_path))
+            logger.info('[TAG][SERVER][req:%s][free] incoming=%s item=%s', request_id, _log_category_values(merged_tags, 'free'), _log_scalar(saved_path))
             try:
                 media_id = metadata_store.resolve_media_id(
                     saved_path,
                     identity={"aliases": [saved_path]},
                 )
+                logger.info('[UPLOAD][SERVER][req:%s] resolve_media_id success path=%s mediaId=%s', request_id, _log_scalar(saved_path), _log_scalar(media_id))
             except Exception:
                 unresolved_paths.append(saved_path)
-                logger.exception("[upload] failed to resolve media id for %r", saved_path)
+                logger.exception('[UPLOAD][ERROR][req:%s] resolve_media_id failed path=%s', request_id, _log_scalar(saved_path))
                 continue
             imported_media_ids.append(media_id)
             resolved_entries.append((media_id, merged_tags))
 
         if unresolved_paths and (has_any_tags or organizeAfterImport):
             failed_name = os.path.basename(unresolved_paths[0])
-            raise bad_request(f"取り込み後のメディア解決に失敗しました: {failed_name}")
+            raise bad_request(f"?????????????????????????????????: {failed_name}")
 
         for media_id, merged_tags in resolved_entries:
             if not merged_tags:
+                logger.info('[UPLOAD][SERVER][req:%s] tag_attach_skipped itemId=%s reason=no_tags', request_id, _log_scalar(media_id))
                 continue
-            metadata_store.add_tags_to_media(media_id, merged_tags)
-            tagged_count += 1
+            try:
+                metadata_store.add_tags_to_media(media_id, merged_tags, request_id=request_id)
+                tagged_count += 1
+                tag_attach_success_count += sum(1 for tag in merged_tags if str(tag.get('name') or '').strip())
+                attached_tags = metadata_store.get_tags_for_media(media_id)
+                attached_tags_by_media[media_id] = [
+                    f"{tag['category']}:{tag['name']}"
+                    for tag in attached_tags
+                ]
+                logger.info(
+                    '[UPLOAD][RESULT][req:%s] itemId=%s attachedTags=%s',
+                    request_id,
+                    _log_scalar(media_id),
+                    _log_string_list(attached_tags_by_media[media_id]),
+                )
+            except Exception:
+                tag_attach_failure_count += sum(1 for tag in merged_tags if str(tag.get('name') or '').strip())
+                logger.exception(
+                    '[UPLOAD][ERROR][req:%s] tag_attach_failed itemId=%s mergedTags=%s',
+                    request_id,
+                    _log_scalar(media_id),
+                    _log_tag_list(merged_tags),
+                )
+                raise
 
         if organizeAfterImport and imported_media_ids:
             organized = metadata_store.organize_media_by_tags(
@@ -231,14 +351,30 @@ async def upload_files(
 
     response = {
         "ok": True,
+        "requestId": request_id,
         "importedCount": imported_count,
         "skippedCount": skipped_count,
         "taggedCount": tagged_count,
         "organizedCount": organized_count,
         "rescannedCount": rescanned_count,
+        "tagAttachSuccessCount": tag_attach_success_count,
+        "tagAttachFailureCount": tag_attach_failure_count,
+        "attachedTagsByMedia": attached_tags_by_media,
     }
     if targetCollection is not None:
         response["targetCollection"] = targetCollection
+    logger.info(
+        '[UPLOAD][RESULT][req:%s] completed imported=%s skipped=%s tagged=%s organized=%s rescanned=%s tagAttachSuccess=%s tagAttachFailure=%s attachedTagsByMedia=%s',
+        request_id,
+        imported_count,
+        skipped_count,
+        tagged_count,
+        organized_count,
+        rescanned_count,
+        tag_attach_success_count,
+        tag_attach_failure_count,
+        _log_attached_tags_by_media(attached_tags_by_media),
+    )
     return response
 
 @router.post("/download-url", response_model=DownloadUrlResponse)
@@ -392,6 +528,56 @@ def apply_delete(request: Request, payload: DeleteRequest) -> MessageResponse:
         hard_delete=payload.hardDelete,
     )
     return MessageResponse(message=f"削除しました ({deleted} 件)")
+
+
+def _normalize_upload_request_id(raw: str | None) -> str:
+    trimmed = str(raw or '').strip()
+    if trimmed:
+        return trimmed
+    return f"up-{secrets.token_hex(4)}"
+
+
+def _log_scalar(value: object | None) -> str:
+    if value is None:
+        return 'null'
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _log_string_list(values: list[str]) -> str:
+    if not values:
+        return '[]'
+    return '[' + ', '.join(_log_scalar(value) for value in values) + ']'
+
+
+def _log_tag_list(tags: list[dict[str, str]]) -> str:
+    if not tags:
+        return '[]'
+    out: list[str] = []
+    for tag in tags:
+        category = str(tag.get('category') or '').strip()
+        name = str(tag.get('name') or '').strip()
+        out.append(f'{category}:{name}')
+    return _log_string_list(out)
+
+
+def _log_tag_groups(tag_groups: list[list[dict[str, str]]]) -> str:
+    if not tag_groups:
+        return '[]'
+    return '[' + ', '.join(_log_tag_list(group) for group in tag_groups) + ']'
+
+
+def _log_category_values(tags: list[dict[str, str]], category: str) -> str:
+    values = [str(tag.get('name') or '').strip() for tag in tags if str(tag.get('category') or '').strip() == category and str(tag.get('name') or '').strip()]
+    return _log_string_list(values)
+
+
+def _log_attached_tags_by_media(attached_tags_by_media: dict[str, list[str]]) -> str:
+    if not attached_tags_by_media:
+        return '{}'
+    entries: list[str] = []
+    for media_id, tags in attached_tags_by_media.items():
+        entries.append(f'{_log_scalar(media_id)}:{_log_string_list(tags)}')
+    return '{' + ', '.join(entries) + '}'
 
 
 def _build_import_tags(

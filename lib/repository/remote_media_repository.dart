@@ -1,5 +1,6 @@
 ﻿import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -846,6 +847,7 @@ class RemoteMediaRepository implements MediaRepository {
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
+    final requestId = _buildUploadRequestId();
     try {
       final uploadTargets =
           items.where((item) => item.kind != MediaKind.folder).toList(
@@ -854,6 +856,37 @@ class RemoteMediaRepository implements MediaRepository {
       if (uploadTargets.isEmpty) {
         return 0;
       }
+
+      final trimmedArtistTag = importMetadata?.artistTag?.trim();
+      final trimmedSeriesTag = importMetadata?.seriesTag?.trim();
+      final trimmedTargetCollection = importMetadata?.targetCollection?.trim();
+      final trimmedCharacterTags =
+          importMetadata?.characterTags
+              .map((entry) => entry.trim())
+              .where((entry) => entry.isNotEmpty)
+              .toList(growable: false) ??
+          const <String>[];
+      final trimmedFreeTags =
+          importMetadata?.freeTags
+              .map((entry) => entry.trim())
+              .where((entry) => entry.isNotEmpty)
+              .toList(growable: false) ??
+          const <String>[];
+      debugPrint(
+        '[UPLOAD][CLIENT][req:$requestId] start '
+        'targetFolderId=${_debugUploadValue(dest.raw)} '
+        'fileNames=${_debugUploadStringList(uploadTargets.map((item) => item.displayName))} '
+        'skipIfExists=$skipIfExists '
+        'targetCollection=${_debugUploadValue(trimmedTargetCollection?.isNotEmpty == true ? trimmedTargetCollection : null)} '
+        'organizeAfterImport=${importMetadata?.organizeAfterImport ?? false}',
+      );
+      debugPrint(
+        '[TAG][CLIENT][req:$requestId] metadata '
+        'artist=${_debugUploadValue(trimmedArtistTag?.isNotEmpty == true ? trimmedArtistTag : null)} '
+        'series=${_debugUploadValue(trimmedSeriesTag?.isNotEmpty == true ? trimmedSeriesTag : null)} '
+        'character=${_debugUploadStringList(trimmedCharacterTags)} '
+        'free=${_debugUploadStringList(trimmedFreeTags)}',
+      );
 
       final unsupported = uploadTargets
           .map(
@@ -867,7 +900,10 @@ class RemoteMediaRepository implements MediaRepository {
 
       final binaries = <RemoteUploadFile>[];
       final readFailures = <String>[];
-      final localStoredTagsByItemId = await _loadLocalUploadTags(uploadTargets);
+      final localStoredTagsByItemId = await _loadLocalUploadTags(
+        uploadTargets,
+        requestId: requestId,
+      );
       onProgress?.call(
         MediaTransferProgress(
           sentBytes: 0,
@@ -884,7 +920,7 @@ class RemoteMediaRepository implements MediaRepository {
         final sourceKindLabel = _sourceKindLabelForItem(item, rawId: rawItem.id);
         final sourceKind = _sourceKindNameForItem(item, rawId: rawItem.id);
         debugPrint(
-          '[remote-upload] source '
+          '[UPLOAD][CLIENT][req:$requestId] source '
           'sourceKind=${sourceKind} '
           'rawId=${rawItem.id} normalizedId=${item.id} '
           'display=${item.displayName} folder=${item.folderRaw}',
@@ -910,13 +946,13 @@ class RemoteMediaRepository implements MediaRepository {
           );
         } catch (error, stackTrace) {
           debugPrint(
-            '[remote-upload] read failed '
+            '[UPLOAD][ERROR][req:$requestId] read failed '
             'name=$fileName sourceKind=$sourceKindLabel '
             'rawId=${rawItem.id} normalizedId=${item.id} '
             'folder=${item.folderRaw} error=$error',
           );
           debugPrintStack(
-            label: '[remote-upload] read failed stack',
+            label: '[UPLOAD][ERROR][req:$requestId] read failed stack',
             stackTrace: stackTrace,
           );
           readFailures.add('$fileName ($sourceKindLabel): $error');
@@ -934,11 +970,11 @@ class RemoteMediaRepository implements MediaRepository {
           localStoredTagsByItemId[item.id] ?? const <Tag>[],
         );
         debugPrint(
-          '[remote-upload] prepared '
+          '[TAG][CLIENT][req:$requestId] prepared '
           'name=$fileName sourceKind=$sourceKindLabel '
           'strategy=${readResult.strategy} '
-          'relative=${sourceRelativePath ?? '-'} bytes=${readResult.bytes.length} '
-          'tags=${itemTags.length}',
+          'relative=${_debugUploadValue(sourceRelativePath)} bytes=${readResult.bytes.length} '
+          'tags=${_debugUploadTagList(itemTags)}',
         );
         binaries.add(
           RemoteUploadFile(
@@ -955,7 +991,7 @@ class RemoteMediaRepository implements MediaRepository {
 
       if (readFailures.isNotEmpty) {
         debugPrint(
-          '[remote-upload] aborted before upload due to read failures '
+          '[UPLOAD][ERROR][req:$requestId] aborted before upload due to read failures '
           'count=${readFailures.length}',
         );
         final summary = readFailures.map((entry) => '- $entry').join('\n');
@@ -980,8 +1016,11 @@ class RemoteMediaRepository implements MediaRepository {
       );
 
       debugPrint(
-        '[remote-upload] dispatch '
-        'count=${binaries.length} names=${binaries.map((file) => file.fileName).join(' | ')}',
+        '[UPLOAD][CLIENT][req:$requestId] payload summary '
+        'count=${binaries.length} names=${_debugUploadStringList(binaries.map((file) => file.fileName))} '
+        'sourceRelativePathsJsonPresent=${binaries.any((file) => file.sourceRelativePath?.trim().isNotEmpty ?? false)} '
+        'fileTagsPresent=${binaries.any((file) => file.tags.isNotEmpty)} '
+        'payloadFiles=${binaries.map((file) => '{name:${_debugUploadValue(file.fileName)}, relative:${_debugUploadValue(file.sourceRelativePath)}, tags:${_debugUploadTagList(file.tags)}}').join(', ')}',
       );
       late final RemoteUploadResponse response;
       try {
@@ -991,14 +1030,15 @@ class RemoteMediaRepository implements MediaRepository {
           importMetadata: importMetadata,
           skipIfExists: skipIfExists,
           onProgress: onProgress,
+          requestId: requestId,
         );
       } catch (error, stackTrace) {
         debugPrint(
-          '[remote-upload] upload request failed '
+          '[UPLOAD][ERROR][req:$requestId] upload request failed '
           'count=${binaries.length} folder=${dest.raw} error=$error',
         );
         debugPrintStack(
-          label: '[remote-upload] upload request failed stack',
+          label: '[UPLOAD][ERROR][req:$requestId] upload request failed stack',
           stackTrace: stackTrace,
         );
         rethrow;
@@ -1013,15 +1053,19 @@ class RemoteMediaRepository implements MediaRepository {
         ),
       );
       debugPrint(
-        '[remote-upload] response '
+        '[UPLOAD][RESULT][req:$requestId] response '
+        'responseRequestId=${_debugUploadValue(response.requestId)} '
         'imported=${response.importedCount} skipped=${response.skippedCount} '
         'tagged=${response.taggedCount} organized=${response.organizedCount} '
-        'rescanned=${response.rescannedCount}',
+        'rescanned=${response.rescannedCount} '
+        'tagAttachSuccess=${response.tagAttachSuccessCount} '
+        'tagAttachFailure=${response.tagAttachFailureCount} '
+        'attachedTagsByMedia=${_debugUploadResponseTags(response.attachedTagsByMedia)}',
       );
       return response.importedCount;
     } on ArgumentError catch (error, stackTrace) {
       debugPrint(
-        '[remote-upload] invalid path argument during host import: '
+        '[UPLOAD][ERROR][req:$requestId] invalid path argument during host import: '
         '$error dest=${dest.raw}\n$stackTrace',
       );
       throw RemoteMediaException(
@@ -1032,23 +1076,70 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<Map<String, List<Tag>>> _loadLocalUploadTags(
-    List<MediaItem> items,
-  ) async {
+    List<MediaItem> items, {
+    required String requestId,
+  }) async {
     final provider = _localUploadTagsProvider;
     if (provider == null || items.isEmpty) {
+      debugPrint('[TAG][CLIENT][req:$requestId] local tag lookup skipped provider=${provider == null} itemCount=${items.length}');
       return const <String, List<Tag>>{};
     }
 
     try {
-      return await provider(items);
+      final result = await provider(items);
+      debugPrint('[TAG][CLIENT][req:$requestId] local tag lookup success keys=${_debugUploadStringList(result.keys)}');
+      return result;
     } catch (error, stackTrace) {
-      debugPrint('[remote-upload] local tag lookup failed: $error');
+      debugPrint('[UPLOAD][ERROR][req:$requestId] local tag lookup failed: $error');
       debugPrintStack(
-        label: '[remote-upload] local tag lookup stack',
+        label: '[UPLOAD][ERROR][req:$requestId] local tag lookup stack',
         stackTrace: stackTrace,
       );
       return const <String, List<Tag>>{};
     }
+  }
+
+  String _buildUploadRequestId() {
+    final micros = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    return 'up-$micros';
+  }
+
+  String _debugUploadValue(String? value) {
+    if (value == null) {
+      return 'null';
+    }
+    return jsonEncode(value);
+  }
+
+  String _debugUploadStringList(Iterable<String> values) {
+    final list = values.toList(growable: false);
+    if (list.isEmpty) {
+      return '[]';
+    }
+    return '[${list.map(_debugUploadValue).join(', ')}]';
+  }
+
+  String _debugUploadTagList(Iterable<Tag> tags) {
+    final values =
+        tags
+            .map((tag) => '${tag.category.name}:${tag.name.trim()}')
+            .where((entry) => entry.isNotEmpty)
+            .toList(growable: false);
+    return _debugUploadStringList(values);
+  }
+
+  String _debugUploadResponseTags(Iterable<RemoteUploadedMediaTags> items) {
+    final values =
+        items
+            .map(
+              (item) =>
+                  '{mediaId:${_debugUploadValue(item.mediaId)}, tags:${_debugUploadStringList(item.tags)}}',
+            )
+            .toList(growable: false);
+    if (values.isEmpty) {
+      return '[]';
+    }
+    return '[${values.join(', ')}]';
   }
 
   List<Tag> _mergeUploadTags(
@@ -1126,11 +1217,11 @@ class RemoteMediaRepository implements MediaRepository {
           ) ??
           'upload.bin';
       debugPrint(
-        '[remote-upload] source normalization fallback: '
+        '[UPLOAD][CLIENT] source normalization fallback: '
         '$error rawId=${item.id} folder=${item.folderRaw}',
       );
       debugPrintStack(
-        label: '[remote-upload] source normalization stack',
+        label: '[UPLOAD][CLIENT] source normalization stack',
         stackTrace: stackTrace,
       );
       return MediaItem(
