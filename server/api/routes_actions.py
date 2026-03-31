@@ -195,16 +195,8 @@ async def upload_files(
         imported_media_ids: list[str] = []
         unresolved_paths: list[str] = []
         has_any_tags = bool(common_tags)
-        for saved_path, relative_path_hint, file_tags in saved_entries:
-            inferred_tags = []
-            if normalized_extension(saved_path) == ".pdf":
-                inferred_tags = filter_hitomi_pdf_auto_tags(
-                    build_inferred_import_tags(
-                        relative_path=relative_path_hint,
-                        source_urls=[],
-                    )
-                )
-            merged_tags = _merge_import_tags(common_tags, file_tags, inferred_tags)
+        for saved_path, _, file_tags in saved_entries:
+            merged_tags = _merge_import_tags(common_tags, file_tags)
             if merged_tags:
                 has_any_tags = True
             try:

@@ -379,7 +379,44 @@ class ActionsRoutesTest(unittest.TestCase):
                 ],
             )
 
-    def test_upload_files_skips_inferred_tags_for_non_hitomi_pdf(self) -> None:
+    def test_upload_files_uses_explicit_metadata_tags_even_when_source_relative_path_suggests_artist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            request = _request(
+                metadata_store,
+                index_service=_RecordingIndexService(),
+                media_roots=[temp_dir],
+            )
+            upload = _FakeUploadFile('sample.pdf', b'%PDF-1.4')
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    artistTag='Client Artist',
+                    seriesTag='Client Series',
+                    freeTagsJson='["manual"]',
+                    characterTagsJson='["Heroine"]',
+                    sourceRelativePathsJson='["hitomi/[12345] Path Artist/sample.pdf"]',
+                    files=[upload],
+                )
+            )
+
+            self.assertEqual(response['importedCount'], 1)
+            self.assertEqual(response['taggedCount'], 1)
+            self.assertEqual(len(metadata_store.add_tag_calls), 1)
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'artist', 'name': 'Client Artist'},
+                    {'category': 'series', 'name': 'Client Series'},
+                    {'category': 'character', 'name': 'Heroine'},
+                    {'category': 'free', 'name': 'manual'},
+                ],
+            )
+
+    def test_upload_files_does_not_infer_artist_from_source_relative_path_when_artist_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             metadata_store = _UploadMetadataStore()
             request = _request(
@@ -395,7 +432,7 @@ class ActionsRoutesTest(unittest.TestCase):
                     folderRaw=temp_dir,
                     skipIfExists=True,
                     freeTagsJson='["manual"]',
-                    sourceRelativePathsJson='["kemono/patreon/[12345] ArtistName/sample.pdf"]',
+                    sourceRelativePathsJson='["hitomi/[12345] Path Artist/sample.pdf"]',
                     files=[upload],
                 )
             )
@@ -410,7 +447,7 @@ class ActionsRoutesTest(unittest.TestCase):
                 ],
             )
 
-    def test_upload_files_infers_tags_for_hitomi_pdf_from_source_relative_paths(self) -> None:
+    def test_upload_files_preserves_file_specific_tags_without_source_path_inference(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             metadata_store = _UploadMetadataStore()
             request = _request(
@@ -425,45 +462,14 @@ class ActionsRoutesTest(unittest.TestCase):
                     request,
                     folderRaw=temp_dir,
                     skipIfExists=True,
-                    freeTagsJson='["manual"]',
-                    sourceRelativePathsJson='["hitomi/[12345] ArtistName/sample.pdf"]',
-                    files=[upload],
-                )
-            )
-
-            self.assertEqual(response['importedCount'], 1)
-            self.assertEqual(response['taggedCount'], 1)
-            self.assertEqual(len(metadata_store.add_tag_calls), 1)
-            self.assertEqual(
-                metadata_store.add_tag_calls[0]['tags'],
-                [
-                    {'category': 'free', 'name': 'manual'},
-                    {'category': 'artist', 'name': 'ArtistName'},
-                    {'category': 'mediaType', 'name': 'hitomi'},
-                ],
-            )
-
-
-
-    def test_upload_files_preserves_file_specific_tags(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            metadata_store = _UploadMetadataStore()
-            request = _request(
-                metadata_store,
-                index_service=_RecordingIndexService(),
-                media_roots=[temp_dir],
-            )
-            upload = _FakeUploadFile('sample.jpg', b'abc123')
-
-            response = asyncio.run(
-                upload_files(
-                    request,
-                    folderRaw=temp_dir,
-                    skipIfExists=True,
+                    sourceRelativePathsJson=json.dumps(
+                        ['hitomi/[12345] Path Artist/sample.pdf']
+                    ),
                     fileTagsJson=json.dumps(
                         [[
                             {'category': 'artist', 'name': 'Local Artist'},
                             {'category': 'series', 'name': 'Local Series'},
+                            {'category': 'character', 'name': 'Local Heroine'},
                             {'category': 'free', 'name': 'bonus'},
                         ]]
                     ),
@@ -479,6 +485,7 @@ class ActionsRoutesTest(unittest.TestCase):
                 [
                     {'category': 'artist', 'name': 'Local Artist'},
                     {'category': 'series', 'name': 'Local Series'},
+                    {'category': 'character', 'name': 'Local Heroine'},
                     {'category': 'free', 'name': 'bonus'},
                 ],
             )
