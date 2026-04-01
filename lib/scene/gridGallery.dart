@@ -79,6 +79,20 @@ class _FolderNavState {
   const _FolderNavState(this.folder, this.pageIndex);
 }
 
+class _GallerySearchSuggestion {
+  final String query;
+  final String label;
+  final String? detail;
+  final IconData icon;
+
+  const _GallerySearchSuggestion({
+    required this.query,
+    required this.label,
+    required this.icon,
+    this.detail,
+  });
+}
+
 class _GeneratedPdfPostProcessResult {
   final MediaItem? item;
   final List<Tag> inferredTags;
@@ -274,6 +288,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   String _homeQuery = '';
   bool _homeSearching = false;
   List<MediaItem> _homeSearchResults = const [];
+  List<MediaItem> _homeSearchCorpus = const [];
+  Map<String, List<TagWithId>> _dbTagDetailsByItemId =
+      <String, List<TagWithId>>{};
+  String _homeSearchCorpusSignature = '';
+  _SortMode _homeSearchSortMode = _SortMode.updatedAt;
 
   Timer? _homeSearchDebounce;
 
@@ -300,7 +319,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   String _query = '';
+  List<MediaItem>? _gallerySearchItemsAll;
+  String? _gallerySearchFolderRaw;
+  bool _gallerySearchLoading = false;
+  bool _gallerySearchLoadingTags = false;
+  int _gallerySearchLoadVersion = 0;
+  Map<String, List<String>> _gallerySearchTagsById = <String, List<String>>{};
+  Map<String, List<TagWithId>> _gallerySearchTagDetailsById =
+      <String, List<TagWithId>>{};
 
   _SortMode _sortMode = _SortMode.name;
 
@@ -461,11 +489,20 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode.addListener(_handleGallerySearchFocusChange);
     _loadPrefsAndAutoOpenFolder();
     unawaited(_initializeHostServerIfNeeded());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reloadArtistTagMasters();
     });
+  }
+
+  void _handleGallerySearchFocusChange() {
+    if (_searchFocusNode.hasFocus) {
+      unawaited(_ensureGallerySearchCacheLoaded());
+    }
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _initializeHostServerIfNeeded() async {
@@ -479,6 +516,514 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   void _logUiError(String label, Object error, StackTrace stackTrace) {
     debugPrint('[GalleryGridPage][$label] $error');
     debugPrintStack(label: '[GalleryGridPage][$label]', stackTrace: stackTrace);
+  }
+
+  bool get _isGallerySearchActive => _query.trim().isNotEmpty;
+  bool get _isGallerySearchBusy =>
+      _gallerySearchLoading || _gallerySearchLoadingTags;
+
+  void _invalidateGallerySearchCache() {
+    _gallerySearchLoadVersion++;
+    _gallerySearchFolderRaw = null;
+    _gallerySearchItemsAll = null;
+    _gallerySearchLoading = false;
+    _gallerySearchLoadingTags = false;
+    _gallerySearchTagsById = <String, List<String>>{};
+    _gallerySearchTagDetailsById = <String, List<TagWithId>>{};
+  }
+
+  Future<void> _ensureGallerySearchCacheLoaded() async {
+    final folder = _folder;
+    if (folder == null) return;
+
+    final folderRaw = folder.raw;
+    if (_gallerySearchFolderRaw == folderRaw &&
+        _gallerySearchItemsAll != null &&
+        !_gallerySearchLoading &&
+        !_gallerySearchLoadingTags) {
+      return;
+    }
+
+    if ((_gallerySearchLoading || _gallerySearchLoadingTags) &&
+        _gallerySearchFolderRaw == folderRaw) {
+      return;
+    }
+
+    final loadVersion = ++_gallerySearchLoadVersion;
+    if (mounted) {
+      setState(() {
+        _gallerySearchFolderRaw = folderRaw;
+        _gallerySearchLoading = true;
+        _gallerySearchLoadingTags = false;
+        _gallerySearchItemsAll = null;
+        _gallerySearchTagsById = <String, List<String>>{};
+        _gallerySearchTagDetailsById = <String, List<TagWithId>>{};
+      });
+    }
+
+    try {
+      final useCurrentPage =
+          _galleryTotal > 0 &&
+          _galleryTotal <= _items.length &&
+          _items.every((item) => item.folderRaw == folderRaw);
+      final allItems = useCurrentPage ? _items : await widget.repo.listMedia(folder);
+
+      if (!mounted ||
+          _gallerySearchLoadVersion != loadVersion ||
+          _folder?.raw != folderRaw) {
+        return;
+      }
+
+      widget.tagService.rememberItems(allItems);
+
+      setState(() {
+        _gallerySearchItemsAll = allItems.toList(growable: false);
+        _gallerySearchLoading = false;
+        _gallerySearchLoadingTags = true;
+      });
+
+      final nonFolderItems = allItems
+          .where((item) => item.kind != MediaKind.folder)
+          .toList(growable: false);
+      final details = nonFolderItems.isEmpty
+          ? const <String, List<TagWithId>>{}
+          : await widget.tagService.getDetailedTagsByItems(nonFolderItems);
+
+      if (!mounted ||
+          _gallerySearchLoadVersion != loadVersion ||
+          _folder?.raw != folderRaw) {
+        return;
+      }
+
+      setState(() {
+        _gallerySearchLoading = false;
+        _gallerySearchLoadingTags = false;
+        _gallerySearchTagDetailsById = details;
+        _gallerySearchTagsById = details.map(
+          (key, value) => MapEntry(
+            key,
+            value.map((entry) => entry.tag.name).toList(growable: false),
+          ),
+        );
+      });
+    } catch (error, stackTrace) {
+      _logUiError('gallery-search-cache', error, stackTrace);
+      if (!mounted ||
+          _gallerySearchLoadVersion != loadVersion ||
+          _folder?.raw != folderRaw) {
+        return;
+      }
+      setState(() {
+        _gallerySearchLoading = false;
+        _gallerySearchLoadingTags = false;
+      });
+    }
+  }
+
+  List<MediaItem> _gallerySearchCorpusItems() {
+    final folderRaw = _folder?.raw;
+    if (folderRaw != null &&
+        _gallerySearchFolderRaw == folderRaw &&
+        _gallerySearchItemsAll != null) {
+      return _gallerySearchItemsAll!;
+    }
+    return _items;
+  }
+
+  List<MediaItem> _gallerySearchBaseItems() {
+    if (!_isGallerySearchActive) return _items;
+    return _gallerySearchCorpusItems();
+  }
+
+  List<String> _searchableTagsFor(MediaItem item) {
+    return _gallerySearchTagsById[item.id] ?? _tagsById[item.id] ?? const <String>[];
+  }
+
+  List<TagWithId> _searchableTagDetailsFor(MediaItem item) {
+    return _gallerySearchTagDetailsById[item.id] ??
+        _tagDetailsById[item.id] ??
+        const <TagWithId>[];
+  }
+
+  TagCategory? _tagCategoryForSearchKey(String key) {
+    switch (key) {
+      case 'artist':
+        return TagCategory.artist;
+      case 'series':
+        return TagCategory.series;
+      case 'type':
+        return TagCategory.mediaType;
+      case 'character':
+        return TagCategory.character;
+      case 'free':
+        return TagCategory.free;
+    }
+    return null;
+  }
+
+  String _tagCategoryLabel(TagCategory category) {
+    switch (category) {
+      case TagCategory.artist:
+        return '作家';
+      case TagCategory.series:
+        return 'シリーズ';
+      case TagCategory.mediaType:
+        return '種別';
+      case TagCategory.character:
+        return 'キャラクター';
+      case TagCategory.free:
+        return '自由タグ';
+    }
+  }
+
+  String _mediaKindLabel(MediaKind kind) {
+    switch (kind) {
+      case MediaKind.folder:
+        return 'フォルダ';
+      case MediaKind.image:
+        return '画像';
+      case MediaKind.pdf:
+        return 'PDF';
+    }
+  }
+
+  IconData _mediaKindIcon(MediaKind kind) {
+    switch (kind) {
+      case MediaKind.folder:
+        return Icons.folder_open_outlined;
+      case MediaKind.image:
+        return Icons.image_outlined;
+      case MediaKind.pdf:
+        return Icons.picture_as_pdf_outlined;
+    }
+  }
+
+  String _replaceActiveGallerySearchToken(String rawQuery, String replacement) {
+    final trimmedRight = rawQuery.trimRight();
+    if (trimmedRight.isEmpty) {
+      return replacement;
+    }
+
+    if (RegExp(r'\s$').hasMatch(rawQuery)) {
+      return '$trimmedRight $replacement';
+    }
+
+    final tokenMatch = RegExp(r'\S+$').firstMatch(trimmedRight);
+    if (tokenMatch == null) {
+      return replacement;
+    }
+
+    final prefix = trimmedRight.substring(0, tokenMatch.start).trimRight();
+    return prefix.isEmpty ? replacement : '$prefix $replacement';
+  }
+
+  Iterable<_GallerySearchSuggestion> _buildGallerySearchSuggestions(
+    TextEditingValue value,
+  ) {
+    if (!_searchFocusNode.hasFocus) {
+      return const <_GallerySearchSuggestion>[];
+    }
+
+    final rawQuery = value.text;
+    final trimmedRight = rawQuery.trimRight();
+    final hasTrailingSpace =
+        rawQuery.isNotEmpty && RegExp(r'\s$').hasMatch(rawQuery);
+    final tokenMatch = hasTrailingSpace
+        ? null
+        : RegExp(r'\S+$').firstMatch(trimmedRight);
+    final activeToken = tokenMatch?.group(0) ?? '';
+    final normalizedToken = activeToken.toLowerCase();
+
+    final suggestions = <_GallerySearchSuggestion>[];
+    final seenQueries = <String>{};
+
+    void addSuggestion(_GallerySearchSuggestion suggestion) {
+      final key = suggestion.query.toLowerCase();
+      if (seenQueries.add(key)) {
+        suggestions.add(suggestion);
+      }
+    }
+
+    void addOperatorSuggestion(
+      String replacement,
+      String detail,
+      IconData icon,
+    ) {
+      addSuggestion(
+        _GallerySearchSuggestion(
+          query: _replaceActiveGallerySearchToken(rawQuery, replacement),
+          label: replacement,
+          detail: detail,
+          icon: icon,
+        ),
+      );
+    }
+
+    final operatorHints = <({
+      String token,
+      String detail,
+      IconData icon,
+    })>[
+      (
+        token: 'artist:',
+        detail: '作家タグで絞り込み',
+        icon: Icons.person_outline,
+      ),
+      (
+        token: 'series:',
+        detail: 'シリーズタグで絞り込み',
+        icon: Icons.collections_bookmark_outlined,
+      ),
+      (
+        token: 'type:',
+        detail: '種別タグで絞り込み',
+        icon: Icons.category_outlined,
+      ),
+      (
+        token: 'character:',
+        detail: 'キャラクタータグで絞り込み',
+        icon: Icons.badge_outlined,
+      ),
+      (
+        token: 'free:',
+        detail: '自由タグで絞り込み',
+        icon: Icons.sell_outlined,
+      ),
+    ];
+
+    if (!normalizedToken.startsWith('#')) {
+      for (final hint in operatorHints) {
+        final compactHint = hint.token.replaceAll(':', '');
+        final compactToken = normalizedToken.replaceAll(':', '');
+        if (normalizedToken.isEmpty || compactHint.startsWith(compactToken)) {
+          addOperatorSuggestion(hint.token, hint.detail, hint.icon);
+        }
+      }
+    }
+
+    if (normalizedToken.isEmpty ||
+        'untagged'.contains(normalizedToken) ||
+        '未分類'.contains(normalizedToken)) {
+      addOperatorSuggestion(
+        'untagged',
+        'タグが付いていない項目のみ',
+        Icons.label_off_outlined,
+      );
+    }
+
+    final items = _gallerySearchCorpusItems();
+    final uniqueNames = LinkedHashSet<String>();
+    final uniqueTagNames = LinkedHashSet<String>();
+    final uniqueCategoryTags = <TagCategory, LinkedHashSet<String>>{};
+
+    for (final item in items) {
+      uniqueNames.add(item.displayName);
+      for (final tagName in _searchableTagsFor(item)) {
+        uniqueTagNames.add(tagName);
+      }
+      for (final detail in _searchableTagDetailsFor(item)) {
+        uniqueCategoryTags
+            .putIfAbsent(detail.tag.category, LinkedHashSet<String>.new)
+            .add(detail.tag.name);
+      }
+    }
+
+    if (normalizedToken.startsWith('#')) {
+      final needle = normalizedToken.substring(1);
+      for (final tagName in uniqueTagNames) {
+        final normalizedTag = tagName.toLowerCase();
+        if (needle.isNotEmpty && !normalizedTag.contains(needle)) continue;
+        addSuggestion(
+          _GallerySearchSuggestion(
+            query: _replaceActiveGallerySearchToken(rawQuery, '#$tagName'),
+            label: '#$tagName',
+            detail: 'タグ',
+            icon: Icons.sell_outlined,
+          ),
+        );
+        if (suggestions.length >= 8) break;
+      }
+      return suggestions.take(8);
+    }
+
+    final separator = normalizedToken.indexOf(':');
+    if (separator > 0 && separator < normalizedToken.length) {
+      final key = normalizedToken.substring(0, separator);
+      final valuePart = normalizedToken.substring(separator + 1);
+      final category = _tagCategoryForSearchKey(key);
+      if (category != null) {
+        final names = uniqueCategoryTags[category] ?? LinkedHashSet<String>();
+        for (final tagName in names) {
+          final normalizedTag = tagName.toLowerCase();
+          if (valuePart.isNotEmpty && !normalizedTag.contains(valuePart)) continue;
+          addSuggestion(
+            _GallerySearchSuggestion(
+              query: _replaceActiveGallerySearchToken(rawQuery, '$key:$tagName'),
+              label: '$key:$tagName',
+              detail: '${_tagCategoryLabel(category)}タグ',
+              icon: Icons.sell_outlined,
+            ),
+          );
+          if (suggestions.length >= 8) break;
+        }
+        return suggestions.take(8);
+      }
+    }
+
+    if (normalizedToken.isNotEmpty) {
+      for (final name in uniqueNames) {
+        if (!name.toLowerCase().contains(normalizedToken)) continue;
+        MediaItem? matchedItem;
+        for (final item in items) {
+          if (item.displayName == name) {
+            matchedItem = item;
+            break;
+          }
+        }
+        addSuggestion(
+          _GallerySearchSuggestion(
+            query: _replaceActiveGallerySearchToken(rawQuery, name),
+            label: name,
+            detail: matchedItem == null ? null : _mediaKindLabel(matchedItem.kind),
+            icon: matchedItem == null
+                ? Icons.search
+                : _mediaKindIcon(matchedItem.kind),
+          ),
+        );
+        if (suggestions.length >= 8) {
+          return suggestions.take(8);
+        }
+      }
+
+      for (final tagName in uniqueTagNames) {
+        if (!tagName.toLowerCase().contains(normalizedToken)) continue;
+        addSuggestion(
+          _GallerySearchSuggestion(
+            query: _replaceActiveGallerySearchToken(rawQuery, '#$tagName'),
+            label: '#$tagName',
+            detail: 'タグ',
+            icon: Icons.sell_outlined,
+          ),
+        );
+        if (suggestions.length >= 8) {
+          return suggestions.take(8);
+        }
+      }
+    }
+
+    return suggestions.take(8);
+  }
+
+  void _handleGallerySearchChanged(String value) {
+    if (!mounted) return;
+    setState(() => _query = value);
+    if (value.trim().isNotEmpty || _searchFocusNode.hasFocus) {
+      unawaited(_ensureGallerySearchCacheLoaded());
+    }
+  }
+
+  void _clearGallerySearchQuery() {
+    _searchCtrl.clear();
+    _handleGallerySearchChanged('');
+  }
+
+  Widget? _buildGallerySearchSuffix() {
+    if (!_isGallerySearchBusy && !_isGallerySearchActive) {
+      return null;
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_isGallerySearchBusy)
+          const Padding(
+            padding: EdgeInsets.only(right: 4),
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        if (_isGallerySearchActive)
+          IconButton(
+            tooltip: 'クリア',
+            icon: const Icon(Icons.clear),
+            onPressed: _clearGallerySearchQuery,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildGallerySearchField() {
+    return RawAutocomplete<_GallerySearchSuggestion>(
+      textEditingController: _searchCtrl,
+      focusNode: _searchFocusNode,
+      displayStringForOption: (option) => option.query,
+      optionsBuilder: _buildGallerySearchSuggestions,
+      onSelected: (option) => _handleGallerySearchChanged(option.query),
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search),
+            hintText: 'タイトル / #タグ / artist:xxx / series:yyy',
+            border: const OutlineInputBorder(),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+            suffixIconConstraints: const BoxConstraints(minWidth: 0),
+            suffixIcon: _buildGallerySearchSuffix(),
+          ),
+          onTap: () => unawaited(_ensureGallerySearchCacheLoaded()),
+          onChanged: _handleGallerySearchChanged,
+          onSubmitted: (_) => onFieldSubmitted(),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final optionList = options.toList(growable: false);
+        if (optionList.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final maxWidth = _isWideLayout(context)
+            ? 520.0
+            : MediaQuery.sizeOf(context).width - 24;
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(12),
+            clipBehavior: Clip.antiAlias,
+            child: SizedBox(
+              width: maxWidth,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 280),
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  shrinkWrap: true,
+                  itemCount: optionList.length,
+                  itemBuilder: (context, index) {
+                    final option = optionList[index];
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(option.icon),
+                      title: Text(
+                        option.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: option.detail == null ? null : Text(option.detail!),
+                      onTap: () => onSelected(option),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildStatusBody({
@@ -879,10 +1424,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _reloadArtistTagMasters();
     await _refreshArtistTagCounts();
 
-    if (_homeQuery.trim().isNotEmpty) {
+    _homeSearchCorpus = const <MediaItem>[];
+    _homeSearchCorpusSignature = '';
+    _dbTagsByItemId = <String, List<String>>{};
+    _dbTagDetailsByItemId = <String, List<TagWithId>>{};
+
+    if (_homeQuery.trim().isNotEmpty || _page == _MainPage.search) {
       _folderItemsCacheRecursive.clear();
-      await _runHomeSearch();
-    } else if (mounted && _page == _MainPage.search) {
+      await _runHomeSearch(includeAllWhenEmpty: _page == _MainPage.search);
+    } else if (mounted) {
       setState(() {
         _homeSearching = false;
         _homeSearchResults = const <MediaItem>[];
@@ -1089,35 +1639,106 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _refreshCurrentPageTags();
   }
 
+  List<String> _homeSearchTagsFor(MediaItem item) {
+    for (final key in _idVariants(item.id)) {
+      final tags = _dbTagsByItemId[key];
+      if (tags != null) {
+        return tags;
+      }
+    }
+    return const <String>[];
+  }
+
+  List<TagWithId> _homeSearchTagDetailsFor(MediaItem item) {
+    for (final key in _idVariants(item.id)) {
+      final details = _dbTagDetailsByItemId[key];
+      if (details != null) {
+        return details;
+      }
+    }
+    return const <TagWithId>[];
+  }
+
+  String _buildHomeSearchCorpusSignature(List<MediaItem> items) {
+    var hash = 0x811C9DC5;
+    for (final item in items) {
+      hash = 0x1fffffff & (hash ^ item.id.hashCode ^ item.displayName.hashCode);
+      hash = 0x1fffffff & (hash + item.kind.index + item.folderRaw.hashCode);
+    }
+    return '${_foldersRaw.length}:$hash:${items.length}';
+  }
+
+  Future<List<MediaItem>> _ensureHomeSearchCorpusLoaded() async {
+    for (final raw in _foldersRaw) {
+      if (_folderItemsCacheRecursive.containsKey(raw)) continue;
+      try {
+        final list = await widget.repo.listMediaRecursiveFiles(FolderHandle(raw));
+        _folderItemsCacheRecursive[raw] = list
+            .where((item) => item.kind != MediaKind.folder)
+            .toList(growable: false);
+      } catch (_) {
+        _folderItemsCacheRecursive[raw] = const <MediaItem>[];
+      }
+    }
+
+    final all = <MediaItem>[];
+    for (final raw in _foldersRaw) {
+      final list = _folderItemsCacheRecursive[raw] ?? const <MediaItem>[];
+      all.addAll(list);
+    }
+
+    final signature = _buildHomeSearchCorpusSignature(all);
+    if (_homeSearchCorpusSignature == signature &&
+        _homeSearchCorpus.length == all.length) {
+      return _homeSearchCorpus;
+    }
+
+    widget.tagService.rememberItems(all);
+    final details = await widget.tagService.getDetailedTagsByItems(all);
+
+    final expandedNames = <String, List<String>>{};
+    final expandedDetails = <String, List<TagWithId>>{};
+    details.forEach((key, value) {
+      final names = value.map((entry) => entry.tag.name).toList(growable: false);
+      for (final variant in _idVariants(key)) {
+        expandedNames[variant] = names;
+        expandedDetails[variant] = value;
+      }
+    });
+
+    _homeSearchCorpus = all.toList(growable: false);
+    _homeSearchCorpusSignature = signature;
+    _dbTagsByItemId = expandedNames;
+    _dbTagDetailsByItemId = expandedDetails;
+    return _homeSearchCorpus;
+  }
+
   bool _matchHomeQuery(MediaItem item, String qRaw) {
     final q = qRaw.trim().toLowerCase();
     if (q.isEmpty) return true;
 
     final tokens = q.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
     final name = item.displayName.toLowerCase();
-
-    final tags =
-        (_dbTagsByItemId[item.id] ??
-                _dbTagsByItemId[item.id.toLowerCase()] ??
-                _dbTagsByItemId[item.id.replaceAll('/', '\\')] ??
-                _dbTagsByItemId[item.id.replaceAll('\\', '/')] ??
-                const <String>[])
-            .map((e) => e.toLowerCase())
-            .toList(growable: false);
+    final tags = _homeSearchTagsFor(item)
+        .map((entry) => entry.toLowerCase())
+        .toList(growable: false);
+    final detailedTags = _homeSearchTagDetailsFor(item);
 
     bool matchToken(String t) {
       if (t == 'untagged' || t == '未分類') {
-        return true;
+        return detailedTags.isEmpty;
       }
-      if (t.contains(':')) {
-        final idx = t.indexOf(':');
-        final key = t.substring(0, idx);
-        if (key == 'artist' ||
-            key == 'series' ||
-            key == 'type' ||
-            key == 'character' ||
-            key == 'free') {
-          return true;
+      final separator = t.indexOf(':');
+      if (separator > 0 && separator < t.length - 1) {
+        final key = t.substring(0, separator);
+        final value = t.substring(separator + 1);
+        final category = _tagCategoryForSearchKey(key);
+        if (category != null) {
+          return detailedTags.any(
+            (tag) =>
+                tag.tag.category == category &&
+                tag.tag.name.toLowerCase().contains(value),
+          );
         }
       }
 
@@ -1136,7 +1757,32 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return true;
   }
 
-  Future<void> _runHomeSearch() async {
+  List<MediaItem> _sortItemsByMode(
+    Iterable<MediaItem> items, {
+    required _SortMode sortMode,
+  }) {
+    final sorted = items.toList(growable: true);
+    switch (sortMode) {
+      case _SortMode.name:
+        sorted.sort(
+          (a, b) => a.displayName.toLowerCase().compareTo(
+            b.displayName.toLowerCase(),
+          ),
+        );
+        break;
+      case _SortMode.updatedAt:
+        sorted.sort((a, b) => _getUpdatedAt(b).compareTo(_getUpdatedAt(a)));
+        break;
+      case _SortMode.addedAt:
+        sorted.sort((a, b) => _getAddedAt(b).compareTo(_getAddedAt(a)));
+        break;
+    }
+    return sorted.toList(growable: false);
+  }
+
+  Future<void> _runHomeSearch({
+    bool includeAllWhenEmpty = false,
+  }) async {
     final q = _homeQuery.trim();
     if (!_repoCapabilities.canRecursiveSearch) {
       if (!mounted) return;
@@ -1148,7 +1794,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    if (q.isEmpty) {
+    if (q.isEmpty && !includeAllWhenEmpty) {
       if (!mounted) return;
       setState(() {
         _homeSearching = false;
@@ -1165,124 +1811,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     });
 
     try {
-      for (final raw in _foldersRaw) {
-        if (_folderItemsCacheRecursive.containsKey(raw)) continue;
-        try {
-          final list = await widget.repo.listMediaRecursiveFiles(FolderHandle(raw));
-          _folderItemsCacheRecursive[raw] = list
-              .where((item) => item.kind != MediaKind.folder)
-              .toList(growable: false);
-        } catch (_) {
-          _folderItemsCacheRecursive[raw] = const <MediaItem>[];
-        }
-      }
-
-      final all = <MediaItem>[];
-      for (final raw in _foldersRaw) {
-        final list = _folderItemsCacheRecursive[raw] ?? const <MediaItem>[];
-        all.addAll(list);
-      }
-
-      widget.tagService.rememberItems(all);
-      final rawMap = await widget.tagService.getTagNamesByItems(all);
-
-      final expanded = <String, List<String>>{};
-      rawMap.forEach((k, v) {
-        for (final vv in _idVariants(k)) {
-          expanded[vv] = v;
-        }
-      });
-
-      _dbTagsByItemId = expanded;
-
-      final tokens = q
-          .toLowerCase()
-          .split(RegExp(r'\s+'))
-          .where((entry) => entry.isNotEmpty)
-          .toList(growable: false);
-
-      String? artist;
-      String? series;
-      bool onlyUntagged = false;
-      final extraCategoryFilters = <MapEntry<TagCategory, String>>[];
-
-      for (final token in tokens) {
-        if (token == 'untagged' || token == '未分類') {
-          onlyUntagged = true;
-          continue;
-        }
-        final idx = token.indexOf(':');
-        if (idx <= 0 || idx == token.length - 1) {
-          continue;
-        }
-
-        final key = token.substring(0, idx);
-        final value = token.substring(idx + 1).trim();
-        if (value.isEmpty) {
-          continue;
-        }
-
-        switch (key) {
-          case 'artist':
-            artist = value;
-            break;
-          case 'series':
-            series = value;
-            break;
-          case 'type':
-            extraCategoryFilters.add(MapEntry(TagCategory.mediaType, value));
-            break;
-          case 'character':
-            extraCategoryFilters.add(MapEntry(TagCategory.character, value));
-            break;
-          case 'free':
-            extraCategoryFilters.add(MapEntry(TagCategory.free, value));
-            break;
-        }
-      }
-
-      Set<String>? matchedIds;
-      if (artist != null || series != null) {
-        matchedIds = (await widget.tagService.findItemIdsByArtistSeriesInCandidates(
-          candidates: all,
-          artist: artist,
-          series: series,
-        ))
-            .toSet();
-      }
-
-      for (final filter in extraCategoryFilters) {
-        final ids = await widget.tagService.findItemIdsByTag(
-          folderRaw: '',
-          category: filter.key,
-          name: filter.value,
-          partial: true,
-          candidates: all,
-        );
-        matchedIds = matchedIds == null ? ids.toSet() : matchedIds.intersection(ids.toSet());
-      }
-
-      if (onlyUntagged) {
-        final ids = await widget.tagService.findUntaggedItemIdsInCandidates(all);
-        matchedIds = matchedIds == null ? ids.toSet() : matchedIds.intersection(ids.toSet());
-      }
-
-      final filtered = all
-          .where((item) => matchedIds == null || matchedIds.contains(item.id))
-          .where((item) => _matchHomeQuery(item, q))
-          .toList(growable: false);
-
-      final sorted = filtered.toList(growable: true)
-        ..sort(
-          (a, b) => a.displayName.toLowerCase().compareTo(
-            b.displayName.toLowerCase(),
-          ),
-        );
+      final all = await _ensureHomeSearchCorpusLoaded();
+      final filtered = q.isEmpty
+          ? all.toList(growable: false)
+          : all.where((item) => _matchHomeQuery(item, q)).toList(growable: false);
+      final sorted = _sortItemsByMode(
+        filtered,
+        sortMode: _homeSearchSortMode,
+      );
 
       if (!mounted) return;
       setState(() {
         _homeSearching = false;
-        _homeSearchResults = sorted.take(50).toList(growable: false);
+        _homeSearchResults = sorted;
         _homeSearchErrorMessage = null;
       });
     } catch (e, st) {
@@ -1292,13 +1833,634 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       setState(() {
         _homeSearching = false;
         _homeSearchResults = const [];
-        _homeSearchErrorMessage = 'ホーム検索でエラーが発生しました: $e';
+        _homeSearchErrorMessage = '全フォルダ検索でエラーが発生しました: $e';
       });
 
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('ホーム検索でエラー: $e')));
+      ).showSnackBar(SnackBar(content: Text('全フォルダ検索でエラー: $e')));
     }
+  }
+
+  Future<void> _openDetailedBrowsePage() async {
+    if (!_repoCapabilities.canRecursiveSearch) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('このモードでは詳細ブラウズは未対応です')),
+      );
+      return;
+    }
+    if (mounted) {
+      setState(() => _page = _MainPage.search);
+    } else {
+      _page = _MainPage.search;
+    }
+    await _runHomeSearch(includeAllWhenEmpty: true);
+  }
+
+  Future<void> _refreshDetailedBrowseIfNeeded() async {
+    if (_homeQuery.trim().isNotEmpty || _page == _MainPage.search) {
+      await _runHomeSearch(includeAllWhenEmpty: _page == _MainPage.search);
+    }
+  }
+
+  void _handleHomeSearchTextChanged({
+    required String value,
+    required bool includeAllWhenEmpty,
+  }) {
+    setState(() => _homeQuery = value);
+
+    _homeSearchDebounce?.cancel();
+    _homeSearchDebounce = Timer(
+      const Duration(milliseconds: 250),
+      () {
+        if (!mounted) return;
+        _runHomeSearch(includeAllWhenEmpty: includeAllWhenEmpty);
+      },
+    );
+  }
+
+  Widget _buildSharedHomeSearchField({
+    required bool includeAllWhenEmpty,
+    String? hintText,
+  }) {
+    return TextField(
+      controller: _homeSearchCtrl,
+      decoration: InputDecoration(
+        prefixIcon: const Icon(Icons.search),
+        hintText: hintText ?? 'タイトル / #タグ / artist:xxx / series:yyy',
+        border: const OutlineInputBorder(),
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        suffixIcon: (_homeQuery.trim().isEmpty)
+            ? null
+            : IconButton(
+                tooltip: 'クリア',
+                icon: const Icon(Icons.clear),
+                onPressed: () {
+                  _homeSearchCtrl.clear();
+                  setState(() => _homeQuery = '');
+                  _runHomeSearch(includeAllWhenEmpty: includeAllWhenEmpty);
+                },
+              ),
+      ),
+      onChanged: (value) => _handleHomeSearchTextChanged(
+        value: value,
+        includeAllWhenEmpty: includeAllWhenEmpty,
+      ),
+    );
+  }
+
+  List<String> _homeSearchValuesForCategory(
+    MediaItem item,
+    TagCategory category,
+  ) {
+    final values = <String>[];
+    final seen = <String>{};
+    for (final entry in _homeSearchTagDetailsFor(item)) {
+      if (entry.tag.category != category) {
+        continue;
+      }
+      final trimmed = entry.tag.name.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      final key = trimmed.toLowerCase();
+      if (seen.add(key)) {
+        values.add(trimmed);
+      }
+    }
+    return values;
+  }
+
+  String _homeSearchPrimaryValueForCategory(
+    MediaItem item,
+    TagCategory category, {
+    int maxValues = 2,
+    String emptyLabel = 'N/A',
+  }) {
+    final values = _homeSearchValuesForCategory(item, category);
+    if (values.isEmpty) {
+      return emptyLabel;
+    }
+    return values.take(maxValues).join(' / ');
+  }
+
+  String _homeSearchMediaTypeLabel(MediaItem item) {
+    final values = _homeSearchValuesForCategory(item, TagCategory.mediaType);
+    if (values.isNotEmpty) {
+      return values.join(' / ');
+    }
+    return item.kind == MediaKind.pdf ? 'PDF' : '画像';
+  }
+
+  String _homeSearchLanguageLabel(MediaItem item) {
+    final names = _homeSearchTagsFor(item);
+    for (final raw in names) {
+      final tag = raw.trim();
+      if (tag.isEmpty) {
+        continue;
+      }
+      final lower = tag.toLowerCase();
+      if (tag.contains('日本語') || lower.contains('japanese')) {
+        return '日本語';
+      }
+      if (tag.contains('英語') || lower.contains('english')) {
+        return '英語';
+      }
+      if (tag.contains('中国語') || lower.contains('chinese')) {
+        return '中国語';
+      }
+      if (tag.contains('韓国語') || lower.contains('korean')) {
+        return '韓国語';
+      }
+    }
+    return '不明';
+  }
+
+  List<String> _homeSearchDisplayTags(MediaItem item, {int maxTags = 12}) {
+    final details = _homeSearchTagDetailsFor(item);
+    final out = <String>[];
+    final seen = <String>{};
+
+    if (details.isNotEmpty) {
+      for (final entry in details) {
+        if (entry.tag.category == TagCategory.artist ||
+            entry.tag.category == TagCategory.series ||
+            entry.tag.category == TagCategory.mediaType) {
+          continue;
+        }
+        final trimmed = entry.tag.name.trim();
+        if (trimmed.isEmpty) {
+          continue;
+        }
+        final key = trimmed.toLowerCase();
+        if (seen.add(key)) {
+          out.add(trimmed);
+        }
+        if (out.length >= maxTags) {
+          return out;
+        }
+      }
+    }
+
+    for (final raw in _homeSearchTagsFor(item)) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      final key = trimmed.toLowerCase();
+      if (seen.add(key)) {
+        out.add(trimmed);
+      }
+      if (out.length >= maxTags) {
+        break;
+      }
+    }
+    return out;
+  }
+
+  String _formatDetailedBrowseDate(DateTime? value) {
+    if (value == null) {
+      return '不明';
+    }
+    final local = value.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.year}/$month/$day $hour:$minute';
+  }
+
+  String? _formatDetailedBrowseFileSize(int? sizeBytes) {
+    if (sizeBytes == null || sizeBytes <= 0) {
+      return null;
+    }
+    const units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
+    var value = sizeBytes.toDouble();
+    var unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex++;
+    }
+    final decimals = value >= 10 || unitIndex == 0 ? 0 : 1;
+    return '${value.toStringAsFixed(decimals)} ${units[unitIndex]}';
+  }
+
+  Color _detailedBrowseAccentColor(BuildContext context, MediaItem item) {
+    final scheme = Theme.of(context).colorScheme;
+    switch (item.kind) {
+      case MediaKind.pdf:
+        return scheme.primaryContainer;
+      case MediaKind.image:
+        return scheme.tertiaryContainer;
+      case MediaKind.folder:
+        return scheme.secondaryContainer;
+    }
+  }
+
+  Widget _buildDetailedBrowseThumb(MediaItem item) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: FutureBuilder<ThumbPair>(
+        future: widget.repo.readThumbPair(item, maxWidth: 320),
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return Container(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: const Icon(Icons.broken_image_outlined),
+            );
+          }
+          if (!snap.hasData) {
+            return Container(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: const CircularProgressIndicator(strokeWidth: 2),
+            );
+          }
+
+          return Image.memory(
+            snap.data!.front,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildDetailedBrowseMetaRow(
+    BuildContext context,
+    String label,
+    String value,
+  ) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 72,
+            child: Text(
+              label,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailedBrowseCard(MediaItem item) {
+    final artists = _homeSearchPrimaryValueForCategory(item, TagCategory.artist);
+    final series = _homeSearchPrimaryValueForCategory(item, TagCategory.series);
+    final mediaType = _homeSearchMediaTypeLabel(item);
+    final language = _homeSearchLanguageLabel(item);
+    final folderLabel = _folderLabelForItem(item);
+    final tags = _homeSearchDisplayTags(item);
+    final updatedAt = _formatDetailedBrowseDate(item.modified ?? _getUpdatedAt(item));
+    final addedAt = _formatDetailedBrowseDate(_getAddedAt(item));
+    final fileSize = _formatDetailedBrowseFileSize(item.sizeBytes);
+    final isSelected = _selectedIds.contains(item.id);
+    final isFavorite = _favorites.contains(item.id);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      clipBehavior: Clip.antiAlias,
+      elevation: isSelected ? 3 : 1,
+      child: InkWell(
+        onLongPress: () {
+          if (!_selectMode) {
+            _enterSelectMode(item);
+          } else {
+            _toggleSelect(item);
+          }
+        },
+        onTap: () async {
+          if (_selectMode) {
+            _toggleSelect(item);
+            return;
+          }
+          await _openDetailFromHome(item);
+        },
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 760;
+            final accent = _detailedBrowseAccentColor(context, item);
+            final thumb = SizedBox(
+              width: narrow ? double.infinity : 148,
+              height: narrow ? 208 : 208,
+              child: _buildDetailedBrowseThumb(item),
+            );
+            final metadata = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  color: accent,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.displayName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            avatar: Icon(
+                              item.kind == MediaKind.pdf
+                                  ? Icons.picture_as_pdf_outlined
+                                  : Icons.image_outlined,
+                              size: 16,
+                            ),
+                            label: Text(
+                              item.kind == MediaKind.pdf ? 'PDF' : '画像',
+                            ),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          Chip(
+                            avatar: const Icon(Icons.folder_outlined, size: 16),
+                            label: Text(
+                              folderLabel,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          if (isFavorite)
+                            const Chip(
+                              avatar: Icon(Icons.star, size: 16),
+                              label: Text('お気に入り'),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          if (isSelected)
+                            const Chip(
+                              avatar: Icon(Icons.check_circle, size: 16),
+                              label: Text('選択中'),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildDetailedBrowseMetaRow(context, '作家', artists),
+                      _buildDetailedBrowseMetaRow(context, 'シリーズ', series),
+                      _buildDetailedBrowseMetaRow(context, '種別', mediaType),
+                      _buildDetailedBrowseMetaRow(context, '言語', language),
+                      _buildDetailedBrowseMetaRow(
+                        context,
+                        '追加日',
+                        addedAt,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'タグ',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      if (tags.isEmpty)
+                        Text(
+                          'タグなし',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final tag in tags)
+                              Chip(
+                                label: Text(tag),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              ),
+                          ],
+                        ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '更新: $updatedAt',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                          if (fileSize != null)
+                            Text(
+                              fileSize,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.chevron_right),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+
+            return DecoratedBox(
+              decoration: BoxDecoration(
+                border: isSelected
+                    ? Border.all(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 1.5,
+                      )
+                    : null,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: narrow
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          thumb,
+                          const SizedBox(height: 12),
+                          metadata,
+                        ],
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          thumb,
+                          const SizedBox(width: 14),
+                          Expanded(child: metadata),
+                        ],
+                      ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailedBrowseResultsBody() {
+    Widget headerCard() {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '詳細ブラウズ',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _homeQuery.trim().isEmpty
+                    ? 'キーワードなしでも最近の項目を一覧できます。検索すると作家・シリーズ・タグで絞り込めます。'
+                    : '作家・シリーズ・タグを含む詳細カードで、PDF や画像を選びやすく表示します。',
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 44,
+                child: _buildSharedHomeSearchField(
+                  includeAllWhenEmpty: true,
+                ),
+              ),
+              const SizedBox(height: 10),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final dropdown = DropdownButton<_SortMode>(
+                    value: _homeSearchSortMode,
+                    items: const [
+                      DropdownMenuItem(
+                        value: _SortMode.updatedAt,
+                        child: Text('更新日'),
+                      ),
+                      DropdownMenuItem(
+                        value: _SortMode.addedAt,
+                        child: Text('追加日'),
+                      ),
+                      DropdownMenuItem(
+                        value: _SortMode.name,
+                        child: Text('名前'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _homeSearchSortMode = value;
+                        _homeSearchResults = _sortItemsByMode(
+                          _homeSearchResults,
+                          sortMode: _homeSearchSortMode,
+                        );
+                      });
+                    },
+                  );
+
+                  if (constraints.maxWidth < 520) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('表示件数: ${_homeSearchResults.length} 件'),
+                        Row(
+                          children: [
+                            const Text('並び替え'),
+                            const SizedBox(width: 8),
+                            dropdown,
+                          ],
+                        ),
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    children: [
+                      Text('表示件数: ${_homeSearchResults.length} 件'),
+                      const Spacer(),
+                      const Text('並び替え'),
+                      const SizedBox(width: 8),
+                      dropdown,
+                    ],
+                  );
+                },
+              ),
+              if (_homeSearching) ...[
+                const SizedBox(height: 10),
+                const LinearProgressIndicator(),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _handlePullToRefresh,
+      child: ListView.builder(
+        physics: _refreshScrollPhysics,
+        padding: const EdgeInsets.all(12),
+        itemCount: _homeSearchErrorMessage != null || (!_homeSearching && _homeSearchResults.isEmpty)
+            ? 2
+            : _homeSearchResults.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return headerCard();
+          }
+          if (_homeSearchErrorMessage != null) {
+            return Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: _buildErrorBody(
+                title: '詳細ブラウズの読み込みに失敗しました',
+                message: _homeSearchErrorMessage!,
+                onAction: () => _runHomeSearch(includeAllWhenEmpty: true),
+              ),
+            );
+          }
+          if (!_homeSearching && _homeSearchResults.isEmpty) {
+            return Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: _buildEmptyBody(
+                title: '表示できる項目がありません',
+                message: _homeQuery.trim().isEmpty
+                    ? '登録フォルダ内に表示対象の PDF / 画像がありません。'
+                    : '別のキーワード、タグ、artist / series 指定を試してください。',
+              ),
+            );
+          }
+          final item = _homeSearchResults[index - 1];
+          return _buildDetailedBrowseCard(item);
+        },
+      ),
+    );
   }
 
   Future<void> _organizeLibrary() async {
@@ -1385,6 +2547,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final currentLabel = _currentFolderRaw == null
         ? '未選択'
         : _folderLabel(_currentFolderRaw!);
+    final homeSearchPreview = _homeSearchResults.take(4).toList(growable: false);
 
     return RefreshIndicator(
       onRefresh: _handlePullToRefresh,
@@ -1405,38 +2568,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 44,
-                  child: TextField(
-                    controller: _homeSearchCtrl,
-                    decoration: InputDecoration(
-                      prefixIcon: const Icon(Icons.search),
-                      hintText: 'タイトル / #タグ / artist:xxx / series:yyy',
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                      suffixIcon: (_homeQuery.trim().isEmpty)
-                          ? null
-                          : IconButton(
-                              tooltip: 'クリア',
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                _homeSearchCtrl.clear();
-                                setState(() => _homeQuery = '');
-                                _runHomeSearch();
-                              },
-                            ),
-                    ),
-                    onChanged: (v) {
-                      setState(() => _homeQuery = v);
-
-                      _homeSearchDebounce?.cancel();
-                      _homeSearchDebounce = Timer(
-                        const Duration(milliseconds: 250),
-                        () {
-                          if (!mounted) return;
-                          _runHomeSearch();
-                        },
-                      );
-                    },
+                  child: _buildSharedHomeSearchField(
+                    includeAllWhenEmpty: false,
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -1462,9 +2595,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 else if (_homeSearchResults.isEmpty)
                   const Text('該当なし')
                 else ...[
-                  Text('件数: ${_homeSearchResults.length} 件（最大50件表示）'),
+                  Text('件数: ${_homeSearchResults.length} 件'),
                   const SizedBox(height: 8),
-                  ..._homeSearchResults.map((item) {
+                  ...homeSearchPreview.map((item) {
                     return Card(
                       margin: const EdgeInsets.symmetric(vertical: 6),
                       child: InkWell(
@@ -1513,6 +2646,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       ),
                     );
                   }),
+                  if (_homeSearchResults.length > homeSearchPreview.length)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _openDetailedBrowsePage(),
+                          icon: const Icon(Icons.view_agenda_outlined),
+                          label: const Text('詳細ブラウズで続きを見る'),
+                        ),
+                      ),
+                    ),
                 ],
               ],
             ),
@@ -1548,6 +2693,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           : () => setState(() => _page = _MainPage.gallery),
                       icon: const Icon(Icons.grid_view),
                       label: const Text('ギャラリーを開く'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _repoCapabilities.canRecursiveSearch
+                          ? () => _openDetailedBrowsePage()
+                          : null,
+                      icon: const Icon(Icons.view_agenda_outlined),
+                      label: const Text('詳細ブラウズ'),
                     ),
                     OutlinedButton.icon(
                       onPressed: _refreshAllFavoritesItems,
@@ -1738,53 +2890,34 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     }
 
+    if (!_homeSearching &&
+        _homeSearchCorpusSignature.isEmpty &&
+        _homeSearchErrorMessage == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _page != _MainPage.search || _homeSearching) {
+          return;
+        }
+        _runHomeSearch(includeAllWhenEmpty: true);
+      });
+    }
+
     if (_homeSearching) {
-      return _buildRefreshableStatusBody(
-        onRefresh: _handlePullToRefresh,
-        child: _buildLoadingBody(
-          title: '検索中です',
-          message: '全フォルダを検索しています。',
-        ),
-      );
+      if (_homeSearchResults.isEmpty) {
+        return _buildRefreshableStatusBody(
+          onRefresh: _handlePullToRefresh,
+          child: _buildLoadingBody(
+            title: '詳細ブラウズを準備しています',
+            message: '登録フォルダとタグ情報を読み込んでいます。',
+          ),
+        );
+      }
     }
 
     if (_homeSearchErrorMessage != null) {
-      return _buildRefreshableStatusBody(
-        onRefresh: _handlePullToRefresh,
-        child: _buildErrorBody(
-          title: '検索に失敗しました',
-          message: _homeSearchErrorMessage!,
-          onAction: _runHomeSearch,
-        ),
-      );
+      return _buildDetailedBrowseResultsBody();
     }
 
-    final q = _homeQuery.trim();
-    if (q.isEmpty) {
-      return _buildRefreshableStatusBody(
-        onRefresh: _handlePullToRefresh,
-        child: _buildEmptyBody(
-          title: 'キーワードを入力してください',
-          message: 'Home の検索欄にキーワード、タグ、#tag を入力してください。',
-        ),
-      );
-    }
-
-    if (_homeSearchResults.isEmpty) {
-      return _buildRefreshableStatusBody(
-        onRefresh: _handlePullToRefresh,
-        child: _buildEmptyBody(
-          title: '該当するアイテムがありません',
-          message: '別のキーワード、タグ、artist / series 指定を試してください。',
-        ),
-      );
-    }
-
-    return _buildGridFromList(
-      _homeSearchResults,
-      showFolderLabel: true,
-      onRefresh: _handlePullToRefresh,
-    );
+    return _buildDetailedBrowseResultsBody();
   }
 
   // --------------------
@@ -2012,18 +3145,40 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
+    List<MediaItem> folderItems;
     if (_folderItemsCache.containsKey(folderRaw)) {
+      folderItems = _folderItemsCache[folderRaw] ?? const <MediaItem>[];
       setState(() {
-        _items = _folderItemsCache[folderRaw] ?? const [];
         _folder = FolderHandle(folderRaw);
         _galleryLoadErrorMessage = null;
       });
     } else {
       await _loadFolder(FolderHandle(folderRaw), saveAsLast: false);
-      _folderItemsCache[folderRaw] = _items;
+      folderItems = _items;
+      _folderItemsCache[folderRaw] = folderItems;
     }
 
-    final idx = _items.indexWhere((e) => e.id == item.id);
+    var idx = folderItems.indexWhere((entry) => entry.id == item.id);
+    if (idx < 0) {
+      try {
+        folderItems = await widget.repo.listMedia(FolderHandle(folderRaw));
+        _folderItemsCache[folderRaw] = folderItems;
+        if (mounted) {
+          setState(() {
+            _folder = FolderHandle(folderRaw);
+            _galleryLoadErrorMessage = null;
+          });
+        }
+        idx = folderItems.indexWhere((entry) => entry.id == item.id);
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('フォルダ内容の再取得に失敗しました: $error')),
+        );
+        return;
+      }
+    }
+
     if (idx < 0) {
       if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2038,7 +3193,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         builder: (_) => ImageDetailPage(
           repo: widget.repo,
           tagService: widget.tagService,
-          items: _items,
+          items: folderItems,
           initialIndex: idx,
           initialPdfPage: 1,
         ),
@@ -2408,6 +3563,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     required bool saveAsLast,
     int pageIndex = 0,
   }) async {
+    _invalidateGallerySearchCache();
     setState(() {
       _thumbsEnabled = false;
       _folder = folder;
@@ -2465,6 +3621,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       _folderItemsCache[folder.raw] = _items;
       await _refreshAllFavoritesItems();
+      if (_query.trim().isNotEmpty) {
+        unawaited(_ensureGallerySearchCacheLoaded());
+      }
     } catch (e, st) {
       _logUiError('load-folder', e, st);
       final message = 'フォルダの読み込みに失敗しました: $e';
@@ -2531,6 +3690,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         if (!mounted) return;
         setState(() => _thumbsEnabled = true);
       });
+      if (_query.trim().isNotEmpty) {
+        unawaited(_ensureGallerySearchCacheLoaded());
+      }
     } catch (e, st) {
       _logUiError('load-gallery-page', e, st);
       final message = 'ページの読み込みに失敗しました: $e';
@@ -2681,9 +3843,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         await _loadFolder(lib, saveAsLast: false);
 
         if (!mounted) return;
-        if (_homeQuery.trim().isNotEmpty) {
-          await _runHomeSearch();
-        }
+        await _refreshDetailedBrowseIfNeeded();
         await _refreshCurrentPageTags();
         await _reloadArtistTagMasters();
         await _refreshArtistTagCounts();
@@ -2785,9 +3945,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     _folderItemsCache.remove(raw);
     await _refreshAllFavoritesItems();
-    if (_homeQuery.trim().isNotEmpty) {
-      await _runHomeSearch();
-    }
+    await _refreshDetailedBrowseIfNeeded();
     await _refreshCurrentPageTags();
     await _refreshArtistTagCounts();
 
@@ -3089,9 +4247,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       if (!mounted) return;
 
-      if (_homeQuery.trim().isNotEmpty) {
-        await _runHomeSearch();
-      }
+      await _refreshDetailedBrowseIfNeeded();
       await _refreshCurrentPageTags();
       await _refreshArtistTagCounts();
 
@@ -3287,9 +4443,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _loadFolder(folder, saveAsLast: false);
       if (!mounted) return;
 
-      if (_homeQuery.trim().isNotEmpty) {
-        await _runHomeSearch();
-      }
+      await _refreshDetailedBrowseIfNeeded();
       await _refreshCurrentPageTags();
       await _refreshArtistTagCounts();
 
@@ -3416,6 +4570,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   void dispose() {
     _thumbResumeDebounce?.cancel();
     _homeSearchDebounce?.cancel();
+    _searchFocusNode
+      ..removeListener(_handleGallerySearchFocusChange)
+      ..dispose();
     _searchCtrl.dispose();
     _homeSearchCtrl.dispose();
     super.dispose();
@@ -3492,8 +4649,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       out = out.where((item) {
         final name = item.displayName.toLowerCase();
-        final tags = _tagsFor(item).map((e) => e.toLowerCase()).toList(growable: false);
-        final detailedTags = _tagDetailsById[item.id] ?? const <TagWithId>[];
+        final tags = _searchableTagsFor(item)
+            .map((e) => e.toLowerCase())
+            .toList(growable: false);
+        final detailedTags = _searchableTagDetailsFor(item);
 
         bool matchToken(String t) {
           if (t == 'untagged' || t == '未分類') {
@@ -3504,25 +4663,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           if (separator > 0 && separator < t.length - 1) {
             final key = t.substring(0, separator);
             final value = t.substring(separator + 1);
-
-            TagCategory? category;
-            switch (key) {
-              case 'artist':
-                category = TagCategory.artist;
-                break;
-              case 'series':
-                category = TagCategory.series;
-                break;
-              case 'type':
-                category = TagCategory.mediaType;
-                break;
-              case 'character':
-                category = TagCategory.character;
-                break;
-              case 'free':
-                category = TagCategory.free;
-                break;
-            }
+            final category = _tagCategoryForSearchKey(key);
 
             if (category != null) {
               return detailedTags.any(
@@ -3575,7 +4716,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final base = _applyFilter(input, pdfOnly: null);
     return base
         .where((item) => item.kind != MediaKind.folder)
-        .where((item) => (_tagDetailsById[item.id] ?? const <TagWithId>[]).isEmpty)
+        .where((item) => _searchableTagDetailsFor(item).isEmpty)
         .toList(growable: false);
   }
 
@@ -3600,9 +4741,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     _dirStack.clear();
     await _loadPrefsAndAutoOpenFolder();
     await _refreshCurrentPageTags();
-    if (_homeQuery.trim().isNotEmpty) {
-      await _runHomeSearch();
-    }
+    await _refreshDetailedBrowseIfNeeded();
     await _reloadArtistTagMasters();
     if (mounted) {
       setState(() {});
@@ -3661,7 +4800,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
       case _HomeMenuAction.openSearchGallery:
         _exitSelectMode();
-        setState(() => _page = _MainPage.search);
+        await _openDetailedBrowsePage();
         return;
     }
   }
@@ -3784,11 +4923,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           value: _HomeMenuAction.openSearchGallery,
           enabled: _repoCapabilities.canRecursiveSearch,
           child: ListTile(
-            leading: Icon(Icons.grid_view),
+            leading: Icon(Icons.view_agenda_outlined),
             title: Text(
               _repoCapabilities.canRecursiveSearch
-                  ? '検索結果（ギャラリー表示）'
-                  : '検索結果（ギャラリー表示）（未対応）',
+                  ? '詳細ブラウズ'
+                  : '詳細ブラウズ（未対応）',
             ),
           ),
         ),
@@ -4346,6 +5485,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             setState(() => _page = _MainPage.gallery);
           },
         ),
+        ListTile(
+          leading: const Icon(Icons.view_agenda_outlined),
+          title: const Text('詳細ブラウズ'),
+          selected: _page == _MainPage.search,
+          onTap: () async {
+            _closeSidebar();
+            _exitSelectMode();
+            await _openDetailedBrowsePage();
+          },
+        ),
         const Divider(),
         _sidebarSectionLabel('作家タグ'),
         if (_loadingArtistTags)
@@ -4762,11 +5911,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _gallerySelectionView(int tabIndex) {
     switch (tabIndex) {
       case 1:
-        return _applyUntagged(_items);
+        return _applyUntagged(_gallerySearchBaseItems());
       case 2:
-        return _favoriteItemsAll;
+        return _applyFilter(_favoriteItemsAll, pdfOnly: null);
       default:
-        return _applyFilter(_items, pdfOnly: null);
+        return _applyFilter(_gallerySearchBaseItems(), pdfOnly: null);
     }
   }
 
@@ -4977,15 +6126,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     }
 
+    final galleryItems = _gallerySelectionView(0);
+    final untaggedItems = _gallerySelectionView(1);
+    final favoriteItems = _gallerySelectionView(2);
+    final showPager = !_isGallerySearchActive;
+
     return TabBarView(
       children: [
         _buildGrid(
-          _applyFilter(_items, pdfOnly: null),
+          galleryItems,
+          showPager: showPager,
           onRefresh: _handlePullToRefresh,
         ),
         _currentPageMetadataAvailable
             ? _buildGrid(
-                _applyUntagged(_items),
+                untaggedItems,
+                showPager: showPager,
                 onRefresh: _handlePullToRefresh,
               )
             : _buildRefreshableStatusBody(
@@ -5004,8 +6160,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
               )
             : _buildGrid(
-                _favoriteItemsAll,
+                favoriteItems,
                 showFolderLabel: true,
+                showPager: false,
                 onRefresh: _handlePullToRefresh,
               )
       ],
@@ -5031,7 +6188,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return Scaffold(
         drawer: _isWideLayout(context) ? null : _buildSidebar(),
         appBar: AppBar(
-          title: const Text('検索結果'),
+          title: const Text('詳細ブラウズ'),
           actions: _buildSearchAppBarActions(),
         ),
         body: _wrapBodyWithUrlImportQueue(
@@ -5085,27 +6242,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                       child: SizedBox(
                         height: 44,
-                        child: TextField(
-                          controller: _searchCtrl,
-                          decoration: InputDecoration(
-                            prefixIcon: const Icon(Icons.search),
-                            hintText: 'タイトル / #タグ / artist:xxx / series:yyy',
-                            border: const OutlineInputBorder(),
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                            suffixIcon: _query.trim().isEmpty
-                                ? null
-                                : IconButton(
-                                    tooltip: 'クリア',
-                                    icon: const Icon(Icons.clear),
-                                    onPressed: () {
-                                      _searchCtrl.clear();
-                                      setState(() => _query = '');
-                                    },
-                                  ),
-                          ),
-                          onChanged: (value) => setState(() => _query = value),
-                        ),
+                        child: _buildGallerySearchField(),
                       ),
                     ),
                     Padding(
@@ -5294,6 +6431,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Widget _buildGrid(
     List<MediaItem> items, {
     bool showFolderLabel = false,
+    bool showPager = true,
     required Future<void> Function() onRefresh,
   }) {
     if (items.isEmpty) {
@@ -5312,7 +6450,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         physics: _refreshScrollPhysics,
         cacheExtent: 200,
         slivers: [
-          if (_galleryTotal > _pageSize)
+          if (showPager && _galleryTotal > _pageSize)
             SliverToBoxAdapter(child: _buildPager()),
           SliverPadding(
             padding: const EdgeInsets.all(12),

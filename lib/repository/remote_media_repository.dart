@@ -54,6 +54,8 @@ class RemoteMediaRepository implements MediaRepository {
   final Map<String, Future<File>> _downloadInFlight = <String, Future<File>>{};
   final Map<String, Future<Uint8List>> _previewInFlight =
       <String, Future<Uint8List>>{};
+  final Map<String, Future<PdfDocument>> _pdfOpenInFlight =
+      <String, Future<PdfDocument>>{};
   final LinkedHashMap<String, PdfDocument> _pdfCache =
       LinkedHashMap<String, PdfDocument>();
   final Map<String, Future<RemoteMediaMeta>> _metaInFlight =
@@ -264,7 +266,10 @@ class RemoteMediaRepository implements MediaRepository {
     _rememberRemoteMediaId(fullPath, mediaId);
   }
 
-  Future<String?> _lookupRemoteMediaIdByPath(MediaItem item) async {
+  Future<String?> _lookupRemoteMediaIdByPath(
+    MediaItem item, {
+    bool refresh = false,
+  }) async {
     if (item.kind == MediaKind.folder) {
       return null;
     }
@@ -272,9 +277,11 @@ class RemoteMediaRepository implements MediaRepository {
       return item.id;
     }
 
-    final remembered = _remoteMediaIdsByPath[_normalizeRemotePath(item.id)];
-    if (remembered != null && remembered.isNotEmpty) {
-      return remembered;
+    if (!refresh) {
+      final remembered = _remoteMediaIdsByPath[_normalizeRemotePath(item.id)];
+      if (remembered != null && remembered.isNotEmpty) {
+        return remembered;
+      }
     }
 
     final entry = await _findFolderChildByPath(item.folderRaw, item.id);
@@ -289,8 +296,11 @@ class RemoteMediaRepository implements MediaRepository {
     return mediaId;
   }
 
-  Future<String> _remoteMediaIdForItem(MediaItem item) async {
-    final remembered = await _lookupRemoteMediaIdByPath(item);
+  Future<String> _remoteMediaIdForItem(
+    MediaItem item, {
+    bool refresh = false,
+  }) async {
+    final remembered = await _lookupRemoteMediaIdByPath(item, refresh: refresh);
     if (remembered != null && remembered.isNotEmpty) {
       return remembered;
     }
@@ -389,8 +399,110 @@ class RemoteMediaRepository implements MediaRepository {
     return '.jpg';
   }
 
-  Future<File> _ensureCachedMediaFile(MediaItem item) async {
-    final meta = await _metaForItem(item);
+  String? _expectedRemoteKind(MediaItem item) {
+    switch (item.kind) {
+      case MediaKind.folder:
+        return null;
+      case MediaKind.image:
+        return 'image';
+      case MediaKind.pdf:
+        return 'pdf';
+    }
+  }
+
+  Future<RemoteMediaMeta> _refreshMetaForItem(MediaItem item) async {
+    if (_looksLikeRemoteMediaId(item.id)) {
+      final meta = await _client.fetchMediaMeta(item.id);
+      _metaCache[meta.mediaId] = meta;
+      if (meta.mediaId != item.id) {
+        _metaCache[item.id] = meta;
+      }
+      return meta;
+    }
+
+    final rememberedId = _remoteMediaIdsByPath[_normalizeRemotePath(item.id)];
+    if (rememberedId != null && rememberedId.isNotEmpty) {
+      _evictMetaCache(rememberedId);
+    }
+    _forgetRemoteMediaId(item.id);
+
+    final refreshedId = await _remoteMediaIdForItem(item, refresh: true);
+    final meta = await _client.fetchMediaMeta(refreshedId);
+    _metaCache[meta.mediaId] = meta;
+    if (meta.mediaId != refreshedId) {
+      _metaCache[refreshedId] = meta;
+    }
+    _rememberRemoteMediaId(item.id, meta.mediaId);
+    return meta;
+  }
+
+  Future<RemoteMediaMeta> _validatedMetaForItem(
+    MediaItem item, {
+    bool forceRefresh = false,
+  }) async {
+    var meta = forceRefresh ? await _refreshMetaForItem(item) : await _metaForItem(item);
+    final expectedKind = _expectedRemoteKind(item);
+    if (expectedKind != null && meta.kind != expectedKind) {
+      meta = await _refreshMetaForItem(item);
+      if (meta.kind != expectedKind) {
+        throw RemoteMediaException(
+          'メディア種別が一致しません: expected=$expectedKind actual=${meta.kind}',
+        );
+      }
+    }
+    return meta;
+  }
+
+  Future<void> _deleteFileQuietly(File file) async {
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
+  Future<bool> _isValidCachedMediaFile(File file, MediaItem item) async {
+    try {
+      final stat = await file.stat();
+      if (stat.type != FileSystemEntityType.file || stat.size <= 0) {
+        return false;
+      }
+      if (item.kind != MediaKind.pdf) {
+        return true;
+      }
+      if (stat.size < 5) {
+        return false;
+      }
+      final raf = await file.open();
+      try {
+        final header = await raf.read(5);
+        if (header.length < 5) {
+          return false;
+        }
+        return ascii.decode(header, allowInvalid: true).startsWith('%PDF-');
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _evictCachedPdfDocument(String filePath) async {
+    final cached = _pdfCache.remove(filePath);
+    if (cached == null) {
+      return;
+    }
+    try {
+      await cached.close();
+    } catch (_) {}
+  }
+
+  Future<File> _ensureCachedMediaFile(
+    MediaItem item, {
+    bool forceRefresh = false,
+  }) async {
+    final meta = await _validatedMetaForItem(item, forceRefresh: forceRefresh);
     final mediaId = meta.mediaId;
     final fileDir = await _ensureCacheSubdir('files');
     final etagKey =
@@ -400,7 +512,10 @@ class RemoteMediaRepository implements MediaRepository {
     final fileName =
         '${_cacheHash(mediaId)}_$etagKey${_extensionForMeta(meta)}';
     final file = File(p.join(fileDir.path, fileName));
-    if (await file.exists()) {
+    if (forceRefresh) {
+      await _evictCachedPdfDocument(file.path);
+      await _deleteFileQuietly(file);
+    } else if (await _isValidCachedMediaFile(file, item)) {
       return file;
     }
 
@@ -409,17 +524,26 @@ class RemoteMediaRepository implements MediaRepository {
       return inFlight;
     }
 
-    final future = _client
-        .downloadMediaToFile(mediaId, file)
-        .then((_) async {
-          await _trimCacheDirectory(fileDir, maxEntries: 48);
-          _downloadInFlight.remove(file.path);
-          return file;
-        })
-        .catchError((Object error) {
-          _downloadInFlight.remove(file.path);
-          throw error;
-        });
+    final partialFile = File('${file.path}.part');
+    final future = (() async {
+      try {
+        await _deleteFileQuietly(partialFile);
+        await _deleteFileQuietly(file);
+        await _client.downloadMediaToFile(mediaId, partialFile);
+        if (!await _isValidCachedMediaFile(partialFile, item)) {
+          throw const RemoteMediaException('キャッシュしたメディアファイルが不正です');
+        }
+        await partialFile.rename(file.path);
+        await _trimCacheDirectory(fileDir, maxEntries: 48);
+        return file;
+      } catch (error) {
+        await _deleteFileQuietly(partialFile);
+        await _deleteFileQuietly(file);
+        rethrow;
+      } finally {
+        _downloadInFlight.remove(file.path);
+      }
+    })();
 
     _downloadInFlight[file.path] = future;
     return future;
@@ -429,13 +553,26 @@ class RemoteMediaRepository implements MediaRepository {
     Directory dir, {
     required int maxEntries,
   }) async {
-    final children =
+    final files =
         await dir.list().where((entity) => entity is File).cast<File>().toList();
-    if (children.length <= maxEntries) {
+    final regularFiles = files
+        .where((file) => !file.path.endsWith('.part'))
+        .toList(growable: false);
+    if (regularFiles.length <= maxEntries) {
+      return;
+    }
+    final pinnedPaths = <String>{
+      ..._downloadInFlight.keys,
+      ..._pdfCache.keys,
+    };
+    final children = regularFiles
+        .where((file) => !pinnedPaths.contains(file.path))
+        .toList(growable: true);
+    if (children.isEmpty) {
       return;
     }
     children.sort((a, b) => a.statSync().modified.compareTo(b.statSync().modified));
-    final removeCount = children.length - maxEntries;
+    final removeCount = (regularFiles.length - maxEntries).clamp(0, children.length);
     for (var index = 0; index < removeCount; index++) {
       try {
         await children[index].delete();
@@ -445,24 +582,57 @@ class RemoteMediaRepository implements MediaRepository {
 
   Future<PdfDocument> _openCachedPdf(MediaItem item) async {
     final file = await _ensureCachedMediaFile(item);
-    final cached = _pdfCache.remove(file.path);
-    if (cached != null) {
-      _pdfCache[file.path] = cached;
-      return cached;
+    final inFlight = _pdfOpenInFlight[file.path];
+    if (inFlight != null) {
+      return inFlight;
     }
 
-    final doc = await PdfDocument.openFile(file.path);
-    _pdfCache[file.path] = doc;
-    while (_pdfCache.length > 6) {
-      final oldestKey = _pdfCache.keys.first;
-      final oldest = _pdfCache.remove(oldestKey);
-      if (oldest != null) {
-        try {
-          await oldest.close();
-        } catch (_) {}
+    final future = (() async {
+      final cached = _pdfCache.remove(file.path);
+      if (cached != null) {
+        _pdfCache[file.path] = cached;
+        return cached;
       }
+
+      Future<PdfDocument> openAndCache(File targetFile) async {
+        final doc = await PdfDocument.openFile(targetFile.path);
+        _pdfCache[targetFile.path] = doc;
+        while (_pdfCache.length > 6) {
+          final oldestKey = _pdfCache.keys.first;
+          final oldest = _pdfCache.remove(oldestKey);
+          if (oldest != null) {
+            try {
+              await oldest.close();
+            } catch (_) {}
+          }
+        }
+        return doc;
+      }
+
+      try {
+        return await openAndCache(file);
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[remote-media] pdf open failed, retrying with fresh download: '
+          'path=${file.path} error=$error',
+        );
+        debugPrintStack(
+          label: '[remote-media] pdf open retry',
+          stackTrace: stackTrace,
+        );
+        await _evictCachedPdfDocument(file.path);
+        await _deleteFileQuietly(file);
+        final refreshedFile = await _ensureCachedMediaFile(item, forceRefresh: true);
+        return openAndCache(refreshedFile);
+      }
+    })();
+
+    _pdfOpenInFlight[file.path] = future;
+    try {
+      return await future;
+    } finally {
+      _pdfOpenInFlight.remove(file.path);
     }
-    return doc;
   }
 
   Future<Uint8List> _renderPdfPage(
