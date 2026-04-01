@@ -1,9 +1,10 @@
-ï»¿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -153,7 +154,7 @@ class MetadataStore:
     def get_media(self, media_id: str) -> dict[str, Any]:
         row = self._db.get_media_record(media_id)
         if row is None:
-            raise not_found("ãƒ¡ãƒ‡ã‚£ã‚¢ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“")
+            raise not_found("ƒƒfƒBƒA‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
         return self._row_to_media_dict(row)
 
     def list_tag_master(
@@ -216,7 +217,7 @@ class MetadataStore:
             if record is not None:
                 return record
 
-        raise not_found("ãƒ¡ãƒ‡ã‚£ã‚¢ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“")
+        raise not_found("ƒƒfƒBƒA‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
 
     def resolve_media_id(
         self,
@@ -532,15 +533,15 @@ class MetadataStore:
         new_path: str | None,
     ) -> dict[str, Any]:
         if not old_path and not old_media_id:
-            raise bad_request("oldPath ã¾ãŸã¯ oldMediaId ãŒå¿…è¦ã§ã™")
+            raise bad_request("oldPath ‚Ü‚½‚Í oldMediaId ‚ª•K—v‚Å‚·")
         if not new_path and not new_media_id:
-            raise bad_request("newPath ã¾ãŸã¯ newMediaId ãŒå¿…è¦ã§ã™")
+            raise bad_request("newPath ‚Ü‚½‚Í newMediaId ‚ª•K—v‚Å‚·")
 
         current = self._db.get_media_record(old_media_id) if old_media_id else None
         if current is None and old_path:
             current = self._db.get_media_record_by_path(old_path)
         if current is None:
-            raise not_found("ãƒªãƒãƒ¼ãƒ å¯¾è±¡ã®ãƒ¡ãƒ‡ã‚£ã‚¢ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“")
+            raise not_found("ƒŠƒl[ƒ€‘ÎÛ‚ÌƒƒfƒBƒA‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
 
         old_full_path = os.path.normpath(old_path or current["full_path"])
         target_full_path = os.path.normpath(new_path or current["full_path"])
@@ -595,6 +596,7 @@ class MetadataStore:
     def apply_delete(self, items: list[dict[str, Any]], hard_delete: bool = False) -> int:
         target_ids: list[str] = []
         target_paths: list[str] = []
+        deleted_count = 0
 
         for item in items:
             media_id = item.get("mediaId")
@@ -603,20 +605,39 @@ class MetadataStore:
             if record is None and path:
                 record = self._db.get_media_record_by_path(path)
             if record is None:
+                raw_path = str(path or "").strip()
+                if not raw_path or not os.path.isdir(raw_path):
+                    continue
+
+                normalized_folder = _normalize_path(raw_path)
+                descendants = self._db.list_media_records(
+                    folder_prefix=normalized_folder,
+                    include_deleted=False,
+                )
+                deleted_count += 1
+                target_ids.extend(str(row["media_id"]) for row in descendants)
+                target_paths.extend(str(row["normalized_full_path"]) for row in descendants)
+
+                if hard_delete and os.path.exists(raw_path):
+                    shutil.rmtree(raw_path)
                 continue
 
             target_ids.append(record["media_id"])
             target_paths.append(record["normalized_full_path"])
+            deleted_count += 1
 
             if hard_delete:
                 full_path = record["full_path"]
                 if os.path.exists(full_path):
                     os.remove(full_path)
 
-        self._db.mark_deleted_by_ids(target_ids, is_deleted=True)
-        if not target_ids and target_paths:
-            self._db.mark_deleted_by_paths(target_paths, is_deleted=True)
-        return len(target_ids)
+        if target_ids:
+            deduped_ids = list(dict.fromkeys(target_ids))
+            self._db.mark_deleted_by_ids(deduped_ids, is_deleted=True)
+        elif target_paths:
+            deduped_paths = list(dict.fromkeys(target_paths))
+            self._db.mark_deleted_by_paths(deduped_paths, is_deleted=True)
+        return deleted_count
 
     def organize_media_by_tags(
         self,
@@ -750,6 +771,8 @@ class MetadataStore:
             "isDeleted": bool(row["is_deleted"]),
             "modifiedEpochMs": _parse_epoch(row.get("modified_epoch_ms")),
         }
+
+
 
 
 

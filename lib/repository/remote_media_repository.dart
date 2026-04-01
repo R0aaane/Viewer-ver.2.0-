@@ -237,6 +237,23 @@ class RemoteMediaRepository implements MediaRepository {
     _remoteMediaIdsByPath.remove(_normalizeRemotePath(path));
   }
 
+  void _forgetRemoteMediaIdsUnderPath(String folderPath) {
+    final trimmed = folderPath.trim();
+    if (trimmed.isEmpty || _looksLikeRemoteMediaId(trimmed)) {
+      return;
+    }
+    final normalizedFolder = _normalizeRemotePath(trimmed);
+    final prefix = '$normalizedFolder\\';
+    final keys = _remoteMediaIdsByPath.keys
+        .where(
+          (key) => key == normalizedFolder || key.startsWith(prefix),
+        )
+        .toList(growable: false);
+    for (final key in keys) {
+      _remoteMediaIdsByPath.remove(key);
+    }
+  }
+
   void _rememberRemoteEntry(RemoteFolderEntry entry) {
     final mediaId = entry.mediaId?.trim();
     final fullPath = (entry.fullPath ?? entry.entryId).trim();
@@ -1029,19 +1046,17 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<int> deleteItems(List<MediaItem> items) async {
-    final targets = items
-        .where((item) => item.kind != MediaKind.folder)
-        .toList(growable: false);
+    final targets = items.toList(growable: false);
     if (targets.isEmpty) {
       return 0;
     }
 
-    final payload = <(MediaItem, ResolvedMediaIdentity, String)>[];
+    final payload = <(MediaItem, ResolvedMediaIdentity, String?)>[];
     for (final item in targets) {
       payload.add((
         item,
         await _idResolver.resolve(item),
-        await _remoteMediaIdForItem(item),
+        item.kind == MediaKind.folder ? null : await _remoteMediaIdForItem(item),
       ));
     }
 
@@ -1050,8 +1065,17 @@ class RemoteMediaRepository implements MediaRepository {
       hardDelete: true,
     );
     for (final entry in payload) {
-      await _assertDeleted(entry.$1, entry.$3);
-      _evictMetaCache(entry.$3);
+      if (entry.$1.kind == MediaKind.folder) {
+        _forgetRemoteMediaIdsUnderPath(entry.$1.id);
+        _idResolver.forget(entry.$1);
+        continue;
+      }
+      final remoteMediaId = entry.$3;
+      if (remoteMediaId == null || remoteMediaId.isEmpty) {
+        continue;
+      }
+      await _assertDeleted(entry.$1, remoteMediaId);
+      _evictMetaCache(remoteMediaId);
       _forgetRemoteMediaId(entry.$1.id);
       _idResolver.forget(entry.$1);
     }

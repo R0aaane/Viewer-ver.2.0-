@@ -161,5 +161,63 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         )
 
 
+    def test_apply_delete_removes_folder_and_marks_descendants_deleted(self) -> None:
+        folder = self.library_dir / 'artist-folder'
+        folder.mkdir()
+        nested = folder / 'nested.jpg'
+        nested.write_bytes(b'test')
+        media_id = build_media_id(
+            kind='image',
+            full_path=str(nested),
+            folder_raw=str(folder),
+            display_name='nested.jpg',
+            size_bytes=4,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                'media_id': media_id,
+                'folder_raw': str(folder),
+                'relative_hint': 'nested.jpg',
+                'display_name': 'nested.jpg',
+                'full_path': str(nested),
+                'normalized_full_path': str(nested).replace('/', '\\').casefold(),
+                'kind': 'image',
+                'mime_type': 'image/jpeg',
+                'size_bytes': 4,
+                'modified_at': None,
+                'modified_epoch_ms': 1,
+                'etag': None,
+                'is_deleted': 0,
+            }
+        )
+
+        deleted = self.store.apply_delete(
+            [{'path': str(folder)}],
+            hard_delete=True,
+        )
+
+        self.assertEqual(deleted, 1)
+        self.assertFalse(folder.exists())
+        record = self.sqlite.get_media_record(media_id)
+        self.assertIsNotNone(record)
+        self.assertEqual(record['is_deleted'], 1)
+
+    def test_apply_delete_removes_empty_folder_without_indexed_descendants(self) -> None:
+        folder = self.library_dir / 'empty-folder'
+        folder.mkdir()
+
+        deleted = self.store.apply_delete(
+            [{'path': str(folder)}],
+            hard_delete=True,
+        )
+
+        self.assertEqual(deleted, 1)
+        self.assertFalse(folder.exists())
+
 if __name__ == '__main__':
     unittest.main()
+
+
+
+

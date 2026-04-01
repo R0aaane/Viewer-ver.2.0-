@@ -110,7 +110,7 @@ enum _RegisteredFolderRemovalAction {
   deleteFiles,
 }
 
-enum _ThumbTileMenuAction { deletePdf }
+enum _ThumbTileMenuAction { deleteItem }
 
 class _UrlImportQueueEntry {
   final String id;
@@ -2046,16 +2046,34 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-  bool _canDeletePdfItem(MediaItem item) {
-    return item.kind == MediaKind.pdf && _repoCapabilities.canDelete;
+  bool _canDeleteItem(MediaItem item) {
+    if (!_repoCapabilities.canDelete) {
+      return false;
+    }
+    if (item.kind == MediaKind.folder && item.id.startsWith('content://')) {
+      return false;
+    }
+    return true;
   }
 
-  Future<bool> _confirmPdfDeletion(MediaItem item) async {
+  String _itemDeletionTypeLabel(MediaItem item) {
+    switch (item.kind) {
+      case MediaKind.pdf:
+        return 'PDF';
+      case MediaKind.image:
+        return '画像';
+      case MediaKind.folder:
+        return 'フォルダ';
+    }
+  }
+
+  Future<bool> _confirmItemDeletion(MediaItem item) async {
+    final label = _itemDeletionTypeLabel(item);
     final result = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('この PDF を削除しますか？'),
+          title: Text('この$labelを削除しますか？'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2091,11 +2109,64 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return result == true;
   }
 
-  Future<void> _removeFavoriteFromPrefs(String itemId) async {
+  Future<bool> _confirmItemsDeletion(List<MediaItem> items) async {
+    if (items.isEmpty) {
+      return false;
+    }
+    if (items.length == 1) {
+      return _confirmItemDeletion(items.first);
+    }
+
+    final pdfCount = items.where((item) => item.kind == MediaKind.pdf).length;
+    final imageCount =
+        items.where((item) => item.kind == MediaKind.image).length;
+    final folderCount =
+        items.where((item) => item.kind == MediaKind.folder).length;
+    final summary = <String>[
+      if (pdfCount > 0) 'PDF: $pdfCount件',
+      if (imageCount > 0) '画像: $imageCount件',
+      if (folderCount > 0) 'フォルダ: $folderCount件',
+    ].join('\n');
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('選択中の${items.length}件を削除しますか？'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('削除すると元に戻せません。'),
+              const SizedBox(height: 12),
+              Text(summary),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('削除'),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
+  }
+
+  Future<void> _removeFavoritesFromPrefs(Iterable<String> itemIds) async {
+    final ids = itemIds.where((entry) => entry.trim().isNotEmpty).toSet();
+    if (ids.isEmpty) {
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     final next = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
         .toSet();
-    next.remove(itemId);
+    next.removeAll(ids);
     await prefs.setStringList(
       _PrefsKeys.favorites,
       next.toList(growable: false),
@@ -2104,45 +2175,94 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() => _favorites = next);
   }
 
-  Future<void> _deletePdfFromList(MediaItem item) async {
-    if (!_canDeletePdfItem(item)) {
+  Future<List<MediaItem>> _collectMetadataDeletionTargets(
+    List<MediaItem> items,
+  ) async {
+    final collected = <MediaItem>[];
+    final seen = <String>{};
+
+    void append(MediaItem item) {
+      if (item.kind == MediaKind.folder) {
+        return;
+      }
+      if (!seen.add(item.id)) {
+        return;
+      }
+      collected.add(item);
+    }
+
+    for (final item in items) {
+      if (item.kind == MediaKind.folder) {
+        try {
+          final descendants = await widget.repo.listMediaRecursiveFiles(
+            FolderHandle(item.id),
+          );
+          for (final descendant in descendants) {
+            append(descendant);
+          }
+        } catch (_) {}
+        continue;
+      }
+      append(item);
+    }
+    return collected;
+  }
+
+  Future<void> _deleteItemsFromList(List<MediaItem> items) async {
+    final targets = items.where(_canDeleteItem).toList(growable: false);
+    if (targets.isEmpty) {
       return;
     }
 
-    final confirmed = await _confirmPdfDeletion(item);
+    final confirmed = await _confirmItemsDeletion(targets);
     if (!confirmed || !mounted) {
       return;
     }
 
     final messenger = ScaffoldMessenger.of(context);
+    final metadataTargets = await _collectMetadataDeletionTargets(targets);
     try {
-      final deleted = await widget.repo.deleteItem(item);
-      if (!deleted) {
+      final deletedCount = await widget.repo.deleteItems(targets);
+      if (deletedCount <= 0) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('PDF の削除に失敗しました')),
+          const SnackBar(content: Text('削除に失敗しました')),
         );
         return;
       }
 
       String? metadataWarning;
       try {
-        await widget.tagService.handleDeletedItems([item]);
+        if (metadataTargets.isNotEmpty) {
+          await widget.tagService.handleDeletedItems(metadataTargets);
+        }
       } catch (error) {
         metadataWarning = 'メタデータ削除に失敗しました: $error';
       }
 
-      await _removeFavoriteFromPrefs(item.id);
+      await _removeFavoritesFromPrefs([
+        ...targets.map((item) => item.id),
+        ...metadataTargets.map((item) => item.id),
+      ]);
       if (!mounted) return;
 
       setState(() {
-        _selectedIds.remove(item.id);
+        _selectedIds.removeAll(targets.map((item) => item.id));
+        if (_selectedIds.isEmpty) {
+          _selectMode = false;
+        }
       });
 
       await _refreshVisibleContent();
       if (!mounted) return;
 
       messenger.showSnackBar(
-        SnackBar(content: Text('「${item.displayName}」を削除しました')),
+        SnackBar(
+          content: Text(
+            targets.length == 1
+                ? '「${targets.first.displayName}」を削除しました'
+                : '${deletedCount}件を削除しました',
+          ),
+        ),
       );
       if (metadataWarning != null) {
         messenger.showSnackBar(SnackBar(content: Text(metadataWarning)));
@@ -2150,9 +2270,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     } catch (error) {
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(content: Text('PDF の削除に失敗しました: $error')),
+        SnackBar(content: Text('削除に失敗しました: $error')),
       );
     }
+  }
+
+  Future<void> _deleteItemFromList(MediaItem item) async {
+    await _deleteItemsFromList([item]);
   }
 
   String _folderLabelForItem(MediaItem item) {
@@ -4562,6 +4686,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           icon: const Icon(Icons.label_outline),
         ),
         IconButton(
+          tooltip: '選択中を削除',
+          onPressed: () {
+            final targets = _selectedFrom(_homeSearchResults);
+            _deleteItemsFromList(targets);
+          },
+          icon: const Icon(Icons.delete_outline),
+        ),
+        IconButton(
           tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
           onPressed: () {
             final targets = _selectedFrom(_homeSearchResults);
@@ -4624,6 +4756,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           _bulkAddTagToItems(targets);
         },
         icon: const Icon(Icons.label_outline),
+      ),
+      IconButton(
+        tooltip: '選択中を削除',
+        onPressed: () {
+          final view = _gallerySelectionView(controller.index);
+          final targets = _selectedFrom(view);
+          _deleteItemsFromList(targets);
+        },
+        icon: const Icon(Icons.delete_outline),
       ),
       IconButton(
         tooltip: '選択中をライブラリに取り込む（重複はスキップ）',
@@ -4952,7 +5093,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _bulkAddTagToItems(List<MediaItem> targets) async {
-    if (targets.isEmpty) {
+    final mediaTargets = targets
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
+    if (mediaTargets.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -4967,7 +5111,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          title: Text('一括タグ付与（${targets.length}件）'),
+          title: Text('一括タグ付与（${mediaTargets.length}件）'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -5039,11 +5183,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     try {
       await widget.tagService.addTagToItems(
-        targets,
+        mediaTargets,
         Tag(name: name, category: cat),
       );
 
-      final got = await widget.tagService.getTagNamesByItems(targets);
+      final got = await widget.tagService.getTagNamesByItems(mediaTargets);
       if (!mounted) return;
       setState(() {
         for (final e in got.entries) {
@@ -5056,7 +5200,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('「$name」を${targets.length}件に付与しました')),
+        SnackBar(content: Text('「$name」を${mediaTargets.length}件に付与しました')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -5069,7 +5213,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _importSelectedToLibrary(List<MediaItem> targets) async {
-    if (targets.isEmpty) return;
+    final mediaTargets = targets
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
+    if (mediaTargets.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('取り込み対象がありません')));
+      return;
+    }
     if (!_repoCapabilities.canUpload) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -5085,7 +5238,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     final imported = await widget.repo.importItemsIntoFolder(
       lib,
-      targets,
+      mediaTargets,
       skipIfExists: true,
     );
 
@@ -5176,7 +5329,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     return InkWell(
       onLongPress: () {
-        if (item.kind == MediaKind.folder) return;
         if (!_selectMode) {
           _enterSelectMode(item);
         } else {
@@ -5184,15 +5336,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
       },
       onTap: () async {
-        if (item.kind == MediaKind.folder) {
-          if (_selectMode) return;
-          _exitSelectMode();
-          await _enterFolder(item);
+        if (_selectMode) {
+          _toggleSelect(item);
           return;
         }
 
-        if (_selectMode) {
-          _toggleSelect(item);
+        if (item.kind == MediaKind.folder) {
+          _exitSelectMode();
+          await _enterFolder(item);
           return;
         }
 
@@ -5226,8 +5377,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         onToggleFavorite: () => _toggleFavorite(item),
         selected: isSelected,
         folderTileMode: _folderTileMode,
-        canDeletePdf: !_selectMode && _canDeletePdfItem(item),
-        onDeletePdf: () => _deletePdfFromList(item),
+        canDeleteItem: !_selectMode && _canDeleteItem(item),
+        onDeleteItem: () => _deleteItemFromList(item),
       ),
     );
   }
@@ -5335,8 +5486,8 @@ class _ThumbTile extends StatelessWidget {
   final VoidCallback onToggleFavorite;
   final bool selected;
   final FolderTileMode folderTileMode;
-  final bool canDeletePdf;
-  final VoidCallback? onDeletePdf;
+  final bool canDeleteItem;
+  final VoidCallback? onDeleteItem;
 
   const _ThumbTile({
     required this.repo,
@@ -5346,8 +5497,8 @@ class _ThumbTile extends StatelessWidget {
     required this.onToggleFavorite,
     this.selected = false,
     required this.folderTileMode,
-    this.canDeletePdf = false,
-    this.onDeletePdf,
+    this.canDeleteItem = false,
+    this.onDeleteItem,
   });
 
   @override
@@ -5369,7 +5520,20 @@ class _ThumbTile extends StatelessWidget {
       child: Stack(
         children: [
           Positioned.fill(child: _buildFolderPlaceholder(context)),
-          const Positioned(top: 8, right: 8, child: _FolderBadge()),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (canDeleteItem && onDeleteItem != null) ...[
+                  _buildDeleteMenuButton(),
+                  const SizedBox(width: 4),
+                ],
+                const _FolderBadge(),
+              ],
+            ),
+          ),
           Positioned(
             left: 8,
             right: 8,
@@ -5411,7 +5575,20 @@ class _ThumbTile extends StatelessWidget {
                     },
                   ),
           ),
-          const Positioned(top: 8, right: 8, child: _FolderBadge()),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (canDeleteItem && onDeleteItem != null) ...[
+                  _buildDeleteMenuButton(),
+                  const SizedBox(width: 4),
+                ],
+                const _FolderBadge(),
+              ],
+            ),
+          ),
           Positioned(
             left: 8,
             right: 8,
@@ -5462,27 +5639,9 @@ class _ThumbTile extends StatelessWidget {
                   isFavorite: isFavorite,
                   onPressed: onToggleFavorite,
                 ),
-                if (canDeletePdf && onDeletePdf != null) ...[
+                if (canDeleteItem && onDeleteItem != null) ...[
                   const SizedBox(width: 4),
-                  PopupMenuButton<_ThumbTileMenuAction>(
-                    tooltip: 'PDF メニュー',
-                    padding: EdgeInsets.zero,
-                    icon: const Icon(Icons.more_vert, size: 18),
-                    onSelected: (action) {
-                      if (action == _ThumbTileMenuAction.deletePdf) {
-                        onDeletePdf!.call();
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: _ThumbTileMenuAction.deletePdf,
-                        child: ListTile(
-                          leading: Icon(Icons.delete_outline),
-                          title: Text('PDF を削除'),
-                        ),
-                      ),
-                    ],
-                  ),
+                  _buildDeleteMenuButton(),
                 ],
               ],
             ),
@@ -5504,6 +5663,28 @@ class _ThumbTile extends StatelessWidget {
       alignment: Alignment.center,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: const Icon(Icons.folder, size: 56),
+    );
+  }
+
+  Widget _buildDeleteMenuButton() {
+    return PopupMenuButton<_ThumbTileMenuAction>(
+      tooltip: '削除メニュー',
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.more_vert, size: 18),
+      onSelected: (action) {
+        if (action == _ThumbTileMenuAction.deleteItem) {
+          onDeleteItem!.call();
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: _ThumbTileMenuAction.deleteItem,
+          child: ListTile(
+            leading: Icon(Icons.delete_outline),
+            title: Text('削除'),
+          ),
+        ),
+      ],
     );
   }
 

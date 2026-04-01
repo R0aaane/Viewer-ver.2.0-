@@ -94,6 +94,30 @@ void main() {
       expect(idResolver.forgotten, <String>[item.id]);
     });
 
+    test('allows deleting remote folders without media verification lookup', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      final idResolver = _FakeMediaIdResolver();
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: idResolver,
+        localPickerRepository: const _StubMediaRepository(),
+      );
+      final folderItem = MediaItem(
+        id: r'C:\library\artist-folder',
+        displayName: 'artist-folder',
+        kind: MediaKind.folder,
+        folderRaw: r'C:\library',
+      );
+
+      final deleted = await repository.deleteItem(folderItem);
+
+      expect(deleted, isTrue);
+      expect(apiClient.deleteCalls, hasLength(1));
+      expect(apiClient.deleteCalls.single, <String>['stable:${folderItem.id}']);
+      expect(apiClient.metaRequests, isEmpty);
+      expect(idResolver.forgotten, <String>[folderItem.id]);
+    });
+
     test('throws when the deletion cannot be verified', () async {
       final apiClient = _FakeRemoteMediaApiClient()..markDeletedOnDelete = false;
       final repository = RemoteMediaRepository(
