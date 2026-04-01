@@ -251,6 +251,39 @@ void main() {
         expect(apiClient.lastUploadFiles.single.fileName, 'downloaded.jpg');
       },
     );
+
+    test(
+      'prefers generated hitomi pdf and attaches inferred artist tags during fallback upload',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient()
+          ..downloadUrlError = const RemoteMediaException(
+            "[stderr] ModuleNotFoundError: No module named 'requests'",
+          );
+        final localRepository = _RecordingLocalUrlImportRepository(
+          createHitomiPdfBundle: true,
+        );
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: localRepository,
+        );
+
+        final result = await repository.importFromUrlIntoFolder(
+          const FolderHandle(r'C:\Users\Host\Documents\library'),
+          'https://hitomi.la/reader/123456.html',
+        );
+
+        expect(result.importedCount, 1);
+        expect(apiClient.lastUploadFiles, hasLength(1));
+        expect(apiClient.lastUploadFiles.single.fileName, 'sample.pdf');
+        expect(
+          apiClient.lastUploadFiles.single.tags
+              .map((tag) => '${tag.category.name}:${tag.name}')
+              .toSet(),
+          containsAll(<String>{'artist:ArtistName', 'mediaType:hitomi'}),
+        );
+      },
+    );
   });
   group('RemoteMediaRepository.importItemsIntoFolder', () {
     test('forwards import metadata to the upload api', () async {
@@ -577,8 +610,13 @@ class _FakeMediaIdResolver extends MediaIdResolver {
 }
 
 class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
+  final bool createHitomiPdfBundle;
   String? lastImportedFolderRaw;
   String? lastImportedUrl;
+
+  _RecordingLocalUrlImportRepository({
+    this.createHitomiPdfBundle = false,
+  });
 
   @override
   bool get canImportFromUrl => true;
@@ -593,9 +631,22 @@ class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
   }) async {
     lastImportedFolderRaw = folder.raw;
     lastImportedUrl = sourceUrl;
-    final file = File('${folder.raw}${Platform.pathSeparator}downloaded.jpg');
-    await file.parent.create(recursive: true);
-    await file.writeAsBytes(<int>[1, 2, 3], flush: true);
+    if (createHitomiPdfBundle) {
+      final galleryDir = Directory(
+        '${folder.raw}${Platform.pathSeparator}hitomi${Platform.pathSeparator}[12345] ArtistName${Platform.pathSeparator}sample',
+      );
+      await galleryDir.create(recursive: true);
+      await File(
+        '${galleryDir.path}${Platform.pathSeparator}001.jpg',
+      ).writeAsBytes(<int>[1, 2, 3], flush: true);
+      await File(
+        '${galleryDir.parent.path}${Platform.pathSeparator}sample.pdf',
+      ).writeAsBytes(<int>[37, 80, 68, 70], flush: true);
+    } else {
+      final file = File('${folder.raw}${Platform.pathSeparator}downloaded.jpg');
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(<int>[1, 2, 3], flush: true);
+    }
     return const UrlImportResult(importedCount: 1);
   }
 
@@ -604,21 +655,33 @@ class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
-    final file = File('${folder.raw}${Platform.pathSeparator}downloaded.jpg');
-    if (!await file.exists()) {
+    final rootDir = Directory(folder.raw);
+    if (!await rootDir.exists()) {
       return const <MediaItem>[];
     }
-    final stat = await file.stat();
-    return <MediaItem>[
-      MediaItem(
-        id: file.path,
-        displayName: 'downloaded.jpg',
-        kind: MediaKind.image,
-        folderRaw: folder.raw,
-        modified: stat.modified,
-        sizeBytes: stat.size,
-      ),
-    ];
+    final items = <MediaItem>[];
+    await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+      if (entity is! File) {
+        continue;
+      }
+      final stat = await entity.stat();
+      final name = entity.uri.pathSegments.isNotEmpty
+          ? entity.uri.pathSegments.last
+          : entity.path;
+      final lowerName = name.toLowerCase();
+      final kind = lowerName.endsWith('.pdf') ? MediaKind.pdf : MediaKind.image;
+      items.add(
+        MediaItem(
+          id: entity.path,
+          displayName: name,
+          kind: kind,
+          folderRaw: entity.parent.path,
+          modified: stat.modified,
+          sizeBytes: stat.size,
+        ),
+      );
+    }
+    return items;
   }
 
   @override

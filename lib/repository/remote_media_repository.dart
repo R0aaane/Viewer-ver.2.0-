@@ -15,6 +15,7 @@ import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 import '../models/tag.dart';
 import '../services/app_settings_service.dart';
+import '../services/import_tag_rule_service.dart';
 import '../services/import_source_normalizer.dart';
 import '../services/media_id_resolver.dart';
 import '../services/remote_media_api_client.dart';
@@ -714,9 +715,11 @@ class RemoteMediaRepository implements MediaRepository {
       final stagedItems = await _localPickerRepository.listMediaRecursiveFiles(
         FolderHandle(stagingDir.path),
       );
-      final uploadItems = stagedItems
-          .where((item) => item.kind != MediaKind.folder)
-          .toList(growable: false);
+      final uploadItems = _prepareFallbackUploadItems(
+        stagedItems,
+        stagingRoot: stagingDir.path,
+        sourceUrls: options.collectSourceUrls(sourceUrl),
+      );
       if (uploadItems.isEmpty) {
         return localResult;
       }
@@ -752,6 +755,116 @@ class RemoteMediaRepository implements MediaRepository {
         } catch (_) {}
       }
     }
+  }
+
+  List<MediaItem> _prepareFallbackUploadItems(
+    List<MediaItem> stagedItems, {
+    required String stagingRoot,
+    required List<String> sourceUrls,
+  }) {
+    final mediaItems = stagedItems
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
+    if (mediaItems.isEmpty) {
+      return const <MediaItem>[];
+    }
+
+    final filteredItems = _filterOutGeneratedPdfSourceImages(
+      mediaItems,
+      stagingRoot: stagingRoot,
+    );
+    return filteredItems.map((item) {
+      final inferredTags = item.kind == MediaKind.pdf
+          ? ImportTagRuleService.inferForImportedItem(
+              itemPath: item.id,
+              rootFolderRaw: stagingRoot,
+              displayName: item.displayName,
+              sourceUrls: sourceUrls,
+            ).tags
+          : const <Tag>[];
+      final mergedTags = _mergeUploadTags(
+        item.tags,
+        inferredTags,
+        const <Tag>[],
+        const <Tag>[],
+      );
+      return MediaItem(
+        id: item.id,
+        displayName: item.displayName,
+        kind: item.kind,
+        folderRaw: stagingRoot,
+        modified: item.modified,
+        sizeBytes: item.sizeBytes,
+        tags: mergedTags,
+      );
+    }).toList(growable: false);
+  }
+
+  List<MediaItem> _filterOutGeneratedPdfSourceImages(
+    List<MediaItem> items, {
+    required String stagingRoot,
+  }) {
+    final pdfRelativePaths = items
+        .where((item) => item.kind == MediaKind.pdf)
+        .map((item) => _stagingRelativePath(item.id, stagingRoot))
+        .whereType<String>()
+        .map(_normalizedRelativeKey)
+        .toSet();
+    if (pdfRelativePaths.isEmpty) {
+      return items;
+    }
+
+    return items.where((item) {
+      if (item.kind != MediaKind.image) {
+        return true;
+      }
+      final relativePath = _stagingRelativePath(item.id, stagingRoot);
+      if (relativePath == null) {
+        return true;
+      }
+      final ctx = _pathContextFor(item.id.contains('\\'));
+      final normalizedRelative = relativePath.replaceAll('\\', '/');
+      final parentDir = ctx.dirname(normalizedRelative);
+      if (parentDir.isEmpty || parentDir == '.') {
+        return true;
+      }
+      final galleryFolder = ctx.basename(parentDir);
+      final creatorDir = ctx.dirname(parentDir);
+      if (galleryFolder.isEmpty || galleryFolder == '.' || creatorDir == '.') {
+        return true;
+      }
+      final candidatePdf = ctx.join(creatorDir, '$galleryFolder.pdf');
+      return !pdfRelativePaths.contains(_normalizedRelativeKey(candidatePdf));
+    }).toList(growable: false);
+  }
+
+  String? _stagingRelativePath(String itemPath, String stagingRoot) {
+    final trimmedPath = itemPath.trim();
+    final trimmedRoot = stagingRoot.trim();
+    if (trimmedPath.isEmpty || trimmedRoot.isEmpty) {
+      return null;
+    }
+    final ctx = _pathContextFor(
+      trimmedPath.contains('\\') || trimmedRoot.contains('\\'),
+    );
+    try {
+      final normalizedPath = ctx.normalize(trimmedPath);
+      final normalizedRoot = ctx.normalize(trimmedRoot);
+      if (normalizedPath == normalizedRoot ||
+          ctx.isWithin(normalizedRoot, normalizedPath)) {
+        return ctx.relative(normalizedPath, from: normalizedRoot).replaceAll(
+          '\\',
+          '/',
+        );
+      }
+    } on ArgumentError {
+      return null;
+    }
+    return null;
+  }
+
+  String _normalizedRelativeKey(String value) {
+    return value.replaceAll('\\', '/').trim().toLowerCase();
   }
 
   FolderHandle? _pickRemoteLibraryFolder(Iterable<FolderHandle> folders) {

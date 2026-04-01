@@ -1,6 +1,7 @@
-import json
+﻿import json
 import logging
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -45,18 +46,18 @@ def request_rescan(
             logger.info("[rescan] request target=%s", target)
             scanned = index_service.scan_folder(target)
             logger.info("[rescan] completed target=%s scanned=%s", target, scanned)
-            return MessageResponse(message=f"再スキャンが完了しました: {scanned} 件")
+            return MessageResponse(message=f"蜀阪せ繧ｭ繝｣繝ｳ縺悟ｮ御ｺ・＠縺ｾ縺励◆: {scanned} 莉ｶ")
 
         logger.info("[rescan] request configured_roots=%s", settings.media_roots)
         results = index_service.rescan_configured_roots(settings.media_roots)
         total = sum(int(entry["count"]) for entry in results)
         logger.info("[rescan] completed configured_roots total=%s details=%s", total, results)
-        return MessageResponse(message=f"再スキャンが完了しました: {total} 件")
+        return MessageResponse(message=f"蜀阪せ繧ｭ繝｣繝ｳ縺悟ｮ御ｺ・＠縺ｾ縺励◆: {total} 莉ｶ")
     except ApiError:
         raise
     except Exception as error:
         logger.exception("[rescan] unexpected failure target=%s roots=%s", target or None, settings.media_roots)
-        raise server_error(f"再スキャンに失敗しました: {error}") from error
+        raise server_error(f"蜀阪せ繧ｭ繝｣繝ｳ縺ｫ螟ｱ謨励＠縺ｾ縺励◆: {error}") from error
 
 
 @router.post("/upload")
@@ -437,7 +438,10 @@ async def download_url(
         source_urls = _collect_source_urls(payload.url, payload.urls)
 
         after_paths = _collect_media_paths(folder_path)
-        imported_paths = sorted(after_paths.difference(before_paths))
+        imported_paths = _prefer_generated_pdf_import_paths(
+            folder_path,
+            sorted(after_paths.difference(before_paths)),
+        )
         flattened_entries = _flatten_imported_media_paths(folder_path, imported_paths)
         rescanned_count = index_service.scan_folder(folder_path)
 
@@ -507,7 +511,7 @@ def apply_rename(request: Request, payload: RenameRequest) -> MessageResponse:
         old_path=payload.oldPath or (before.path if before else None),
         new_path=payload.newPath or (after.path if after else None),
     )
-    return MessageResponse(message="リネームしました")
+    return MessageResponse(message="繝ｪ繝阪・繝縺励∪縺励◆")
 
 
 @router.post("/delete", response_model=MessageResponse)
@@ -527,7 +531,7 @@ def apply_delete(request: Request, payload: DeleteRequest) -> MessageResponse:
         items=items,
         hard_delete=payload.hardDelete,
     )
-    return MessageResponse(message=f"削除しました ({deleted} 件)")
+    return MessageResponse(message=f"蜑企勁縺励∪縺励◆ ({deleted} 莉ｶ)")
 
 
 def _normalize_upload_request_id(raw: str | None) -> str:
@@ -685,15 +689,15 @@ def _parse_json_string_list(
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise bad_request(f"{field_name} は JSON 配列で指定してください") from error
+        raise bad_request(f"{field_name} 縺ｯ JSON 驟榊・縺ｧ謖・ｮ壹＠縺ｦ縺上□縺輔＞") from error
 
     if not isinstance(value, list):
-        raise bad_request(f"{field_name} は文字列配列で指定してください")
+        raise bad_request(f"{field_name} 縺ｯ譁・ｭ怜・驟榊・縺ｧ謖・ｮ壹＠縺ｦ縺上□縺輔＞")
 
     out: list[str] = []
     for entry in value:
         if not isinstance(entry, str):
-            raise bad_request(f"{field_name} の各要素は文字列である必要があります")
+            raise bad_request(f"{field_name} 縺ｮ蜷・ｦ∫ｴ縺ｯ譁・ｭ怜・縺ｧ縺ゅｋ蠢・ｦ√′縺ゅｊ縺ｾ縺・)
         trimmed = entry.strip()
         if trimmed or preserve_empty:
             out.append(trimmed)
@@ -805,6 +809,64 @@ def _collect_media_paths(folder_path: str) -> set[str]:
     return found
 
 
+def _prefer_generated_pdf_import_paths(
+    folder_path: str,
+    imported_paths: list[str],
+) -> list[str]:
+    normalized_paths = [os.path.normpath(path) for path in imported_paths]
+    pdf_relative_paths = {
+        _normalized_relative_path(path, folder_path)
+        for path in normalized_paths
+        if normalized_extension(path) == ".pdf"
+    }
+    if not pdf_relative_paths:
+        return normalized_paths
+
+    preferred: list[str] = []
+    dropped: list[str] = []
+    for path in normalized_paths:
+        if _is_generated_pdf_source_image(path, folder_path, pdf_relative_paths):
+            dropped.append(path)
+            continue
+        preferred.append(path)
+
+    for path in dropped:
+        try:
+            os.remove(path)
+        except OSError:
+            continue
+    if dropped:
+        _remove_empty_dirs(folder_path)
+    return preferred
+
+
+def _is_generated_pdf_source_image(
+    path: str,
+    folder_path: str,
+    pdf_relative_paths: set[str],
+) -> bool:
+    if normalized_extension(path) == ".pdf":
+        return False
+
+    relative_path = _normalized_relative_path(path, folder_path)
+    parent_dir = posixpath.dirname(relative_path)
+    if not parent_dir or parent_dir == ".":
+        return False
+
+    gallery_folder = posixpath.basename(parent_dir)
+    creator_dir = posixpath.dirname(parent_dir)
+    if not gallery_folder or gallery_folder == "." or creator_dir in {"", "."}:
+        return False
+
+    candidate_pdf = posixpath.normpath(
+        posixpath.join(creator_dir, f"{gallery_folder}.pdf")
+    )
+    return candidate_pdf in pdf_relative_paths
+
+
+def _normalized_relative_path(path: str, folder_path: str) -> str:
+    return os.path.relpath(path, folder_path).replace("\\", "/")
+
 def _flatten_imported_media_paths(
     folder_path: str,
     imported_paths: list[str],
@@ -846,3 +908,5 @@ def _remove_empty_dirs(folder_path: str) -> None:
                 os.rmdir(base)
         except OSError:
             continue
+
+
