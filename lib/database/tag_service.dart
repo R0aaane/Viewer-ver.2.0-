@@ -2,6 +2,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
@@ -752,7 +753,22 @@ class TagService {
       );
     }
 
-    return _localStore.organizeAppLibrary(libraryRoot: libraryRoot);
+    final moved = await _localStore.organizeAppLibrary(libraryRoot: libraryRoot);
+    if (moved.isEmpty) {
+      return moved;
+    }
+
+    for (final entry in moved.entries) {
+      final before = _lookupKnownItem(entry.key) ?? _fallbackMovedItem(entry.key);
+      final after = _remapMovedItem(before, entry.value);
+      _forgetKnownItem(before);
+      rememberItem(after);
+      _idResolver.forget(before);
+      _idResolver.forget(after);
+      await _mirrorHostRename(before, after);
+    }
+
+    return moved;
   }
 
   // Repository is responsible for the actual filesystem / remote action.
@@ -992,6 +1008,8 @@ class TagService {
 
     final beforeIdentity = await _idResolver.resolve(before);
     final afterIdentity = await _idResolver.resolve(after);
+    _remoteTagCache.remove(beforeIdentity.stableId);
+    _remoteTagCache.remove(afterIdentity.stableId);
     await _runHostMirror(
       () => client.notifyRename(
         beforeItem: before,
@@ -1286,5 +1304,42 @@ class TagService {
       return null;
     }
     return '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
+  }
+
+  MediaItem _remapMovedItem(MediaItem before, String nextPath) {
+    return MediaItem(
+      id: nextPath,
+      displayName: p.basename(nextPath),
+      kind: before.kind,
+      folderRaw: p.dirname(nextPath),
+      modified: before.modified,
+      sizeBytes: before.sizeBytes,
+      tags: before.tags,
+    );
+  }
+
+  MediaItem _fallbackMovedItem(String path) {
+    final lowered = path.toLowerCase();
+    final kind = lowered.endsWith('.pdf') ? MediaKind.pdf : MediaKind.image;
+    DateTime? modified;
+    int? sizeBytes;
+
+    try {
+      final stat = File(path).statSync();
+      modified = stat.modified;
+      sizeBytes = stat.size;
+    } catch (_) {
+      modified = null;
+      sizeBytes = null;
+    }
+
+    return MediaItem(
+      id: path,
+      displayName: p.basename(path),
+      kind: kind,
+      folderRaw: p.dirname(path),
+      modified: modified,
+      sizeBytes: sizeBytes,
+    );
   }
 }

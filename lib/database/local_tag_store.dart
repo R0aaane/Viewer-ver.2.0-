@@ -166,26 +166,7 @@ class LocalTagStore {
     }
 
     await _db.transaction(() async {
-      await _db.into(_db.mediaItems).insertOnConflictUpdate(
-            db.MediaItemsCompanion.insert(
-              id: after.id,
-              folderRaw: after.folderRaw,
-              displayName: after.displayName,
-              kind: _kindToInt(after.kind),
-              modifiedEpochMs: Value(after.modified?.millisecondsSinceEpoch),
-            ),
-          );
-
-      await _db.customUpdate(
-        'UPDATE media_item_tags SET item_id = ? WHERE item_id = ?',
-        variables: [
-          Variable<String>(after.id),
-          Variable<String>(before.id),
-        ],
-        updates: {_db.mediaItemTags},
-      );
-
-      await (_db.delete(_db.mediaItems)..where((table) => table.id.equals(before.id))).go();
+      await _moveMediaItemRecord(beforeId: before.id, after: after);
     });
   }
 
@@ -430,26 +411,18 @@ class LocalTagStore {
         }
 
         await _db.transaction(() async {
-          await _db.into(_db.mediaItems).insertOnConflictUpdate(
-                db.MediaItemsCompanion.insert(
-                  id: targetPath,
-                  folderRaw: p.dirname(targetPath),
-                  displayName: fileName,
-                  kind: item.kind,
-                  modifiedEpochMs: Value(item.modifiedEpochMs),
-                ),
-              );
-
-          await _db.customUpdate(
-            'UPDATE media_item_tags SET item_id = ? WHERE item_id = ?',
-            variables: [
-              Variable<String>(targetPath),
-              Variable<String>(sourcePath),
-            ],
-            updates: {_db.mediaItemTags},
+          await _moveMediaItemRecord(
+            beforeId: sourcePath,
+            after: media.MediaItem(
+              id: targetPath,
+              folderRaw: p.dirname(targetPath),
+              displayName: fileName,
+              kind: item.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
+              modified: item.modifiedEpochMs == null
+                  ? null
+                  : DateTime.fromMillisecondsSinceEpoch(item.modifiedEpochMs!),
+            ),
           );
-
-          await (_db.delete(_db.mediaItems)..where((table) => table.id.equals(sourcePath))).go();
         });
 
         moved[sourcePath] = targetPath;
@@ -518,5 +491,34 @@ class LocalTagStore {
       }
     }
     return candidate;
+  }
+
+  Future<void> _moveMediaItemRecord({
+    required String beforeId,
+    required media.MediaItem after,
+  }) async {
+    await _db.into(_db.mediaItems).insertOnConflictUpdate(
+          db.MediaItemsCompanion.insert(
+            id: after.id,
+            folderRaw: after.folderRaw,
+            displayName: after.displayName,
+            kind: _kindToInt(after.kind),
+            modifiedEpochMs: Value(after.modified?.millisecondsSinceEpoch),
+          ),
+        );
+
+    if (beforeId == after.id) {
+      return;
+    }
+
+    await _db.customStatement(
+      'INSERT OR IGNORE INTO media_item_tags (item_id, tag_id) '
+      'SELECT ?, tag_id FROM media_item_tags WHERE item_id = ?',
+      <Object?>[after.id, beforeId],
+    );
+    await (_db.delete(_db.mediaItemTags)
+          ..where((table) => table.itemId.equals(beforeId)))
+        .go();
+    await (_db.delete(_db.mediaItems)..where((table) => table.id.equals(beforeId))).go();
   }
 }
