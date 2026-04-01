@@ -10,11 +10,15 @@ import 'widgets/scene_ui.dart';
 class TagAssignAfterImportPage extends StatefulWidget {
   final List<MediaItem> items;
   final TagService tagService;
+  final String? title;
+  final String? applyLabel;
 
   const TagAssignAfterImportPage({
     super.key,
     required this.items,
     required this.tagService,
+    this.title,
+    this.applyLabel,
   });
 
   @override
@@ -84,7 +88,9 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
 
   void _addExisting(model.Tag tag) {
     final next = model.Tag(name: tag.name, category: tag.category);
-    if (_isPending(next)) return;
+    if (_isPending(next)) {
+      return;
+    }
     setState(() => _pending.add(next));
   }
 
@@ -103,7 +109,9 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
     final name = _normalizeTag(_tagController.text);
     if (name == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('タグは空白を含まない 1 語で入力してください')),
+        const SnackBar(
+          content: Text('タグが無効です。空白を含まない 1 語で入力してください。'),
+        ),
       );
       return;
     }
@@ -123,7 +131,9 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
 
   Future<void> _save() async {
     if (_pending.isEmpty) {
-      Navigator.pop(context);
+      if (mounted) {
+        Navigator.pop(context, false);
+      }
       return;
     }
 
@@ -133,7 +143,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
         await widget.tagService.addTagToItems(widget.items, tag);
       }
       if (!mounted) return;
-      Navigator.pop(context);
+      Navigator.pop(context, true);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -149,29 +159,31 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
   String _categoryLabel(model.TagCategory category) {
     switch (category) {
       case model.TagCategory.artist:
-        return '作者';
+        return '作家';
       case model.TagCategory.series:
         return 'シリーズ';
       case model.TagCategory.mediaType:
-        return 'メディア種別';
+        return '種別';
       case model.TagCategory.character:
-        return 'キャラクター';
+        return 'キャラ';
       case model.TagCategory.free:
-        return '自由タグ';
+        return '自由';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final count = widget.items.length;
+    final title = widget.title ?? 'タグ付け（$count件）';
+    final applyLabel = widget.applyLabel ?? '$count件にタグを付ける';
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('取り込み後のタグ付け ($count 件)'),
+        title: Text(title),
         actions: [
           TextButton(
-            onPressed: _saving ? null : () => Navigator.pop(context),
-            child: const Text('スキップ'),
+            onPressed: _saving ? null : () => Navigator.pop(context, false),
+            child: const Text('閉じる'),
           ),
           const SizedBox(width: 8),
         ],
@@ -274,7 +286,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                                 ? const SceneEmptyState(
                                     icon: Icons.label_outline,
                                     title: '候補がありません',
-                                    message: '入力中の文字やカテゴリに一致するタグがまだありません。',
+                                    message: '入力中の文字列やカテゴリに一致する既存タグが見つかりません。',
                                   )
                                 : ListView.separated(
                                     itemCount: _master.length,
@@ -313,7 +325,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                                 ? const SceneEmptyState(
                                     icon: Icons.sell_outlined,
                                     title: 'まだタグは選ばれていません',
-                                    message: '候補を選ぶか、新しいタグを追加してください。',
+                                    message: '既存タグをタップするか、新しいタグ名を入力して追加してください。',
                                   )
                                 : SingleChildScrollView(
                                     child: Wrap(
@@ -369,7 +381,7 @@ class _TagAssignAfterImportPageState extends State<TagAssignAfterImportPage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.sell),
-                label: Text(_saving ? '保存中...' : '$count 件にタグを付ける'),
+                label: Text(_saving ? '保存中...' : applyLabel),
               ),
             ],
           ),

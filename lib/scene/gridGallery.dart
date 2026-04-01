@@ -5226,30 +5226,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ),
     );
   }
-  String? _normalizeTagName(String raw) {
-    var t = raw.trim();
-    if (t.isEmpty) return null;
-    if (t.startsWith('#')) t = t.substring(1).trim();
-    if (t.isEmpty) return null;
-    if (t.contains(RegExp(r'\s'))) return null;
-    return t;
-  }
-
-  String _categoryLabel(TagCategory c) {
-    switch (c) {
-      case TagCategory.artist:
-        return '作家';
-      case TagCategory.series:
-        return 'シリーズ';
-      case TagCategory.mediaType:
-        return '種別';
-      case TagCategory.character:
-        return 'キャラ';
-      case TagCategory.free:
-        return '自由';
-    }
-  }
-
   Future<void> _bulkAddTagToItems(List<MediaItem> targets) async {
     final mediaTargets = targets
         .where((item) => item.kind != MediaKind.folder)
@@ -5262,89 +5238,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    TagCategory cat = TagCategory.free;
-    final ctrl = TextEditingController();
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: Text('一括タグ付与（${mediaTargets.length}件）'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<TagCategory>(
-                value: cat,
-                items: TagCategory.values
-                    .map(
-                      (c) => DropdownMenuItem(
-                        value: c,
-                        child: Text(_categoryLabel(c)),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: (v) => cat = v ?? TagCategory.free,
-                decoration: const InputDecoration(
-                  labelText: 'カテゴリ',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'タグ名',
-                  hintText: '例: #漫画 / artist:xxx / series:xxx',
-                  border: OutlineInputBorder(),
-                ),
-                onSubmitted: (_) => Navigator.of(ctx).pop(true),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '空白を含むタグは不可です（検索の分解が崩れるため）',
-                style: TextStyle(fontSize: 12),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('キャンセル'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('付与'),
-            ),
-          ],
-        );
-      },
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => TagAssignAfterImportPage(
+          items: mediaTargets,
+          tagService: widget.tagService,
+          title: '一括タグ付与（${mediaTargets.length}件）',
+          applyLabel: '${mediaTargets.length}件にタグを付ける',
+        ),
+      ),
     );
 
-    if (ok != true) return;
-
-    final name = _normalizeTagName(ctrl.text);
-    if (name == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('タグが無効です（空白なしで入力してください）')));
+    if (changed != true || !mounted) {
       return;
     }
 
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-
     try {
-      await widget.tagService.addTagToItems(
-        mediaTargets,
-        Tag(name: name, category: cat),
-      );
-
       final got = await widget.tagService.getTagNamesByItems(mediaTargets);
       if (!mounted) return;
       setState(() {
@@ -5355,18 +5264,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
       });
       await _refreshCurrentPageTags();
+      await _refreshArtistTagCounts();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('「$name」を${mediaTargets.length}件に付与しました')),
+        SnackBar(content: Text('${mediaTargets.length}件にタグを付与しました')),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('一括タグ付けに失敗しました: $e')));
-    } finally {
-      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      ).showSnackBar(SnackBar(content: Text('タグ反映の更新に失敗しました: $e')));
     }
   }
 

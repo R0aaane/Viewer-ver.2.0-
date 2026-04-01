@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../database/tag_service.dart';
+import '../models/folder.dart';
+import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../models/tag_with_id.dart';
 import '../repository/mediaRepository.dart';
@@ -29,11 +31,13 @@ class _TagManagementPageState extends State<TagManagementPage> {
   TagCategory _category = TagCategory.artist;
   String _query = '';
   late Future<List<TagWithId>> _future;
+  late Future<_TagUsageIndex> _usageFuture;
 
   @override
   void initState() {
     super.initState();
     _future = _loadTags();
+    _usageFuture = _loadUsageIndex();
   }
 
   @override
@@ -50,16 +54,70 @@ class _TagManagementPageState extends State<TagManagementPage> {
     );
   }
 
+  Future<_TagUsageIndex> _loadUsageIndex() async {
+    final all = <MediaItem>[];
+    final seen = <String>{};
+
+    for (final folderRaw in widget.folderRaws) {
+      final loaded = await widget.repo.listMediaRecursiveFiles(FolderHandle(folderRaw));
+      for (final item in loaded) {
+        if (item.kind == MediaKind.folder) {
+          continue;
+        }
+        if (seen.add(item.id)) {
+          all.add(item);
+        }
+      }
+    }
+
+    if (all.isEmpty) {
+      return const _TagUsageIndex.empty();
+    }
+
+    widget.tagService.rememberItems(all);
+    final details = await widget.tagService.getDetailedTagsByItems(all);
+
+    final counts = <String, int>{};
+    final previews = <String, List<MediaItem>>{};
+
+    for (final item in all) {
+      final tags = details[item.id] ?? const <TagWithId>[];
+      final seenInItem = <String>{};
+      for (final entry in tags) {
+        final key = _usageKey(entry.tag.category, entry.tag.name);
+        if (!seenInItem.add(key)) {
+          continue;
+        }
+
+        counts[key] = (counts[key] ?? 0) + 1;
+        if (entry.tag.category == TagCategory.artist) {
+          final bucket = previews.putIfAbsent(key, () => <MediaItem>[]);
+          if (bucket.length < 3) {
+            bucket.add(item);
+          }
+        }
+      }
+    }
+
+    return _TagUsageIndex(counts: counts, artistPreviews: previews);
+  }
+
   Future<void> _refresh() async {
-    final next = _loadTags();
+    final nextTags = _loadTags();
+    final nextUsage = _loadUsageIndex();
     if (!mounted) {
-      _future = next;
+      _future = nextTags;
+      _usageFuture = nextUsage;
       return;
     }
     setState(() {
-      _future = next;
+      _future = nextTags;
+      _usageFuture = nextUsage;
     });
-    await next;
+    await Future.wait<void>(<Future<void>>[
+      nextTags.then((_) {}),
+      nextUsage.then((_) {}),
+    ]);
   }
 
   void _setCategory(TagCategory category) {
@@ -122,6 +180,7 @@ class _TagManagementPageState extends State<TagManagementPage> {
         ),
       ),
     );
+    await _refresh();
   }
 
   Future<void> _deleteTag(TagWithId entry) async {
@@ -179,6 +238,127 @@ class _TagManagementPageState extends State<TagManagementPage> {
     }
   }
 
+  String _usageKey(TagCategory category, String name) {
+    return '${category.name}\u0000${name.trim().toLowerCase()}';
+  }
+
+  Widget _buildPreviewThumb(MediaItem item) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: FutureBuilder<ThumbPair>(
+        future: widget.repo.readThumbPair(item, maxWidth: 180),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Container(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: const Icon(Icons.broken_image_outlined),
+            );
+          }
+          if (!snapshot.hasData) {
+            return Container(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
+          return Image.memory(
+            snapshot.data!.front,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildArtistPreview(
+    _TagUsageSummary summary,
+  ) {
+    if (summary.previewItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: [
+          for (final item in summary.previewItems)
+            SizedBox(
+              width: 110,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AspectRatio(
+                    aspectRatio: 3 / 4,
+                    child: _buildPreviewThumb(item),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    item.displayName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          if (summary.count > summary.previewItems.length)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '+${summary.count - summary.previewItems.length} 件',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTagCard(
+    TagWithId entry,
+    _TagUsageSummary summary, {
+    required bool usageReady,
+    required bool usageFailed,
+  }) {
+    final subtitle = usageReady
+        ? '${_categoryLabel(entry.tag.category)} · ${summary.count}件'
+        : usageFailed
+            ? '${_categoryLabel(entry.tag.category)} · 件数取得に失敗しました'
+            : '${_categoryLabel(entry.tag.category)} · 集計中...';
+
+    return SceneSurfaceCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          ListTile(
+            leading: CircleAvatar(
+              radius: 18,
+              child: Icon(_categoryIcon(entry.tag.category), size: 18),
+            ),
+            title: Text(entry.tag.name),
+            subtitle: Text(subtitle),
+            onTap: () => _openTagResults(entry),
+            trailing: IconButton(
+              tooltip: 'タグを削除',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () => _deleteTag(entry),
+            ),
+          ),
+          if (entry.tag.category == TagCategory.artist && usageReady)
+            _buildArtistPreview(summary),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final categories = TagCategory.values;
@@ -230,19 +410,19 @@ class _TagManagementPageState extends State<TagManagementPage> {
           Expanded(
             child: FutureBuilder<List<TagWithId>>(
               future: _future,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState != ConnectionState.done) {
+              builder: (context, tagSnapshot) {
+                if (tagSnapshot.connectionState != ConnectionState.done) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                if (snapshot.hasError) {
+                if (tagSnapshot.hasError) {
                   return SceneEmptyState(
                     icon: Icons.error_outline,
                     title: 'タグ一覧の読み込みに失敗しました',
-                    message: '${snapshot.error}',
+                    message: '${tagSnapshot.error}',
                   );
                 }
 
-                final items = snapshot.data ?? const <TagWithId>[];
+                final items = tagSnapshot.data ?? const <TagWithId>[];
                 if (items.isEmpty) {
                   return const SceneEmptyState(
                     icon: Icons.sell_outlined,
@@ -251,28 +431,29 @@ class _TagManagementPageState extends State<TagManagementPage> {
                   );
                 }
 
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                  itemCount: items.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final entry = items[index];
-                    return SceneSurfaceCard(
-                      padding: EdgeInsets.zero,
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          radius: 18,
-                          child: Icon(_categoryIcon(entry.tag.category), size: 18),
-                        ),
-                        title: Text(entry.tag.name),
-                        subtitle: Text(_categoryLabel(entry.tag.category)),
-                        onTap: () => _openTagResults(entry),
-                        trailing: IconButton(
-                          tooltip: 'タグを削除',
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _deleteTag(entry),
-                        ),
-                      ),
+                return FutureBuilder<_TagUsageIndex>(
+                  future: _usageFuture,
+                  builder: (context, usageSnapshot) {
+                    final usageIndex = usageSnapshot.data ?? const _TagUsageIndex.empty();
+                    final usageReady =
+                        usageSnapshot.connectionState == ConnectionState.done &&
+                        !usageSnapshot.hasError;
+                    final usageFailed = usageSnapshot.hasError;
+
+                    return ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                      itemCount: items.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final entry = items[index];
+                        final summary = usageIndex.summaryFor(entry.tag);
+                        return _buildTagCard(
+                          entry,
+                          summary,
+                          usageReady: usageReady,
+                          usageFailed: usageFailed,
+                        );
+                      },
                     );
                   },
                 );
@@ -283,4 +464,36 @@ class _TagManagementPageState extends State<TagManagementPage> {
       ),
     );
   }
+}
+
+class _TagUsageIndex {
+  final Map<String, int> counts;
+  final Map<String, List<MediaItem>> artistPreviews;
+
+  const _TagUsageIndex({
+    required this.counts,
+    required this.artistPreviews,
+  });
+
+  const _TagUsageIndex.empty()
+      : counts = const <String, int>{},
+        artistPreviews = const <String, List<MediaItem>>{};
+
+  _TagUsageSummary summaryFor(Tag tag) {
+    final key = '${tag.category.name}\u0000${tag.name.trim().toLowerCase()}';
+    return _TagUsageSummary(
+      count: counts[key] ?? 0,
+      previewItems: artistPreviews[key] ?? const <MediaItem>[],
+    );
+  }
+}
+
+class _TagUsageSummary {
+  final int count;
+  final List<MediaItem> previewItems;
+
+  const _TagUsageSummary({
+    required this.count,
+    required this.previewItems,
+  });
 }
