@@ -545,7 +545,22 @@ class TagService {
         remoteTagId = await _findRemoteMasterTagId(tag.tag);
       }
       if (client != null && remoteTagId != null) {
-        await client.deleteMasterTag(remoteTagId);
+        try {
+          await client.deleteMasterTag(remoteTagId);
+        } on MetadataException catch (error, stackTrace) {
+          final refreshedRemoteTagId = await _findRemoteMasterTagId(tag.tag);
+          if (refreshedRemoteTagId != null &&
+              refreshedRemoteTagId != remoteTagId) {
+            await client.deleteMasterTag(refreshedRemoteTagId);
+          } else if (!_isRemoteNotFoundError(error)) {
+            debugPrint(
+              '[host-mirror] delete master tag failed: '
+              'tag=${tag.tag.category.name}:${tag.tag.name} '
+              'remoteTagId=$remoteTagId error=$error\n$stackTrace',
+            );
+            rethrow;
+          }
+        }
       }
       await _localStore.deleteTagMaster(tag.tagId);
       _remoteTagIdLookup.remove(tag.tagId);
@@ -566,7 +581,11 @@ class TagService {
       await client.deleteMasterTag(remoteTagId);
     } on MetadataException catch (error, stackTrace) {
       final refreshedRemoteTagId = await _findRemoteMasterTagId(tag.tag);
-      if (refreshedRemoteTagId == null || refreshedRemoteTagId == remoteTagId) {
+      if (refreshedRemoteTagId != null &&
+          refreshedRemoteTagId != remoteTagId) {
+        remoteTagId = refreshedRemoteTagId;
+        await client.deleteMasterTag(remoteTagId);
+      } else if (!_isRemoteNotFoundError(error)) {
         debugPrint(
           '[metadata] delete master tag failed: '
           'tag=${tag.tag.category.name}:${tag.tag.name} '
@@ -574,8 +593,6 @@ class TagService {
         );
         rethrow;
       }
-      remoteTagId = refreshedRemoteTagId;
-      await client.deleteMasterTag(remoteTagId);
     }
     _remoteTagIdLookup.remove(tag.tagId);
     _remoteTagCache.clear();
@@ -597,6 +614,11 @@ class TagService {
       debugPrint('[metadata] resolve remote master tag id failed: $error\n$stackTrace');
     }
     return null;
+  }
+
+  bool _isRemoteNotFoundError(MetadataException error) {
+    final message = error.message.trim().toLowerCase();
+    return message.contains('not found') || message.contains('404');
   }
 
   Future<List<TagWithId>> listTagMasterByCategory(
