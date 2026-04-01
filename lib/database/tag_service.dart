@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -544,22 +544,39 @@ class TagService {
       if (client != null && remoteTagId == null) {
         remoteTagId = await _findRemoteMasterTagId(tag.tag);
       }
+      if (client != null && remoteTagId != null) {
+        await client.deleteMasterTag(remoteTagId);
+      }
       await _localStore.deleteTagMaster(tag.tagId);
       _remoteTagIdLookup.remove(tag.tagId);
       _remoteTagCache.clear();
-      if (client != null && remoteTagId != null) {
-        final resolvedRemoteTagId = remoteTagId;
-        await _runHostMirror(() => client.deleteMasterTag(resolvedRemoteTagId));
-      }
       return;
     }
 
-    final remoteTagId = _remoteTagIdLookup[tag.tagId];
+    var remoteTagId = _remoteTagIdLookup[tag.tagId];
+    if (remoteTagId == null) {
+      remoteTagId = await _findRemoteMasterTagId(tag.tag);
+    }
     if (remoteTagId == null) {
       throw const MetadataException('タグ ID を解決できないため、削除できません');
     }
 
-    await _requireApiClient().deleteMasterTag(remoteTagId);
+    final client = _requireApiClient();
+    try {
+      await client.deleteMasterTag(remoteTagId);
+    } on MetadataException catch (error, stackTrace) {
+      final refreshedRemoteTagId = await _findRemoteMasterTagId(tag.tag);
+      if (refreshedRemoteTagId == null || refreshedRemoteTagId == remoteTagId) {
+        debugPrint(
+          '[metadata] delete master tag failed: '
+          'tag=${tag.tag.category.name}:${tag.tag.name} '
+          'remoteTagId=$remoteTagId error=$error\n$stackTrace',
+        );
+        rethrow;
+      }
+      remoteTagId = refreshedRemoteTagId;
+      await client.deleteMasterTag(remoteTagId);
+    }
     _remoteTagIdLookup.remove(tag.tagId);
     _remoteTagCache.clear();
   }
@@ -590,6 +607,13 @@ class TagService {
     await initialize();
 
     if (!isRemoteMode) {
+      if (isHostMode) {
+        await _syncHostMirrorMasterTags(
+          category,
+          contains: contains,
+          limit: limit,
+        );
+      }
       return _localStore.listTagMasterByCategory(
         category,
         contains: contains,
@@ -614,7 +638,11 @@ class TagService {
     await initialize();
 
     if (!isRemoteMode) {
-      return _localStore.listTagsByCategory(category);
+      if (!isHostMode) {
+        return _localStore.listTagsByCategory(category);
+      }
+      final masters = await listTagMasterByCategory(category, limit: 500);
+      return masters.map((entry) => entry.tag).toList(growable: false);
     }
 
     final masters = await listTagMasterByCategory(category, limit: 500);
@@ -881,6 +909,59 @@ class TagService {
     }
   }
 
+  Future<void> _syncHostMirrorMasterTags(
+    TagCategory category, {
+    String? contains,
+    int limit = 200,
+  }) async {
+    final client = _hostMirrorClient;
+    if (client == null) {
+      return;
+    }
+
+    final trimmedContains = contains?.trim();
+    final shouldPrune = trimmedContains == null || trimmedContains.isEmpty;
+    final fetchLimit = shouldPrune ? 1000 : limit.clamp(1, 1000);
+
+    try {
+      final remoteTags = await client.fetchMasterTags(
+        category,
+        contains: trimmedContains,
+        limit: fetchLimit,
+      );
+      final remoteKeys = <String>{};
+
+      for (final entry in remoteTags) {
+        final key = _tagLookupKey(entry.tag);
+        if (key == null) {
+          continue;
+        }
+        remoteKeys.add(key);
+        final localId = await _localStore.ensureTagId(entry.tag);
+        _remoteTagIdLookup[localId] = entry.rawId;
+      }
+
+      if (!shouldPrune) {
+        return;
+      }
+
+      final localTags = await _localStore.listTagMasterByCategory(
+        category,
+        limit: fetchLimit,
+      );
+      for (final localTag in localTags) {
+        final key = _tagLookupKey(localTag.tag);
+        if (key == null || remoteKeys.contains(key)) {
+          continue;
+        }
+        await _localStore.deleteTagMaster(localTag.tagId);
+        _remoteTagIdLookup.remove(localTag.tagId);
+      }
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[host-mirror] master tag sync failed: $error\n$stackTrace');
+    }
+  }
+
   Future<void> _mirrorHostRename(MediaItem before, MediaItem after) async {
     final client = _hostMirrorClient;
     if (client == null) {
@@ -1011,7 +1092,9 @@ class TagService {
       debugPrint(
         '[metadata] resolve item identity failed: ${item.id}\n$error\n$stackTrace',
       );
-      throw MetadataException('メディア識別子の解決に失敗しました: ${item.displayName}');
+      throw MetadataException(
+        'メディア識別情報の解決に失敗しました: ${item.displayName}',
+      );
     }
     final cached = _remoteTagCache[identity.stableId];
     if (cached != null) {
