@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import os
 import posixpath
@@ -46,18 +46,18 @@ def request_rescan(
             logger.info("[rescan] request target=%s", target)
             scanned = index_service.scan_folder(target)
             logger.info("[rescan] completed target=%s scanned=%s", target, scanned)
-            return MessageResponse(message=f"蜀阪せ繧ｭ繝｣繝ｳ縺悟ｮ御ｺ・＠縺ｾ縺励◆: {scanned} 莉ｶ")
+            return MessageResponse(message=f"Rescan completed: {scanned} items")
 
         logger.info("[rescan] request configured_roots=%s", settings.media_roots)
         results = index_service.rescan_configured_roots(settings.media_roots)
         total = sum(int(entry["count"]) for entry in results)
         logger.info("[rescan] completed configured_roots total=%s details=%s", total, results)
-        return MessageResponse(message=f"蜀阪せ繧ｭ繝｣繝ｳ縺悟ｮ御ｺ・＠縺ｾ縺励◆: {total} 莉ｶ")
+        return MessageResponse(message=f"Rescan completed: {total} items")
     except ApiError:
         raise
     except Exception as error:
         logger.exception("[rescan] unexpected failure target=%s roots=%s", target or None, settings.media_roots)
-        raise server_error(f"蜀阪せ繧ｭ繝｣繝ｳ縺ｫ螟ｱ謨励＠縺ｾ縺励◆: {error}") from error
+        raise server_error(f"Rescan failed: {error}") from error
 
 
 @router.post("/upload")
@@ -94,12 +94,12 @@ async def upload_files(
         len(files),
     )
     if not files:
-        raise bad_request("?????????????????????????????????")
+        raise bad_request("No files were provided for upload")
 
     settings = request.app.state.settings
     folder_path = os.path.normpath(folderRaw)
     if not os.path.isdir(folder_path):
-        raise bad_request(f"???????????????????????: {folderRaw}")
+        raise bad_request(f"Destination folder does not exist: {folderRaw}")
     if settings.media_roots and not any(_is_inside_root(folder_path, root) for root in settings.media_roots):
         raise bad_request("folderRaw must be inside configured media roots")
 
@@ -122,7 +122,7 @@ async def upload_files(
         )
         raise
     if source_relative_paths and len(source_relative_paths) != len(files):
-        raise bad_request("sourceRelativePathsJson ?????????????????????????????")
+        raise bad_request("sourceRelativePathsJson length must match files")
 
     try:
         original_display_names = _parse_json_string_list(
@@ -143,7 +143,7 @@ async def upload_files(
         )
         raise
     if original_display_names and len(original_display_names) != len(files):
-        raise bad_request("originalDisplayNamesJson ?????????????????????????????")
+        raise bad_request("originalDisplayNamesJson length must match files")
 
     try:
         file_tag_groups = _parse_json_tag_groups(fileTagsJson, field_name="fileTagsJson")
@@ -201,7 +201,7 @@ async def upload_files(
             continue
 
         if not is_supported_media_extension(normalized_extension(file_name)):
-            raise bad_request(f"????????????????????? {file_name}")
+            raise bad_request(f"Unsupported media file type: {file_name}")
 
         destination = os.path.join(folder_path, file_name)
         if os.path.exists(destination):
@@ -311,7 +311,7 @@ async def upload_files(
 
         if unresolved_paths and (has_any_tags or organizeAfterImport):
             failed_name = os.path.basename(unresolved_paths[0])
-            raise bad_request(f"?????????????????????????????????: {failed_name}")
+            raise bad_request(f"Failed to resolve media identity after save: {failed_name}")
 
         for media_id, merged_tags in resolved_entries:
             if not merged_tags:
@@ -402,14 +402,14 @@ async def download_url(
         convert_hitomi_to_pdf=payload.convertHitomiToPdf,
     )
     if not options.has_any_source(source_url):
-        raise bad_request("URL?URL ??????????????????????????")
+        raise bad_request("Provide a URL, URL list file, or favorites condition")
 
     settings = request.app.state.settings
     folder_path = os.path.normpath(payload.folderRaw)
     if not os.path.isdir(folder_path):
-        raise bad_request(f"??????????????: {payload.folderRaw}")
+        raise bad_request(f"Destination folder does not exist: {payload.folderRaw}")
     if settings.media_roots and not any(_is_inside_root(folder_path, root) for root in settings.media_roots):
-        raise bad_request("?????????????????????")
+        raise bad_request("folderRaw must be inside configured media roots")
 
     before_paths = _collect_media_paths(folder_path)
 
@@ -474,7 +474,7 @@ async def download_url(
 
         if unresolved_paths and (has_any_tags or payload.organizeAfterImport):
             failed_name = os.path.basename(unresolved_paths[0])
-            raise bad_request(f"???????????????????: {failed_name}")
+            raise bad_request(f"Failed to resolve media identity after save: {failed_name}")
 
         for media_id, merged_tags in resolved_entries:
             if not merged_tags:
@@ -511,7 +511,7 @@ def apply_rename(request: Request, payload: RenameRequest) -> MessageResponse:
         old_path=payload.oldPath or (before.path if before else None),
         new_path=payload.newPath or (after.path if after else None),
     )
-    return MessageResponse(message="繝ｪ繝阪・繝縺励∪縺励◆")
+    return MessageResponse(message="Rename completed")
 
 
 @router.post("/delete", response_model=MessageResponse)
@@ -531,7 +531,7 @@ def apply_delete(request: Request, payload: DeleteRequest) -> MessageResponse:
         items=items,
         hard_delete=payload.hardDelete,
     )
-    return MessageResponse(message=f"蜑企勁縺励∪縺励◆ ({deleted} 莉ｶ)")
+    return MessageResponse(message=f"Deleted {deleted} items")
 
 
 def _normalize_upload_request_id(raw: str | None) -> str:
@@ -689,15 +689,15 @@ def _parse_json_string_list(
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise bad_request(f"{field_name} 縺ｯ JSON 驟榊・縺ｧ謖・ｮ壹＠縺ｦ縺上□縺輔＞") from error
+        raise bad_request(f"{field_name} must be a JSON array") from error
 
     if not isinstance(value, list):
-        raise bad_request(f"{field_name} 縺ｯ譁・ｭ怜・驟榊・縺ｧ謖・ｮ壹＠縺ｦ縺上□縺輔＞")
+        raise bad_request(f"{field_name} must be a JSON array")
 
     out: list[str] = []
     for entry in value:
         if not isinstance(entry, str):
-            raise bad_request(f"{field_name} 縺ｮ蜷・ｦ∫ｴ縺ｯ譁・ｭ怜・縺ｧ縺ゅｋ蠢・ｦ√′縺ゅｊ縺ｾ縺・)
+            raise bad_request(f"Each entry in {field_name} must be a string")
         trimmed = entry.strip()
         if trimmed or preserve_empty:
             out.append(trimmed)
