@@ -61,6 +61,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   bool _isFavorite = false;
   bool _favChanged = false;
+  bool _itemChanged = false;
 
   // tag・医ち繧ｰ・・
   List<TagWithId> _tags = const [];
@@ -91,11 +92,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   MediaItem get _item => _items[_index];
   bool get _isPdf => _item.kind == MediaKind.pdf;
-  bool get _canRenameCurrentItem =>
-      _isPdf && widget.repo.capabilities.canRename;
+  bool get _canRenameCurrentItem => widget.repo.capabilities.canRename;
 
   void _popWithResult() {
-    Navigator.of(context).pop(_favChanged || _tagsChanged);
+    Navigator.of(context).pop(_favChanged || _tagsChanged || _itemChanged);
   }
 
   static const _uiBg = Color(0xFF0F0F10);
@@ -495,25 +495,25 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
-  Future<void> _renameCurrentPdf() async {
+  Future<void> _renameCurrentItem() async {
     final item = _item;
-    if (item.kind != MediaKind.pdf) return;
-
-    final base = item.displayName.toLowerCase().endsWith('.pdf')
-        ? item.displayName.substring(0, item.displayName.length - 4)
-        : item.displayName;
+    final base = _displayNameWithoutExtension(item);
 
     final ctrl = TextEditingController(text: base);
+    final kindLabel = item.kind == MediaKind.pdf ? 'PDF' : '画像';
+    final hintText = item.kind == MediaKind.pdf
+        ? '拡張子 .pdf は不要です'
+        : '拡張子はそのまま維持されます';
 
     final newBase = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('PDF 名を変更'),
+        title: Text('$kindLabel名を変更'),
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '拡張子 .pdf は不要です',
+          decoration: InputDecoration(
+            hintText: hintText,
             border: OutlineInputBorder(),
           ),
         ),
@@ -540,11 +540,23 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       } catch (e) {
         metadataWarning = 'メタデータの更新に失敗しました: $e';
       }
+      final prefs = await SharedPreferences.getInstance();
+      final favorites = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+          .toSet();
+      if (favorites.remove(item.id)) {
+        favorites.add(updated.id);
+        await prefs.setStringList(
+          _PrefsKeys.favorites,
+          favorites.toList(growable: false),
+        );
+      }
       if (!mounted) return;
 
       setState(() {
         _items[_index] = updated;
+        _isFavorite = favorites.contains(updated.id);
       });
+      _itemChanged = true;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('名前を変更しました: ${updated.displayName}')),
@@ -562,6 +574,19 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     } finally {
       ctrl.dispose();
     }
+  }
+
+  String _displayNameWithoutExtension(MediaItem item) {
+    if (item.kind == MediaKind.pdf &&
+        item.displayName.toLowerCase().endsWith('.pdf')) {
+      return item.displayName.substring(0, item.displayName.length - 4);
+    }
+
+    final dot = item.displayName.lastIndexOf('.');
+    if (dot <= 0 || dot == item.displayName.length - 1) {
+      return item.displayName;
+    }
+    return item.displayName.substring(0, dot);
   }
 
   Future<void> _toggleFullscreen() async {
@@ -1112,9 +1137,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     ),
                     if (_canRenameCurrentItem)
                       IconButton(
-                        tooltip: 'PDF 名を変更',
+                        tooltip: '名前を変更',
                         icon: const Icon(Icons.edit, color: Colors.white),
-                        onPressed: _renameCurrentPdf,
+                        onPressed: _renameCurrentItem,
                       ),
                   ],
                 ),

@@ -141,6 +141,10 @@ class RemoteTagApiClient {
     return rows.map(_parseRemoteTagRecord).toList(growable: false);
   }
 
+  Future<void> deleteMasterTag(String tagId) async {
+    await _deleteJson('/tags/master/${Uri.encodeComponent(tagId)}');
+  }
+
   Future<Set<String>> searchItemIds({
     String? artist,
     String? series,

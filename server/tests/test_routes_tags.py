@@ -1,15 +1,16 @@
-﻿from types import SimpleNamespace
+from types import SimpleNamespace
 import unittest
 
 from starlette.datastructures import QueryParams
 
-from server.api.routes_tags import get_tags_for_item
+from server.api.routes_tags import delete_master_tag, get_tags_for_item
 
 
 class _RecordingMetadataStore:
     def __init__(self) -> None:
         self.resolve_calls: list[dict[str, object | None]] = []
         self.get_tag_calls: list[dict[str, object | None]] = []
+        self.deleted_tag_ids: list[str] = []
 
     def resolve_media_id(
         self,
@@ -28,6 +29,10 @@ class _RecordingMetadataStore:
     ) -> list[dict[str, str]]:
         self.get_tag_calls.append({'media_id': media_id, 'identity': identity})
         return [{'tagId': 'artist:1', 'name': 'Artist', 'category': 'artist'}]
+
+    def delete_tag_master(self, tag_id: str) -> int:
+        self.deleted_tag_ids.append(tag_id)
+        return 1
 
 
 def _request(query: str, metadata_store: _RecordingMetadataStore):
@@ -61,6 +66,15 @@ class TagsRoutesTest(unittest.TestCase):
         self.assertEqual(identity['sizeBytes'], 12)
         self.assertEqual(identity['modifiedEpochMs'], 1234)
         self.assertEqual(identity['aliases'], [r'C:\library\sample.jpg'])
+
+    def test_delete_master_tag_forwards_to_metadata_store(self) -> None:
+        store = _RecordingMetadataStore()
+        request = _request('', store)
+
+        response = delete_master_tag(request, 'artist:123')
+
+        self.assertTrue(response['ok'])
+        self.assertEqual(store.deleted_tag_ids, ['artist:123'])
 
 
 if __name__ == '__main__':

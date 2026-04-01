@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sqlite3
 import threading
@@ -311,6 +311,20 @@ class SqliteStore:
                 """
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_tag_master(self, tag_id: str) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            row = cur.execute(
+                "SELECT * FROM tag_master WHERE tag_id = ?",
+                (tag_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_tag_master(self, tag_id: str) -> int:
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM media_tag_links WHERE tag_id = ?", (tag_id,))
+            result = cur.execute("DELETE FROM tag_master WHERE tag_id = ?", (tag_id,))
+        return int(result.rowcount or 0)
 
     def list_tags_for_media(self, media_id: str) -> list[dict[str, Any]]:
         with self._cursor() as cur:

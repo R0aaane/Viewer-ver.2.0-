@@ -160,6 +160,23 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
             {('free', 'bonus')},
         )
 
+    def test_delete_tag_master_removes_links_from_all_media(self) -> None:
+        self.store.add_tags_to_media(
+            self.media_id_1,
+            [{'category': 'artist', 'name': 'Artist A'}],
+        )
+        self.store.add_tags_to_media(
+            self.media_id_2,
+            [{'category': 'artist', 'name': 'Artist A'}],
+        )
+        tag_id = self.sqlite.list_tag_master()[0]['tag_id']
+
+        deleted = self.store.delete_tag_master(str(tag_id))
+
+        self.assertEqual(deleted, 1)
+        self.assertEqual(self._master_tags(), set())
+        self.assertEqual(self._media_tags(self.media_id_1), set())
+        self.assertEqual(self._media_tags(self.media_id_2), set())
 
     def test_apply_delete_removes_folder_and_marks_descendants_deleted(self) -> None:
         folder = self.library_dir / 'artist-folder'

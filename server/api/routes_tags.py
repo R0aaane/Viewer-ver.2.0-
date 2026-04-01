@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
@@ -79,6 +79,12 @@ def get_tags_for_item(request: Request, media_id: str) -> ItemTagsResponse:
         identity=identity,
     )
     return ItemTagsResponse(mediaId=resolved_media_id, items=items)
+
+
+@router.delete("/tags/master/{tag_id}")
+def delete_master_tag(request: Request, tag_id: str):
+    deleted = request.app.state.metadata_store.delete_tag_master(tag_id)
+    return {"ok": True, "message": f"deleted {deleted} tag(s)"}
 
 
 @router.post("/tags/item/{media_id}", response_model=AddItemTagsResponse)

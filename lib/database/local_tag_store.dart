@@ -128,6 +128,15 @@ class LocalTagStore {
         .go();
   }
 
+  Future<void> deleteTagMaster(int tagId) async {
+    await _db.transaction(() async {
+      await (_db.delete(_db.mediaItemTags)
+            ..where((table) => table.tagId.equals(tagId)))
+          .go();
+      await (_db.delete(_db.tags)..where((table) => table.tagId.equals(tagId))).go();
+    });
+  }
+
   Future<void> deleteItemsByIds(List<String> ids) async {
     if (ids.isEmpty) {
       return;

@@ -1195,7 +1195,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         throw Exception('rename: parent dir not found: ${item.folderRaw}');
       }
 
-      final fixedName = _ensurePdfName(newDisplayName);
+      final fixedName = _ensureDisplayName(item, newDisplayName);
       final d = src as dynamic;
 
       DocumentFile? moved;
@@ -1238,10 +1238,16 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     });
   }
 
-  String _ensurePdfName(String name) {
+  String _ensureDisplayName(MediaItem item, String name) {
     final n = name.trim();
-    if (n.isEmpty) return 'export.pdf';
-    return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
+    if (n.isEmpty) return item.displayName;
+    if (item.kind == MediaKind.pdf) {
+      return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
+    }
+
+    final ext = _lowerExt(item.displayName);
+    if (ext.isEmpty) return n;
+    return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
   }
 
  Future<List<_SafEntry>> _safListRecursive(

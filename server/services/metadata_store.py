@@ -185,6 +185,12 @@ class MetadataStore:
 
         return filtered
 
+    def delete_tag_master(self, tag_id: str) -> int:
+        existing = self._db.get_tag_master(tag_id)
+        if existing is None:
+            raise not_found("ƒ^ƒO‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
+        return self._db.delete_tag_master(tag_id)
+
     def resolve_media_record(
         self,
         media_id: str | None,

@@ -23,6 +23,7 @@ import 'artistTagIndex.dart';
 import 'detailImage.dart';
 import 'metadata_settings_dialog.dart';
 import 'TagResults.dart';
+import 'tag_management_page.dart';
 import 'url_import_dialog.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
@@ -34,6 +35,7 @@ enum _HomeMenuAction {
   importToLibrary,
   importUrlToLibrary,
   artistTagIndex,
+  tagManagement,
   metadataSettings,
   refreshFavorites,
   openSearchGallery,
@@ -45,6 +47,7 @@ enum _GalleryMenuAction {
   importUrl,
   exportPdf,
   organizeLibrary,
+  tagManagement,
   folderTileMode,
   metadataSettings,
   goHome,
@@ -110,7 +113,7 @@ enum _RegisteredFolderRemovalAction {
   deleteFiles,
 }
 
-enum _ThumbTileMenuAction { deleteItem }
+enum _ThumbTileMenuAction { renameItem, deleteItem }
 
 class _UrlImportQueueEntry {
   final String id;
@@ -2056,6 +2059,123 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return true;
   }
 
+  bool _canRenameItem(MediaItem item) {
+    return widget.repo.capabilities.canRename && item.kind != MediaKind.folder;
+  }
+
+  String _renameDialogLabel(MediaItem item) {
+    return item.kind == MediaKind.pdf ? 'PDF' : '画像';
+  }
+
+  String _displayNameWithoutExtension(MediaItem item) {
+    if (item.kind == MediaKind.pdf &&
+        item.displayName.toLowerCase().endsWith('.pdf')) {
+      return item.displayName.substring(0, item.displayName.length - 4);
+    }
+
+    final dot = item.displayName.lastIndexOf('.');
+    if (dot <= 0 || dot == item.displayName.length - 1) {
+      return item.displayName;
+    }
+    return item.displayName.substring(0, dot);
+  }
+
+  Future<void> _replaceFavoriteId(String oldId, String newId) async {
+    if (oldId == newId) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final next = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+        .toSet();
+    if (!next.remove(oldId)) {
+      return;
+    }
+    next.add(newId);
+    await prefs.setStringList(
+      _PrefsKeys.favorites,
+      next.toList(growable: false),
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() => _favorites = next);
+  }
+
+  Future<void> _renameItemFromList(MediaItem item) async {
+    if (!_canRenameItem(item)) {
+      return;
+    }
+
+    final ctrl = TextEditingController(text: _displayNameWithoutExtension(item));
+    final hintText = item.kind == MediaKind.pdf
+        ? '拡張子 .pdf は不要です'
+        : '拡張子はそのまま維持されます';
+
+    final newBase = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('${_renameDialogLabel(item)}名を変更'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: hintText,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(ctrl.text.trim()),
+              child: const Text('変更'),
+            ),
+          ],
+        );
+      },
+    );
+
+    ctrl.dispose();
+    if (newBase == null || newBase.isEmpty) {
+      return;
+    }
+
+    try {
+      final updated = await widget.repo.rename(item, newBase);
+      String? metadataWarning;
+      try {
+        await widget.tagService.handleItemRenamed(item, updated);
+      } catch (error) {
+        metadataWarning = 'メタデータの更新に失敗しました: $error';
+      }
+
+      await _replaceFavoriteId(item.id, updated.id);
+      await _refreshVisibleContent();
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('名前を変更しました: ${updated.displayName}')),
+      );
+      if (metadataWarning != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(metadataWarning)),
+        );
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('名前の変更に失敗しました: $error')),
+      );
+    }
+  }
+
   String _itemDeletionTypeLabel(MediaItem item) {
     switch (item.kind) {
       case MediaKind.pdf:
@@ -3537,6 +3657,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
   // ---- AppBar overflow menus ----
+  Future<void> _openTagManagementPage() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TagManagementPage(
+          tagService: widget.tagService,
+          repo: widget.repo,
+          folderRaws: _foldersRaw,
+        ),
+      ),
+    );
+    await _reloadArtistTagMasters();
+    await _refreshCurrentPageTags();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   Future<void> _onHomeMenuSelected(_HomeMenuAction action) async {
     switch (action) {
       case _HomeMenuAction.addFolder:
@@ -3559,6 +3697,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
           ),
         );
+        return;
+      case _HomeMenuAction.tagManagement:
+        await _openTagManagementPage();
         return;
       case _HomeMenuAction.metadataSettings:
         await _openMetadataSettings();
@@ -3604,6 +3745,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           return;
         }
         _organizeLibrary();
+        return;
+      case _GalleryMenuAction.tagManagement:
+        await _openTagManagementPage();
         return;
       case _GalleryMenuAction.folderTileMode:
         await _showFolderTileModeDialog();
@@ -3661,6 +3805,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   ? 'アーティストタグ一覧'
                   : 'アーティストタグ一覧（未対応）',
             ),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _HomeMenuAction.tagManagement,
+          child: ListTile(
+            leading: Icon(Icons.sell_outlined),
+            title: Text('タグ管理'),
           ),
         ),
         const PopupMenuItem(
@@ -3745,6 +3896,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   ? 'ライブラリ整理（作家・シリーズ）'
                   : 'ライブラリ整理（未対応）',
             ),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _GalleryMenuAction.tagManagement,
+          child: ListTile(
+            leading: Icon(Icons.sell_outlined),
+            title: Text('タグ管理'),
           ),
         ),
         const PopupMenuItem(
@@ -5377,6 +5535,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         onToggleFavorite: () => _toggleFavorite(item),
         selected: isSelected,
         folderTileMode: _folderTileMode,
+        canRenameItem: !_selectMode && _canRenameItem(item),
+        onRenameItem: () => _renameItemFromList(item),
         canDeleteItem: !_selectMode && _canDeleteItem(item),
         onDeleteItem: () => _deleteItemFromList(item),
       ),
@@ -5486,6 +5646,8 @@ class _ThumbTile extends StatelessWidget {
   final VoidCallback onToggleFavorite;
   final bool selected;
   final FolderTileMode folderTileMode;
+  final bool canRenameItem;
+  final VoidCallback? onRenameItem;
   final bool canDeleteItem;
   final VoidCallback? onDeleteItem;
 
@@ -5497,6 +5659,8 @@ class _ThumbTile extends StatelessWidget {
     required this.onToggleFavorite,
     this.selected = false,
     required this.folderTileMode,
+    this.canRenameItem = false,
+    this.onRenameItem,
     this.canDeleteItem = false,
     this.onDeleteItem,
   });
@@ -5526,7 +5690,8 @@ class _ThumbTile extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (canDeleteItem && onDeleteItem != null) ...[
+                if ((canRenameItem && onRenameItem != null) ||
+                    (canDeleteItem && onDeleteItem != null)) ...[
                   _buildDeleteMenuButton(),
                   const SizedBox(width: 4),
                 ],
@@ -5581,7 +5746,8 @@ class _ThumbTile extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (canDeleteItem && onDeleteItem != null) ...[
+                if ((canRenameItem && onRenameItem != null) ||
+                    (canDeleteItem && onDeleteItem != null)) ...[
                   _buildDeleteMenuButton(),
                   const SizedBox(width: 4),
                 ],
@@ -5639,7 +5805,8 @@ class _ThumbTile extends StatelessWidget {
                   isFavorite: isFavorite,
                   onPressed: onToggleFavorite,
                 ),
-                if (canDeleteItem && onDeleteItem != null) ...[
+                if ((canRenameItem && onRenameItem != null) ||
+                    (canDeleteItem && onDeleteItem != null)) ...[
                   const SizedBox(width: 4),
                   _buildDeleteMenuButton(),
                 ],
@@ -5668,22 +5835,34 @@ class _ThumbTile extends StatelessWidget {
 
   Widget _buildDeleteMenuButton() {
     return PopupMenuButton<_ThumbTileMenuAction>(
-      tooltip: '削除メニュー',
+      tooltip: 'アイテムメニュー',
       padding: EdgeInsets.zero,
       icon: const Icon(Icons.more_vert, size: 18),
       onSelected: (action) {
+        if (action == _ThumbTileMenuAction.renameItem) {
+          onRenameItem!.call();
+        }
         if (action == _ThumbTileMenuAction.deleteItem) {
           onDeleteItem!.call();
         }
       },
-      itemBuilder: (context) => const [
-        PopupMenuItem(
-          value: _ThumbTileMenuAction.deleteItem,
-          child: ListTile(
-            leading: Icon(Icons.delete_outline),
-            title: Text('削除'),
+      itemBuilder: (context) => [
+        if (canRenameItem && onRenameItem != null)
+          const PopupMenuItem(
+            value: _ThumbTileMenuAction.renameItem,
+            child: ListTile(
+              leading: Icon(Icons.edit_outlined),
+              title: Text('名前を変更'),
+            ),
           ),
-        ),
+        if (canDeleteItem && onDeleteItem != null)
+          const PopupMenuItem(
+            value: _ThumbTileMenuAction.deleteItem,
+            child: ListTile(
+              leading: Icon(Icons.delete_outline),
+              title: Text('削除'),
+            ),
+          ),
       ],
     );
   }

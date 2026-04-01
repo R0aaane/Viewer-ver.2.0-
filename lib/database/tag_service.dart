@@ -535,6 +535,52 @@ class TagService {
     _remoteTagCache.remove(identity.stableId);
   }
 
+  Future<void> deleteTagMaster(TagWithId tag) async {
+    await initialize();
+
+    if (!isRemoteMode) {
+      String? remoteTagId = _remoteTagIdLookup[tag.tagId];
+      final client = _hostMirrorClient;
+      if (client != null && remoteTagId == null) {
+        remoteTagId = await _findRemoteMasterTagId(tag.tag);
+      }
+      await _localStore.deleteTagMaster(tag.tagId);
+      _remoteTagIdLookup.remove(tag.tagId);
+      _remoteTagCache.clear();
+      if (client != null && remoteTagId != null) {
+        await _runHostMirror(() => client.deleteMasterTag(remoteTagId));
+      }
+      return;
+    }
+
+    final remoteTagId = _remoteTagIdLookup[tag.tagId];
+    if (remoteTagId == null) {
+      throw const MetadataException('タグ ID を解決できないため、削除できません');
+    }
+
+    await _requireApiClient().deleteMasterTag(remoteTagId);
+    _remoteTagIdLookup.remove(tag.tagId);
+    _remoteTagCache.clear();
+  }
+
+  Future<String?> _findRemoteMasterTagId(Tag tag) async {
+    try {
+      final matches = await _requireApiClient().fetchMasterTags(
+        tag.category,
+        contains: tag.name,
+        limit: 500,
+      );
+      for (final entry in matches) {
+        if (entry.tag.category == tag.category && entry.tag.name == tag.name) {
+          return entry.rawId;
+        }
+      }
+    } on MetadataException catch (error, stackTrace) {
+      debugPrint('[metadata] resolve remote master tag id failed: $error\n$stackTrace');
+    }
+    return null;
+  }
+
   Future<List<TagWithId>> listTagMasterByCategory(
     TagCategory category, {
     String? contains,
