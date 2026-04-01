@@ -517,9 +517,11 @@ class RemoteMediaRepository implements MediaRepository {
   @override
   Future<FolderHandle> getAppLibraryFolder() async {
     final folders = await listAvailableFolders();
-    return folders.isNotEmpty
-        ? folders.first
-        : const FolderHandle('remote://library');
+    final preferred = _pickRemoteLibraryFolder(folders);
+    return preferred ??
+        (folders.isNotEmpty
+            ? folders.first
+            : const FolderHandle('remote://library'));
   }
 
   @override
@@ -621,12 +623,64 @@ class RemoteMediaRepository implements MediaRepository {
       );
     }
 
+    final resolvedFolder = await _resolveUrlImportFolder(folder);
     return _client.downloadUrl(
-      folderRaw: folder.raw,
+      folderRaw: resolvedFolder.raw,
       sourceUrl: trimmedUrl,
       importMetadata: importMetadata,
       options: effectiveOptions,
     );
+  }
+
+  Future<FolderHandle> _resolveUrlImportFolder(FolderHandle folder) async {
+    final raw = folder.raw.trim();
+    if (raw.isEmpty || raw == 'remote://library') {
+      return getAppLibraryFolder();
+    }
+    return folder;
+  }
+
+  FolderHandle? _pickRemoteLibraryFolder(Iterable<FolderHandle> folders) {
+    for (final folder in folders) {
+      if (_looksLikeRemoteLibraryFolder(folder.raw)) {
+        return folder;
+      }
+    }
+    return null;
+  }
+
+  bool _looksLikeRemoteLibraryFolder(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty || trimmed == 'remote://library') {
+      return false;
+    }
+
+    final normalized = trimmed.replaceAll('\\', '/');
+    final slashParts = normalized
+        .split('/')
+        .where((entry) => entry.trim().isNotEmpty)
+        .toList(growable: false);
+    final candidates = <String>{
+      _basenameOrSelf(_winPath, trimmed),
+      _basenameOrSelf(_posixPath, trimmed),
+      if (slashParts.isNotEmpty) slashParts.last,
+    };
+
+    for (final candidate in candidates) {
+      if (candidate.trim().toLowerCase() == 'library') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _basenameOrSelf(p.Context context, String raw) {
+    try {
+      final base = context.basename(raw).trim();
+      return base.isEmpty ? raw.trim() : base;
+    } on ArgumentError {
+      return raw.trim();
+    }
   }
 
 

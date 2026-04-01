@@ -148,6 +148,10 @@ void main() {
   group('RemoteMediaRepository.importFromUrlIntoFolder', () {
     test('forwards the URL import request to the host API', () async {
       final apiClient = _FakeRemoteMediaApiClient();
+      apiClient.availableFolders = const <FolderHandle>[
+        FolderHandle(r'D:\other'),
+        FolderHandle(r'C:\host\library'),
+      ];
       final repository = RemoteMediaRepository(
         apiClient: apiClient,
         idResolver: _FakeMediaIdResolver(),
@@ -179,6 +183,32 @@ void main() {
       expect(apiClient.lastDownloadUrlMetadata?.characterTags, const <String>['heroine']);
       expect(apiClient.lastDownloadUrlMetadata?.targetCollection, 'library');
       expect(apiClient.lastDownloadUrlMetadata?.organizeAfterImport, isTrue);
+    });
+
+    test('uses the host library folder for library URL imports', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      apiClient.availableFolders = const <FolderHandle>[
+        FolderHandle(r'D:\archive'),
+        FolderHandle(r'C:\Users\Host\Documents\library'),
+        FolderHandle(r'E:\misc'),
+      ];
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: const _StubMediaRepository(),
+      );
+
+      final library = await repository.getAppLibraryFolder();
+      await repository.importFromUrlIntoFolder(
+        library,
+        'https://kemono.su/patreon/user/123/post/456',
+      );
+
+      expect(library.raw, r'C:\Users\Host\Documents\library');
+      expect(
+        apiClient.lastDownloadUrlFolderRaw,
+        r'C:\Users\Host\Documents\library',
+      );
     });
   });
   group('RemoteMediaRepository.importItemsIntoFolder', () {
@@ -347,6 +377,7 @@ class _RenameCall {
 }
 
 class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
+  List<FolderHandle> availableFolders = const <FolderHandle>[];
   final Map<String, List<RemoteFolderEntry>> folderEntriesByFolder =
       <String, List<RemoteFolderEntry>>{};
   final List<_RenameCall> renameCalls = <_RenameCall>[];
@@ -369,6 +400,9 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
       onRename;
 
   _FakeRemoteMediaApiClient() : super(baseUrl: 'http://example.com');
+
+  @override
+  Future<List<FolderHandle>> listAvailableFolders() async => availableFolders;
 
   @override
   Future<void> renameMedia({
