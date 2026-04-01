@@ -548,7 +548,8 @@ class TagService {
       _remoteTagIdLookup.remove(tag.tagId);
       _remoteTagCache.clear();
       if (client != null && remoteTagId != null) {
-        await _runHostMirror(() => client.deleteMasterTag(remoteTagId));
+        final resolvedRemoteTagId = remoteTagId;
+        await _runHostMirror(() => client.deleteMasterTag(resolvedRemoteTagId));
       }
       return;
     }
