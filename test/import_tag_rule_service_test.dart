@@ -5,11 +5,11 @@ import 'package:pdf_viewer/services/import_tag_rule_service.dart';
 
 void main() {
   group('ImportTagRuleService', () {
-    test('infers hitomi and artist tags for generated pdf context', () {
+    test('infers hitomi artist and series tags for generated pdf context', () {
       final inferred = ImportTagRuleService.inferForGeneratedPdf(
-        sourceFolderRaw: r'C:\library\hitomi\[12345] ArtistName',
-        sourceFolderLabel: '[12345] ArtistName',
-        generatedFileName: 'sample.pdf',
+        sourceFolderRaw: r'C:\library\hitomi\[12345] ArtistName\[20241105] [3114110] Sample Title',
+        sourceFolderLabel: '[20241105] [3114110] Sample Title',
+        generatedFileName: '[20241105] [3114110] Sample Title.pdf',
         libraryRootRaw: r'C:\library',
       );
 
@@ -17,6 +17,14 @@ void main() {
         inferred.tags.any(
           (tag) =>
               tag.category == TagCategory.artist && tag.name == 'ArtistName',
+        ),
+        isTrue,
+      );
+      expect(
+        inferred.tags.any(
+          (tag) =>
+              tag.category == TagCategory.series &&
+              tag.name == 'Sample Title',
         ),
         isTrue,
       );
@@ -47,11 +55,11 @@ void main() {
       );
     });
 
-    test('infers artist and mediaType for imported pdf path', () {
+    test('infers artist series and mediaType for imported pdf path', () {
       final inferred = ImportTagRuleService.inferForImportedItem(
-        itemPath: r'C:\library\hitomi\[12345] ArtistName\sample.pdf',
+        itemPath: r'C:\library\hitomi\[12345] ArtistName\[20241105] [3114110] Sample Title.pdf',
         rootFolderRaw: r'C:\library',
-        displayName: 'sample.pdf',
+        displayName: '[20241105] [3114110] Sample Title.pdf',
         sourceUrls: const <String>['https://hitomi.la/reader/123456.html'],
       );
 
@@ -59,6 +67,14 @@ void main() {
         inferred.tags.any(
           (tag) =>
               tag.category == TagCategory.artist && tag.name == 'ArtistName',
+        ),
+        isTrue,
+      );
+      expect(
+        inferred.tags.any(
+          (tag) =>
+              tag.category == TagCategory.series &&
+              tag.name == 'Sample Title',
         ),
         isTrue,
       );

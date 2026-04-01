@@ -136,6 +136,16 @@ class ImportTagRuleService {
         mediaTypeTags.add(entry.value);
       }
     }
+    final isHitomiContext = mediaTypeTags.contains('hitomi');
+    final seriesTag = _inferSeriesTagFromParts(
+      segments,
+      relativePathHint: relativePathHint,
+      isHitomiContext: isHitomiContext,
+      artistTag: artistTag,
+    );
+    if (seriesTag != null) {
+      out.add(Tag(name: seriesTag, category: TagCategory.series));
+    }
     final sortedMediaTypeTags = mediaTypeTags.toList(growable: false)..sort();
     for (final name in sortedMediaTypeTags) {
       out.add(Tag(name: name, category: TagCategory.mediaType));
@@ -296,6 +306,35 @@ class ImportTagRuleService {
     return null;
   }
 
+  static String? _inferSeriesTagFromParts(
+    List<String> parts, {
+    required String? relativePathHint,
+    required bool isHitomiContext,
+    String? artistTag,
+  }) {
+    if (!isHitomiContext) {
+      return null;
+    }
+
+    final serviceIndexes = <int>[];
+    for (var i = 0; i < parts.length; i++) {
+      if (_isServiceSegment(parts[i])) {
+        serviceIndexes.add(i);
+      }
+    }
+
+    final startIndex = serviceIndexes.isEmpty ? 0 : serviceIndexes.last + 1;
+    for (var i = startIndex + 1; i < parts.length; i++) {
+      final candidate = _cleanSeriesTagCandidate(parts[i], artistTag: artistTag);
+      if (candidate != null) {
+        return candidate;
+      }
+    }
+
+    final fileStem = _relativeFileStem(relativePathHint);
+    return _cleanSeriesTagCandidate(fileStem, artistTag: artistTag);
+  }
+
   static String? _cleanArtistTagCandidate(String segment) {
     var cleaned = segment.trim();
     cleaned = cleaned.replaceAll(_bracketedDigits, ' ');
@@ -314,6 +353,51 @@ class ImportTagRuleService {
       return null;
     }
     return cleaned;
+  }
+
+  static String? _cleanSeriesTagCandidate(
+    String? segment, {
+    String? artistTag,
+  }) {
+    if (segment == null) {
+      return null;
+    }
+
+    final cleaned = _cleanArtistTagCandidate(segment);
+    if (cleaned == null) {
+      return null;
+    }
+
+    final loweredArtist = artistTag?.trim().toLowerCase();
+    if (loweredArtist != null && loweredArtist.isNotEmpty) {
+      if (cleaned.toLowerCase() == loweredArtist) {
+        return null;
+      }
+    }
+    return cleaned;
+  }
+
+  static String? _relativeFileStem(String? relativePathHint) {
+    final raw = (relativePathHint ?? '').trim();
+    if (raw.isEmpty) {
+      return null;
+    }
+
+    final parts = raw
+        .split(RegExp(r'[\\/]+'))
+        .map((segment) => segment.trim())
+        .where((segment) => segment.isNotEmpty)
+        .toList(growable: false);
+    if (parts.isEmpty) {
+      return null;
+    }
+
+    final fileName = parts.last;
+    final dot = fileName.lastIndexOf('.');
+    if (dot <= 0) {
+      return fileName;
+    }
+    return fileName.substring(0, dot);
   }
 
   static bool _isServiceSegment(String segment) {

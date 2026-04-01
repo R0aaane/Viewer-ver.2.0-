@@ -4194,9 +4194,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       final isArtist = tag.category == TagCategory.artist;
+      final isSeries = tag.category == TagCategory.series;
       final isHitomiMediaType = tag.category == TagCategory.mediaType &&
           normalizedName.toLowerCase() == 'hitomi';
-      if (!isArtist && !isHitomiMediaType) {
+      if (!isArtist && !isSeries && !isHitomiMediaType) {
         continue;
       }
 

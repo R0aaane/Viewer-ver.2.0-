@@ -277,7 +277,7 @@ void main() {
     );
 
     test(
-      'prefers generated hitomi pdf and attaches inferred artist tags during fallback upload',
+      'prefers generated hitomi pdf and attaches inferred artist and series tags during fallback upload',
       () async {
         final apiClient = _FakeRemoteMediaApiClient()
           ..downloadUrlError = const RemoteMediaException(
@@ -299,12 +299,19 @@ void main() {
 
         expect(result.importedCount, 1);
         expect(apiClient.lastUploadFiles, hasLength(1));
-        expect(apiClient.lastUploadFiles.single.fileName, 'sample.pdf');
+        expect(
+          apiClient.lastUploadFiles.single.fileName,
+          '[20241105] [3114110] Sample Title.pdf',
+        );
         expect(
           apiClient.lastUploadFiles.single.tags
               .map((tag) => '${tag.category.name}:${tag.name}')
               .toSet(),
-          containsAll(<String>{'artist:ArtistName', 'mediaType:hitomi'}),
+          containsAll(<String>{
+            'artist:ArtistName',
+            'series:Sample Title',
+            'mediaType:hitomi',
+          }),
         );
       },
     );
@@ -657,14 +664,14 @@ class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
     lastImportedUrl = sourceUrl;
     if (createHitomiPdfBundle) {
       final galleryDir = Directory(
-        '${folder.raw}${Platform.pathSeparator}hitomi${Platform.pathSeparator}[12345] ArtistName${Platform.pathSeparator}sample',
+        '${folder.raw}${Platform.pathSeparator}hitomi${Platform.pathSeparator}[12345] ArtistName${Platform.pathSeparator}[20241105] [3114110] Sample Title',
       );
       await galleryDir.create(recursive: true);
       await File(
         '${galleryDir.path}${Platform.pathSeparator}001.jpg',
       ).writeAsBytes(<int>[1, 2, 3], flush: true);
       await File(
-        '${galleryDir.parent.path}${Platform.pathSeparator}sample.pdf',
+        '${galleryDir.parent.path}${Platform.pathSeparator}[20241105] [3114110] Sample Title.pdf',
       ).writeAsBytes(<int>[37, 80, 68, 70], flush: true);
     } else {
       final file = File('${folder.raw}${Platform.pathSeparator}downloaded.jpg');

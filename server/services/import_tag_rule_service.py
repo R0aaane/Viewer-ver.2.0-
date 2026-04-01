@@ -69,6 +69,16 @@ def build_inferred_import_tags(
     if artist_tag is not None:
         tags.append({"category": "artist", "name": artist_tag})
 
+    is_hitomi_context = "hitomi" in media_type_tag_names
+    series_tag = _infer_series_tag_from_parts(
+        path_segments,
+        relative_path=relative_path,
+        is_hitomi_context=is_hitomi_context,
+        artist_tag=artist_tag,
+    )
+    if series_tag is not None:
+        tags.append({"category": "series", "name": series_tag})
+
     for tag_name in sorted(media_type_tag_names):
         tags.append({"category": "mediaType", "name": tag_name})
     return tags
@@ -120,6 +130,63 @@ def _clean_artist_tag_candidate(segment: str) -> str | None:
     return cleaned
 
 
+def _infer_series_tag_from_parts(
+    parts: list[str],
+    *,
+    relative_path: str | None,
+    is_hitomi_context: bool,
+    artist_tag: str | None,
+) -> str | None:
+    if not is_hitomi_context:
+        return None
+
+    service_indexes = [
+        index for index, segment in enumerate(parts) if _is_service_segment(segment)
+    ]
+    start_index = service_indexes[-1] + 1 if service_indexes else 0
+
+    for index in range(start_index + 1, len(parts)):
+        candidate = _clean_series_tag_candidate(parts[index], artist_tag=artist_tag)
+        if candidate is not None:
+            return candidate
+
+    return _clean_series_tag_candidate(
+        _relative_file_stem(relative_path),
+        artist_tag=artist_tag,
+    )
+
+
+def _clean_series_tag_candidate(
+    segment: str | None,
+    *,
+    artist_tag: str | None,
+) -> str | None:
+    if segment is None:
+        return None
+
+    cleaned = _clean_artist_tag_candidate(segment)
+    if cleaned is None:
+        return None
+
+    if artist_tag and cleaned.casefold() == artist_tag.strip().casefold():
+        return None
+    return cleaned
+
+
+def _relative_file_stem(relative_path: str | None) -> str | None:
+    raw = (relative_path or "").strip()
+    if not raw:
+        return None
+
+    parts = [part.strip() for part in re.split(r"[\\/]+", raw) if part.strip()]
+    if not parts:
+        return None
+
+    file_name = parts[-1]
+    stem, _, _ = file_name.rpartition(".")
+    return stem or file_name
+
+
 def _is_service_segment(segment: str) -> bool:
     lowered = segment.strip().casefold()
     if not lowered:
@@ -144,8 +211,9 @@ def filter_hitomi_pdf_auto_tags(
 
         lowered_name = name.casefold()
         is_artist = category == "artist"
+        is_series = category == "series"
         is_hitomi_media_type = category == "mediaType" and lowered_name == "hitomi"
-        if not is_artist and not is_hitomi_media_type:
+        if not is_artist and not is_series and not is_hitomi_media_type:
             continue
 
         if is_hitomi_media_type:

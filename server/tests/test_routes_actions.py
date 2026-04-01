@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import os
 import tempfile
@@ -265,7 +265,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_rename(request, payload)
 
-        self.assertEqual(response.message, '繝ｪ繝阪・繝縺励∪縺励◆')
+        self.assertEqual(response.message, 'Rename completed')
         self.assertEqual(
             store.rename_calls,
             [
@@ -299,7 +299,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = apply_delete(request, payload)
 
-        self.assertEqual(response.message, '蜑企勁縺励∪縺励◆ (2 莉ｶ)')
+        self.assertEqual(response.message, 'Deleted 2 items')
         self.assertEqual(len(store.delete_calls), 1)
         self.assertTrue(store.delete_calls[0]['hard_delete'])
         self.assertEqual(len(store.delete_calls[0]['items']), 2)
@@ -323,7 +323,7 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = request_rescan(request)
 
-        self.assertEqual(response.message, '蜀阪せ繧ｭ繝｣繝ｳ縺悟ｮ御ｺ・＠縺ｾ縺励◆: 3 莉ｶ')
+        self.assertEqual(response.message, 'Rescan completed: 3 items')
         self.assertEqual(index_service.rescan_calls, [[r'C:\library', r'D:\books']])
         self.assertEqual(index_service.scan_calls, [r'C:\library', r'D:\books'])
 
@@ -351,7 +351,7 @@ class ActionsRoutesTest(unittest.TestCase):
             request_rescan(request)
 
         self.assertEqual(context.exception.status_code, 500)
-        self.assertEqual(context.exception.detail, '蜀阪せ繧ｭ繝｣繝ｳ縺ｫ螟ｱ謨励＠縺ｾ縺励◆: db locked')
+        self.assertEqual(context.exception.detail, '髯ｷﾂ鬮ｦ・ｪ邵ｺ蟶ｷ・ｹ・ｧ繝ｻ・ｭ驛｢譎｢・ｽ・｣驛｢譎｢・ｽ・ｳ驍ｵ・ｺ繝ｻ・ｫ髯樊ｻゑｽｽ・ｱ髫ｰ・ｨ陷会ｽｱ繝ｻ・ｰ驍ｵ・ｺ繝ｻ・ｾ驍ｵ・ｺ陷会ｽｱ隨ｳ繝ｻ db locked')
 
     def test_upload_files_applies_tags_and_organizes_imported_media(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -555,7 +555,7 @@ class ActionsRoutesTest(unittest.TestCase):
                 media_roots=[temp_dir],
             )
             upload = _FakeUploadFile('upload_001_deadbeef.pdf', b'%PDF-1.4')
-            original_name = '縺ゅ＞縺・∴縺垣貍｢蟄玲ｷｷ蝨ｨ.pdf'
+            original_name = '驍ｵ・ｺ郢ｧ繝ｻ・ｼ讓抵ｽｸ・ｺ郢晢ｽｻ遶擾ｽｴ驍ｵ・ｺ陜呻ｽ｣髮区誓・ｽ・｢髯昴・霆ｸ繝ｻ・ｷ繝ｻ・ｷ髯懶ｽｨ繝ｻ・ｨ.pdf'
 
             response = asyncio.run(
                 upload_files(
@@ -583,7 +583,7 @@ class ActionsRoutesTest(unittest.TestCase):
                 media_roots=[temp_dir],
             )
             upload = _FakeUploadFile('upload_001_cafebabe.png', b'png')
-            original_name = '繝・せ繝育判蜒・png'
+            original_name = '驛｢譏ｴ繝ｻ邵ｺ蟶ｷ・ｹ譎√＃陋ｻ・､髯ｷ蛛ｵ繝ｻpng'
 
             response = asyncio.run(
                 upload_files(
@@ -595,7 +595,7 @@ class ActionsRoutesTest(unittest.TestCase):
                         ensure_ascii=False,
                     ),
                     sourceRelativePathsJson=json.dumps(
-                        ['譌･譛ｬ隱槭ヵ繧ｩ繝ｫ繝/繝・せ繝育判蜒・png'],
+                        ['髫ｴ魃会ｽｽ・･髫ｴ蟷｢・ｽ・ｬ鬮ｫ・ｱ隶抵ｽｭ郢晢ｽｵ驛｢・ｧ繝ｻ・ｩ驛｢譎｢・ｽ・ｫ驛｢謨鳴/驛｢譏ｴ繝ｻ邵ｺ蟶ｷ・ｹ譎√＃陋ｻ・､髯ｷ蛛ｵ繝ｻpng'],
                         ensure_ascii=False,
                     ),
                     files=[upload],
@@ -674,11 +674,11 @@ class ActionsRoutesTest(unittest.TestCase):
 
             def _create_downloaded_file(_: str, destination_folder: str) -> None:
                 artist_dir = os.path.join(destination_folder, 'hitomi', '[12345] ArtistName')
-                gallery_dir = os.path.join(artist_dir, 'sample')
+                gallery_dir = os.path.join(artist_dir, '[20241105] [3114110] Sample Title')
                 os.makedirs(gallery_dir, exist_ok=True)
                 with open(os.path.join(gallery_dir, '001.jpg'), 'wb') as handle:
                     handle.write(b'jpg')
-                with open(os.path.join(artist_dir, 'sample.pdf'), 'wb') as handle:
+                with open(os.path.join(artist_dir, '[20241105] [3114110] Sample Title.pdf'), 'wb') as handle:
                     handle.write(b'%PDF-1.4')
 
             downloader = _FakeUrlDownloadService(
@@ -707,13 +707,14 @@ class ActionsRoutesTest(unittest.TestCase):
             self.assertEqual(response.organizedCount, 0)
             self.assertEqual(response.rescannedCount, 1)
             self.assertEqual(index_service.scan_calls, [temp_dir])
-            self.assertTrue(os.path.exists(os.path.join(temp_dir, 'sample.pdf')))
-            self.assertFalse(os.path.exists(os.path.join(temp_dir, 'sample', '001.jpg')))
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, '[20241105] [3114110] Sample Title.pdf')))
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, '[20241105] [3114110] Sample Title', '001.jpg')))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, 'hitomi')))
             self.assertEqual(
                 metadata_store.add_tag_calls[0]['tags'],
                 [
                     {'category': 'artist', 'name': 'ArtistName'},
+                    {'category': 'series', 'name': 'Sample Title'},
                     {'category': 'mediaType', 'name': 'hitomi'},
                 ],
             )
