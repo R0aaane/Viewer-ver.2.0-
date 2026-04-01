@@ -624,12 +624,54 @@ class RemoteMediaRepository implements MediaRepository {
     }
 
     final resolvedFolder = await _resolveUrlImportFolder(folder);
-    return _client.downloadUrl(
-      folderRaw: resolvedFolder.raw,
-      sourceUrl: trimmedUrl,
-      importMetadata: importMetadata,
-      options: effectiveOptions,
-    );
+    try {
+      return await _client.downloadUrl(
+        folderRaw: resolvedFolder.raw,
+        sourceUrl: trimmedUrl,
+        importMetadata: importMetadata,
+        options: effectiveOptions,
+      );
+    } on RemoteMediaException catch (error, stackTrace) {
+      if (!_shouldFallbackToClientUrlImport(error)) {
+        rethrow;
+      }
+      debugPrint(
+        '[URL-IMPORT][REMOTE] host downloader unavailable, falling back to '
+        'client staging upload folder=${resolvedFolder.raw} url=$trimmedUrl '
+        'error=${error.message}',
+      );
+      debugPrintStack(
+        label: '[URL-IMPORT][REMOTE] host fallback trigger stack',
+        stackTrace: stackTrace,
+      );
+      try {
+        return await _importFromUrlViaClientStaging(
+          resolvedFolder,
+          trimmedUrl,
+          importMetadata: importMetadata,
+          options: effectiveOptions,
+          onProgress: onProgress,
+        );
+      } on Exception catch (fallbackError, fallbackStackTrace) {
+        debugPrint(
+          '[URL-IMPORT][REMOTE] client staging fallback failed '
+          'folder=${resolvedFolder.raw} url=$trimmedUrl hostError=${error.message} '
+          'fallbackError=$fallbackError',
+        );
+        debugPrintStack(
+          label: '[URL-IMPORT][REMOTE] client staging fallback stack',
+          stackTrace: fallbackStackTrace,
+        );
+        final fallbackMessage = fallbackError is RemoteMediaException
+            ? fallbackError.message
+            : fallbackError.toString();
+        throw RemoteMediaException(
+          'ホスト側の URL 取り込みが利用できなかったためクライアント側へフォールバックしましたが、'
+          'ホストへの取り込みに失敗しました。'
+          ' host=${error.message} fallback=$fallbackMessage',
+        );
+      }
+    }
   }
 
   Future<FolderHandle> _resolveUrlImportFolder(FolderHandle folder) async {
@@ -638,6 +680,78 @@ class RemoteMediaRepository implements MediaRepository {
       return getAppLibraryFolder();
     }
     return folder;
+  }
+
+  bool _shouldFallbackToClientUrlImport(RemoteMediaException error) {
+    final lower = error.message.toLowerCase();
+    return lower.contains("no module named 'requests'") ||
+        lower.contains('modulenotfounderror') && lower.contains('requests') ||
+        lower.contains('module not found') && lower.contains('requests') ||
+        lower.contains("no module named 'bs4'") ||
+        lower.contains('modulenotfounderror') && lower.contains('bs4') ||
+        lower.contains('beautifulsoup4') ||
+        lower.contains('url 取り込みに必要な依存') ||
+        lower.contains('url取り込みに必要な依存');
+  }
+
+  Future<UrlImportResult> _importFromUrlViaClientStaging(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    required UrlImportOptions options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    final stagingDir = await Directory.systemTemp.createTemp(
+      'remote_url_import_',
+    );
+    try {
+      final localResult = await _localPickerRepository.importFromUrlIntoFolder(
+        FolderHandle(stagingDir.path),
+        sourceUrl,
+        options: options,
+        onProgress: onProgress,
+      );
+      final stagedItems = await _localPickerRepository.listMediaRecursiveFiles(
+        FolderHandle(stagingDir.path),
+      );
+      final uploadItems = stagedItems
+          .where((item) => item.kind != MediaKind.folder)
+          .toList(growable: false);
+      if (uploadItems.isEmpty) {
+        return localResult;
+      }
+
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: uploadItems.length,
+          totalBytes: uploadItems.length,
+          completedFiles: 0,
+          totalFiles: uploadItems.length,
+          statusLabel: 'ダウンロード済みファイルをホストへ転送しています',
+        ),
+      );
+
+      final importedCount = await importItemsIntoFolder(
+        folder,
+        uploadItems,
+        importMetadata: importMetadata,
+        skipIfExists: !options.overwriteExistingFiles,
+        onProgress: onProgress,
+      );
+      final uploadSkipCount =
+          (uploadItems.length - importedCount).clamp(0, uploadItems.length).toInt();
+      return UrlImportResult(
+        importedCount: importedCount,
+        skippedCount: localResult.skippedCount + uploadSkipCount,
+        failedCount: localResult.failedCount,
+      );
+    } finally {
+      if (await stagingDir.exists()) {
+        try {
+          await stagingDir.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
   }
 
   FolderHandle? _pickRemoteLibraryFolder(Iterable<FolderHandle> folders) {

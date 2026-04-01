@@ -210,6 +210,47 @@ void main() {
         r'C:\Users\Host\Documents\library',
       );
     });
+
+    test(
+      'falls back to client staging upload when the host downloader lacks requests',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient()
+          ..downloadUrlError = const RemoteMediaException(
+            "[stderr] ModuleNotFoundError: No module named 'requests'",
+          );
+        final localRepository = _RecordingLocalUrlImportRepository();
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: localRepository,
+        );
+        final metadata = ImportMetadata(
+          artistTag: 'Artist',
+          targetCollection: 'library',
+        );
+
+        final result = await repository.importFromUrlIntoFolder(
+          const FolderHandle(r'C:\Users\Host\Documents\library'),
+          'https://kemono.su/patreon/user/123/post/456',
+          importMetadata: metadata,
+        );
+
+        expect(apiClient.lastDownloadUrlFolderRaw, r'C:\Users\Host\Documents\library');
+        expect(
+          localRepository.lastImportedUrl,
+          'https://kemono.su/patreon/user/123/post/456',
+        );
+        expect(localRepository.lastImportedFolderRaw, isNotEmpty);
+        expect(result.importedCount, 1);
+        expect(result.skippedCount, 0);
+        expect(result.failedCount, 0);
+        expect(apiClient.lastUploadFolderRaw, r'C:\Users\Host\Documents\library');
+        expect(apiClient.lastUploadMetadata?.artistTag, 'Artist');
+        expect(apiClient.lastUploadMetadata?.targetCollection, 'library');
+        expect(apiClient.lastUploadFiles, hasLength(1));
+        expect(apiClient.lastUploadFiles.single.fileName, 'downloaded.jpg');
+      },
+    );
   });
   group('RemoteMediaRepository.importItemsIntoFolder', () {
     test('forwards import metadata to the upload api', () async {
@@ -395,6 +436,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
 
   Object? renameError;
   Object? deleteError;
+  Object? downloadUrlError;
   bool markDeletedOnDelete = true;
   void Function(MediaItem afterItem, ResolvedMediaIdentity afterIdentity)?
       onRename;
@@ -491,6 +533,10 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
     lastDownloadUrl = sourceUrl;
     lastDownloadUrlMetadata = importMetadata;
     lastDownloadUrlOptions = options;
+    final error = downloadUrlError;
+    if (error != null) {
+      throw error;
+    }
     return const UrlImportResult(importedCount: 3, skippedCount: 1);
   }
   @override
@@ -527,6 +573,57 @@ class _FakeMediaIdResolver extends MediaIdResolver {
   @override
   void forget(MediaItem item) {
     forgotten.add(item.id);
+  }
+}
+
+class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
+  String? lastImportedFolderRaw;
+  String? lastImportedUrl;
+
+  @override
+  bool get canImportFromUrl => true;
+
+  @override
+  Future<UrlImportResult> importFromUrlIntoFolder(
+    FolderHandle folder,
+    String sourceUrl, {
+    ImportMetadata? importMetadata,
+    UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    lastImportedFolderRaw = folder.raw;
+    lastImportedUrl = sourceUrl;
+    final file = File('${folder.raw}${Platform.pathSeparator}downloaded.jpg');
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(<int>[1, 2, 3], flush: true);
+    return const UrlImportResult(importedCount: 1);
+  }
+
+  @override
+  Future<List<MediaItem>> listMediaRecursiveFiles(
+    FolderHandle folder, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final file = File('${folder.raw}${Platform.pathSeparator}downloaded.jpg');
+    if (!await file.exists()) {
+      return const <MediaItem>[];
+    }
+    final stat = await file.stat();
+    return <MediaItem>[
+      MediaItem(
+        id: file.path,
+        displayName: 'downloaded.jpg',
+        kind: MediaKind.image,
+        folderRaw: folder.raw,
+        modified: stat.modified,
+        sizeBytes: stat.size,
+      ),
+    ];
+  }
+
+  @override
+  Future<Uint8List> readBytes(MediaItem item) async {
+    return File(item.id).readAsBytes();
   }
 }
 
