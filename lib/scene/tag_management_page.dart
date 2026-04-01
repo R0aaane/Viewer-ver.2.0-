@@ -56,7 +56,9 @@ class _TagManagementPageState extends State<TagManagementPage> {
       _future = next;
       return;
     }
-    setState(() => _future = next);
+    setState(() {
+      _future = next;
+    });
     await next;
   }
 
