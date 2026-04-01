@@ -154,7 +154,7 @@ class MetadataStore:
     def get_media(self, media_id: str) -> dict[str, Any]:
         row = self._db.get_media_record(media_id)
         if row is None:
-            raise not_found("ƒƒfƒBƒA‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
+            raise not_found("ãƒ¡ãƒ‡ã‚£ã‚¢ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“")
         return self._row_to_media_dict(row)
 
     def list_tag_master(
@@ -188,7 +188,7 @@ class MetadataStore:
     def delete_tag_master(self, tag_id: str) -> int:
         existing = self._db.get_tag_master(tag_id)
         if existing is None:
-            raise not_found("ƒ^ƒO‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
+            raise not_found("ã‚¿ã‚°ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“")
         return self._db.delete_tag_master(tag_id)
 
     def resolve_media_record(
@@ -223,7 +223,7 @@ class MetadataStore:
             if record is not None:
                 return record
 
-        raise not_found("ƒƒfƒBƒA‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
+        raise not_found("ãƒ¡ãƒ‡ã‚£ã‚¢ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“")
 
     def resolve_media_id(
         self,
@@ -539,15 +539,15 @@ class MetadataStore:
         new_path: str | None,
     ) -> dict[str, Any]:
         if not old_path and not old_media_id:
-            raise bad_request("oldPath ‚Ü‚½‚Í oldMediaId ‚ª•K—v‚Å‚·")
+            raise bad_request("oldPath ã¾ãŸã¯ oldMediaId ãŒå¿…è¦ã§ã™")
         if not new_path and not new_media_id:
-            raise bad_request("newPath ‚Ü‚½‚Í newMediaId ‚ª•K—v‚Å‚·")
+            raise bad_request("newPath ã¾ãŸã¯ newMediaId ãŒå¿…è¦ã§ã™")
 
         current = self._db.get_media_record(old_media_id) if old_media_id else None
         if current is None and old_path:
             current = self._db.get_media_record_by_path(old_path)
         if current is None:
-            raise not_found("ƒŠƒl[ƒ€‘ÎÛ‚ÌƒƒfƒBƒA‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ")
+            raise not_found("ãƒªãƒãƒ¼ãƒ å¯¾è±¡ã®ãƒ¡ãƒ‡ã‚£ã‚¢ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“")
 
         old_full_path = os.path.normpath(old_path or current["full_path"])
         target_full_path = os.path.normpath(new_path or current["full_path"])
