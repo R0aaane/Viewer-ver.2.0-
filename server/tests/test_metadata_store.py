@@ -232,6 +232,104 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertEqual(deleted, 1)
         self.assertFalse(folder.exists())
 
+    def test_apply_rename_renames_folder_and_updates_descendant_records(self) -> None:
+        folder = self.library_dir / 'artist-folder'
+        folder.mkdir()
+        nested = folder / 'nested.jpg'
+        nested.write_bytes(b'test')
+        media_id = build_media_id(
+            kind='image',
+            full_path=str(nested),
+            folder_raw=str(folder),
+            display_name='nested.jpg',
+            size_bytes=4,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                'media_id': media_id,
+                'folder_raw': str(folder),
+                'relative_hint': 'nested.jpg',
+                'display_name': 'nested.jpg',
+                'full_path': str(nested),
+                'normalized_full_path': str(nested).replace('/', '\\').casefold(),
+                'kind': 'image',
+                'mime_type': 'image/jpeg',
+                'size_bytes': 4,
+                'modified_at': None,
+                'modified_epoch_ms': 1,
+                'etag': None,
+                'is_deleted': 0,
+            }
+        )
+
+        renamed_folder = self.library_dir / 'artist-folder-renamed'
+        result = self.store.apply_rename(
+            old_media_id=None,
+            new_media_id=None,
+            old_path=str(folder),
+            new_path=str(renamed_folder),
+        )
+
+        self.assertEqual(result['fullPath'], str(renamed_folder))
+        self.assertFalse(folder.exists())
+        self.assertTrue(renamed_folder.exists())
+        self.assertIsNone(self.sqlite.get_media_record(media_id))
+        updated = self.sqlite.get_media_record_by_path(str(renamed_folder / 'nested.jpg'))
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated['folder_raw'], str(renamed_folder))
+
+    def test_organize_media_by_tags_skips_duplicate_target_without_suffix_copy(self) -> None:
+        source = self.library_dir / 'sample.pdf'
+        source.write_bytes(b'source')
+        source_media_id = build_media_id(
+            kind='pdf',
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name='sample.pdf',
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                'media_id': source_media_id,
+                'folder_raw': str(self.library_dir),
+                'relative_hint': 'sample.pdf',
+                'display_name': 'sample.pdf',
+                'full_path': str(source),
+                'normalized_full_path': str(source).replace('/', '\\').casefold(),
+                'kind': 'pdf',
+                'mime_type': 'application/pdf',
+                'size_bytes': 6,
+                'modified_at': None,
+                'modified_epoch_ms': 1,
+                'etag': None,
+                'is_deleted': 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [{'category': 'artist', 'name': 'Conflict Artist'}],
+        )
+
+        conflict_dir = self.library_dir / '作者別' / 'Conflict Artist'
+        conflict_dir.mkdir(parents=True)
+        conflict_path = conflict_dir / 'sample.pdf'
+        conflict_path.write_bytes(b'other')
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        self.assertEqual(moved, {})
+        self.assertTrue(source.exists())
+        self.assertTrue(conflict_path.exists())
+        self.assertFalse((conflict_dir / 'sample (1).pdf').exists())
+        record = self.sqlite.get_media_record(source_media_id)
+        self.assertIsNotNone(record)
+        self.assertEqual(record['full_path'], str(source))
+
 if __name__ == '__main__':
     unittest.main()
 

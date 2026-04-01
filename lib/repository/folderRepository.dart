@@ -13,12 +13,14 @@ import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../services/item_name_service.dart';
 import '../services/import_source_normalizer.dart';
+import '../services/local_path_operation_service.dart';
 import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
 /// ------------------------------
-/// LRU 繝｡繝｢繝ｪ繧ｭ繝｣繝・す繝･・亥ｮｹ驥・莉ｶ謨ｰ蛻ｶ髯撰ｼ・/// ------------------------------
+/// LRU 郢晢ｽ｡郢晢ｽ｢郢晢ｽｪ郢ｧ・ｭ郢晢ｽ｣郢昴・縺咏ｹ晢ｽ･繝ｻ莠･・ｮ・ｹ鬩･繝ｻ闔会ｽｶ隰ｨ・ｰ陋ｻ・ｶ鬮ｯ謦ｰ・ｼ繝ｻ/// ------------------------------
 class _LruCache<K, V> {
   final int maxBytes;
   final int maxEntries;
@@ -36,7 +38,7 @@ class _LruCache<K, V> {
   V? get(K key) {
     final v = _map.remove(key);
     if (v == null) return null;
-    // 繧｢繧ｯ繧ｻ繧ｹ縺輔ｌ縺溘ｂ縺ｮ繧呈忰蟆ｾ縺ｸ
+    // 郢ｧ・｢郢ｧ・ｯ郢ｧ・ｻ郢ｧ・ｹ邵ｺ霈費ｽ檎ｸｺ貅假ｽらｸｺ・ｮ郢ｧ蜻亥ｿｰ陝・ｽｾ邵ｺ・ｸ
     _map[key] = v;
     return v;
   }
@@ -54,7 +56,7 @@ class _LruCache<K, V> {
   }
 
   void _evictIfNeeded() {
-    // 件数 or 容量を満たすまで古いものから捨てる
+    // 莉ｶ謨ｰ or 螳ｹ驥上ｒ貅縺溘☆縺ｾ縺ｧ蜿､縺・ｂ縺ｮ縺九ｉ謐ｨ縺ｦ繧・
     while (_map.isNotEmpty && (_map.length > maxEntries || _bytes > maxBytes)) {
       final oldestKey = _map.keys.first;
       final oldestVal = _map.remove(oldestKey)!;
@@ -134,10 +136,10 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   // ------------------------------
-  // 繧ｵ繝繝阪う繝ｫ・壹Γ繝｢繝ｪLRU繧ｭ繝｣繝・す繝･
+  // 郢ｧ・ｵ郢晢｣ｰ郢晞亂縺・ｹ晢ｽｫ繝ｻ螢ｹﾎ鍋ｹ晢ｽ｢郢晢ｽｪLRU郢ｧ・ｭ郢晢ｽ｣郢昴・縺咏ｹ晢ｽ･
   // ------------------------------
-  // 逶ｮ螳・ 64MB / 譛螟ｧ400莉ｶ
-  // （どちらか先に達したら古いものから破棄）
+  // 騾ｶ・ｮ陞ｳ繝ｻ 64MB / 隴崢陞滂ｽｧ400闔会ｽｶ
+  // ・医←縺｡繧峨°蜈医↓驕斐＠縺溘ｉ蜿､縺・ｂ縺ｮ縺九ｉ遐ｴ譽・ｼ・
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
     maxBytes: 64 * 1024 * 1024,
     maxEntries: 400,
@@ -145,10 +147,10 @@ class WindowsFolderRepository implements MediaRepository {
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
 
-  // 蜷御ｸ繧ｵ繝繝阪・蜷梧凾隕∵ｱゅｒ1蝗槭↓縺ｾ縺ｨ繧√∵･縺ｪ繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ縺ｫ蟇ｾ蠢懊〒縺阪ｋ繧医≧縺ｫ
+  // 陷ｷ蠕｡・ｸﾂ郢ｧ・ｵ郢晢｣ｰ郢晞亂繝ｻ陷ｷ譴ｧ蜃ｾ髫補扱・ｱ繧・ｽ・陜玲ｧｭ竊鍋ｸｺ・ｾ邵ｺ・ｨ郢ｧ竏堋竏ｵﾂ・･邵ｺ・ｪ郢ｧ・ｹ郢ｧ・ｯ郢晢ｽｭ郢晢ｽｼ郢晢ｽｫ邵ｺ・ｫ陝・ｽｾ陟｢諛翫堤ｸｺ髦ｪ・狗ｹｧ蛹ｻ竕ｧ邵ｺ・ｫ
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
 
-  // PDF キャッシュ（ページ送り高速化）
+  // PDF 繧ｭ繝｣繝・す繝･・医・繝ｼ繧ｸ騾√ｊ鬮倬溷喧・・
   final Map<String, PdfDocument> _pdfCache = {};
 
   bool _isUncPath(String path) => path.startsWith(r'\\');
@@ -259,7 +261,7 @@ class WindowsFolderRepository implements MediaRepository {
       return MediaFileTypes.imageExtensions.contains(ext) || ext == _pdfExt;
     }
 
-    // 陦ｨ遉ｺ逕ｨ縺ｯ縲檎峩荳九・縺ｿ縲搾ｼ・Directory 繧りｿ斐☆
+    // 髯ｦ・ｨ驕会ｽｺ騾包ｽｨ邵ｺ・ｯ邵ｲ讙主ｳｩ闕ｳ荵昴・邵ｺ・ｿ邵ｲ謳ｾ・ｼ繝ｻDirectory 郢ｧ繧奇ｽｿ譁絶・
     final entries = <FileSystemEntity>[];
     await for (final e in dir.list(recursive: false, followLinks: false)) {
       entries.add(e);
@@ -272,10 +274,10 @@ class WindowsFolderRepository implements MediaRepository {
     final files = <MediaItem>[];
 
     for (final e in entries) {
-      // 逶ｴ荳九し繝悶ヵ繧ｩ繝ｫ繝
+      // 騾ｶ・ｴ闕ｳ荵昴＠郢晄じ繝ｵ郢ｧ・ｩ郢晢ｽｫ郢敖
       if (e is Directory) {
         final stat = await e.stat();
-        final name = _fileName(e.path); // 譌｢蟄倥・繝倥Ν繝代・豬∫畑・域忰蟆ｾ蜷榊叙蠕暦ｼ・
+        final name = _fileName(e.path); // 隴鯉ｽ｢陝・･繝ｻ郢晏･ﾎ晉ｹ昜ｻ｣繝ｻ雎ｬ竏ｫ逡代・蝓溷ｿｰ陝・ｽｾ陷ｷ讎雁徐陟墓圜・ｼ繝ｻ
         folders.add(
           MediaItem(
             id: e.path,
@@ -292,7 +294,7 @@ class WindowsFolderRepository implements MediaRepository {
         continue;
       }
 
-      // 直下ファイル（画像/PDF）
+      // 逶ｴ荳九ヵ繧｡繧､繝ｫ・育判蜒・PDF・・
       if (!isMediaFile(e)) {
         processed++;
         if (onProgress != null) onProgress(processed, total);
@@ -324,7 +326,7 @@ class WindowsFolderRepository implements MediaRepository {
       if (onProgress != null) onProgress(processed, total);
     }
 
-    // 見やすく：フォルダ→ファイル、各々名前順
+    // 隕九ｄ縺吶￥・壹ヵ繧ｩ繝ｫ繝竊偵ヵ繧｡繧､繝ｫ縲∝推縲・錐蜑埼・
     folders.sort(
       (a, b) =>
           a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
@@ -345,12 +347,12 @@ class WindowsFolderRepository implements MediaRepository {
     int total = 0;
     await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is Directory) {
-        total++; // 繝輔か繝ｫ繝繧り｡ｨ遉ｺ蟇ｾ雎｡
+        total++; // 郢晁ｼ斐°郢晢ｽｫ郢敖郢ｧ繧奇ｽ｡・ｨ驕会ｽｺ陝・ｽｾ髮趣ｽ｡
       } else if (ent is File) {
         final name = ent.uri.pathSegments.isNotEmpty
             ? ent.uri.pathSegments.last
             : ent.path;
-        if (_isTargetFileName(name)) total++; // 逕ｻ蜒・PDF縺ｮ縺ｿ
+        if (_isTargetFileName(name)) total++; // 騾包ｽｻ陷偵・PDF邵ｺ・ｮ邵ｺ・ｿ
       }
     }
     return total;
@@ -459,7 +461,7 @@ class WindowsFolderRepository implements MediaRepository {
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
-    // Windows縺ｯ蟶ｸ縺ｫ繝輔ぃ繧､繝ｫ繝代せ蜑肴署
+    // Windows邵ｺ・ｯ陝ｶ・ｸ邵ｺ・ｫ郢晁ｼ斐＜郢ｧ・､郢晢ｽｫ郢昜ｻ｣縺幄恆閧ｴ鄂ｲ
     return _listMediaFsRecursiveFiles(folder, onProgress: onProgress);
   }
   
@@ -504,7 +506,7 @@ class WindowsFolderRepository implements MediaRepository {
           id: ent.path,
           displayName: name,
           kind: kind,
-          folderRaw: folder.raw, // ★検索元ルート
+          folderRaw: folder.raw, // 笘・､懃ｴ｢蜈・Ν繝ｼ繝・
           modified: stat.modified,
           sizeBytes: stat.size,
           tags: const [],
@@ -663,7 +665,7 @@ class WindowsFolderRepository implements MediaRepository {
     }
   }
 
-  // ---- 繝壹・繧ｸ謨ｰ繧貞叙蠕・----
+  // ---- 郢晏｣ｹ繝ｻ郢ｧ・ｸ隰ｨ・ｰ郢ｧ雋槫徐陟輔・----
   @override
   Future<int> getPageCount(MediaItem item) async {
     if (item.kind != MediaKind.pdf) return 1;
@@ -671,7 +673,7 @@ class WindowsFolderRepository implements MediaRepository {
     return doc.pagesCount;
   }
 
-  // ---- 莉ｻ諢上・繝ｼ繧ｸ繧単NG縺ｨ縺励※蜿門ｾ励〒縺阪ｋ繧医≧縺ｫ ----
+  // ---- 闔会ｽｻ隲｢荳翫・郢晢ｽｼ郢ｧ・ｸ郢ｧ蜊朗G邵ｺ・ｨ邵ｺ蜉ｱ窶ｻ陷ｿ髢・ｾ蜉ｱ縲堤ｸｺ髦ｪ・狗ｹｧ蛹ｻ竕ｧ邵ｺ・ｫ ----
   @override
   Future<Uint8List> renderPageBytes(
     MediaItem item,
@@ -693,15 +695,15 @@ class WindowsFolderRepository implements MediaRepository {
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
     final cacheKey = '${item.id}|$maxWidth';
 
-    // LRU キャッシュをあたってみる
+    // LRU 繧ｭ繝｣繝・す繝･繧偵≠縺溘▲縺ｦ縺ｿ繧・
     final cached = _thumbCache.get(cacheKey);
     if (cached != null) return cached;
 
-    // 同一キーの in-flight を共有
+    // 蜷御ｸ繧ｭ繝ｼ縺ｮ in-flight 繧貞・譛・
     final inflight = _thumbInFlight[cacheKey];
     if (inflight != null) return inflight;
 
-    // 作成（in-flight 登録）
+    // 菴懈・・・n-flight 逋ｻ骭ｲ・・
     final future = _buildThumbPair(item, maxWidth)
         .then((pair) {
           _thumbCache.put(cacheKey, pair);
@@ -729,7 +731,7 @@ class WindowsFolderRepository implements MediaRepository {
       return ThumbPair(front: bytes, back: null);
     }
 
-    // PDF: 1ページ目 + 中間ページ（docキャッシュを利用）
+    // PDF: 1繝壹・繧ｸ逶ｮ + 荳ｭ髢薙・繝ｼ繧ｸ・・oc繧ｭ繝｣繝・す繝･繧貞茜逕ｨ・・
     final doc = await _openPdf(item.id);
     final pageCount = doc.pagesCount;
     final mid = (pageCount / 2).ceil().clamp(1, pageCount);
@@ -778,7 +780,7 @@ class WindowsFolderRepository implements MediaRepository {
     return img.bytes;
   }
 
-  /// 繝輔か繝ｫ繝蛻・崛繝ｻ繧｢繝励Μ邨ゆｺ・凾縺ｫ蜻ｼ縺ｶ縺ｨ繝｡繝｢繝ｪ繝ｪ繝ｼ繧ｯ縺励↓縺上＞
+  /// 郢晁ｼ斐°郢晢ｽｫ郢敖陋ｻ繝ｻ蟠帷ｹ晢ｽｻ郢ｧ・｢郢晏干ﾎ憺お繧・ｽｺ繝ｻ蜃ｾ邵ｺ・ｫ陷ｻ・ｼ邵ｺ・ｶ邵ｺ・ｨ郢晢ｽ｡郢晢ｽ｢郢晢ｽｪ郢晢ｽｪ郢晢ｽｼ郢ｧ・ｯ邵ｺ蜉ｱ竊鍋ｸｺ荳奇ｼ・
   Future<void> dispose() async {
     _thumbInFlight.clear();
     _thumbCache.clear();
@@ -832,21 +834,57 @@ class WindowsFolderRepository implements MediaRepository {
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
     final oldPath = item.id;
+    final fixedName = ItemNameService.buildDisplayName(item, newDisplayName);
+    final newPath = '${item.folderRaw}${Platform.pathSeparator}$fixedName';
+
+    if (item.kind == MediaKind.folder) {
+      final oldDir = Directory(oldPath);
+      if (!await oldDir.exists()) {
+        throw Exception('Folder not found: $oldPath');
+      }
+
+      await LocalPathOperationService.renameItem(
+        sourcePath: oldPath,
+        targetPath: newPath,
+        isDirectory: true,
+      );
+      _thumbCache.clear();
+      final keys = _pdfCache.keys.toList(growable: false);
+      for (final key in keys) {
+        if (_isInsideLibrary(key, oldPath) || _isInsideLibrary(key, newPath)) {
+          final doc = _pdfCache.remove(key);
+          if (doc != null) {
+            try {
+              await doc.close();
+            } catch (_) {}
+          }
+        }
+      }
+
+      return MediaItem(
+        id: newPath,
+        displayName: fixedName,
+        kind: MediaKind.folder,
+        folderRaw: item.folderRaw,
+        modified: item.modified,
+        sizeBytes: item.sizeBytes,
+        tags: item.tags,
+      );
+    }
+
     final oldFile = File(oldPath);
     if (!await oldFile.exists()) {
       throw Exception('File not found: $oldPath');
     }
 
-    final fixedName = _ensureExtensionForFs(item, newDisplayName);
+    await LocalPathOperationService.renameItem(
+      sourcePath: oldPath,
+      targetPath: newPath,
+      isDirectory: false,
+    );
 
-    final parent = oldFile.parent.path;
-    final newPath = '$parent${Platform.pathSeparator}$fixedName';
-
-    final renamed = await oldFile.rename(newPath);
-
-    // 繝輔ぃ繧､繝ｫ繝代せ縺ｯ螟峨ｏ繧九・縺ｧ id 繧よ峩譁ｰ縺吶ｋ
     return MediaItem(
-      id: renamed.path,
+      id: newPath,
       displayName: fixedName,
       kind: item.kind,
       folderRaw: item.folderRaw,
@@ -867,7 +905,7 @@ class WindowsFolderRepository implements MediaRepository {
     final trimmedUrl = sourceUrl.trim();
     final effectiveOptions = options ?? const UrlImportOptions();
     if (!effectiveOptions.hasAnySource(trimmedUrl)) {
-      throw Exception('URL、URL 一覧ファイル、またはお気に入り条件を入力してください');
+      throw Exception('URL を入力してください');
     }
 
     final destDir = Directory(folder.raw);
@@ -888,6 +926,7 @@ class WindowsFolderRepository implements MediaRepository {
       failedCount: result.failedCount,
     );
   }
+
   @override
   Future<int> importIntoFolder(
     FolderHandle folder, {
@@ -926,6 +965,7 @@ class WindowsFolderRepository implements MediaRepository {
 
     if (files.isEmpty) return 0;
 
+    final overwriteExisting = !(request?.skipIfExists ?? true);
     int ok = 0;
     int sentBytes = 0;
     final totalFiles = files.length;
@@ -936,9 +976,15 @@ class WindowsFolderRepository implements MediaRepository {
         if (!await src.exists()) continue;
 
         final name = xf.name;
-        final unique = _uniqueNameInDir(destDir, name);
         final stat = await src.stat();
-        await src.copy('${destDir.path}${Platform.pathSeparator}$unique');
+        final copied = await LocalPathOperationService.copyItem(
+          sourcePath: src.path,
+          targetPath: '${destDir.path}${Platform.pathSeparator}$name',
+          overwrite: overwriteExisting,
+        );
+        if (!copied) {
+          continue;
+        }
         ok++;
         sentBytes += stat.size;
         onProgress?.call(
@@ -947,7 +993,7 @@ class WindowsFolderRepository implements MediaRepository {
             totalBytes: totalBytes,
             completedFiles: ok,
             totalFiles: totalFiles,
-            currentFileName: unique,
+            currentFileName: name,
           ),
         );
       } catch (_) {}
@@ -968,15 +1014,6 @@ class WindowsFolderRepository implements MediaRepository {
       await destDir.create(recursive: true);
     }
 
-    // 既存名セット（軽量な重複回避）
-    final existingLowerNames = <String>{};
-    await for (final ent in destDir.list(recursive: false, followLinks: false)) {
-      if (ent is File) {
-        final name = _fileName(ent.path).toLowerCase();
-        existingLowerNames.add(name);
-      }
-    }
-
     int ok = 0;
     int sentBytes = 0;
     final uploadTargets = items
@@ -991,20 +1028,18 @@ class WindowsFolderRepository implements MediaRepository {
     for (final it in items) {
       if (it.kind == MediaKind.folder) continue;
 
-      final src = File(it.id); // Windows縺ｧ縺ｯid=繝輔Ν繝代せ
+      final src = File(it.id);
       if (!await src.exists()) continue;
 
       final name = it.displayName;
-      final lower = name.toLowerCase();
-
-      if (skipIfExists && existingLowerNames.contains(lower)) {
-        continue; // 蜷悟錐縺梧里縺ｫ菫晉ｮ｡蠎ｫ縺ｫ縺ゅｋ縺ｮ縺ｧ繧ｹ繧ｭ繝・・
+      final copied = await LocalPathOperationService.copyItem(
+        sourcePath: src.path,
+        targetPath: '${destDir.path}${Platform.pathSeparator}$name',
+        overwrite: !skipIfExists,
+      );
+      if (!copied) {
+        continue;
       }
-
-      // 競合する場合は unique 名で保存（skip=false の時の挙動）
-      final outName = skipIfExists ? name : _uniqueNameInDir(destDir, name);
-      await src.copy('${destDir.path}${Platform.pathSeparator}$outName');
-      existingLowerNames.add(outName.toLowerCase());
       ok++;
       sentBytes += it.sizeBytes ?? 0;
       onProgress?.call(
@@ -1013,32 +1048,12 @@ class WindowsFolderRepository implements MediaRepository {
           totalBytes: totalBytes,
           completedFiles: ok,
           totalFiles: totalFiles,
-          currentFileName: outName,
+          currentFileName: name,
         ),
       );
     }
 
     return ok;
-  }
-
-  String _uniqueNameInDir(Directory dir, String name) {
-    final dot = name.lastIndexOf('.');
-    final base = dot >= 0 ? name.substring(0, dot) : name;
-    final ext = dot >= 0 ? name.substring(dot) : '';
-
-    var candidate = name;
-    var n = 1;
-    while (File(
-      '${dir.path}${Platform.pathSeparator}$candidate',
-    ).existsSync()) {
-      candidate = '$base ($n)$ext';
-      n++;
-      if (n > 999) {
-        candidate = '${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
-        break;
-      }
-    }
-    return candidate;
   }
 
   Future<int> _sumFileSelectorBytes(List<XFile> files) async {
@@ -1049,24 +1064,5 @@ class WindowsFolderRepository implements MediaRepository {
       } catch (_) {}
     }
     return total;
-  }
-
-  String _ensureExtensionForFs(MediaItem item, String name) {
-    final n = name.trim();
-    if (n.isEmpty) return item.displayName;
-
-    if (item.kind == MediaKind.pdf) {
-      return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
-    }
-
-    final ext = _extLowerFs(item.displayName);
-    if (ext.isEmpty) return n;
-    return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
-  }
-
-  String _extLowerFs(String fileName) {
-    final dot = fileName.lastIndexOf('.');
-    if (dot < 0 || dot == fileName.length - 1) return '';
-    return fileName.substring(dot).toLowerCase();
   }
 }

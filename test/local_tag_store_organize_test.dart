@@ -132,6 +132,100 @@ void main() {
     );
     expect(taggedItems.map((item) => item.id), contains(targetPath));
   });
+
+  test('renameItemsUnderPathPrefix keeps tags after folder rename', () async {
+    final docsDir = await Directory.systemTemp.createTemp('local-tag-store-folder-rename');
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+
+    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+    final beforeFolder = Directory(p.join(libraryRoot.path, 'before'));
+    await beforeFolder.create(recursive: true);
+
+    final beforePath = p.join(beforeFolder.path, 'sample.pdf');
+    await File(beforePath).writeAsBytes(const <int>[1, 3, 5]);
+    final item = MediaItem(
+      id: beforePath,
+      displayName: 'sample.pdf',
+      kind: MediaKind.pdf,
+      folderRaw: beforeFolder.path,
+    );
+
+    await store.addTagToItem(
+      item,
+      const Tag(name: 'Folder Artist', category: TagCategory.artist),
+    );
+
+    final afterFolderPath = p.join(libraryRoot.path, 'after');
+    await beforeFolder.rename(afterFolderPath);
+    await store.renameItemsUnderPathPrefix(
+      beforePrefix: beforeFolder.path,
+      afterPrefix: afterFolderPath,
+    );
+
+    final afterPath = p.join(afterFolderPath, 'sample.pdf');
+    final tags = await store.listTagsForItem(afterPath);
+    expect(tags.map((entry) => entry.tag.name), contains('Folder Artist'));
+    expect(await store.listTagsForItem(beforePath), isEmpty);
+
+    final taggedItems = await store.findMediaItemsByTagGlobal(
+      category: TagCategory.artist,
+      name: 'Folder Artist',
+    );
+    expect(taggedItems.map((entry) => entry.id), contains(afterPath));
+    expect(taggedItems.map((entry) => entry.id), isNot(contains(beforePath)));
+  });
+
+  test('organizeAppLibrary blocks duplicate target names instead of creating suffix copies', () async {
+    final docsDir = await Directory.systemTemp.createTemp('local-tag-store-conflict');
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+
+    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+    await libraryRoot.create(recursive: true);
+
+    final sourcePath = p.join(libraryRoot.path, 'sample.pdf');
+    await File(sourcePath).writeAsBytes(const <int>[1, 2, 3]);
+    final source = MediaItem(
+      id: sourcePath,
+      displayName: 'sample.pdf',
+      kind: MediaKind.pdf,
+      folderRaw: libraryRoot.path,
+    );
+    await store.addTagToItem(
+      source,
+      const Tag(name: 'Conflict Artist', category: TagCategory.artist),
+    final conflictDir = Directory(p.join(libraryRoot.path, '作者別', 'Conflict Artist'));
+
+    final conflictDir = Directory(p.join(libraryRoot.path, '作者別', 'Conflict Artist'));
+    await conflictDir.create(recursive: true);
+    final conflictPath = p.join(conflictDir.path, 'sample.pdf');
+    await File(conflictPath).writeAsBytes(const <int>[9, 9, 9]);
+
+    final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+
+    expect(moved, isEmpty);
+    expect(await File(sourcePath).exists(), isTrue);
+    expect(await File(conflictPath).exists(), isTrue);
+    expect(await File(p.join(conflictDir.path, 'sample (1).pdf')).exists(), isFalse);
+    expect(await store.listTagsForItem(sourcePath), isNotEmpty);
+  });
 }
 
 class _FakePathProviderPlatform extends PathProviderPlatform {

@@ -1,11 +1,13 @@
 import 'dart:io';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/mediaItem.dart' as media;
 import '../models/tag.dart' as model;
 import '../models/tag_with_id.dart';
+import '../services/local_path_operation_service.dart';
 import 'app_db.dart' as db;
 
 class LocalTagStore {
@@ -167,6 +169,50 @@ class LocalTagStore {
 
     await _db.transaction(() async {
       await _moveMediaItemRecord(beforeId: before.id, after: after);
+    });
+  }
+
+  Future<void> renameItemsUnderPathPrefix({
+    required String beforePrefix,
+    required String afterPrefix,
+  }) async {
+    final normalizedBefore = p.normalize(beforePrefix);
+    final normalizedAfter = p.normalize(afterPrefix);
+    if (normalizedBefore == normalizedAfter) {
+      return;
+    }
+
+    final rows = await (_db.select(_db.mediaItems)
+          ..orderBy([(table) => OrderingTerm.asc(table.id)]))
+        .get();
+    final targets = rows
+        .where((row) => _isPathWithinPrefix(row.id, normalizedBefore))
+        .toList(growable: false);
+    if (targets.isEmpty) {
+      return;
+    }
+
+    await _db.transaction(() async {
+      for (final row in targets) {
+        final nextId = _replacePathPrefix(row.id, normalizedBefore, normalizedAfter);
+        final nextFolderRaw = _replacePathPrefix(
+          row.folderRaw,
+          normalizedBefore,
+          normalizedAfter,
+        );
+        await _moveMediaItemRecord(
+          beforeId: row.id,
+          after: media.MediaItem(
+            id: nextId,
+            folderRaw: nextFolderRaw,
+            displayName: row.displayName,
+            kind: row.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
+            modified: row.modifiedEpochMs == null
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(row.modifiedEpochMs!),
+          ),
+        );
+      }
     });
   }
 
@@ -389,9 +435,10 @@ class LocalTagStore {
 
       final sourcePath = item.id;
       final fileName = p.basename(sourcePath);
-      final targetPath = _uniquePath(destinationDir, fileName);
+      final targetPath = p.join(destinationDir, fileName);
 
       if (p.equals(p.normalize(sourcePath), p.normalize(targetPath))) {
+        debugPrint('[TAG-ORGANIZE] no file move required; db only path=$sourcePath');
         continue;
       }
 
@@ -403,11 +450,13 @@ class LocalTagStore {
           continue;
         }
 
-        try {
-          await sourceFile.rename(targetPath);
-        } catch (_) {
-          await sourceFile.copy(targetPath);
-          await sourceFile.delete();
+        final movedFile = await LocalPathOperationService.moveItem(
+          sourcePath: sourcePath,
+          targetPath: targetPath,
+          logPrefix: 'TAG-ORGANIZE',
+        );
+        if (!movedFile) {
+          continue;
         }
 
         await _db.transaction(() async {
@@ -426,8 +475,14 @@ class LocalTagStore {
         });
 
         moved[sourcePath] = targetPath;
-      } catch (_) {
-        // 続行
+      } catch (error, stackTrace) {
+        debugPrint(
+          '[TAG-ORGANIZE] blocked source=$sourcePath target=$targetPath reason=$error',
+        );
+        debugPrintStack(
+          label: '[TAG-ORGANIZE] stack',
+          stackTrace: stackTrace,
+        );
       }
     }
 
@@ -477,20 +532,25 @@ class LocalTagStore {
     return value.isEmpty ? '_' : value;
   }
 
-  String _uniquePath(String dir, String fileName) {
-    final base = p.basenameWithoutExtension(fileName);
-    final extension = p.extension(fileName);
-
-    var candidate = p.join(dir, fileName);
-    var index = 1;
-    while (File(candidate).existsSync()) {
-      candidate = p.join(dir, '$base ($index)$extension');
-      index++;
-      if (index > 999) {
-        return p.join(dir, '${base}_${DateTime.now().millisecondsSinceEpoch}$extension');
-      }
+  bool _isPathWithinPrefix(String value, String prefix) {
+    final normalizedValue = p.normalize(value);
+    if (p.equals(normalizedValue, prefix)) {
+      return true;
     }
-    return candidate;
+    return p.isWithin(prefix, normalizedValue);
+  }
+
+  String _replacePathPrefix(String value, String beforePrefix, String afterPrefix) {
+    final normalizedValue = p.normalize(value);
+    if (p.equals(normalizedValue, beforePrefix)) {
+      return afterPrefix;
+    }
+
+    final relative = p.relative(normalizedValue, from: beforePrefix);
+    if (relative == '.') {
+      return afterPrefix;
+    }
+    return p.normalize(p.join(afterPrefix, relative));
   }
 
   Future<void> _moveMediaItemRecord({

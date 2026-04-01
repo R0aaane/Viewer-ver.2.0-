@@ -17,6 +17,7 @@ import '../models/tag.dart';
 import '../services/app_settings_service.dart';
 import '../services/import_tag_rule_service.dart';
 import '../services/import_source_normalizer.dart';
+import '../services/item_name_service.dart';
 import '../services/media_id_resolver.dart';
 import '../services/remote_media_api_client.dart';
 import 'mediaRepository.dart';
@@ -1084,19 +1085,7 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
-    if (item.kind == MediaKind.folder) {
-      throw const RemoteMediaException('フォルダ名の変更は未対応です');
-    }
-    final trimmed = newDisplayName.trim();
-    if (trimmed.isEmpty) {
-      throw const RemoteMediaException('新しい名前を入力してください');
-    }
-
-    final ext = _winPath.extension(item.displayName);
-    final fixedName =
-        ext.isNotEmpty && !trimmed.toLowerCase().endsWith(ext.toLowerCase())
-        ? '$trimmed$ext'
-        : trimmed;
+    final fixedName = ItemNameService.buildDisplayName(item, newDisplayName);
     final nextPath = _winPath.join(item.folderRaw, fixedName);
     final nextItem = MediaItem(
       id: nextPath,
@@ -1123,6 +1112,10 @@ class RemoteMediaRepository implements MediaRepository {
       throw const RemoteMediaException('リネーム後のメディア取得に失敗しました');
     }
 
+    if (item.kind == MediaKind.folder) {
+      _forgetRemoteMediaIdsUnderPath(item.id);
+      _forgetRemoteMediaIdsUnderPath(nextItem.id);
+    }
     _evictMetaCache(beforeRemoteMediaId);
     if (refreshed.mediaId != null && refreshed.mediaId!.isNotEmpty) {
       _evictMetaCache(refreshed.mediaId!);

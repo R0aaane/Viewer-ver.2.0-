@@ -22,6 +22,7 @@ import '../repository/mediaRepository.dart';
 import 'artistTagIndex.dart';
 import 'detailImage.dart';
 import 'metadata_settings_dialog.dart';
+import 'rename_item_dialog.dart';
 import 'TagResults.dart';
 import 'tag_management_page.dart';
 import 'url_import_dialog.dart';
@@ -2060,24 +2061,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   bool _canRenameItem(MediaItem item) {
-    return widget.repo.capabilities.canRename && item.kind != MediaKind.folder;
-  }
-
-  String _renameDialogLabel(MediaItem item) {
-    return item.kind == MediaKind.pdf ? 'PDF' : '画像';
-  }
-
-  String _displayNameWithoutExtension(MediaItem item) {
-    if (item.kind == MediaKind.pdf &&
-        item.displayName.toLowerCase().endsWith('.pdf')) {
-      return item.displayName.substring(0, item.displayName.length - 4);
-    }
-
-    final dot = item.displayName.lastIndexOf('.');
-    if (dot <= 0 || dot == item.displayName.length - 1) {
-      return item.displayName;
-    }
-    return item.displayName.substring(0, dot);
+    return widget.repo.capabilities.canRename;
   }
 
   Future<void> _replaceFavoriteId(String oldId, String newId) async {
@@ -2106,39 +2090,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    final ctrl = TextEditingController(text: _displayNameWithoutExtension(item));
-    final hintText = item.kind == MediaKind.pdf
-        ? '拡張子 .pdf は不要です'
-        : '拡張子はそのまま維持されます';
-
-    final newBase = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: Text('${_renameDialogLabel(item)}名を変更'),
-          content: TextField(
-            controller: ctrl,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: hintText,
-              border: const OutlineInputBorder(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('キャンセル'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(ctrl.text.trim()),
-              child: const Text('変更'),
-            ),
-          ],
-        );
-      },
-    );
-
-    ctrl.dispose();
+    final newBase = await showRenameItemDialog(context, item: item);
     if (newBase == null || newBase.isEmpty) {
       return;
     }

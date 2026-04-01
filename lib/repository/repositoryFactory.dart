@@ -2,7 +2,7 @@
 
 import '../database/app_db.dart';
 import '../models/metadata_settings.dart';
-import 'androidFolderRepository.dart';
+import 'android_folder_repository.dart';
 import 'folderRepository.dart';
 import 'mediaRepository.dart';
 import 'remote_media_repository.dart';

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:collection';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:convert';
 
@@ -15,7 +14,9 @@ import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../services/item_name_service.dart';
 import '../services/import_source_normalizer.dart';
+import '../services/local_path_operation_service.dart';
 import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
@@ -61,10 +62,10 @@ class AndroidFolderRepository implements MediaRepository {
   Future<List<FolderHandle>> listAvailableFolders() async =>
       const <FolderHandle>[];
 
-  // インデックスの有効期限
+  // Folder index cache TTL.
   static const Duration _folderIndexTtl = Duration(minutes: 10);
 
-  // 対象ファイルの拡張子（小文字）
+  // Supported image extensions for local filesystem scans.
   static const Set<String> _imageExt = MediaFileTypes.imageExtensions;
   static const _pdfExt = '.pdf';
   static const Duration _safShallowTtl = Duration(seconds: 15);
@@ -75,7 +76,7 @@ class AndroidFolderRepository implements MediaRepository {
     return _docmanMutex.synchronized(action);
   }
   
-  // SAF shallow cache（直下一覧/ソート済み）
+  // SAF shallow cache keyed by directory URI.
   final Map<String, _ShallowCacheEntry> _safShallowCache = {};
 
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
@@ -86,20 +87,19 @@ class AndroidFolderRepository implements MediaRepository {
   );
   
 
-  // PDF操作は並列不可なのでURI単位でロック
+  // Small in-memory PDF document cache.
   final Map<String, _AsyncMutex> _pdfLocks = {};
   _AsyncMutex _lockOf(String uri) =>
       _pdfLocks.putIfAbsent(uri, () => _AsyncMutex());
 
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
 
-  // ★ PDFキャッシュ（無限に増えるのを防ぐ）
   final LinkedHashMap<String, PdfDocument> _pdfCache = LinkedHashMap();
   static const int _pdfCacheMaxEntries = 6;
 
   final Map<String, Future<void>> _folderIndexInFlight = {};
 
-  //一度に読み込むレンダリングを制限
+  // Limit concurrent thumbnail generation work.
   int _thumbActive = 0;
   final List<Completer<void>> _thumbWaiters = [];
   
@@ -120,18 +120,6 @@ class AndroidFolderRepository implements MediaRepository {
       _thumbWaiters.removeAt(0).complete();
     }
   }
-
-  int _entryKindToMediaKind(int k) {
-  final e = db.FolderEntryKindDb.values[k];
-  switch (e) {
-    case db.FolderEntryKindDb.folder:
-      return 2; // 仮（使わない）
-    case db.FolderEntryKindDb.image:
-      return 0;
-    case db.FolderEntryKindDb.pdf:
-      return 1;
-  }
-}
 
 MediaKind _dbKindToMediaKind(int k) {
   final e = db.FolderEntryKindDb.values[k];
@@ -204,12 +192,12 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   return PagedMediaResult(items: items, total: idx.totalCount);
 }
 
-  /// SAF直下をスキャンしてDBへ保存（差分は「全入れ替え」で簡単・堅牢）
+  /// Rebuild the folder index for a SAF directory.
   Future<void> _rebuildFolderIndexSaf(String folderRaw) async {
-    // SAF直下
-    final entries = await _safListShallow(folderRaw);
+    // Read the current direct children from SAF.
+    final entries = (await _getSafShallowCached(folderRaw)).entries;
 
-    // 対象だけ + kind決定
+    // Convert SAF entries into cached DB rows.
     final out = <db.FolderEntriesCompanion>[];
     for (final e in entries) {
       if (e.isDir) {
@@ -217,7 +205,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           folderRaw: folderRaw,
           entryId: e.documentUri,
           displayName: e.name,
-          kind: db.FolderEntryKindDb.folder.index,
+          kind: _mediaKindToFolderEntryKind(MediaKind.folder),
           modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
           sortName: _sortKey(e.name),
         ));
@@ -230,7 +218,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           folderRaw: folderRaw,
           entryId: e.documentUri,
           displayName: e.name,
-          kind: db.FolderEntryKindDb.pdf.index,
+          kind: _mediaKindToFolderEntryKind(MediaKind.pdf),
           modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
           sortName: _sortKey(e.name),
         ));
@@ -241,7 +229,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           folderRaw: folderRaw,
           entryId: e.documentUri,
           displayName: e.name,
-          kind: db.FolderEntryKindDb.image.index,
+          kind: _mediaKindToFolderEntryKind(MediaKind.image),
           modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
           sortName: _sortKey(e.name),
         ));
@@ -249,7 +237,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       }
     }
 
-    // sort（DB orderByでも整うが totalCount を正確に）
+    // Keep folder-first ordering and stable total counts in sync with the DB page order.
     out.sort((a, b) {
       final ak = a.kind.value;
       final bk = b.kind.value;
@@ -261,7 +249,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     final nowMs = DateTime.now().millisecondsSinceEpoch;
 
     await _db.transaction(() async {
-      // 既存削除 → 作り直し（整合性が一番強い）
+      // Replace cached folder rows before inserting the fresh snapshot.
       await (_db.delete(_db.folderEntries)..where((t) => t.folderRaw.equals(folderRaw))).go();
 
       await _db.into(_db.folderIndexes).insertOnConflictUpdate(
@@ -302,7 +290,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     });
   }
 
-  // --- 追加: サムネのディスクキャッシュ ---
+  // Thumbnail disk cache.
   Directory? _thumbDiskDir;
 
   Future<Directory> _ensureThumbDiskDir() async {
@@ -314,7 +302,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     return dir;
   }
 
-  // 依存を増やさない簡易ハッシュ（FNV-1a 64bit）
+  // Stable FNV-1a 64-bit hash used for cache keys.
   String _fnv1a64Hex(String s) {
     const int fnvOffset = 0xcbf29ce484222325;
     const int fnvPrime = 0x100000001b3;
@@ -331,12 +319,11 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   Future<File> _thumbDiskFile(String cacheKey) async {
     final dir = await _ensureThumbDiskDir();
     final name = _fnv1a64Hex(cacheKey);
-    return File('${dir.path}/$name.bin'); // front bytes だけ保存
+    return File('${dir.path}/$name.bin');
   }
 
   // ==============================
-  // SAF アダプタ（docman）
-  // ==============================
+  // SAF helpers backed by docman.
 
   Future<String?> _safPickTreeUri() async {
     final dir = await DocMan.pick.directory();
@@ -344,7 +331,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }
 
   DateTime? _toDateTimeSafe(Object? lm) {
-    // docman / provider 差を吸収（int / int? / null どれでもOK）
+    // docman/provider modified time may be int, int?, or null.
     if (lm is int) {
       if (lm <= 0) return null;
       return DateTime.fromMillisecondsSinceEpoch(lm);
@@ -360,7 +347,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
       final children = await dir.listDocuments();
 
-      String _fallbackNameFromUri(String uri) {
+      String fallbackNameFromUri(String uri) {
         try {
           final u = Uri.parse(uri);
           for (int i = u.pathSegments.length - 1; i >= 0; i--) {
@@ -373,17 +360,17 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
       final out = <_SafEntry>[];
       for (final f in children) {
-        final rawName = (f.name ?? '').trim();
+        final rawName = f.name.trim();
         final isDir = f.isDirectory == true;
 
         final name =
-            rawName.isNotEmpty ? rawName : (isDir ? _fallbackNameFromUri(f.uri) : '');
+            rawName.isNotEmpty ? rawName : (isDir ? fallbackNameFromUri(f.uri) : '');
         if (name.isEmpty) continue;
 
         out.add(_SafEntry(
           documentUri: f.uri,
           name: name,
-          modified: null, // 変更日時は一旦取らない（重い＆docmanのバージョン差が大きい）
+          modified: null,
           isDir: isDir,
         ));
       }
@@ -507,7 +494,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       final idx = await _getFolderIndexRow(raw);
       if (idx != null && _isIndexFresh(idx)) return idx.totalCount;
 
-      // 無い/古いなら作る
+      // Build the index when it is missing or stale.
       await _ensureFolderIndexSaf(raw, force: true);
       final idx2 = await _getFolderIndexRow(raw);
       return idx2?.totalCount ?? 0;
@@ -538,10 +525,10 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     final raw = folder.raw;
 
     if (raw.startsWith('content://')) {
-      // 1) まずDBから即返す（もしあれば）
+      // 1) Return cached DB page first when available.
       final cached = await _tryListPageFromDb(folder, offset: offset, limit: limit);
       if (cached != null) {
-        // 2) TTL切れなら裏で更新（UIは即表示のまま）
+        // 2) Refresh the index in background if TTL expired.
         final idx = await _getFolderIndexRow(raw);
         if (idx != null && !_isIndexFresh(idx)) {
           // ignore: unawaited_futures
@@ -550,12 +537,12 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         return cached;
       }
 
-      // DBに無い（初回）なら: スキャンしてDB作成 → DBから返す
+      // Build the initial index, then serve the page from cached DB rows.
       await _ensureFolderIndexSaf(raw, force: true);
       final after = await _tryListPageFromDb(folder, offset: offset, limit: limit);
       return after ?? const PagedMediaResult(items: [], total: 0);
     }
-    // FS (直下)
+    // Filesystem-backed folders are paged directly from disk.
     final dir = Directory(raw);
     if (!await dir.exists()) return const PagedMediaResult(items: [], total: 0);
 
@@ -609,8 +596,8 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
-    // ✅ 直下のみ
-    final entries = await _safListShallow(folder.raw);
+    // SAF folders list only direct children.
+    final entries = (await _getSafShallowCached(folder.raw)).entries;
 
     final folders = <MediaItem>[];
     final files = <MediaItem>[];
@@ -622,7 +609,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       if (e.isDir) {
         folders.add(
           MediaItem(
-            id: e.documentUri,          // サブフォルダURI
+            id: e.documentUri,          // Child folder document URI.
             displayName: e.name,
             kind: MediaKind.folder,
             folderRaw: folder.raw,
@@ -654,7 +641,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       if (onProgress != null) onProgress(processed, total);
     }
 
-    // フォルダ→ファイル順が見やすい
+    // Return folders before files for a consistent gallery order.
     return <MediaItem>[...folders, ...files];
   }
   
@@ -680,7 +667,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         }
 
         for (final f in children) {
-          final name = (f.name ?? '').trim();
+          final name = f.name.trim();
           if (name.isEmpty) continue;
 
           if (f.isDirectory == true) {
@@ -712,7 +699,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       return ext == _pdfExt || _imageExt.contains(ext);
     }
   
-    // total が必要なら 2パス（%を出すため）
+    // Count only target media when progress reporting is enabled.
     int total = 0;
     if (onProgress != null) {
       await for (final ent in dir.list(recursive: false, followLinks: false)) {
@@ -776,7 +763,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
-    // total（進捗%用）を先に数える。重いので onProgress がある時だけ。
+    // Count recursively only when progress reporting is enabled.
     final total = (onProgress == null) ? 0 : await _docmanSync(() => _safCountMedia(folder.raw));
 
     final entries = await _docmanSync(() => _safListRecursive(
@@ -785,7 +772,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           total: total,
         ));
 
-    // entries はファイルのみ入る設計なので MediaItem にする
+    // Convert file entries into MediaItem instances.
     final items = <MediaItem>[];
     for (final e in entries) {
       final ext = _lowerExt(e.name);
@@ -798,7 +785,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         id: e.documentUri,
         displayName: e.name,
         kind: kind,
-        folderRaw: folder.raw, // ★ “検索元の登録フォルダ” を root として保持
+        folderRaw: folder.raw, // Preserve the registered root folder as folderRaw.
         modified: e.modified,
         tags: const [],
       ));
@@ -846,7 +833,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         id: ent.path,
         displayName: name,
         kind: kind,
-        folderRaw: folder.raw, // ★ root
+        folderRaw: folder.raw, // Preserve the registered root folder as folderRaw.
         modified: stat.modified,
         tags: const [],
       ));
@@ -961,18 +948,18 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
     final cacheKey = '${item.id}|$maxWidth';
 
-    // 1) メモリキャッシュ
+    // 1) In-memory cache.
     final cached = _thumbCache.get(cacheKey);
     if (cached != null) return cached;
 
-    // 2) 同一キーの同時実行まとめ
+    // 2) Reuse in-flight thumbnail work for the same cache key.
     final inflight = _thumbInFlight[cacheKey];
     if (inflight != null) return inflight;
 
     final future = () async {
-      await _acquireThumbSlot(2); // ここは後で 1 に落とす
+      await _acquireThumbSlot(2);
       try {
-        // 3) ディスクキャッシュ
+        // 3) Disk cache.
         try {
           final f = await _thumbDiskFile(cacheKey);
           if (await f.exists()) {
@@ -984,13 +971,13 @@ Future<PagedMediaResult?> _tryListPageFromDb(
             }
           }
         } catch (_) {
-          // ディスクキャッシュ失敗は無視して生成へ
+          // Fall back to fresh generation when the disk cache misses.
         }
 
-        // 4) 生成
+        // 4) Generate thumbnails.
         final pair = await _buildThumbPair(item, maxWidth);
 
-        // 5) 保存（失敗してもOK）
+        // 5) Save to memory cache and opportunistically persist to disk.
         _thumbCache.put(cacheKey, pair);
         try {
           final f = await _thumbDiskFile(cacheKey);
@@ -1020,7 +1007,11 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     final mid = (pageCount / 2).ceil().clamp(1, pageCount);
 
     final front = await _renderPage(item.id, doc, 1, maxWidth);
-    return ThumbPair(front: front, back: null);
+    Uint8List? back;
+    if (pageCount >= 2) {
+      back = await _renderPage(item.id, doc, mid, maxWidth);
+    }
+    return ThumbPair(front: front, back: back);
   }
 
   Future<PdfDocument> _openPdf(String documentUri) {
@@ -1145,7 +1136,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       final doc = await DocumentFile.fromUri(uri);
       if (doc == null || doc.isDirectory == true) return null;
 
-      final rawName = (doc.name ?? '').trim();
+      final rawName = doc.name.trim();
       final name = rawName.isNotEmpty ? rawName : _fileName(uri);
       if (!_isTargetFileName(name)) return null;
 
@@ -1182,22 +1173,78 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
-    if (item.kind != MediaKind.pdf) {
-      throw Exception('rename: only pdf is supported now');
+    final fixedName = ItemNameService.buildDisplayName(item, newDisplayName);
+
+    if (!item.id.startsWith('content://')) {
+      final newPath = '${item.folderRaw}${Platform.pathSeparator}$fixedName';
+      if (item.kind == MediaKind.folder) {
+        final dir = Directory(item.id);
+        if (!await dir.exists()) {
+          throw Exception('Folder not found: ${item.id}');
+        }
+        await LocalPathOperationService.renameItem(
+          sourcePath: item.id,
+          targetPath: newPath,
+          isDirectory: true,
+        );
+      } else {
+        final file = File(item.id);
+        if (!await file.exists()) {
+          throw Exception('File not found: ${item.id}');
+        }
+        await LocalPathOperationService.renameItem(
+          sourcePath: item.id,
+          targetPath: newPath,
+          isDirectory: false,
+        );
+      }
+
+      _thumbCache.clear();
+      for (final doc in _pdfCache.values) {
+        try {
+          await doc.close();
+        } catch (_) {}
+      }
+      _pdfCache.clear();
+      return MediaItem(
+        id: newPath,
+        displayName: fixedName,
+        kind: item.kind,
+        folderRaw: item.folderRaw,
+        modified: DateTime.now(),
+        sizeBytes: item.sizeBytes,
+        tags: item.tags,
+      );
     }
 
     return _docmanSync(() async {
       final src = await DocumentFile.fromUri(item.id);
-      if (src == null) throw Exception('rename: src not found: ${item.id}');
+      if (src == null) {
+        throw Exception('rename: src not found: ${item.id}');
+      }
 
       final dir = await DocumentFile.fromUri(item.folderRaw);
       if (dir == null || dir.isDirectory != true) {
         throw Exception('rename: parent dir not found: ${item.folderRaw}');
       }
 
-      final fixedName = _ensureDisplayName(item, newDisplayName);
-      final d = src as dynamic;
+      final conflict = await dir.find(fixedName);
+      if (conflict != null && conflict.exists == true && conflict.uri != src.uri) {
+        throw Exception('同名のファイルまたはフォルダが既に存在します');
+      }
+      if (conflict != null && conflict.exists == true && conflict.uri == src.uri) {
+        return MediaItem(
+          id: src.uri,
+          displayName: fixedName,
+          kind: item.kind,
+          folderRaw: item.folderRaw,
+          modified: DateTime.now(),
+          sizeBytes: item.sizeBytes,
+          tags: item.tags,
+        );
+      }
 
+      final d = src as dynamic;
       DocumentFile? moved;
 
       try {
@@ -1220,12 +1267,28 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       }
 
       if (moved == null) {
-        throw Exception('rename: moveTo not supported or permission denied');
+        try {
+          final r = await d.renameTo(fixedName);
+          if (r is DocumentFile) {
+            moved = r;
+          } else if (r == true) {
+            moved = await dir.find(fixedName);
+          }
+        } catch (_) {}
       }
 
-      // キャッシュ無効化
-      _invalidateSafShallow(item.folderRaw);
+      if (moved == null) {
+        throw Exception('この保存先では名前変更に対応していません');
+      }
+
+      _invalidateSafShallowAll();
       await _invalidateFolderIndex(item.folderRaw);
+      for (final doc in _pdfCache.values) {
+        try {
+          await doc.close();
+        } catch (_) {}
+      }
+      _pdfCache.clear();
 
       return MediaItem(
         id: moved.uri,
@@ -1233,24 +1296,13 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         kind: item.kind,
         folderRaw: item.folderRaw,
         modified: DateTime.now(),
+        sizeBytes: item.sizeBytes,
         tags: item.tags,
       );
     });
   }
 
-  String _ensureDisplayName(MediaItem item, String name) {
-    final n = name.trim();
-    if (n.isEmpty) return item.displayName;
-    if (item.kind == MediaKind.pdf) {
-      return n.toLowerCase().endsWith('.pdf') ? n : '$n.pdf';
-    }
-
-    final ext = _lowerExt(item.displayName);
-    if (ext.isEmpty) return n;
-    return n.toLowerCase().endsWith(ext) ? n : '$n$ext';
-  }
-
- Future<List<_SafEntry>> _safListRecursive(
+  Future<List<_SafEntry>> _safListRecursive(
     String treeUri, {
     void Function(int processed, int total)? onProgress,
     required int total,
@@ -1276,7 +1328,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         }
 
         for (final f in children) {
-          final name = (f.name ?? '').trim();
+          final name = f.name.trim();
           if (name.isEmpty) continue;
 
           final isDir = f.isDirectory == true;
@@ -1332,29 +1384,30 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       extensions: MediaFileTypes.mediaPickerExtensions,
       limit: 200,
     );
-      if (picked.isEmpty) return 0;
+    if (picked.isEmpty) return 0;
 
-      // 1) まずターゲットが「保管庫など file path」なら確実に書ける
-      if (!folder.raw.startsWith('content://')) {
-        final dir = Directory(folder.raw);
-        if (!await dir.exists()) await dir.create(recursive: true);
+    final overwriteExisting = !(request?.skipIfExists ?? true);
 
-        int ok = 0;
-        for (final f in picked) {
-          try {
-            final name = f.path.split('/').last;
-            final bytes = await f.readAsBytes();
-            if (bytes.isEmpty) continue;
+    if (!folder.raw.startsWith('content://')) {
+      final dir = Directory(folder.raw);
+      if (!await dir.exists()) await dir.create(recursive: true);
 
-            final outPath = await _uniquePathInDir(dir, name);
-            await File(outPath).writeAsBytes(bytes, flush: true);
+      int ok = 0;
+      for (final f in picked) {
+        try {
+          final copied = await LocalPathOperationService.copyItem(
+            sourcePath: f.path,
+            targetPath: '${dir.path}/${f.path.split('/').last}',
+            overwrite: overwriteExisting,
+          );
+          if (copied) {
             ok++;
-          } catch (_) {}
-        }
-        return ok;
+          }
+        } catch (_) {}
       }
+      return ok;
+    }
 
-      // 2) SAFフォルダの場合：書き込み可なら直接入れる
     return _docmanSync(() async {
       final dir = await DocumentFile.fromUri(folder.raw);
       if (dir == null) throw Exception('DocumentFile.fromUri failed: ${folder.raw}');
@@ -1368,17 +1421,26 @@ Future<PagedMediaResult?> _tryListPageFromDb(
             final bytes = await f.readAsBytes();
             if (bytes.isEmpty) continue;
 
-            final unique = await _uniqueName(dir, name); // ←これも docman 操作
-            final created = await _createFile(dir, unique, bytes);
+            final existing = await dir.find(name);
+            if (existing != null && existing.exists == true) {
+              if (!overwriteExisting) {
+                continue;
+              }
+              final deleted = await _deleteDoc(existing);
+              if (!deleted) {
+                throw Exception('同名のファイルまたはフォルダが既に存在します');
+              }
+            }
+
+            final created = await _createFile(dir, name, bytes);
             if (created != null) ok++;
           } catch (_) {}
         }
         _invalidateSafShallow(folder.raw);
         await _invalidateFolderIndex(folder.raw);
         return ok;
-    }
+      }
 
-    // 3) SAFが書き込み不可 → ★保管庫へ確実に取り込む（fallback）
       final lib = await getAppLibraryFolder();
       final libDir = Directory(lib.raw);
       if (!await libDir.exists()) await libDir.create(recursive: true);
@@ -1386,19 +1448,19 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       int ok = 0;
       for (final f in picked) {
         try {
-          final name = f.path.split('/').last;
-          final bytes = await f.readAsBytes();
-          if (bytes.isEmpty) continue;
-
-          final outPath = await _uniquePathInDir(libDir, name);
-          await File(outPath).writeAsBytes(bytes, flush: true);
-          ok++;
+          final copied = await LocalPathOperationService.copyItem(
+            sourcePath: f.path,
+            targetPath: '${libDir.path}/${f.path.split('/').last}',
+            overwrite: overwriteExisting,
+          );
+          if (copied) {
+            ok++;
+          }
         } catch (_) {}
       }
       return ok;
     });
   }
-
   @override
   Future<UrlImportResult> importFromUrlIntoFolder(
     FolderHandle folder,
@@ -1410,7 +1472,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     final trimmedUrl = sourceUrl.trim();
     final effectiveOptions = options ?? const UrlImportOptions();
     if (!effectiveOptions.hasAnySource(trimmedUrl)) {
-      throw Exception('URL、URL 一覧ファイル、または favorites 条件を入力してください');
+      throw Exception('URL を入力してください');
     }
 
     if (!folder.raw.startsWith('content://')) {
@@ -1460,7 +1522,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           totalBytes: stagedItems.length,
           completedFiles: 0,
           totalFiles: stagedItems.length,
-          statusLabel: 'ダウンロード済みファイルを保存先へ取り込み中',
+          statusLabel: 'ホストにアップロードしています',
         ),
       );
 
@@ -1526,82 +1588,70 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     bool skipIfExists = true,
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
-    // 1) dest が file path（保管庫は通常これ）なら、Directoryへ書き込む
     if (!dest.raw.startsWith('content://')) {
       final dir = Directory(dest.raw);
       if (!await dir.exists()) await dir.create(recursive: true);
-
-      final existingLowerNames = <String>{};
-      await for (final ent in dir.list(recursive: false, followLinks: false)) {
-        if (ent is File) {
-          final name = ent.uri.pathSegments.isNotEmpty
-              ? ent.uri.pathSegments.last
-              : ent.path;
-          existingLowerNames.add(name.toLowerCase());
-        }
-      }
 
       int ok = 0;
       for (final it in items) {
         if (it.kind == MediaKind.folder) continue;
 
-        final lower = it.displayName.toLowerCase();
-        if (skipIfExists && existingLowerNames.contains(lower)) continue;
-
         try {
-          final bytes = await readBytes(it); // 既存の repo API を利用
+          final bytes = await readBytes(it);
           if (bytes.isEmpty) continue;
 
-          final outPath = skipIfExists
-              ? '${dir.path}/${it.displayName}'
-              : await _uniquePathInDir(dir, it.displayName);
+          final targetPath = '${dir.path}/${it.displayName}';
+          final conflict = await LocalPathOperationService.checkNameConflict(
+            sourcePath: it.id,
+            targetPath: targetPath,
+          );
+          if (conflict == LocalPathConflictResult.sameFile) {
+            debugPrint('[MOVE] skipped same-file source=${it.id} target=$targetPath');
+            continue;
+          }
+          if (conflict == LocalPathConflictResult.duplicateName && skipIfExists) {
+            debugPrint('[COPY] blocked duplicate-name source=${it.id} target=$targetPath');
+            continue;
+          }
+          if (conflict == LocalPathConflictResult.duplicateName) {
+            await File(targetPath).delete();
+          }
 
-          // skipIfExists=true でも、並行で同名が出来る等の事故を避けたいので存在確認
-          if (skipIfExists && await File(outPath).exists()) continue;
-
-          await File(outPath).writeAsBytes(bytes, flush: true);
-          existingLowerNames.add((outPath.split('/').last).toLowerCase());
+          await File(targetPath).writeAsBytes(bytes, flush: true);
           ok++;
         } catch (_) {}
       }
       return ok;
     }
 
-    // 2) dest が SAF の場合（必要なら）
     return _docmanSync(() async {
       final dir = await DocumentFile.fromUri(dest.raw);
       if (dir == null) throw Exception('DocumentFile.fromUri failed: ${dest.raw}');
       if (dir.isDirectory != true) throw Exception('Target is not a directory: ${dest.raw}');
       if (dir.canCreate != true) throw Exception('Target folder is not writable: ${dest.raw}');
 
-      // 既存名セット（docmanで浅く取得）
-      final existingLowerNames = <String>{};
-      final children = await dir.listDocuments();
-      for (final c in children) {
-        final n = (c.name ?? '').trim();
-        if (n.isNotEmpty) existingLowerNames.add(n.toLowerCase());
-      }
-
       int ok = 0;
       for (final it in items) {
         if (it.kind == MediaKind.folder) continue;
-
-        final lower = it.displayName.toLowerCase();
-        if (skipIfExists && existingLowerNames.contains(lower)) continue;
 
         try {
           final bytes = await readBytes(it);
           if (bytes.isEmpty) continue;
 
-          final uniqueName = skipIfExists
-              ? it.displayName
-              : await _uniqueName(dir, it.displayName);
+          final existing = await dir.find(it.displayName);
+          if (existing != null && existing.exists == true) {
+            if (skipIfExists) {
+              debugPrint('[COPY] blocked duplicate-name source=${it.id} target=${it.displayName}');
+              continue;
+            }
+            final deleted = await _deleteDoc(existing);
+            if (!deleted) {
+              throw Exception('同名のファイルまたはフォルダが既に存在します');
+            }
+          }
 
-          if (skipIfExists && existingLowerNames.contains(uniqueName.toLowerCase())) continue;
-
-          final created = await _createFile(dir, uniqueName, bytes);
+          final created = await _createFile(dir, it.displayName, bytes);
           if (created != null) {
-            existingLowerNames.add(uniqueName.toLowerCase());
             ok++;
           }
         } catch (_) {}
@@ -1613,43 +1663,8 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     });
   }
 
-  Future<String> _uniquePathInDir(Directory dir, String name) async {
-    final dot = name.lastIndexOf('.');
-    final base = dot >= 0 ? name.substring(0, dot) : name;
-    final ext = dot >= 0 ? name.substring(dot) : '';
-
-    String candidate = name;
-    int n = 1;
-    while (await File('${dir.path}/$candidate').exists()) {
-      candidate = '$base ($n)$ext';
-      n++;
-      if (n > 999) {
-        return '${dir.path}/${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
-      }
-    }
-    return '${dir.path}/$candidate';
-  }
-
-  Future<String> _uniqueName(DocumentFile dir, String name) async {
-    final dot = name.lastIndexOf('.');
-    final base = dot >= 0 ? name.substring(0, dot) : name;
-    final ext = dot >= 0 ? name.substring(dot) : '';
-
-    String candidate = name;
-    int n = 1;
-    while (true) {
-      final found = await dir.find(candidate);
-      if (found == null || found.exists != true) return candidate;
-      candidate = '$base ($n)$ext';
-      n++;
-      if (n > 999)
-        return '${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
-    }
-  }
-
   // -------------------------
-  // docman の createFile/delete シグネチャ差を吸収
-  // -------------------------
+  // docman create/delete helpers with signature fallbacks.
   Future<DocumentFile?> _createFile(
     DocumentFile dir,
     String name,
@@ -1657,19 +1672,19 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   ) async {
     final d = dir as dynamic;
 
-    // パターン1: createFile(name: ..., bytes: ...)
+    // Pattern 1: createFile(name: ..., bytes: ...)
     try {
       final r = await d.createFile(name: name, bytes: bytes);
       if (r is DocumentFile) return r;
     } catch (_) {}
 
-    // パターン2: createFile(name, bytes)
+    // Pattern 2: createFile(name, bytes)
     try {
       final r = await d.createFile(name, bytes);
       if (r is DocumentFile) return r;
     } catch (_) {}
 
-    // パターン3: createFile(name: ..., mimeType: ..., bytes: ...)
+    // Pattern 3: createFile(name: ..., mimeType: ..., bytes: ...)
     try {
       final mime = _mimeFor(itemExt: _lowerExt(name));
       final r = await d.createFile(name: name, mimeType: mime, bytes: bytes);
@@ -1682,19 +1697,19 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   
   Future<bool> _deleteDoc(DocumentFile doc) async {
     final d = doc as dynamic;
-    // パターン1: delete()
+    // Pattern 1: delete()
     try {
       final r = await d.delete();
       if (r is bool) return r;
-      return true; // void の場合も成功扱い
+      return true;
     } catch (_) {}
-    // パターン2: delete(recursive: false)
+    // Pattern 2: delete(recursive: false)
     try {
       final r = await d.delete(recursive: false);
       if (r is bool) return r;
       return true;
     } catch (_) {}
-    // パターン3: deleteFile()
+    // Pattern 3: deleteFile()
     try {
       final r = await d.deleteFile();
       if (r is bool) return r;
@@ -1703,18 +1718,18 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     return false;
   }
 
-    bool _isFsFolderInLibrary(MediaItem item) {
+  bool _isFsFolderInLibrary(MediaItem item) {
     return item.kind == MediaKind.folder && !item.id.startsWith('content://');
   }
 
   @override
   Future<bool> deleteItem(MediaItem item) async {
-    // SAFの外部フォルダ削除は今回は未対応
+    // SAF folder deletion is not supported yet.
     if (item.kind == MediaKind.folder && item.id.startsWith('content://')) {
       return false;
     }
 
-    // アプリ保管庫の通常フォルダ削除
+    // Delete local filesystem folders directly.
     if (_isFsFolderInLibrary(item)) {
       try {
         final dir = Directory(item.id);
@@ -1731,7 +1746,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       }
     }
 
-    // SAF (content://) の画像/PDF
+    // Delete SAF-backed images and PDFs.
     if (item.id.startsWith('content://')) {
       return _docmanSync(() async {
         final doc = await DocumentFile.fromUri(item.id);
@@ -1746,7 +1761,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       });
     }
 
-    // 通常ファイル（保管庫など）
+    // Delete the local filesystem item directly when not using SAF.
     try {
       final f = File(item.id);
       if (await f.exists()) {
@@ -1774,43 +1789,37 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }
 
   Future<_ShallowCacheEntry> _getSafShallowCached(String dirUri) async {
-    // TTL内なら返す
     final hit = _safShallowCache[dirUri];
     if (hit != null && DateTime.now().difference(hit.at) <= _safShallowTtl) {
       return hit;
     }
 
-    // 直下一覧を取り直す（docman listDocumentsはここだけ）
     final entries = await _safListShallow(dirUri);
-
-    // ここで “一度だけ” 分類＆ソート
     final dirs = <_SafEntry>[];
     final files = <_SafEntry>[];
 
-    for (final e in entries) {
-      if (e.isDir) {
-        dirs.add(e);
-      } else {
-        if (_isTargetFileName(e.name)) files.add(e);
+    for (final entry in entries) {
+      if (entry.isDir) {
+        dirs.add(entry);
+      } else if (_isTargetFileName(entry.name)) {
+        files.add(entry);
       }
     }
 
-    int cmp(_SafEntry a, _SafEntry b) =>
+    int compareByName(_SafEntry a, _SafEntry b) =>
         a.name.toLowerCase().compareTo(b.name.toLowerCase());
 
-    dirs.sort(cmp);
-    files.sort(cmp);
+    dirs.sort(compareByName);
+    files.sort(compareByName);
 
-    final sortedAll = <_SafEntry>[...dirs, ...files];
-
-    final entry = _ShallowCacheEntry(
+    final cacheEntry = _ShallowCacheEntry(
       at: DateTime.now(),
       entries: entries,
-      sortedAll: sortedAll,
+      sortedAll: <_SafEntry>[...dirs, ...files],
     );
 
-    _safShallowCache[dirUri] = entry;
-    return entry;
+    _safShallowCache[dirUri] = cacheEntry;
+    return cacheEntry;
   }
 
   void _invalidateSafShallow(String dirUri) {
@@ -1838,7 +1847,7 @@ class _SafEntry {
 
 
 
-class _LruCache<K, V> {
+class _LruCache<K, V extends Object> {
   final int maxBytes;
   final int maxEntries;
   final int Function(V value) sizeOf;
@@ -1913,13 +1922,14 @@ class _AsyncMutex {
 }
 
 // ==============================
-// SAF shallow cache（直下一覧/ソート済み）
+// ==============================
+// SAF shallow cache entry
 // ==============================
 
 class _ShallowCacheEntry {
   final DateTime at;
-  final List<_SafEntry> entries;         // raw listDocuments結果（整形済み）
-  final List<_SafEntry> sortedAll;       // dirs→files + name sort 済み
+  final List<_SafEntry> entries;
+  final List<_SafEntry> sortedAll;
   _ShallowCacheEntry({
     required this.at,
     required this.entries,

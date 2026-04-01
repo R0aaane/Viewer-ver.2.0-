@@ -210,8 +210,7 @@ async def upload_files(
                 await upload.close()
                 logger.info('[UPLOAD][SERVER][req:%s] skip index=%s destination=%s reason=exists', request_id, index, _log_scalar(destination))
                 continue
-            destination = _unique_path(folder_path, file_name)
-
+            logger.info('[UPLOAD][SERVER][req:%s] overwrite index=%s destination=%s reason=explicit_overwrite', request_id, index, _log_scalar(destination))
         logger.info(
             '[UPLOAD][SERVER][req:%s] saving index=%s destination=%s final_filename=%s sourceRelativePath=%s',
             request_id,
@@ -723,16 +722,30 @@ def _is_inside_root(folder_path: str, root: str) -> bool:
     return normalized_folder == normalized_root or normalized_folder.startswith(normalized_root + os.sep)
 
 
-def _unique_path(folder_path: str, file_name: str) -> str:
-    base = Path(file_name).stem
-    suffix = Path(file_name).suffix
-    index = 1
-    candidate = os.path.join(folder_path, file_name)
-    while os.path.exists(candidate):
-        candidate = os.path.join(folder_path, f"{base} ({index}){suffix}")
-        index += 1
-    return candidate
+def _same_file(source_path: str, target_path: str) -> bool:
+    normalized_source = os.path.normcase(os.path.normpath(source_path))
+    normalized_target = os.path.normcase(os.path.normpath(target_path))
+    if normalized_source == normalized_target:
+        return True
 
+    try:
+        return os.path.samefile(source_path, target_path)
+    except OSError:
+        pass
+
+    if not os.path.isfile(source_path) or not os.path.isfile(target_path):
+        return False
+
+    try:
+        source_stat = os.stat(source_path)
+        target_stat = os.stat(target_path)
+    except OSError:
+        return False
+
+    return (
+        int(source_stat.st_size) == int(target_stat.st_size)
+        and int(source_stat.st_mtime * 1000) == int(target_stat.st_mtime * 1000)
+    )
 
 
 def _normalize_upload_file_name(raw_name: str) -> str:
@@ -888,7 +901,16 @@ def _flatten_imported_media_paths(
             flattened.append((source_path, relative_path))
             continue
         if os.path.exists(target_path):
-            target_path = _unique_path(folder_path, file_name)
+            if _same_file(source_path, target_path):
+                logger.info('[MOVE] skipped same-file old=%s new=%s', source_path, target_path)
+                try:
+                    os.remove(source_path)
+                except OSError:
+                    pass
+                flattened.append((os.path.normpath(target_path), relative_path))
+                continue
+            logger.warning('[COPY] blocked duplicate-name source=%s target=%s', source_path, target_path)
+            raise bad_request('同名のファイルまたはフォルダが既に存在します')
 
         shutil.move(source_path, target_path)
         flattened.append((os.path.normpath(target_path), relative_path))

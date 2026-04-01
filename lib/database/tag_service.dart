@@ -775,15 +775,31 @@ class TagService {
   // TagService only keeps metadata stores and caches in sync with that result.
   Future<void> handleItemRenamed(MediaItem before, MediaItem after) async {
     await initialize();
-    _forgetKnownItem(before);
-    rememberItem(after);
+    if (before.kind == MediaKind.folder) {
+      _forgetKnownItemsUnderPrefix(before.id);
+      _forgetKnownItemsUnderPrefix(after.id);
+      rememberItem(after);
+    } else {
+      _forgetKnownItem(before);
+      rememberItem(after);
+    }
 
     if (!isRemoteMode) {
-      await _localStore.renameItem(before, after);
+      if (before.kind == MediaKind.folder) {
+        await _localStore.renameItemsUnderPathPrefix(
+          beforePrefix: before.id,
+          afterPrefix: after.id,
+        );
+      } else {
+        await _localStore.renameItem(before, after);
+      }
       await _mirrorHostRename(before, after);
       return;
     }
 
+    if (before.kind == MediaKind.folder) {
+      _remoteTagCache.clear();
+    }
     final beforeIdentity = await _idResolver.resolve(before);
     final afterIdentity = await _idResolver.resolve(after);
     _remoteTagCache.remove(beforeIdentity.stableId);
@@ -850,6 +866,9 @@ class TagService {
       return true;
     }
     try {
+      if (item.kind == MediaKind.folder) {
+        return Directory(item.id).existsSync();
+      }
       return File(item.id).existsSync();
     } catch (_) {
       return false;
@@ -1109,6 +1128,20 @@ class TagService {
 
   void _forgetKnownItem(MediaItem item) {
     for (final key in _itemLookupKeys(item.id)) {
+      _knownItems.remove(key);
+    }
+  }
+
+  void _forgetKnownItemsUnderPrefix(String prefix) {
+    final normalizedPrefix = prefix.replaceAll('/', '\\').toLowerCase();
+    final keys = _knownItems.keys
+        .where((key) {
+          final normalizedKey = key.replaceAll('/', '\\').toLowerCase();
+          return normalizedKey == normalizedPrefix ||
+              normalizedKey.startsWith('$normalizedPrefix\\');
+        })
+        .toList(growable: false);
+    for (final key in keys) {
       _knownItems.remove(key);
     }
   }

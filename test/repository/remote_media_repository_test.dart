@@ -53,6 +53,47 @@ void main() {
       expect(idResolver.forgotten, containsAll(<String>[item.id, renamed.id]));
     });
 
+    test('supports folder rename through the remote api', () async {
+      final apiClient = _FakeRemoteMediaApiClient();
+      final idResolver = _FakeMediaIdResolver();
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: idResolver,
+        localPickerRepository: const _StubMediaRepository(),
+      );
+      final item = MediaItem(
+        id: r'C:\library\old-folder',
+        displayName: 'old-folder',
+        kind: MediaKind.folder,
+        folderRaw: r'C:\library',
+      );
+
+      apiClient.onRename = (afterItem, afterIdentity) {
+        apiClient.folderEntriesByFolder[afterItem.folderRaw] = <RemoteFolderEntry>[
+          RemoteFolderEntry(
+            entryId: afterItem.id,
+            displayName: afterItem.displayName,
+            folderRaw: afterItem.folderRaw,
+            kind: 'folder',
+            mediaId: null,
+            fullPath: afterItem.id,
+            sizeBytes: null,
+            modifiedAt: null,
+          ),
+        ];
+      };
+
+      final renamed = await repository.rename(item, 'new-folder');
+
+      expect(renamed.id, r'C:\library\new-folder');
+      expect(renamed.displayName, 'new-folder');
+      expect(renamed.kind, MediaKind.folder);
+      expect(apiClient.renameCalls, hasLength(1));
+      expect(apiClient.renameCalls.single.oldPath, item.id);
+      expect(apiClient.renameCalls.single.newPath, r'C:\library\new-folder');
+      expect(idResolver.forgotten, containsAll(<String>[item.id, renamed.id]));
+    });
+
     test('throws when the remote rename API fails', () async {
       final apiClient = _FakeRemoteMediaApiClient()
         ..renameError = const RemoteMediaException('rename failed');

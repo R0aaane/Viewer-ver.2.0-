@@ -99,17 +99,28 @@ def _sanitize_dir_name(input_value: str) -> str:
     return value or "_"
 
 
-def _unique_path(directory: str, file_name: str) -> str:
-    base = Path(file_name).stem
-    suffix = Path(file_name).suffix
-    index = 1
-    candidate = os.path.join(directory, file_name)
-    while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{base} ({index}){suffix}")
-        index += 1
-        if index > 999:
-            return os.path.join(directory, f"{base}_{int(datetime.now(tz=timezone.utc).timestamp() * 1000)}{suffix}")
-    return candidate
+def _same_file(source_path: str, target_path: str) -> bool:
+    if _normalize_path(source_path) == _normalize_path(target_path):
+        return True
+
+    try:
+        return os.path.samefile(source_path, target_path)
+    except OSError:
+        pass
+
+    if not os.path.isfile(source_path) or not os.path.isfile(target_path):
+        return False
+
+    try:
+        source_stat = os.stat(source_path)
+        target_stat = os.stat(target_path)
+    except OSError:
+        return False
+
+    return (
+        int(source_stat.st_size) == int(target_stat.st_size)
+        and int(source_stat.st_mtime * 1000) == int(target_stat.st_mtime * 1000)
+    )
 
 
 def _pick_first_tag_name(tags: list[dict[str, Any]], category: str) -> str | None:
@@ -154,7 +165,7 @@ class MetadataStore:
     def get_media(self, media_id: str) -> dict[str, Any]:
         row = self._db.get_media_record(media_id)
         if row is None:
-            raise not_found("メディアが見つかりません")
+            raise not_found("Media was not found")
         return self._row_to_media_dict(row)
 
     def list_tag_master(
@@ -188,7 +199,7 @@ class MetadataStore:
     def delete_tag_master(self, tag_id: str) -> int:
         existing = self._db.get_tag_master(tag_id)
         if existing is None:
-            raise not_found("タグが見つかりません")
+            raise not_found("Tag was not found")
         return self._db.delete_tag_master(tag_id)
 
     def resolve_media_record(
@@ -223,7 +234,7 @@ class MetadataStore:
             if record is not None:
                 return record
 
-        raise not_found("メディアが見つかりません")
+        raise not_found("Media was not found")
 
     def resolve_media_id(
         self,
@@ -539,23 +550,116 @@ class MetadataStore:
         new_path: str | None,
     ) -> dict[str, Any]:
         if not old_path and not old_media_id:
-            raise bad_request("oldPath または oldMediaId が必要です")
+            raise bad_request("oldPath or oldMediaId is required")
         if not new_path and not new_media_id:
-            raise bad_request("newPath または newMediaId が必要です")
+            raise bad_request("newPath or newMediaId is required")
 
         current = self._db.get_media_record(old_media_id) if old_media_id else None
         if current is None and old_path:
             current = self._db.get_media_record_by_path(old_path)
+
+        old_full_path = os.path.normpath(old_path or (current["full_path"] if current else ""))
+        target_full_path = os.path.normpath(new_path or old_full_path)
+        logger.info("[RENAME] request old=%s new=%s", old_full_path, target_full_path)
+
         if current is None:
-            raise not_found("リネーム対象のメディアが見つかりません")
+            if not old_full_path or not os.path.isdir(old_full_path):
+                raise not_found("Rename target was not found")
+
+            if _normalize_path(old_full_path) == _normalize_path(target_full_path):
+                logger.info("[MOVE] skipped same-file old=%s new=%s", old_full_path, target_full_path)
+                return {
+                    "entryId": target_full_path,
+                    "displayName": os.path.basename(target_full_path),
+                    "folderRaw": os.path.dirname(target_full_path),
+                    "kind": "folder",
+                    "mediaId": None,
+                    "fullPath": target_full_path,
+                    "sizeBytes": None,
+                    "modifiedAt": None,
+                }
+
+            if os.path.exists(target_full_path):
+                logger.warning("[RENAME] failed reason=duplicate-name old=%s new=%s", old_full_path, target_full_path)
+                raise bad_request("A file or folder with the same name already exists")
+
+            target_parent = os.path.dirname(target_full_path)
+            if target_parent:
+                os.makedirs(target_parent, exist_ok=True)
+            shutil.move(old_full_path, target_full_path)
+
+            descendants = self._db.list_media_records(
+                folder_prefix=_normalize_path(old_full_path),
+                include_deleted=True,
+            )
+            for row in descendants:
+                current_full = os.path.normpath(str(row["full_path"]))
+                relative = os.path.relpath(current_full, old_full_path)
+                actual_path = os.path.normpath(os.path.join(target_full_path, relative))
+                folder_raw = os.path.dirname(actual_path)
+                display_name = os.path.basename(actual_path)
+                stat = os.stat(actual_path) if os.path.exists(actual_path) else None
+                size_bytes = stat.st_size if stat else row.get("size_bytes")
+                modified_epoch_ms = int(stat.st_mtime * 1000) if stat else row.get("modified_epoch_ms")
+                modified_at = (
+                    datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                    if stat
+                    else row.get("modified_at")
+                )
+                final_media_id = build_media_id(
+                    kind=str(row["kind"]),
+                    full_path=actual_path,
+                    folder_raw=folder_raw,
+                    display_name=display_name,
+                    size_bytes=size_bytes,
+                    modified_epoch_ms=modified_epoch_ms,
+                )
+                updated = {
+                    "media_id": final_media_id,
+                    "folder_raw": folder_raw,
+                    "relative_hint": display_name,
+                    "display_name": display_name,
+                    "full_path": actual_path,
+                    "normalized_full_path": _normalize_path(actual_path),
+                    "kind": row["kind"],
+                    "mime_type": row.get("mime_type"),
+                    "size_bytes": size_bytes,
+                    "modified_at": modified_at,
+                    "modified_epoch_ms": modified_epoch_ms,
+                    "etag": row.get("etag"),
+                    "is_deleted": row.get("is_deleted", 0),
+                }
+                self._db.upsert_media_record(updated)
+                self._db.replace_media_id_references(str(row["media_id"]), final_media_id)
+                if str(row["media_id"]) != final_media_id:
+                    self._db.remove_media_record(str(row["media_id"]))
+
+            logger.info("[RENAME] success old=%s new=%s", old_full_path, target_full_path)
+            return {
+                "entryId": target_full_path,
+                "displayName": os.path.basename(target_full_path),
+                "folderRaw": os.path.dirname(target_full_path),
+                "kind": "folder",
+                "mediaId": None,
+                "fullPath": target_full_path,
+                "sizeBytes": None,
+                "modifiedAt": None,
+            }
 
         old_full_path = os.path.normpath(old_path or current["full_path"])
         target_full_path = os.path.normpath(new_path or current["full_path"])
         if old_full_path != target_full_path and os.path.exists(old_full_path):
-            target_parent = os.path.dirname(target_full_path)
-            if target_parent:
-                os.makedirs(target_parent, exist_ok=True)
-            os.replace(old_full_path, target_full_path)
+            if os.path.exists(target_full_path):
+                if _same_file(old_full_path, target_full_path):
+                    logger.info("[MOVE] skipped same-file old=%s new=%s", old_full_path, target_full_path)
+                else:
+                    logger.warning("[RENAME] failed reason=duplicate-name old=%s new=%s", old_full_path, target_full_path)
+                    raise bad_request("A file or folder with the same name already exists")
+            else:
+                target_parent = os.path.dirname(target_full_path)
+                if target_parent:
+                    os.makedirs(target_parent, exist_ok=True)
+                os.replace(old_full_path, target_full_path)
 
         actual_path = target_full_path
         kind = current["kind"]
@@ -597,6 +701,7 @@ class MetadataStore:
         self._db.replace_media_id_references(current["media_id"], final_media_id)
         if current["media_id"] != final_media_id:
             self._db.remove_media_record(current["media_id"])
+        logger.info("[RENAME] success old=%s new=%s", old_full_path, target_full_path)
         return self._row_to_media_dict(updated)
 
     def apply_delete(self, items: list[dict[str, Any]], hard_delete: bool = False) -> int:
@@ -680,10 +785,13 @@ class MetadataStore:
             if _normalize_path(source_path) == _normalize_path(candidate_path):
                 continue
 
+            target_path = candidate_path
             if os.path.exists(candidate_path):
-                target_path = _unique_path(destination_dir, file_name)
-            else:
-                target_path = candidate_path
+                if _same_file(source_path, candidate_path):
+                    logger.info("[MOVE] skipped same-file old=%s new=%s", source_path, candidate_path)
+                    continue
+                logger.warning("[TAG-ORGANIZE] conflict source=%s target=%s", source_path, candidate_path)
+                continue
 
             updated = self.apply_rename(
                 old_media_id=current["media_id"],

@@ -10,6 +10,7 @@ import '../repository/mediaRepository.dart';
 
 import '../database/tag_service.dart';
 import '../models/tag.dart';
+import 'rename_item_dialog.dart';
 
 enum ReaderFitMode { vertical, horizontal, contain }
 
@@ -497,38 +498,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   Future<void> _renameCurrentItem() async {
     final item = _item;
-    final base = _displayNameWithoutExtension(item);
-
-    final ctrl = TextEditingController(text: base);
-    final kindLabel = item.kind == MediaKind.pdf ? 'PDF' : '画像';
-    final hintText = item.kind == MediaKind.pdf
-        ? '拡張子 .pdf は不要です'
-        : '拡張子はそのまま維持されます';
-
-    final newBase = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text('$kindLabel名を変更'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: hintText,
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('キャンセル'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-            child: const Text('変更'),
-          ),
-        ],
-      ),
-    );
+    final newBase = await showRenameItemDialog(context, item: item);
 
     if (newBase == null || newBase.isEmpty) return;
 
@@ -571,22 +541,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('名前の変更に失敗しました: $e')));
-    } finally {
-      ctrl.dispose();
     }
-  }
-
-  String _displayNameWithoutExtension(MediaItem item) {
-    if (item.kind == MediaKind.pdf &&
-        item.displayName.toLowerCase().endsWith('.pdf')) {
-      return item.displayName.substring(0, item.displayName.length - 4);
-    }
-
-    final dot = item.displayName.lastIndexOf('.');
-    if (dot <= 0 || dot == item.displayName.length - 1) {
-      return item.displayName;
-    }
-    return item.displayName.substring(0, dot);
   }
 
   Future<void> _toggleFullscreen() async {
