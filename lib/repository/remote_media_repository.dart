@@ -961,10 +961,10 @@ class RemoteMediaRepository implements MediaRepository {
     return filteredItems
         .map((item) {
           final relativePath = _stagingRelativePath(item.id, stagingRoot);
-          final hitomiMetadata =
-              hitomiMetadataByRelativePath[HitomiGalleryMetadata.normalizeRelativePathKey(
-                relativePath,
-              )];
+          final hitomiMetadata = _lookupHitomiMetadataForRelativePath(
+            relativePath,
+            hitomiMetadataByRelativePath: hitomiMetadataByRelativePath,
+          );
           final inferredTags = item.kind == MediaKind.pdf
               ? ImportTagRuleService.inferForImportedItem(
                   itemPath: item.id,
@@ -991,6 +991,38 @@ class RemoteMediaRepository implements MediaRepository {
           );
         })
         .toList(growable: false);
+  }
+
+  HitomiGalleryMetadata? _lookupHitomiMetadataForRelativePath(
+    String? relativePath, {
+    required Map<String, HitomiGalleryMetadata> hitomiMetadataByRelativePath,
+  }) {
+    if (hitomiMetadataByRelativePath.isEmpty) {
+      return null;
+    }
+
+    final key = HitomiGalleryMetadata.normalizeRelativePathKey(relativePath);
+    final exactMatch = key == null ? null : hitomiMetadataByRelativePath[key];
+    if (exactMatch != null) {
+      return exactMatch;
+    }
+
+    final basenameKey = HitomiGalleryMetadata.basenameKey(relativePath);
+    if (basenameKey == null) {
+      return null;
+    }
+
+    HitomiGalleryMetadata? match;
+    for (final entry in hitomiMetadataByRelativePath.entries) {
+      if (HitomiGalleryMetadata.basenameKey(entry.key) != basenameKey) {
+        continue;
+      }
+      if (match != null) {
+        return null;
+      }
+      match = entry.value;
+    }
+    return match;
   }
 
   List<MediaItem> _filterOutGeneratedPdfSourceImages(

@@ -1,4 +1,4 @@
-import requests
+﻿import requests
 from requests.adapters import HTTPAdapter, Retry
 import re
 import os
@@ -29,6 +29,7 @@ from .hitomi import (
     extract_hitomi_gallery_info,
     parse_hitomi_gg,
     parse_hitomi_url,
+    pick_hitomi_directory_name,
 )
 # from .my_yt_dlp import my_yt_dlp
 
@@ -308,13 +309,13 @@ class downloader:
         japanese_title = info.get('japanese_title')
         english_title = info.get('title')
         title = japanese_title or english_title or f"gallery_{gallery_id}"
-        artists = collect_hitomi_names(info, 'artists', 'artist')
-        groups = collect_hitomi_names(info, 'groups', 'group')
-        series = collect_hitomi_names(info, 'parodys', 'parody')
-        characters = collect_hitomi_names(info, 'characters', 'character')
+        artists = collect_hitomi_names(info, ('artists', 'artist'), ('artist', 'name'))
+        groups = collect_hitomi_names(info, ('groups', 'group'), ('group', 'name'))
+        series = collect_hitomi_names(info, ('parodys', 'parodies', 'series', 'parody'), ('parody', 'series', 'name', 'title'))
+        characters = collect_hitomi_names(info, ('characters', 'character'), ('character', 'name'))
         tags = [item.get('tag') for item in (info.get('tags') or []) if item.get('tag')]
 
-        owner_name = artists[0] if artists else (groups[0] if groups else title)
+        owner_name = pick_hitomi_directory_name(artists, groups, series, title)
         published_raw = info.get('date')
         if published_raw and isinstance(published_raw, str) and published_raw.count(':') == 1:
             published_raw = f"{published_raw}:00"
@@ -1543,3 +1544,6 @@ class downloader:
 
 def main():
     downloader(get_args())
+
+
+

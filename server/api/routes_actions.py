@@ -1,4 +1,4 @@
-import json
+﻿import json
 import logging
 import os
 import posixpath
@@ -450,8 +450,9 @@ async def download_url(
         has_any_tags = bool(common_tags)
         for saved_path, relative_path_hint in flattened_entries:
             inferred_tags = []
-            hitomi_metadata = download_result.hitomi_metadata_by_relative_path.get(
-                relative_path_hint.replace("\\", "/").casefold()
+            hitomi_metadata = _lookup_hitomi_metadata_for_relative_path(
+                relative_path_hint,
+                download_result.hitomi_metadata_by_relative_path,
             )
             if normalized_extension(saved_path) == ".pdf":
                 inferred_tags = filter_hitomi_pdf_auto_tags(
@@ -923,6 +924,30 @@ def _replace_relative_basename(relative_path: str, file_name: str) -> str:
     return posixpath.join(parent, file_name)
 
 
+def _lookup_hitomi_metadata_for_relative_path(
+    relative_path_hint: str,
+    metadata_by_relative_path: dict[str, dict[str, object]],
+) -> dict[str, object] | None:
+    normalized = str(relative_path_hint or "").replace("\\", "/").casefold()
+    if normalized:
+        exact = metadata_by_relative_path.get(normalized)
+        if exact is not None:
+            return exact
+
+    basename = posixpath.basename(normalized)
+    if not basename:
+        return None
+
+    match: dict[str, object] | None = None
+    for key, value in metadata_by_relative_path.items():
+        if posixpath.basename(str(key or "").replace("\\", "/").casefold()) != basename:
+            continue
+        if match is not None:
+            return None
+        match = value
+    return match
+
+
 def _flatten_imported_media_paths(
     folder_path: str,
     imported_paths: list[str],
@@ -968,6 +993,7 @@ def _remove_empty_dirs(folder_path: str) -> None:
                 os.rmdir(base)
         except OSError:
             continue
+
 
 
 

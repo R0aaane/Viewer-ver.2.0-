@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import re
 
@@ -67,13 +67,96 @@ def parse_hitomi_gg(payload: str):
     return mapping, base_match.group(1).strip("/"), default_value
 
 
-def collect_hitomi_names(info: dict, key: str, field: str):
+def _dedupe_hitomi_names(values: list[str]) -> list[str]:
     names = []
-    for item in info.get(key) or []:
-        value = item.get(field)
+    seen = set()
+
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        lowered = value.casefold()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        names.append(value)
+
+    return names
+
+
+def _candidate_list(value) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(entry).strip() for entry in value if str(entry).strip()]
+    single = str(value or "").strip()
+    return [single] if single else []
+
+
+def _iter_hitomi_items(info: dict, keys):
+    for key in _candidate_list(keys):
+        raw_items = info.get(key)
+        if raw_items is None:
+            continue
+        if isinstance(raw_items, (list, tuple)):
+            items = raw_items
+        else:
+            items = [raw_items]
+        for item in items:
+            yield item
+
+
+def _extract_hitomi_name(item, fields) -> str | None:
+    field_names = _candidate_list(fields)
+    fallback_fields = [
+        field
+        for field in ("name", "title", "value", "label")
+        if field not in field_names
+    ]
+
+    if isinstance(item, dict):
+        for field_name in [*field_names, *fallback_fields]:
+            value = item.get(field_name)
+            trimmed = str(value or "").strip()
+            if trimmed:
+                return trimmed
+        return None
+
+    trimmed = str(item or "").strip()
+    return trimmed or None
+
+
+def collect_hitomi_names(info: dict, keys, fields):
+    names = []
+    for item in _iter_hitomi_items(info, keys):
+        value = _extract_hitomi_name(item, fields)
         if value:
             names.append(value)
-    return names
+    return _dedupe_hitomi_names(names)
+
+
+def pick_hitomi_directory_name(
+    artists: list[str],
+    groups: list[str],
+    series: list[str],
+    title: str,
+):
+    deduped_artists = _dedupe_hitomi_names(artists)
+    deduped_groups = _dedupe_hitomi_names(groups)
+    deduped_series = _dedupe_hitomi_names(series)
+    cleaned_title = str(title or "").strip()
+
+    if len(deduped_artists) > 1:
+        if deduped_series:
+            return deduped_series[0]
+        if cleaned_title:
+            return cleaned_title
+
+    if deduped_artists:
+        return deduped_artists[0]
+    if deduped_groups:
+        return deduped_groups[0]
+    if deduped_series:
+        return deduped_series[0]
+    return cleaned_title or "gallery"
 
 
 def list_hitomi_extensions(file_info: dict, preferred: str = "auto"):
