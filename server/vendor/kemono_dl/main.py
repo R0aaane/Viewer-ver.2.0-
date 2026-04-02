@@ -27,6 +27,7 @@ from .hitomi import (
     build_hitomi_file,
     build_hitomi_pdf_path,
     collect_hitomi_names,
+    extract_hitomi_gallery_html_metadata,
     extract_hitomi_gallery_info,
     parse_hitomi_gg,
     parse_hitomi_url,
@@ -305,15 +306,16 @@ class downloader:
         self.hitomi_gg = parse_hitomi_gg(response.text)
         return self.hitomi_gg
 
-    def build_hitomi_post(self, gallery:dict, info:dict):
+    def build_hitomi_post(self, gallery:dict, info:dict, gallery_html:str | None = None):
         gallery_id = gallery['gallery_id']
         japanese_title = info.get('japanese_title')
         english_title = info.get('title')
         title = japanese_title or english_title or f"gallery_{gallery_id}"
-        artists = collect_hitomi_names(info, ('artists', 'artist'), ('artist', 'name'))
-        groups = collect_hitomi_names(info, ('groups', 'group'), ('group', 'name'))
-        series = collect_hitomi_names(info, ('parodys', 'parodies', 'series', 'parody'), ('parody', 'series', 'name', 'title'))
-        characters = collect_hitomi_names(info, ('characters', 'character'), ('character', 'name'))
+        html_metadata = extract_hitomi_gallery_html_metadata(gallery_html)
+        artists = html_metadata['artists'] or collect_hitomi_names(info, ('artists', 'artist'), ('artist', 'name'))
+        groups = html_metadata['groups'] or collect_hitomi_names(info, ('groups', 'group'), ('group', 'name'))
+        series = html_metadata['series'] or collect_hitomi_names(info, ('parodys', 'parodies', 'series', 'parody'), ('parody', 'series', 'name', 'title'))
+        characters = html_metadata['characters'] or collect_hitomi_names(info, ('characters', 'character'), ('character', 'name'))
         tags = [item.get('tag') for item in (info.get('tags') or []) if item.get('tag')]
 
         owner_name = pick_hitomi_directory_name(artists, groups, series, title)
@@ -446,7 +448,18 @@ class downloader:
             )
             if not response.ok:
                 raise Exception(f"{response.status_code} {response.reason}")
-            post = self.build_hitomi_post(gallery, extract_hitomi_gallery_info(response.text))
+            gallery_html = None
+            try:
+                gallery_response = self.session.get(
+                    url=gallery['normalized_url'],
+                    headers=dict(self.headers, Referer=gallery['reader_url']),
+                    timeout=self.timeout,
+                )
+                if gallery_response.ok:
+                    gallery_html = gallery_response.text
+            except Exception as gallery_exc:
+                logger.debug(f"Hitomi gallery page metadata fetch failed | gallery_id:{gallery['gallery_id']} error:{gallery_exc}")
+            post = self.build_hitomi_post(gallery, extract_hitomi_gallery_info(response.text), gallery_html=gallery_html)
         except Exception as exc:
             logger.debug(f"{type(exc)}: {exc}")
             if retry > 0:
@@ -1547,6 +1560,7 @@ class downloader:
 
 def main():
     downloader(get_args())
+
 
 
 

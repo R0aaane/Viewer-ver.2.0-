@@ -3,6 +3,7 @@
 from server.vendor.kemono_dl.hitomi import (
     build_hitomi_pdf_path,
     collect_hitomi_names,
+    extract_hitomi_gallery_html_metadata,
     pick_hitomi_directory_name,
 )
 
@@ -23,6 +24,18 @@ class HitomiHelpersTest(unittest.TestCase):
             ['Artist A', 'Artist B'],
         )
 
+    def test_collect_hitomi_names_does_not_fallback_to_title_for_artist(self) -> None:
+        info = {
+            'artists': [
+                {'title': '[20241105] [3114110] Sample Title'},
+            ]
+        }
+
+        self.assertEqual(
+            collect_hitomi_names(info, 'artists', ('artist', 'name')),
+            [],
+        )
+
     def test_collect_hitomi_names_supports_alternate_series_keys_and_fields(self) -> None:
         info = {
             'series': [
@@ -36,9 +49,33 @@ class HitomiHelpersTest(unittest.TestCase):
             collect_hitomi_names(
                 info,
                 ('parodys', 'parodies', 'series', 'parody'),
-                ('parody', 'series'),
+                ('parody', 'series', 'name', 'title'),
             ),
             ['Original Series'],
+        )
+
+    def test_extract_hitomi_gallery_html_metadata_reads_artists_and_series(self) -> None:
+        html = '''
+        <html>
+          <body>
+            <h2><a>Artist A</a> <a>Artist B</a></h2>
+            <table>
+              <tr><td>Group</td><td><a>Group X</a></td></tr>
+              <tr><td>Series</td><td><a>Original Series</a></td></tr>
+              <tr><td>Characters</td><td><a>Heroine</a></td></tr>
+            </table>
+          </body>
+        </html>
+        '''
+
+        self.assertEqual(
+            extract_hitomi_gallery_html_metadata(html),
+            {
+                'artists': ['Artist A', 'Artist B'],
+                'groups': ['Group X'],
+                'series': ['Original Series'],
+                'characters': ['Heroine'],
+            },
         )
 
     def test_pick_hitomi_directory_name_prefers_series_for_multi_artist_gallery(self) -> None:

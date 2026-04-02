@@ -2,6 +2,8 @@
 import os
 import re
 
+from bs4 import BeautifulSoup
+
 
 HITOMI_ROOT = "https://hitomi.la"
 HITOMI_MEDIA_DOMAIN = "gold-usergeneratedcontent.net"
@@ -106,14 +108,9 @@ def _iter_hitomi_items(info: dict, keys):
 
 def _extract_hitomi_name(item, fields) -> str | None:
     field_names = _candidate_list(fields)
-    fallback_fields = [
-        field
-        for field in ("name", "title", "value", "label")
-        if field not in field_names
-    ]
 
     if isinstance(item, dict):
-        for field_name in [*field_names, *fallback_fields]:
+        for field_name in field_names:
             value = item.get(field_name)
             trimmed = str(value or "").strip()
             if trimmed:
@@ -131,6 +128,68 @@ def collect_hitomi_names(info: dict, keys, fields):
         if value:
             names.append(value)
     return _dedupe_hitomi_names(names)
+
+
+def _normalize_hitomi_label(raw: str) -> str:
+    return re.sub(r"\s+", " ", str(raw or "")).strip().rstrip(":").casefold()
+
+
+def _extract_hitomi_anchor_texts(node) -> list[str]:
+    if node is None:
+        return []
+    values = []
+    for anchor in node.find_all("a"):
+        text = " ".join(anchor.stripped_strings).strip()
+        if text:
+            values.append(text)
+    return _dedupe_hitomi_names(values)
+
+
+def _extract_hitomi_row_link_values(soup: BeautifulSoup, labels) -> list[str]:
+    normalized_labels = {_normalize_hitomi_label(label) for label in _candidate_list(labels)}
+    for row in soup.find_all("tr"):
+        cells = row.find_all(["td", "th"], recursive=False)
+        if len(cells) < 2:
+            continue
+        label = _normalize_hitomi_label(" ".join(cells[0].stripped_strings))
+        if label not in normalized_labels:
+            continue
+        values = []
+        for cell in cells[1:]:
+            values.extend(_extract_hitomi_anchor_texts(cell))
+        if values:
+            return _dedupe_hitomi_names(values)
+    return []
+
+
+def extract_hitomi_gallery_html_metadata(payload: str | None) -> dict[str, list[str]]:
+    raw = str(payload or "").strip()
+    if not raw:
+        return {
+            "artists": [],
+            "groups": [],
+            "series": [],
+            "characters": [],
+        }
+
+    soup = BeautifulSoup(raw, "html.parser")
+    artists = []
+    for heading in soup.find_all("h2"):
+        artists.extend(_extract_hitomi_anchor_texts(heading))
+    artists = _dedupe_hitomi_names(artists)
+    if not artists:
+        artists = _extract_hitomi_row_link_values(soup, ("artist",))
+
+    groups = _extract_hitomi_row_link_values(soup, ("group", "circle"))
+    series = _extract_hitomi_row_link_values(soup, ("series", "parody"))
+    characters = _extract_hitomi_row_link_values(soup, ("characters",))
+
+    return {
+        "artists": artists,
+        "groups": groups,
+        "series": series,
+        "characters": characters,
+    }
 
 
 def pick_hitomi_directory_name(
@@ -193,7 +252,6 @@ def list_hitomi_extensions(file_info: dict, preferred: str = "auto"):
         if preferred not in {"avif", "jxl"} or file_info.get(f"has{preferred}"):
             add_extension(preferred)
 
-    # Match Hitomi's reader flow: prefer AVIF when available, otherwise WEBP.
     if file_info.get("hasavif"):
         add_extension("avif")
 
@@ -262,4 +320,3 @@ def build_hitomi_file(file_info: dict, gg_map: dict, gg_base: str, gg_default: i
         "fallback_urls": [],
         "hash": None,
     }
-
