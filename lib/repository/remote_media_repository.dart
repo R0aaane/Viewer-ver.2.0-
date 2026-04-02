@@ -1269,12 +1269,10 @@ class RemoteMediaRepository implements MediaRepository {
 
     final beforeRemoteMediaId = await _remoteMediaIdForItem(item);
     final beforeIdentity = await _idResolver.resolve(item);
-    final afterIdentity = await _idResolver.resolve(nextItem);
     await _client.renameMedia(
       beforeItem: item,
       afterItem: nextItem,
       beforeIdentity: beforeIdentity,
-      afterIdentity: afterIdentity,
     );
 
     final refreshed = await _findFolderChildByPath(nextItem.folderRaw, nextPath);

@@ -880,25 +880,59 @@ def _is_generated_pdf_source_image(
 def _normalized_relative_path(path: str, folder_path: str) -> str:
     return os.path.relpath(path, folder_path).replace("\\", "/")
 
+
+def _collapse_repeated_numeric_suffixes(stem: str) -> str:
+    value = str(stem or "").strip()
+    if not value:
+        return value
+
+    suffixes: list[str] = []
+    while True:
+        match = re.search(r" \((\d+)\)$", value)
+        if match is None:
+            break
+        suffixes.append(match.group(1))
+        value = value[: match.start()]
+
+    if len(suffixes) < 2:
+        return stem
+    if any(suffix != suffixes[0] for suffix in suffixes):
+        return stem
+    if not value.strip():
+        return stem
+    return f"{value} ({suffixes[0]})"
+
+
+def _normalized_import_file_name(file_name: str) -> str:
+    path = Path(str(file_name or ""))
+    collapsed_stem = _collapse_repeated_numeric_suffixes(path.stem)
+    if collapsed_stem == path.stem:
+        return path.name
+    return f"{collapsed_stem}{path.suffix}"
+
+
+def _replace_relative_basename(relative_path: str, file_name: str) -> str:
+    normalized = str(relative_path or "").replace("\\", "/")
+    parent = posixpath.dirname(normalized)
+    if not parent or parent == ".":
+        return file_name
+    return posixpath.join(parent, file_name)
+
+
 def _flatten_imported_media_paths(
     folder_path: str,
     imported_paths: list[str],
 ) -> list[tuple[str, str]]:
     flattened: list[tuple[str, str]] = []
-    normalized_root = os.path.normcase(os.path.normpath(folder_path))
 
     for raw_path in imported_paths:
         source_path = os.path.normpath(raw_path)
         relative_path = os.path.relpath(source_path, folder_path).replace("\\", "/")
-        source_parent = os.path.normcase(os.path.dirname(source_path))
-        if source_parent == normalized_root:
-            flattened.append((source_path, relative_path))
-            continue
-
-        file_name = os.path.basename(source_path)
+        file_name = _normalized_import_file_name(os.path.basename(source_path))
+        relative_hint = _replace_relative_basename(relative_path, file_name)
         target_path = os.path.normpath(os.path.join(folder_path, file_name))
         if os.path.normcase(target_path) == os.path.normcase(source_path):
-            flattened.append((source_path, relative_path))
+            flattened.append((source_path, relative_hint))
             continue
         if os.path.exists(target_path):
             if _same_file(source_path, target_path):
@@ -907,13 +941,13 @@ def _flatten_imported_media_paths(
                     os.remove(source_path)
                 except OSError:
                     pass
-                flattened.append((os.path.normpath(target_path), relative_path))
+                flattened.append((os.path.normpath(target_path), relative_hint))
                 continue
             logger.warning('[COPY] blocked duplicate-name source=%s target=%s', source_path, target_path)
-            raise bad_request('同名のファイルまたはフォルダが既に存在します')
+            raise bad_request('Duplicate file or folder name already exists')
 
         shutil.move(source_path, target_path)
-        flattened.append((os.path.normpath(target_path), relative_path))
+        flattened.append((os.path.normpath(target_path), relative_hint))
 
     _remove_empty_dirs(folder_path)
     return flattened
@@ -930,5 +964,6 @@ def _remove_empty_dirs(folder_path: str) -> None:
                 os.rmdir(base)
         except OSError:
             continue
+
 
 

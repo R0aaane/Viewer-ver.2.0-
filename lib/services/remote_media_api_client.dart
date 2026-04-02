@@ -237,7 +237,6 @@ class RemoteMediaApiClient {
     required MediaItem beforeItem,
     required MediaItem afterItem,
     required ResolvedMediaIdentity beforeIdentity,
-    required ResolvedMediaIdentity afterIdentity,
   }) async {
     await _sendJsonRequest(
       'POST',
@@ -252,7 +251,6 @@ class RemoteMediaApiClient {
           'displayName': beforeItem.displayName,
         },
         'after': <String, dynamic>{
-          ...afterIdentity.toJson(),
           'path': afterItem.id,
           'folderRaw': afterItem.folderRaw,
           'displayName': afterItem.displayName,

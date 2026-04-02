@@ -27,14 +27,14 @@ void main() {
         displayName: 'old.jpg',
       );
 
-      apiClient.onRename = (afterItem, afterIdentity) {
+      apiClient.onRename = (afterItem) {
         apiClient.folderEntriesByFolder[afterItem.folderRaw] = <RemoteFolderEntry>[
           RemoteFolderEntry(
             entryId: afterItem.id,
             displayName: afterItem.displayName,
             folderRaw: afterItem.folderRaw,
             kind: 'image',
-            mediaId: afterIdentity.stableId,
+            mediaId: afterItem.id,
             fullPath: afterItem.id,
             sizeBytes: afterItem.sizeBytes,
             modifiedAt: afterItem.modified,
@@ -68,7 +68,7 @@ void main() {
         folderRaw: r'C:\library',
       );
 
-      apiClient.onRename = (afterItem, afterIdentity) {
+      apiClient.onRename = (afterItem) {
         apiClient.folderEntriesByFolder[afterItem.folderRaw] = <RemoteFolderEntry>[
           RemoteFolderEntry(
             entryId: afterItem.id,
@@ -543,8 +543,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
   Object? deleteError;
   Object? downloadUrlError;
   bool markDeletedOnDelete = true;
-  void Function(MediaItem afterItem, ResolvedMediaIdentity afterIdentity)?
-      onRename;
+  void Function(MediaItem afterItem)? onRename;
 
   _FakeRemoteMediaApiClient() : super(baseUrl: 'http://example.com');
 
@@ -556,14 +555,13 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
     required MediaItem beforeItem,
     required MediaItem afterItem,
     required ResolvedMediaIdentity beforeIdentity,
-    required ResolvedMediaIdentity afterIdentity,
   }) async {
     final error = renameError;
     if (error != null) {
       throw error;
     }
     renameCalls.add(_RenameCall(oldPath: beforeItem.id, newPath: afterItem.id));
-    onRename?.call(afterItem, afterIdentity);
+    onRename?.call(afterItem);
   }
 
   @override

@@ -673,7 +673,7 @@ class MetadataStore:
             if stat
             else current.get("modified_at")
         )
-        final_media_id = new_media_id or build_media_id(
+        computed_media_id = build_media_id(
             kind=kind,
             full_path=actual_path,
             folder_raw=folder_raw,
@@ -681,6 +681,14 @@ class MetadataStore:
             size_bytes=size_bytes,
             modified_epoch_ms=modified_epoch_ms,
         )
+        if new_media_id and new_media_id != computed_media_id:
+            logger.warning(
+                "[RENAME] ignoring mismatched new media id old=%s provided=%s computed=%s",
+                old_full_path,
+                new_media_id,
+                computed_media_id,
+            )
+        final_media_id = computed_media_id
 
         updated = {
             "media_id": final_media_id,
@@ -885,6 +893,7 @@ class MetadataStore:
             "isDeleted": bool(row["is_deleted"]),
             "modifiedEpochMs": _parse_epoch(row.get("modified_epoch_ms")),
         }
+
 
 
 

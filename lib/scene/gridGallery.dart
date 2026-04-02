@@ -1954,33 +1954,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return item.kind == MediaKind.pdf ? 'PDF' : '画像';
   }
 
-  String _homeSearchLanguageLabel(MediaItem item) {
-    final names = _homeSearchTagsFor(item);
-    for (final raw in names) {
-      final tag = raw.trim();
-      if (tag.isEmpty) {
-        continue;
-      }
-      final lower = tag.toLowerCase();
-      if (tag.contains('日本語') || lower.contains('japanese')) {
-        return '日本語';
-      }
-      if (tag.contains('英語') || lower.contains('english')) {
-        return '英語';
-      }
-      if (tag.contains('中国語') || lower.contains('chinese')) {
-        return '中国語';
-      }
-      if (tag.contains('韓国語') || lower.contains('korean')) {
-        return '韓国語';
-      }
-    }
-    return '不明';
-  }
-
-  List<String> _homeSearchDisplayTags(MediaItem item, {int maxTags = 12}) {
+  List<Tag> _homeSearchDisplayTags(MediaItem item, {int maxTags = 12}) {
     final details = _homeSearchTagDetailsFor(item);
-    final out = <String>[];
+    final out = <Tag>[];
     final seen = <String>{};
 
     if (details.isNotEmpty) {
@@ -1996,7 +1972,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
         final key = trimmed.toLowerCase();
         if (seen.add(key)) {
-          out.add(trimmed);
+          out.add(Tag(name: trimmed, category: entry.tag.category));
         }
         if (out.length >= maxTags) {
           return out;
@@ -2011,13 +1987,49 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
       final key = trimmed.toLowerCase();
       if (seen.add(key)) {
-        out.add(trimmed);
+        out.add(Tag(name: trimmed, category: TagCategory.free));
       }
       if (out.length >= maxTags) {
         break;
       }
     }
     return out;
+  }
+
+  String _detailedBrowseQueryForTag(Tag tag) {
+    final normalized = tag.name.trim();
+    if (normalized.isEmpty) {
+      return '';
+    }
+    switch (tag.category) {
+      case TagCategory.artist:
+        return 'artist:$normalized';
+      case TagCategory.series:
+        return 'series:$normalized';
+      case TagCategory.mediaType:
+        return 'type:$normalized';
+      case TagCategory.character:
+        return 'character:$normalized';
+      case TagCategory.free:
+        return '#$normalized';
+    }
+  }
+
+  Future<void> _searchDetailedBrowseByTag(Tag tag) async {
+    final query = _detailedBrowseQueryForTag(tag);
+    if (query.isEmpty) {
+      return;
+    }
+    _homeSearchCtrl.value = TextEditingValue(
+      text: query,
+      selection: TextSelection.collapsed(offset: query.length),
+    );
+    if (mounted) {
+      setState(() => _homeQuery = query);
+    } else {
+      _homeQuery = query;
+    }
+    await _runHomeSearch(includeAllWhenEmpty: true);
   }
 
   String _formatDetailedBrowseDate(DateTime? value) {
@@ -2126,11 +2138,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final artists = _homeSearchPrimaryValueForCategory(item, TagCategory.artist);
     final series = _homeSearchPrimaryValueForCategory(item, TagCategory.series);
     final mediaType = _homeSearchMediaTypeLabel(item);
-    final language = _homeSearchLanguageLabel(item);
     final folderLabel = _folderLabelForItem(item);
     final tags = _homeSearchDisplayTags(item);
     final updatedAt = _formatDetailedBrowseDate(item.modified ?? _getUpdatedAt(item));
-    final addedAt = _formatDetailedBrowseDate(_getAddedAt(item));
     final fileSize = _formatDetailedBrowseFileSize(item.sizeBytes);
     final isSelected = _selectedIds.contains(item.id);
     final isFavorite = _favorites.contains(item.id);
@@ -2238,12 +2248,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       _buildDetailedBrowseMetaRow(context, '作家', artists),
                       _buildDetailedBrowseMetaRow(context, 'シリーズ', series),
                       _buildDetailedBrowseMetaRow(context, '種別', mediaType),
-                      _buildDetailedBrowseMetaRow(context, '言語', language),
-                      _buildDetailedBrowseMetaRow(
-                        context,
-                        '追加日',
-                        addedAt,
-                      ),
                       const SizedBox(height: 8),
                       Text(
                         'タグ',
@@ -2263,8 +2267,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           runSpacing: 8,
                           children: [
                             for (final tag in tags)
-                              Chip(
-                                label: Text(tag),
+                              ActionChip(
+                                label: Text(tag.name),
+                                onPressed: () => _searchDetailedBrowseByTag(tag),
                                 materialTapTargetSize:
                                     MaterialTapTargetSize.shrinkWrap,
                               ),
