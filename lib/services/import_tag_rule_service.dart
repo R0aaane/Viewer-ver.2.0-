@@ -60,8 +60,10 @@ class ImportTagRuleService {
     'archive',
     'pdf',
     'pdfs',
+    '\u4f5c\u8005',
     '\u4f5c\u8005\u5225',
     '\u30b7\u30ea\u30fc\u30ba',
+    '\u4e0d\u660e',
   };
 
   static final RegExp _bracketedDigits = RegExp(r'\[\s*\d+\s*\]');

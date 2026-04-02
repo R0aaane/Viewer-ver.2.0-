@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
@@ -420,20 +420,12 @@ class LocalTagStore {
       }
 
       final tags = await listTagsForItem(item.id);
-      final preferSeriesFolderForHitomi =
-          _shouldPreferSeriesFolderForHitomi(tags);
-      final artist = preferSeriesFolderForHitomi
-          ? null
-          : _pickFirst(tags, model.TagCategory.artist);
+      final artistTags = _tagsForCategory(tags, model.TagCategory.artist);
       final series = _pickFirst(tags, model.TagCategory.series);
-
-      if (!preferSeriesFolderForHitomi && artist == null && series == null) {
-        continue;
-      }
 
       final destinationDir = _calcLibraryDestDir(
         libraryRoot: libraryRoot,
-        artist: artist,
+        artistTags: artistTags,
         series: series,
       );
 
@@ -495,68 +487,44 @@ class LocalTagStore {
 
   TagWithId? _pickFirst(List<TagWithId> tags, model.TagCategory category) {
     for (final entry in tags) {
-      if (entry.tag.category == category) {
+      if (entry.tag.category == category && entry.tag.name.trim().isNotEmpty) {
         return entry;
       }
     }
     return null;
   }
 
-  bool _shouldPreferSeriesFolderForHitomi(List<TagWithId> tags) {
-    if (!_hasTagName(tags, model.TagCategory.mediaType, 'hitomi')) {
-      return false;
-    }
-
-    final artistNames = <String>{};
-    for (final entry in tags) {
-      if (entry.tag.category != model.TagCategory.artist) {
-        continue;
-      }
-      final normalized = entry.tag.name.trim().toLowerCase();
-      if (normalized.isNotEmpty) {
-        artistNames.add(normalized);
-      }
-    }
-    return artistNames.length > 1;
-  }
-
-  bool _hasTagName(
+  List<TagWithId> _tagsForCategory(
     List<TagWithId> tags,
     model.TagCategory category,
-    String name,
   ) {
-    final normalizedName = name.trim().toLowerCase();
-    for (final entry in tags) {
-      if (entry.tag.category != category) {
-        continue;
-      }
-      if (entry.tag.name.trim().toLowerCase() == normalizedName) {
-        return true;
-      }
-    }
-    return false;
+    return tags
+        .where(
+          (entry) =>
+              entry.tag.category == category && entry.tag.name.trim().isNotEmpty,
+        )
+        .toList(growable: false);
   }
 
   String _calcLibraryDestDir({
     required String libraryRoot,
-    TagWithId? artist,
+    required List<TagWithId> artistTags,
     TagWithId? series,
   }) {
     String safe(String input) => _sanitizeDirName(input);
+    const authorDir = '\u4f5c\u8005';
+    const seriesDir = '\u30b7\u30ea\u30fc\u30ba';
+    const unknownDir = '\u4e0d\u660e';
 
-    if (artist != null) {
-      final artistName = safe(artist.tag.name);
-      if (series != null) {
-        return p.join(libraryRoot, '作者別', artistName, safe(series.tag.name));
-      }
-      return p.join(libraryRoot, '作者別', artistName);
+    if (artistTags.length == 1) {
+      return p.join(libraryRoot, authorDir, safe(artistTags.first.tag.name));
     }
 
     if (series != null) {
-      return p.join(libraryRoot, 'シリーズ', safe(series.tag.name));
+      return p.join(libraryRoot, seriesDir, safe(series.tag.name));
     }
 
-    return libraryRoot;
+    return p.join(libraryRoot, unknownDir);
   }
 
   String _sanitizeDirName(String input) {
@@ -621,3 +589,4 @@ class LocalTagStore {
     await (_db.delete(_db.mediaItems)..where((table) => table.id.equals(beforeId))).go();
   }
 }
+

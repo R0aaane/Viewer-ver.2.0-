@@ -121,8 +121,14 @@ void main() {
 
     final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
     final targetPath = moved[sourcePath];
+    final expectedPath = p.join(
+      libraryRoot.path,
+      '\u4f5c\u8005',
+      'Todakenji',
+      'sample.pdf',
+    );
 
-    expect(targetPath, isNotNull);
+    expect(targetPath, expectedPath);
     expect(await File(targetPath!).exists(), isTrue);
     expect(await store.listTagsForItem(targetPath), isNotEmpty);
 
@@ -133,9 +139,7 @@ void main() {
     expect(taggedItems.map((item) => item.id), contains(targetPath));
   });
 
-  test(
-    'organizeAppLibrary uses series folder for hitomi items with multiple artists',
-    () async {
+  test('organizeAppLibrary uses series folder for items with multiple artists', () async {
       final docsDir = await Directory.systemTemp.createTemp(
         'local-tag-store-hitomi-collab',
       );
@@ -174,10 +178,6 @@ void main() {
         source,
         const Tag(name: 'Original Series', category: TagCategory.series),
       );
-      await store.addTagToItem(
-        source,
-        const Tag(name: 'hitomi', category: TagCategory.mediaType),
-      );
 
       final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
       final targetPath = p.join(
@@ -191,12 +191,146 @@ void main() {
       expect(await File(targetPath).exists(), isTrue);
       expect(
         await Directory(
-          p.join(libraryRoot.path, '\u4f5c\u8005\u5225'),
+          p.join(libraryRoot.path, '\u4f5c\u8005'),
         ).exists(),
         isFalse,
       );
     },
   );
+
+  test('organizeAppLibrary uses series folder when artist tags are missing', () async {
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-series-only',
+    );
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+
+    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+    await libraryRoot.create(recursive: true);
+
+    final sourcePath = p.join(libraryRoot.path, 'series-only.pdf');
+    await File(sourcePath).writeAsBytes(const <int>[4, 4, 4]);
+    final source = MediaItem(
+      id: sourcePath,
+      displayName: 'series-only.pdf',
+      kind: MediaKind.pdf,
+      folderRaw: libraryRoot.path,
+    );
+
+    await store.addTagToItem(
+      source,
+      const Tag(name: 'Series Only', category: TagCategory.series),
+    );
+
+    final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+    final targetPath = p.join(
+      libraryRoot.path,
+      '\u30b7\u30ea\u30fc\u30ba',
+      'Series Only',
+      'series-only.pdf',
+    );
+
+    expect(moved[sourcePath], targetPath);
+    expect(await File(targetPath).exists(), isTrue);
+  });
+
+  test(
+    'organizeAppLibrary uses unknown folder when multiple artists have no series',
+    () async {
+      final docsDir = await Directory.systemTemp.createTemp(
+        'local-tag-store-collab-unknown',
+      );
+      addTearDown(() async {
+        if (await docsDir.exists()) {
+          await docsDir.delete(recursive: true);
+        }
+      });
+      PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+      final db = AppDb();
+      addTearDown(db.close);
+      final store = LocalTagStore(db);
+
+      final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+      await libraryRoot.create(recursive: true);
+
+      final sourcePath = p.join(libraryRoot.path, 'collab-no-series.pdf');
+      await File(sourcePath).writeAsBytes(const <int>[5, 5, 5]);
+      final source = MediaItem(
+        id: sourcePath,
+        displayName: 'collab-no-series.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: libraryRoot.path,
+      );
+
+      await store.addTagToItem(
+        source,
+        const Tag(name: 'Artist A', category: TagCategory.artist),
+      );
+      await store.addTagToItem(
+        source,
+        const Tag(name: 'Artist B', category: TagCategory.artist),
+      );
+
+      final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+      final targetPath = p.join(
+        libraryRoot.path,
+        '\u4e0d\u660e',
+        'collab-no-series.pdf',
+      );
+
+      expect(moved[sourcePath], targetPath);
+      expect(await File(targetPath).exists(), isTrue);
+    },
+  );
+
+  test('organizeAppLibrary uses unknown folder when artist and series tags are missing', () async {
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-unknown',
+    );
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+
+    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+    await libraryRoot.create(recursive: true);
+
+    final sourcePath = p.join(libraryRoot.path, 'unknown.pdf');
+    await File(sourcePath).writeAsBytes(const <int>[6, 6, 6]);
+    final source = MediaItem(
+      id: sourcePath,
+      displayName: 'unknown.pdf',
+      kind: MediaKind.pdf,
+      folderRaw: libraryRoot.path,
+    );
+
+    await store.upsertMediaItem(source);
+
+    final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+    final targetPath = p.join(
+      libraryRoot.path,
+      '\u4e0d\u660e',
+      'unknown.pdf',
+    );
+
+    expect(moved[sourcePath], targetPath);
+    expect(await File(targetPath).exists(), isTrue);
+  });
 
   test('renameItemsUnderPathPrefix keeps tags after folder rename', () async {
     final docsDir = await Directory.systemTemp.createTemp('local-tag-store-folder-rename');
@@ -280,7 +414,7 @@ void main() {
     );
 
     final conflictDir = Directory(
-      p.join(libraryRoot.path, '\u4f5c\u8005\u5225', 'Conflict Artist'),
+      p.join(libraryRoot.path, '\u4f5c\u8005', 'Conflict Artist'),
     );
     await conflictDir.create(recursive: true);
     final conflictPath = p.join(conflictDir.path, 'sample.pdf');

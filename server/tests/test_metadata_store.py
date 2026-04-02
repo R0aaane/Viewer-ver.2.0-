@@ -279,41 +279,82 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertIsNotNone(updated)
         self.assertEqual(updated['folder_raw'], str(renamed_folder))
 
-    def test_organize_media_by_tags_prefers_series_for_hitomi_with_multiple_artists(self) -> None:
-        source = self.library_dir / 'collab.pdf'
-        source.write_bytes(b'collab')
+    def test_organize_media_by_tags_uses_author_dir_for_single_artist(self) -> None:
+        source = self.library_dir / "sample.pdf"
+        source.write_bytes(b"author")
         source_media_id = build_media_id(
-            kind='pdf',
+            kind="pdf",
             full_path=str(source),
             folder_raw=str(self.library_dir),
-            display_name='collab.pdf',
+            display_name="sample.pdf",
             size_bytes=6,
             modified_epoch_ms=1,
         )
         self.sqlite.upsert_media_record(
             {
-                'media_id': source_media_id,
-                'folder_raw': str(self.library_dir),
-                'relative_hint': 'collab.pdf',
-                'display_name': 'collab.pdf',
-                'full_path': str(source),
-                'normalized_full_path': str(source).replace('/', '\\').casefold(),
-                'kind': 'pdf',
-                'mime_type': 'application/pdf',
-                'size_bytes': 6,
-                'modified_at': None,
-                'modified_epoch_ms': 1,
-                'etag': None,
-                'is_deleted': 0,
+                "media_id": source_media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": "sample.pdf",
+                "display_name": "sample.pdf",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 6,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [{"category": "artist", "name": "Todakenji"}],
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        target = self.library_dir / "\u4f5c\u8005" / "Todakenji" / "sample.pdf"
+        self.assertEqual(moved, {str(source): str(target)})
+        self.assertTrue(target.exists())
+
+    def test_organize_media_by_tags_uses_series_dir_for_multiple_artists(self) -> None:
+        source = self.library_dir / "collab.pdf"
+        source.write_bytes(b"collab")
+        source_media_id = build_media_id(
+            kind="pdf",
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name="collab.pdf",
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": source_media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": "collab.pdf",
+                "display_name": "collab.pdf",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 6,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
             }
         )
         self.store.add_tags_to_media(
             source_media_id,
             [
-                {'category': 'artist', 'name': 'Artist A'},
-                {'category': 'artist', 'name': 'Artist B'},
-                {'category': 'series', 'name': 'Original Series'},
-                {'category': 'mediaType', 'name': 'hitomi'},
+                {"category": "artist", "name": "Artist A"},
+                {"category": "artist", "name": "Artist B"},
+                {"category": "series", "name": "Original Series"},
             ],
         )
 
@@ -322,10 +363,135 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
             media_ids=[source_media_id],
         )
 
-        target = self.library_dir / '\u30b7\u30ea\u30fc\u30ba' / 'Original Series' / 'collab.pdf'
+        target = self.library_dir / "\u30b7\u30ea\u30fc\u30ba" / "Original Series" / "collab.pdf"
         self.assertEqual(moved, {str(source): str(target)})
         self.assertTrue(target.exists())
-        self.assertFalse((self.library_dir / '\u4f5c\u8005\u5225').exists())
+        self.assertFalse((self.library_dir / "\u4f5c\u8005").exists())
+
+    def test_organize_media_by_tags_uses_series_dir_when_artist_missing(self) -> None:
+        source = self.library_dir / "series-only.pdf"
+        source.write_bytes(b"series")
+        source_media_id = build_media_id(
+            kind="pdf",
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name="series-only.pdf",
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": source_media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": "series-only.pdf",
+                "display_name": "series-only.pdf",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 6,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [{"category": "series", "name": "Series Only"}],
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        target = self.library_dir / "\u30b7\u30ea\u30fc\u30ba" / "Series Only" / "series-only.pdf"
+        self.assertEqual(moved, {str(source): str(target)})
+        self.assertTrue(target.exists())
+
+    def test_organize_media_by_tags_uses_unknown_dir_when_multiple_artists_have_no_series(self) -> None:
+        source = self.library_dir / "collab-no-series.pdf"
+        source.write_bytes(b"unknown")
+        source_media_id = build_media_id(
+            kind="pdf",
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name="collab-no-series.pdf",
+            size_bytes=7,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": source_media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": "collab-no-series.pdf",
+                "display_name": "collab-no-series.pdf",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 7,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [
+                {"category": "artist", "name": "Artist A"},
+                {"category": "artist", "name": "Artist B"},
+            ],
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        target = self.library_dir / "\u4e0d\u660e" / "collab-no-series.pdf"
+        self.assertEqual(moved, {str(source): str(target)})
+        self.assertTrue(target.exists())
+
+    def test_organize_media_by_tags_uses_unknown_dir_when_artist_and_series_missing(self) -> None:
+        source = self.library_dir / "unknown.pdf"
+        source.write_bytes(b"none")
+        source_media_id = build_media_id(
+            kind="pdf",
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name="unknown.pdf",
+            size_bytes=4,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": source_media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": "unknown.pdf",
+                "display_name": "unknown.pdf",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 4,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        target = self.library_dir / "\u4e0d\u660e" / "unknown.pdf"
+        self.assertEqual(moved, {str(source): str(target)})
+        self.assertTrue(target.exists())
 
     def test_organize_media_by_tags_skips_duplicate_target_without_suffix_copy(self) -> None:
         source = self.library_dir / 'sample.pdf'
@@ -360,7 +526,7 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
             [{'category': 'artist', 'name': 'Conflict Artist'}],
         )
 
-        conflict_dir = self.library_dir / '菴懆・挨' / 'Conflict Artist'
+        conflict_dir = self.library_dir / '\u4f5c\u8005' / 'Conflict Artist'
         conflict_dir.mkdir(parents=True)
         conflict_path = conflict_dir / 'sample.pdf'
         conflict_path.write_bytes(b'other')
@@ -380,6 +546,7 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
 
 
 

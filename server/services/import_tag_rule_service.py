@@ -43,6 +43,10 @@ _GENERIC_IMPORT_SEGMENTS = {
     "archive",
     "pdf",
     "pdfs",
+    "\u4f5c\u8005",
+    "\u4f5c\u8005\u5225",
+    "\u30b7\u30ea\u30fc\u30ba",
+    "\u4e0d\u660e",
 }
 
 _BRACKETED_DIGITS_RE = re.compile(r"\[\s*\d+\s*\]")
@@ -273,3 +277,5 @@ def filter_hitomi_pdf_auto_tags(
     if not has_hitomi_media_type:
         return []
     return filtered
+
+

@@ -133,31 +133,20 @@ def _pick_first_tag_name(tags: list[dict[str, Any]], category: str) -> str | Non
     return None
 
 
-def _has_tag_name(tags: list[dict[str, Any]], category: str, name: str) -> bool:
-    normalized_name = _normalize_name(name)
+def _tag_names_for_category(tags: list[dict[str, Any]], category: str) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
     for tag in tags:
         if tag.get("category") != category:
             continue
-        if _normalize_name(str(tag.get("name") or "")) == normalized_name:
-            return True
-    return False
-
-
-def _count_distinct_tag_names(tags: list[dict[str, Any]], category: str) -> int:
-    names: set[str] = set()
-    for tag in tags:
-        if tag.get("category") != category:
+        name = str(tag.get("name") or "").strip()
+        normalized_name = _normalize_name(name)
+        if not normalized_name or normalized_name in seen:
             continue
-        normalized_name = _normalize_name(str(tag.get("name") or ""))
-        if normalized_name:
-            names.add(normalized_name)
-    return len(names)
+        seen.add(normalized_name)
+        names.append(name)
+    return names
 
-
-def _should_prefer_series_dir_for_hitomi(tags: list[dict[str, Any]]) -> bool:
-    if not _has_tag_name(tags, "mediaType", "hitomi"):
-        return False
-    return _count_distinct_tag_names(tags, "artist") > 1
 
 @dataclass(frozen=True)
 class SearchQuery:
@@ -804,14 +793,11 @@ class MetadataStore:
                 continue
 
             tags = self.get_tags_for_media(current["media_id"])
-            prefer_series_dir_for_hitomi = _should_prefer_series_dir_for_hitomi(tags)
-            artist_name = None if prefer_series_dir_for_hitomi else _pick_first_tag_name(tags, "artist")
+            artist_names = _tag_names_for_category(tags, "artist")
             series_name = _pick_first_tag_name(tags, "series")
-            if not prefer_series_dir_for_hitomi and not artist_name and not series_name:
-                continue
             destination_dir = self._calc_library_dest_dir(
                 library_root=library_root,
-                artist_name=artist_name,
+                artist_names=artist_names,
                 series_name=series_name,
             )
             file_name = os.path.basename(source_path)
@@ -841,21 +827,19 @@ class MetadataStore:
         self,
         *,
         library_root: str,
-        artist_name: str | None,
+        artist_names: list[str],
         series_name: str | None,
     ) -> str:
-        artist = _sanitize_dir_name(artist_name or "") if artist_name else None
+        artist = _sanitize_dir_name(artist_names[0]) if len(artist_names) == 1 else None
         series = _sanitize_dir_name(series_name or "") if series_name else None
 
         if artist:
-            if series:
-                return os.path.join(library_root, "\u4f5c\u8005\u5225", artist, series)
-            return os.path.join(library_root, "\u4f5c\u8005\u5225", artist)
+            return os.path.join(library_root, "\u4f5c\u8005", artist)
 
         if series:
             return os.path.join(library_root, "\u30b7\u30ea\u30fc\u30ba", series)
 
-        return library_root
+        return os.path.join(library_root, "\u4e0d\u660e")
 
     def _matches_search(
         self,
@@ -919,6 +903,7 @@ class MetadataStore:
             "isDeleted": bool(row["is_deleted"]),
             "modifiedEpochMs": _parse_epoch(row.get("modified_epoch_ms")),
         }
+
 
 
 
