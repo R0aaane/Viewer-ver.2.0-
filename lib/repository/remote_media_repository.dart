@@ -94,7 +94,7 @@ class RemoteMediaRepository implements MediaRepository {
     canUpload: true,
     canRecursiveSearch: true,
     canExportPdf: false,
-    canOrganizeLibrary: false,
+    canOrganizeLibrary: true,
     canPickFolder: false,
     canAddLocalFolder: false,
     canImportToHost: true,

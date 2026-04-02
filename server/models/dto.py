@@ -87,6 +87,17 @@ class RescanRequest(BaseModel):
     folderRaw: str | None = None
 
 
+class OrganizeLibraryRequest(BaseModel):
+    folderRaw: str
+
+
+class OrganizeLibraryResponse(BaseModel):
+    ok: bool = True
+    moved: dict[str, str] = Field(default_factory=dict)
+    movedCount: int = 0
+    rescannedCount: int = 0
+
+
 class DownloadUrlRequest(BaseModel):
     folderRaw: str
     url: str = ""

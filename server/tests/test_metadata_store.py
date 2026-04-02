@@ -321,6 +321,51 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertEqual(moved, {str(source): str(target)})
         self.assertTrue(target.exists())
 
+    def test_organize_media_by_tags_migrates_legacy_author_dir(self) -> None:
+        legacy_dir = self.library_dir / "作者別" / "Legacy Artist"
+        legacy_dir.mkdir(parents=True)
+        source = legacy_dir / "legacy.pdf"
+        source.write_bytes(b"legacy")
+        source_media_id = build_media_id(
+            kind="pdf",
+            full_path=str(source),
+            folder_raw=str(legacy_dir),
+            display_name="legacy.pdf",
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": source_media_id,
+                "folder_raw": str(legacy_dir),
+                "relative_hint": "legacy.pdf",
+                "display_name": "legacy.pdf",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 6,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [{"category": "artist", "name": "Legacy Artist"}],
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        target = self.library_dir / "作者" / "Legacy Artist" / "legacy.pdf"
+        self.assertEqual(moved, {str(source): str(target)})
+        self.assertTrue(target.exists())
+        self.assertFalse((self.library_dir / "作者別").exists())
+
     def test_organize_media_by_tags_uses_series_dir_for_multiple_artists(self) -> None:
         source = self.library_dir / "collab.pdf"
         source.write_bytes(b"collab")

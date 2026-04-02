@@ -17,6 +17,8 @@ from server.models.dto import (
     DownloadUrlRequest,
     DownloadUrlResponse,
     MessageResponse,
+    OrganizeLibraryRequest,
+    OrganizeLibraryResponse,
     RenameRequest,
     RescanRequest,
 )
@@ -58,6 +60,36 @@ def request_rescan(
     except Exception as error:
         logger.exception("[rescan] unexpected failure target=%s roots=%s", target or None, settings.media_roots)
         raise server_error(f"Rescan failed: {error}") from error
+
+
+@router.post("/organize", response_model=OrganizeLibraryResponse)
+def organize_library(
+    request: Request,
+    payload: OrganizeLibraryRequest,
+) -> OrganizeLibraryResponse:
+    settings = request.app.state.settings
+    folder_path = os.path.normpath(payload.folderRaw)
+    if not os.path.isdir(folder_path):
+        raise bad_request(f"Destination folder does not exist: {payload.folderRaw}")
+    if settings.media_roots and not any(_is_inside_root(folder_path, root) for root in settings.media_roots):
+        raise bad_request("folderRaw must be inside configured media roots")
+
+    try:
+        moved = request.app.state.metadata_store.organize_media_by_tags(
+            library_root=folder_path,
+            media_ids=None,
+        )
+        rescanned_count = request.app.state.index_service.scan_folder(folder_path)
+        return OrganizeLibraryResponse(
+            moved=moved,
+            movedCount=len(moved),
+            rescannedCount=rescanned_count,
+        )
+    except ApiError:
+        raise
+    except Exception as error:
+        logger.exception('[organize] unexpected failure folder=%s', folder_path)
+        raise server_error(f"Organize failed: {error}") from error
 
 
 @router.post("/upload")

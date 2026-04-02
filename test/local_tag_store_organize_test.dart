@@ -139,6 +139,57 @@ void main() {
     expect(taggedItems.map((item) => item.id), contains(targetPath));
   });
 
+  test('organizeAppLibrary migrates legacy 作者別 folders into 作者', () async {
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-legacy-author-dir',
+    );
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+
+    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+    final legacyArtistDir = Directory(
+      p.join(libraryRoot.path, '\u4f5c\u8005\u5225', 'Legacy Artist'),
+    );
+    await legacyArtistDir.create(recursive: true);
+
+    final sourcePath = p.join(legacyArtistDir.path, 'legacy.pdf');
+    await File(sourcePath).writeAsBytes(const <int>[2, 4, 6]);
+    final source = MediaItem(
+      id: sourcePath,
+      displayName: 'legacy.pdf',
+      kind: MediaKind.pdf,
+      folderRaw: legacyArtistDir.path,
+    );
+
+    await store.addTagToItem(
+      source,
+      const Tag(name: 'Legacy Artist', category: TagCategory.artist),
+    );
+
+    final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+    final targetPath = p.join(
+      libraryRoot.path,
+      '\u4f5c\u8005',
+      'Legacy Artist',
+      'legacy.pdf',
+    );
+
+    expect(moved[sourcePath], targetPath);
+    expect(await File(targetPath).exists(), isTrue);
+    expect(
+      await Directory(p.join(libraryRoot.path, '\u4f5c\u8005\u5225')).exists(),
+      isFalse,
+    );
+  });
+
   test('organizeAppLibrary uses series folder for items with multiple artists', () async {
       final docsDir = await Directory.systemTemp.createTemp(
         'local-tag-store-hitomi-collab',

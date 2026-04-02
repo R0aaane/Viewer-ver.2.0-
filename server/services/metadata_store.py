@@ -148,6 +148,39 @@ def _tag_names_for_category(tags: list[dict[str, Any]], category: str) -> list[s
     return names
 
 
+def _remove_empty_ancestor_dirs(*, start_dir: str, stop_at: str) -> None:
+    normalized_stop = os.path.normcase(os.path.normpath(stop_at))
+    current = os.path.normcase(os.path.normpath(start_dir))
+    while current != normalized_stop and current.startswith(normalized_stop + "\\"):
+        if not _remove_empty_dir_if_possible(current):
+            break
+        parent = os.path.normcase(os.path.normpath(os.path.dirname(current)))
+        if parent == current:
+            break
+        current = parent
+
+
+def _remove_empty_dir_if_possible(dir_path: str) -> bool:
+    try:
+        if not os.path.isdir(dir_path):
+            return False
+        if os.listdir(dir_path):
+            return False
+        os.rmdir(dir_path)
+        return True
+    except OSError:
+        return False
+
+
+def _remove_empty_legacy_author_dirs(library_root: str) -> None:
+    legacy_root = os.path.join(library_root, "\u4f5c\u8005\u5225")
+    if not os.path.isdir(legacy_root):
+        return
+
+    for base, _, _ in os.walk(legacy_root, topdown=False):
+        _remove_empty_dir_if_possible(base)
+
+
 @dataclass(frozen=True)
 class SearchQuery:
     q: str | None = None
@@ -777,12 +810,22 @@ class MetadataStore:
         self,
         *,
         library_root: str,
-        media_ids: list[str],
+        media_ids: list[str] | None = None,
     ) -> dict[str, str]:
         moved: dict[str, str] = {}
         normalized_root = _normalize_path(library_root)
+        candidate_media_ids = media_ids
+        if not candidate_media_ids:
+            candidate_media_ids = [
+                str(row["media_id"])
+                for row in self._db.list_media_records(
+                    folder_prefix=normalized_root,
+                    include_deleted=False,
+                )
+                if str(row.get("kind") or "") in {"image", "pdf"}
+            ]
 
-        for media_id in media_ids:
+        for media_id in candidate_media_ids:
             current = self._db.get_media_record(media_id)
             if current is None or current.get("is_deleted"):
                 continue
@@ -819,7 +862,13 @@ class MetadataStore:
                 old_path=source_path,
                 new_path=target_path,
             )
+            _remove_empty_ancestor_dirs(
+                start_dir=os.path.dirname(source_path),
+                stop_at=library_root,
+            )
             moved[source_path] = updated["fullPath"]
+
+        _remove_empty_legacy_author_dirs(library_root)
 
         return moved
 

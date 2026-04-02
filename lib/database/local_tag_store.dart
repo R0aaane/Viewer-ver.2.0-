@@ -469,6 +469,10 @@ class LocalTagStore {
             ),
           );
         });
+        await _removeEmptyAncestorDirs(
+          startDir: p.dirname(sourcePath),
+          stopAt: libraryRoot,
+        );
 
         moved[sourcePath] = targetPath;
       } catch (error, stackTrace) {
@@ -481,6 +485,8 @@ class LocalTagStore {
         );
       }
     }
+
+    await _removeEmptyLegacyAuthorDirs(libraryRoot);
 
     return moved;
   }
@@ -537,6 +543,65 @@ class LocalTagStore {
     value = value.replaceAll(RegExp(r'[\x00-\x1F]'), '_');
     value = value.replaceAll(RegExp(r'[\. ]+$'), '');
     return value.isEmpty ? '_' : value;
+  }
+
+  Future<void> _removeEmptyAncestorDirs({
+    required String startDir,
+    required String stopAt,
+  }) async {
+    final normalizedStop = p.normalize(stopAt);
+    var current = p.normalize(startDir);
+    while (!p.equals(current, normalizedStop) && p.isWithin(normalizedStop, current)) {
+      final removed = await _removeEmptyDirIfPossible(current);
+      if (!removed) {
+        break;
+      }
+      final parent = p.dirname(current);
+      if (p.equals(parent, current)) {
+        break;
+      }
+      current = parent;
+    }
+  }
+
+  Future<bool> _removeEmptyDirIfPossible(String dirPath) async {
+    try {
+      final dir = Directory(dirPath);
+      if (!await dir.exists()) {
+        return false;
+      }
+      final isEmpty = await dir.list(followLinks: false).isEmpty;
+      if (!isEmpty) {
+        return false;
+      }
+      await dir.delete();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _removeEmptyLegacyAuthorDirs(String libraryRoot) async {
+    final legacyRoot = p.join(libraryRoot, '\u4f5c\u8005\u5225');
+    final legacyDir = Directory(legacyRoot);
+    if (!await legacyDir.exists()) {
+      return;
+    }
+
+    final dirs = <String>[];
+    await for (final entity
+        in legacyDir.list(recursive: true, followLinks: false)) {
+      if (entity is Directory) {
+        dirs.add(entity.path);
+      }
+    }
+    dirs.sort(
+      (a, b) => p.normalize(b).length.compareTo(p.normalize(a).length),
+    );
+    for (final dirPath in dirs) {
+      await _removeEmptyDirIfPossible(dirPath);
+    }
+    await _removeEmptyDirIfPossible(legacyRoot);
   }
 
   bool _isPathWithinPrefix(String value, String prefix) {

@@ -176,6 +176,32 @@ class RemoteTagApiClient {
     await _postJson('/rescan', const <String, dynamic>{});
   }
 
+  Future<Map<String, String>> organizeLibrary(String folderRaw) async {
+    final json = await _postJson(
+      '/organize',
+      <String, dynamic>{'folderRaw': folderRaw},
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const MetadataException('整理結果の形式が不正です');
+    }
+
+    final movedRaw = json['moved'];
+    if (movedRaw is! Map) {
+      return const <String, String>{};
+    }
+
+    final moved = <String, String>{};
+    movedRaw.forEach((key, value) {
+      final before = key?.toString().trim() ?? '';
+      final after = value?.toString().trim() ?? '';
+      if (before.isEmpty || after.isEmpty) {
+        return;
+      }
+      moved[before] = after;
+    });
+    return moved;
+  }
+
   Future<void> notifyRename({
     required MediaItem beforeItem,
     required MediaItem afterItem,

@@ -748,9 +748,17 @@ class TagService {
     await initialize();
 
     if (isRemoteMode) {
-      throw const MetadataException(
-        'クライアントモードではライブラリ整理は未対応です',
-      );
+      final moved = await _requireApiClient().organizeLibrary(libraryRoot);
+      _remoteTagCache.clear();
+      for (final entry in moved.entries) {
+        final before = _lookupKnownItem(entry.key) ?? _fallbackMovedItem(entry.key);
+        final after = _remapMovedItem(before, entry.value);
+        _forgetKnownItem(before);
+        rememberItem(after);
+        _idResolver.forget(before);
+        _idResolver.forget(after);
+      }
+      return moved;
     }
 
     final moved = await _localStore.organizeAppLibrary(libraryRoot: libraryRoot);
@@ -854,10 +862,24 @@ class TagService {
         if (!_itemStillExists(item)) {
           continue;
         }
-        await _replaceHostMirrorTagsForItem(item);
+        try {
+          await _replaceHostMirrorTagsForItem(item);
+        } catch (error, stackTrace) {
+          debugPrint('[host-mirror] item sync failed id=${item.id} error=$error');
+          debugPrintStack(
+            label: '[host-mirror] item sync failed',
+            stackTrace: stackTrace,
+          );
+        }
       }
     } on MetadataException catch (error, stackTrace) {
       debugPrint('[host-mirror] full sync failed: $error\n$stackTrace');
+    } catch (error, stackTrace) {
+      debugPrint('[host-mirror] unexpected full sync failure: $error');
+      debugPrintStack(
+        label: '[host-mirror] unexpected full sync failure',
+        stackTrace: stackTrace,
+      );
     }
   }
 

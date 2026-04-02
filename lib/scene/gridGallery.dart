@@ -507,7 +507,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await widget.hostServerService.refresh();
     final settings = widget.tagService.settings;
     if (settings.isHostMode && settings.autoStartHostServer) {
-      await widget.hostServerService.startServer(tagService: widget.tagService);
+      try {
+        await widget.hostServerService.startServer(
+          tagService: widget.tagService,
+        );
+      } catch (error, stackTrace) {
+        _logUiError('initializeHostServerIfNeeded', error, stackTrace);
+      }
     }
   }
 
@@ -4836,7 +4842,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         widget.hostServerService.status.state == HostServerState.running) {
       await widget.hostServerService.stopServer();
     } else if (nextSettings.isHostMode && nextSettings.autoStartHostServer) {
-      await widget.hostServerService.startServer(tagService: widget.tagService);
+      try {
+        await widget.hostServerService.startServer(
+          tagService: widget.tagService,
+        );
+      } catch (error, stackTrace) {
+        _logUiError('openMetadataSettings.startServer', error, stackTrace);
+      }
     }
     _folderItemsCache.clear();
     _folderItemsCacheRecursive.clear();

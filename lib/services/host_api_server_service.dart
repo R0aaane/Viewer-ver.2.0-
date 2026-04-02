@@ -257,7 +257,16 @@ class HostApiServerService extends ChangeNotifier {
     }
 
     if (tagService != null) {
-      await tagService.syncLocalTagsToHost();
+      try {
+        await tagService.syncLocalTagsToHost();
+      } catch (error, stackTrace) {
+        _appendLog('[start-sync] $error');
+        debugPrint('[host-server][start-sync] $error');
+        debugPrintStack(
+          label: '[host-server][start-sync]',
+          stackTrace: stackTrace,
+        );
+      }
     }
 
     final networkInfo = await _loadNetworkInfo(settings.hostPort);
@@ -471,14 +480,29 @@ class HostApiServerService extends ChangeNotifier {
   }
 
   void _attachLogs(Process process) {
-    _stdoutSubscription = process.stdout
-        .transform(utf8.decoder)
+    _stdoutSubscription = _listenToProcessOutput(process.stdout, 'stdout');
+    _stderrSubscription = _listenToProcessOutput(process.stderr, 'stderr');
+  }
+
+  StreamSubscription<String> _listenToProcessOutput(
+    Stream<List<int>> stream,
+    String label,
+  ) {
+    return stream
+        .transform(const Utf8Decoder(allowMalformed: true))
         .transform(const LineSplitter())
-        .listen((line) => _appendLog('[stdout] $line'));
-    _stderrSubscription = process.stderr
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen((line) => _appendLog('[stderr] $line'));
+        .listen(
+          (line) => _appendLog('[$label] $line'),
+          onError: (Object error, StackTrace stackTrace) {
+            _appendLog('[$label] log stream error: $error');
+            debugPrint('[host-server][$label] log stream error: $error');
+            debugPrintStack(
+              label: '[host-server][$label]',
+              stackTrace: stackTrace,
+            );
+          },
+          cancelOnError: false,
+        );
   }
 
   void _appendLog(String line) {

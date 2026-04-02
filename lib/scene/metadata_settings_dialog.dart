@@ -306,6 +306,14 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
       await widget.hostServerService.startServer(tagService: widget.tagService);
       await widget.hostServerService.refresh();
       await _checkConnection();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _status = _statusWithMessage(
+          MetadataConnectionState.disconnected,
+          'ホストサーバーの起動でエラーが発生しました: $error',
+        );
+      });
     } finally {
       if (mounted) {
         setState(() => _hostWorking = false);
