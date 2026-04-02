@@ -1,4 +1,4 @@
-import tempfile
+﻿import tempfile
 import unittest
 from pathlib import Path
 
@@ -279,6 +279,54 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertIsNotNone(updated)
         self.assertEqual(updated['folder_raw'], str(renamed_folder))
 
+    def test_organize_media_by_tags_prefers_series_for_hitomi_with_multiple_artists(self) -> None:
+        source = self.library_dir / 'collab.pdf'
+        source.write_bytes(b'collab')
+        source_media_id = build_media_id(
+            kind='pdf',
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name='collab.pdf',
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                'media_id': source_media_id,
+                'folder_raw': str(self.library_dir),
+                'relative_hint': 'collab.pdf',
+                'display_name': 'collab.pdf',
+                'full_path': str(source),
+                'normalized_full_path': str(source).replace('/', '\\').casefold(),
+                'kind': 'pdf',
+                'mime_type': 'application/pdf',
+                'size_bytes': 6,
+                'modified_at': None,
+                'modified_epoch_ms': 1,
+                'etag': None,
+                'is_deleted': 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [
+                {'category': 'artist', 'name': 'Artist A'},
+                {'category': 'artist', 'name': 'Artist B'},
+                {'category': 'series', 'name': 'Original Series'},
+                {'category': 'mediaType', 'name': 'hitomi'},
+            ],
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        target = self.library_dir / '\u30b7\u30ea\u30fc\u30ba' / 'Original Series' / 'collab.pdf'
+        self.assertEqual(moved, {str(source): str(target)})
+        self.assertTrue(target.exists())
+        self.assertFalse((self.library_dir / '\u4f5c\u8005\u5225').exists())
+
     def test_organize_media_by_tags_skips_duplicate_target_without_suffix_copy(self) -> None:
         source = self.library_dir / 'sample.pdf'
         source.write_bytes(b'source')
@@ -312,7 +360,7 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
             [{'category': 'artist', 'name': 'Conflict Artist'}],
         )
 
-        conflict_dir = self.library_dir / '作者別' / 'Conflict Artist'
+        conflict_dir = self.library_dir / '菴懆・挨' / 'Conflict Artist'
         conflict_dir.mkdir(parents=True)
         conflict_path = conflict_dir / 'sample.pdf'
         conflict_path.write_bytes(b'other')
@@ -332,6 +380,8 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
 
 
 

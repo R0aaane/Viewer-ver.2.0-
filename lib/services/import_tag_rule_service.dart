@@ -130,10 +130,11 @@ class ImportTagRuleService {
         .toList(growable: false);
 
     final out = <Tag>[];
-    final artistTag =
-        _cleanArtistTagCandidate(hitomiMetadata?.primaryArtist ?? '') ??
-        _inferArtistTagFromParts(segments);
-    if (artistTag != null) {
+    final artistTags = _inferArtistTags(
+      segments,
+      hitomiMetadata: hitomiMetadata,
+    );
+    for (final artistTag in artistTags) {
       out.add(Tag(name: artistTag, category: TagCategory.artist));
     }
 
@@ -148,7 +149,7 @@ class ImportTagRuleService {
     final seriesTag = _inferSeriesTagFromParts(
       isHitomiContext: isHitomiContext,
       hitomiMetadata: hitomiMetadata,
-      artistTag: artistTag,
+      artistTags: artistTags,
     );
     if (seriesTag != null) {
       out.add(Tag(name: seriesTag, category: TagCategory.series));
@@ -285,6 +286,22 @@ class ImportTagRuleService {
     return parts.sublist(0, parts.length - 1);
   }
 
+  static List<String> _inferArtistTags(
+    List<String> parts, {
+    HitomiGalleryMetadata? hitomiMetadata,
+  }) {
+    final fromMetadata = _cleanDistinctArtistTags(hitomiMetadata?.artists);
+    if (fromMetadata.isNotEmpty) {
+      return fromMetadata;
+    }
+
+    final inferred = _inferArtistTagFromParts(parts);
+    if (inferred == null) {
+      return const <String>[];
+    }
+    return <String>[inferred];
+  }
+
   static String? _inferArtistTagFromParts(List<String> parts) {
     if (parts.isEmpty) {
       return null;
@@ -317,7 +334,7 @@ class ImportTagRuleService {
   static String? _inferSeriesTagFromParts({
     required bool isHitomiContext,
     HitomiGalleryMetadata? hitomiMetadata,
-    String? artistTag,
+    List<String> artistTags = const <String>[],
   }) {
     if (!isHitomiContext) {
       return null;
@@ -325,8 +342,27 @@ class ImportTagRuleService {
 
     return _cleanSeriesTagCandidate(
       hitomiMetadata?.primarySeries,
-      artistTag: artistTag,
+      artistTags: artistTags,
     );
+  }
+
+  static List<String> _cleanDistinctArtistTags(List<String>? segments) {
+    if (segments == null || segments.isEmpty) {
+      return const <String>[];
+    }
+
+    final out = <String>[];
+    final seen = <String>{};
+    for (final segment in segments) {
+      final cleaned = _cleanArtistTagCandidate(segment);
+      if (cleaned == null) {
+        continue;
+      }
+      if (seen.add(cleaned.toLowerCase())) {
+        out.add(cleaned);
+      }
+    }
+    return out;
   }
 
   static String? _cleanArtistTagCandidate(String segment) {
@@ -352,7 +388,7 @@ class ImportTagRuleService {
 
   static String? _cleanSeriesTagCandidate(
     String? segment, {
-    String? artistTag,
+    List<String> artistTags = const <String>[],
   }) {
     if (segment == null) {
       return null;
@@ -363,9 +399,9 @@ class ImportTagRuleService {
       return null;
     }
 
-    final loweredArtist = artistTag?.trim().toLowerCase();
-    if (loweredArtist != null && loweredArtist.isNotEmpty) {
-      if (cleaned.toLowerCase() == loweredArtist) {
+    final loweredCleaned = cleaned.toLowerCase();
+    for (final artistTag in artistTags) {
+      if (loweredCleaned == artistTag.trim().toLowerCase()) {
         return null;
       }
     }

@@ -373,16 +373,17 @@ void main() {
           apiClient.lastUploadFiles.single.fileName,
           '[20241105] [3114110] Sample Title.pdf',
         );
-        expect(
-          apiClient.lastUploadFiles.single.tags
-              .map((tag) => '${tag.category.name}:${tag.name}')
-              .toSet(),
-          containsAll(<String>{
-            'artist:ArtistName',
-            'series:Original Series',
-            'mediaType:hitomi',
-          }),
-        );
+          expect(
+            apiClient.lastUploadFiles.single.tags
+                .map((tag) => '${tag.category.name}:${tag.name}')
+                .toSet(),
+            containsAll(<String>{
+              'artist:ArtistName',
+              'artist:CoArtist',
+              'series:Original Series',
+              'mediaType:hitomi',
+            }),
+          );
       },
     );
   });
@@ -757,7 +758,7 @@ class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
             HitomiGalleryMetadata.normalizeRelativePathKey(
               'hitomi/[12345] ArtistName/[20241105] [3114110] Sample Title.pdf',
             )!: const HitomiGalleryMetadata(
-              artists: <String>['ArtistName'],
+              artists: <String>['ArtistName', 'CoArtist'],
               series: <String>['Original Series'],
             ),
           }

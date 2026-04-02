@@ -1,4 +1,4 @@
-import re
+﻿import re
 
 _IMPORT_SITE_TAGS = {
     "hitomi": "hitomi",
@@ -66,17 +66,18 @@ def build_inferred_import_tags(
         ):
             media_type_tag_names.add(tag_name)
 
-    artist_tag = _clean_artist_tag_candidate(
-        _pick_first_tag_value(hitomi_metadata, "artists")
-    ) or _infer_artist_tag_from_parts(path_segments)
-    if artist_tag is not None:
+    artist_tags = _infer_artist_tags(
+        path_segments,
+        hitomi_metadata=hitomi_metadata,
+    )
+    for artist_tag in artist_tags:
         tags.append({"category": "artist", "name": artist_tag})
 
     is_hitomi_context = "hitomi" in media_type_tag_names
     series_tag = _infer_series_tag_from_parts(
         is_hitomi_context=is_hitomi_context,
         hitomi_metadata=hitomi_metadata,
-        artist_tag=artist_tag,
+        artist_tags=artist_tags,
     )
     if series_tag is not None:
         tags.append({"category": "series", "name": series_tag})
@@ -94,6 +95,23 @@ def _relative_directory_parts(relative_path: str | None) -> list[str]:
     if len(parts) <= 1:
         return []
     return parts[:-1]
+
+
+def _infer_artist_tags(
+    parts: list[str],
+    *,
+    hitomi_metadata: dict[str, object] | None,
+) -> list[str]:
+    from_metadata = _clean_artist_tag_candidates(
+        _pick_tag_values(hitomi_metadata, "artists")
+    )
+    if from_metadata:
+        return from_metadata
+
+    inferred = _infer_artist_tag_from_parts(parts)
+    if inferred is None:
+        return []
+    return [inferred]
 
 
 def _infer_artist_tag_from_parts(parts: list[str]) -> str | None:
@@ -115,6 +133,23 @@ def _infer_artist_tag_from_parts(parts: list[str]) -> str | None:
         if candidate is not None:
             return candidate
     return None
+
+
+def _clean_artist_tag_candidates(segments: list[str]) -> list[str]:
+    cleaned_values: list[str] = []
+    seen: set[str] = set()
+
+    for segment in segments:
+        cleaned = _clean_artist_tag_candidate(segment)
+        if cleaned is None:
+            continue
+        lowered = cleaned.casefold()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        cleaned_values.append(cleaned)
+
+    return cleaned_values
 
 
 def _clean_artist_tag_candidate(segment: str | None) -> str | None:
@@ -139,21 +174,21 @@ def _infer_series_tag_from_parts(
     *,
     is_hitomi_context: bool,
     hitomi_metadata: dict[str, object] | None,
-    artist_tag: str | None,
+    artist_tags: list[str],
 ) -> str | None:
     if not is_hitomi_context:
         return None
 
     return _clean_series_tag_candidate(
         _pick_first_tag_value(hitomi_metadata, "series"),
-        artist_tag=artist_tag,
+        artist_tags=artist_tags,
     )
 
 
 def _clean_series_tag_candidate(
     segment: str | None,
     *,
-    artist_tag: str | None,
+    artist_tags: list[str],
 ) -> str | None:
     if segment is None:
         return None
@@ -162,8 +197,10 @@ def _clean_series_tag_candidate(
     if cleaned is None:
         return None
 
-    if artist_tag and cleaned.casefold() == artist_tag.strip().casefold():
-        return None
+    cleaned_lowered = cleaned.casefold()
+    for artist_tag in artist_tags:
+        if cleaned_lowered == artist_tag.strip().casefold():
+            return None
     return cleaned
 
 
@@ -180,16 +217,28 @@ def _pick_first_tag_value(
     metadata: dict[str, object] | None,
     key: str,
 ) -> str | None:
-    if not metadata:
+    values = _pick_tag_values(metadata, key)
+    if not values:
         return None
+    return values[0]
+
+
+
+def _pick_tag_values(
+    metadata: dict[str, object] | None,
+    key: str,
+) -> list[str]:
+    if not metadata:
+        return []
     raw = metadata.get(key)
     if not isinstance(raw, list):
-        return None
+        return []
+    values: list[str] = []
     for entry in raw:
         value = str(entry or "").strip()
         if value:
-            return value
-    return None
+            values.append(value)
+    return values
 
 
 def filter_hitomi_pdf_auto_tags(

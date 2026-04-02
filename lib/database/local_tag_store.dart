@@ -420,10 +420,14 @@ class LocalTagStore {
       }
 
       final tags = await listTagsForItem(item.id);
-      final artist = _pickFirst(tags, model.TagCategory.artist);
+      final preferSeriesFolderForHitomi =
+          _shouldPreferSeriesFolderForHitomi(tags);
+      final artist = preferSeriesFolderForHitomi
+          ? null
+          : _pickFirst(tags, model.TagCategory.artist);
       final series = _pickFirst(tags, model.TagCategory.series);
 
-      if (artist == null && series == null) {
+      if (!preferSeriesFolderForHitomi && artist == null && series == null) {
         continue;
       }
 
@@ -496,6 +500,41 @@ class LocalTagStore {
       }
     }
     return null;
+  }
+
+  bool _shouldPreferSeriesFolderForHitomi(List<TagWithId> tags) {
+    if (!_hasTagName(tags, model.TagCategory.mediaType, 'hitomi')) {
+      return false;
+    }
+
+    final artistNames = <String>{};
+    for (final entry in tags) {
+      if (entry.tag.category != model.TagCategory.artist) {
+        continue;
+      }
+      final normalized = entry.tag.name.trim().toLowerCase();
+      if (normalized.isNotEmpty) {
+        artistNames.add(normalized);
+      }
+    }
+    return artistNames.length > 1;
+  }
+
+  bool _hasTagName(
+    List<TagWithId> tags,
+    model.TagCategory category,
+    String name,
+  ) {
+    final normalizedName = name.trim().toLowerCase();
+    for (final entry in tags) {
+      if (entry.tag.category != category) {
+        continue;
+      }
+      if (entry.tag.name.trim().toLowerCase() == normalizedName) {
+        return true;
+      }
+    }
+    return false;
   }
 
   String _calcLibraryDestDir({

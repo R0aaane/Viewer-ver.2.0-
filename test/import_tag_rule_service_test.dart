@@ -50,7 +50,7 @@ void main() {
       );
     });
 
-    test('uses downloader metadata for hitomi artist and series', () {
+    test('uses all downloader metadata artists for hitomi artist and series', () {
       final inferred = ImportTagRuleService.inferForImportedItem(
         itemPath:
             r'C:\library\hitomi\[12345] ArtistName\[20241105] [3114110] Sample Title.pdf',
@@ -58,17 +58,17 @@ void main() {
         displayName: '[20241105] [3114110] Sample Title.pdf',
         sourceUrls: const <String>['https://hitomi.la/reader/123456.html'],
         hitomiMetadata: const HitomiGalleryMetadata(
-          artists: <String>['ArtistName'],
+          artists: <String>['ArtistName', 'CoArtist'],
           series: <String>['Original Series'],
         ),
       );
 
       expect(
-        inferred.tags.any(
-          (tag) =>
-              tag.category == TagCategory.artist && tag.name == 'ArtistName',
-        ),
-        isTrue,
+        inferred.tags
+            .where((tag) => tag.category == TagCategory.artist)
+            .map((tag) => tag.name)
+            .toSet(),
+        <String>{'ArtistName', 'CoArtist'},
       );
       expect(
         inferred.tags.any(

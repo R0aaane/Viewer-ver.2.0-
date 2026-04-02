@@ -133,6 +133,71 @@ void main() {
     expect(taggedItems.map((item) => item.id), contains(targetPath));
   });
 
+  test(
+    'organizeAppLibrary uses series folder for hitomi items with multiple artists',
+    () async {
+      final docsDir = await Directory.systemTemp.createTemp(
+        'local-tag-store-hitomi-collab',
+      );
+      addTearDown(() async {
+        if (await docsDir.exists()) {
+          await docsDir.delete(recursive: true);
+        }
+      });
+      PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+      final db = AppDb();
+      addTearDown(db.close);
+      final store = LocalTagStore(db);
+
+      final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+      await libraryRoot.create(recursive: true);
+
+      final sourcePath = p.join(libraryRoot.path, 'hitomi-collab.pdf');
+      await File(sourcePath).writeAsBytes(const <int>[7, 7, 7]);
+      final source = MediaItem(
+        id: sourcePath,
+        displayName: 'hitomi-collab.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: libraryRoot.path,
+      );
+
+      await store.addTagToItem(
+        source,
+        const Tag(name: 'Artist A', category: TagCategory.artist),
+      );
+      await store.addTagToItem(
+        source,
+        const Tag(name: 'Artist B', category: TagCategory.artist),
+      );
+      await store.addTagToItem(
+        source,
+        const Tag(name: 'Original Series', category: TagCategory.series),
+      );
+      await store.addTagToItem(
+        source,
+        const Tag(name: 'hitomi', category: TagCategory.mediaType),
+      );
+
+      final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+      final targetPath = p.join(
+        libraryRoot.path,
+        '\u30b7\u30ea\u30fc\u30ba',
+        'Original Series',
+        'hitomi-collab.pdf',
+      );
+
+      expect(moved[sourcePath], targetPath);
+      expect(await File(targetPath).exists(), isTrue);
+      expect(
+        await Directory(
+          p.join(libraryRoot.path, '\u4f5c\u8005\u5225'),
+        ).exists(),
+        isFalse,
+      );
+    },
+  );
+
   test('renameItemsUnderPathPrefix keeps tags after folder rename', () async {
     final docsDir = await Directory.systemTemp.createTemp('local-tag-store-folder-rename');
     addTearDown(() async {

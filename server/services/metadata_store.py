@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -132,6 +132,32 @@ def _pick_first_tag_name(tags: list[dict[str, Any]], category: str) -> str | Non
             return name
     return None
 
+
+def _has_tag_name(tags: list[dict[str, Any]], category: str, name: str) -> bool:
+    normalized_name = _normalize_name(name)
+    for tag in tags:
+        if tag.get("category") != category:
+            continue
+        if _normalize_name(str(tag.get("name") or "")) == normalized_name:
+            return True
+    return False
+
+
+def _count_distinct_tag_names(tags: list[dict[str, Any]], category: str) -> int:
+    names: set[str] = set()
+    for tag in tags:
+        if tag.get("category") != category:
+            continue
+        normalized_name = _normalize_name(str(tag.get("name") or ""))
+        if normalized_name:
+            names.add(normalized_name)
+    return len(names)
+
+
+def _should_prefer_series_dir_for_hitomi(tags: list[dict[str, Any]]) -> bool:
+    if not _has_tag_name(tags, "mediaType", "hitomi"):
+        return False
+    return _count_distinct_tag_names(tags, "artist") > 1
 
 @dataclass(frozen=True)
 class SearchQuery:
@@ -778,11 +804,11 @@ class MetadataStore:
                 continue
 
             tags = self.get_tags_for_media(current["media_id"])
-            artist_name = _pick_first_tag_name(tags, "artist")
+            prefer_series_dir_for_hitomi = _should_prefer_series_dir_for_hitomi(tags)
+            artist_name = None if prefer_series_dir_for_hitomi else _pick_first_tag_name(tags, "artist")
             series_name = _pick_first_tag_name(tags, "series")
-            if not artist_name and not series_name:
+            if not prefer_series_dir_for_hitomi and not artist_name and not series_name:
                 continue
-
             destination_dir = self._calc_library_dest_dir(
                 library_root=library_root,
                 artist_name=artist_name,
@@ -893,6 +919,7 @@ class MetadataStore:
             "isDeleted": bool(row["is_deleted"]),
             "modifiedEpochMs": _parse_epoch(row.get("modified_epoch_ms")),
         }
+
 
 
 
