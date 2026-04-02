@@ -1,6 +1,10 @@
 ﻿import unittest
 
-from server.vendor.kemono_dl.hitomi import collect_hitomi_names, pick_hitomi_directory_name
+from server.vendor.kemono_dl.hitomi import (
+    build_hitomi_pdf_path,
+    collect_hitomi_names,
+    pick_hitomi_directory_name,
+)
 
 
 class HitomiHelpersTest(unittest.TestCase):
@@ -59,7 +63,15 @@ class HitomiHelpersTest(unittest.TestCase):
             'Sample Title',
         )
 
+    def test_build_hitomi_pdf_path_matches_generated_pdf_location(self) -> None:
+        self.assertEqual(
+            build_hitomi_pdf_path(
+                r'C:\library\hitomi\Original Series [12345]',
+                r'C:\library\hitomi\Original Series [12345]\[20241105] [3114110] Sample Title\001.webp',
+            ),
+            r'C:\library\hitomi\Original Series [12345]\[20241105] [3114110] Sample Title.pdf',
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
-

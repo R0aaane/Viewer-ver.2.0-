@@ -25,6 +25,7 @@ from .helper import get_file_hash, print_download_bar, check_date, parse_url, co
 from .hitomi import (
     HITOMI_GG_URL,
     build_hitomi_file,
+    build_hitomi_pdf_path,
     collect_hitomi_names,
     extract_hitomi_gallery_info,
     parse_hitomi_gg,
@@ -355,26 +356,6 @@ class downloader:
             'raw': info,
         }
 
-        pdf_path = os.path.join(
-            os.path.dirname(post['post_path']),
-            f"{os.path.basename(post['post_path'])}.pdf",
-        )
-        self.emit_ui_event(
-            'hitomi_metadata',
-            pdf_path=pdf_path,
-            source_url=gallery['normalized_url'],
-            reader_url=gallery['reader_url'],
-            title=title,
-            english_title=english_title,
-            japanese_title=japanese_title,
-            media_type=info.get('type'),
-            language=info.get('language'),
-            artists=artists,
-            groups=groups,
-            series=series,
-            characters=characters,
-            tags=tags,
-        )
 
         if self.content:
             metadata = {
@@ -429,6 +410,28 @@ class downloader:
                 'file_variables': file_variables,
                 'file_path': file_path,
             })
+
+        if post['attachments']:
+            pdf_path = build_hitomi_pdf_path(
+                post['post_path'],
+                post['attachments'][0]['file_path'],
+            )
+            self.emit_ui_event(
+                'hitomi_metadata',
+                pdf_path=pdf_path,
+                source_url=gallery['normalized_url'],
+                reader_url=gallery['reader_url'],
+                title=title,
+                english_title=english_title,
+                japanese_title=japanese_title,
+                media_type=info.get('type'),
+                language=info.get('language'),
+                artists=artists,
+                groups=groups,
+                series=series,
+                characters=characters,
+                tags=tags,
+            )
 
         self.register_post_files(post)
         return post
@@ -1544,6 +1547,7 @@ class downloader:
 
 def main():
     downloader(get_args())
+
 
 
 

@@ -159,6 +159,23 @@ def pick_hitomi_directory_name(
     return cleaned_title or "gallery"
 
 
+def build_hitomi_pdf_path(post_path: str, attachment_file_path: str) -> str:
+    gallery_dir = os.path.dirname(str(attachment_file_path or "").strip())
+    normalized_post_path = os.path.normpath(str(post_path or "").strip())
+    normalized_gallery_dir = os.path.normpath(gallery_dir) if gallery_dir else ""
+
+    if normalized_gallery_dir and normalized_gallery_dir != normalized_post_path:
+        return os.path.join(
+            os.path.dirname(normalized_gallery_dir),
+            f"{os.path.basename(normalized_gallery_dir)}.pdf",
+        )
+
+    return os.path.join(
+        os.path.dirname(normalized_post_path),
+        f"{os.path.basename(normalized_post_path)}.pdf",
+    )
+
+
 def list_hitomi_extensions(file_info: dict, preferred: str = "auto"):
     preferred = (preferred or "auto").lower().lstrip(".")
     original_name = os.path.basename((file_info.get("name") or "").split("?")[0])
@@ -245,3 +262,4 @@ def build_hitomi_file(file_info: dict, gg_map: dict, gg_base: str, gg_default: i
         "fallback_urls": [],
         "hash": None,
     }
+
