@@ -1,4 +1,4 @@
-﻿import 'dart:typed_data';
+import 'dart:typed_data';
 
 import 'dart:io';
 
@@ -14,44 +14,51 @@ import 'package:pdf_viewer/services/remote_media_api_client.dart';
 
 void main() {
   group('RemoteMediaRepository.rename', () {
-    test('returns the refreshed remote item after a successful rename', () async {
-      final apiClient = _FakeRemoteMediaApiClient();
-      final idResolver = _FakeMediaIdResolver();
-      final repository = RemoteMediaRepository(
-        apiClient: apiClient,
-        idResolver: idResolver,
-        localPickerRepository: const _StubMediaRepository(),
-      );
-      final item = _imageItem(
-        id: r'C:\library\old.jpg',
-        displayName: 'old.jpg',
-      );
+    test(
+      'returns the refreshed remote item after a successful rename',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient();
+        final idResolver = _FakeMediaIdResolver();
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: idResolver,
+          localPickerRepository: const _StubMediaRepository(),
+        );
+        final item = _imageItem(
+          id: r'C:\library\old.jpg',
+          displayName: 'old.jpg',
+        );
 
-      apiClient.onRename = (afterItem) {
-        apiClient.folderEntriesByFolder[afterItem.folderRaw] = <RemoteFolderEntry>[
-          RemoteFolderEntry(
-            entryId: afterItem.id,
-            displayName: afterItem.displayName,
-            folderRaw: afterItem.folderRaw,
-            kind: 'image',
-            mediaId: afterItem.id,
-            fullPath: afterItem.id,
-            sizeBytes: afterItem.sizeBytes,
-            modifiedAt: afterItem.modified,
-          ),
-        ];
-      };
+        apiClient.onRename = (afterItem) {
+          apiClient.folderEntriesByFolder[afterItem.folderRaw] =
+              <RemoteFolderEntry>[
+                RemoteFolderEntry(
+                  entryId: afterItem.id,
+                  displayName: afterItem.displayName,
+                  folderRaw: afterItem.folderRaw,
+                  kind: 'image',
+                  mediaId: afterItem.id,
+                  fullPath: afterItem.id,
+                  sizeBytes: afterItem.sizeBytes,
+                  modifiedAt: afterItem.modified,
+                ),
+              ];
+        };
 
-      final renamed = await repository.rename(item, 'new');
+        final renamed = await repository.rename(item, 'new');
 
-      expect(renamed.id, r'C:\library\new.jpg');
-      expect(renamed.displayName, 'new.jpg');
-      expect(renamed.kind, MediaKind.image);
-      expect(apiClient.renameCalls, hasLength(1));
-      expect(apiClient.renameCalls.single.oldPath, item.id);
-      expect(apiClient.renameCalls.single.newPath, r'C:\library\new.jpg');
-      expect(idResolver.forgotten, containsAll(<String>[item.id, renamed.id]));
-    });
+        expect(renamed.id, r'C:\library\new.jpg');
+        expect(renamed.displayName, 'new.jpg');
+        expect(renamed.kind, MediaKind.image);
+        expect(apiClient.renameCalls, hasLength(1));
+        expect(apiClient.renameCalls.single.oldPath, item.id);
+        expect(apiClient.renameCalls.single.newPath, r'C:\library\new.jpg');
+        expect(
+          idResolver.forgotten,
+          containsAll(<String>[item.id, renamed.id]),
+        );
+      },
+    );
 
     test('supports folder rename through the remote api', () async {
       final apiClient = _FakeRemoteMediaApiClient();
@@ -69,18 +76,19 @@ void main() {
       );
 
       apiClient.onRename = (afterItem) {
-        apiClient.folderEntriesByFolder[afterItem.folderRaw] = <RemoteFolderEntry>[
-          RemoteFolderEntry(
-            entryId: afterItem.id,
-            displayName: afterItem.displayName,
-            folderRaw: afterItem.folderRaw,
-            kind: 'folder',
-            mediaId: null,
-            fullPath: afterItem.id,
-            sizeBytes: null,
-            modifiedAt: null,
-          ),
-        ];
+        apiClient.folderEntriesByFolder[afterItem.folderRaw] =
+            <RemoteFolderEntry>[
+              RemoteFolderEntry(
+                entryId: afterItem.id,
+                displayName: afterItem.displayName,
+                folderRaw: afterItem.folderRaw,
+                kind: 'folder',
+                mediaId: null,
+                fullPath: afterItem.id,
+                sizeBytes: null,
+                modifiedAt: null,
+              ),
+            ];
       };
 
       final renamed = await repository.rename(item, 'new-folder');
@@ -135,32 +143,38 @@ void main() {
       expect(idResolver.forgotten, <String>[item.id]);
     });
 
-    test('allows deleting remote folders without media verification lookup', () async {
-      final apiClient = _FakeRemoteMediaApiClient();
-      final idResolver = _FakeMediaIdResolver();
-      final repository = RemoteMediaRepository(
-        apiClient: apiClient,
-        idResolver: idResolver,
-        localPickerRepository: const _StubMediaRepository(),
-      );
-      final folderItem = MediaItem(
-        id: r'C:\library\artist-folder',
-        displayName: 'artist-folder',
-        kind: MediaKind.folder,
-        folderRaw: r'C:\library',
-      );
+    test(
+      'allows deleting remote folders without media verification lookup',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient();
+        final idResolver = _FakeMediaIdResolver();
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: idResolver,
+          localPickerRepository: const _StubMediaRepository(),
+        );
+        final folderItem = MediaItem(
+          id: r'C:\library\artist-folder',
+          displayName: 'artist-folder',
+          kind: MediaKind.folder,
+          folderRaw: r'C:\library',
+        );
 
-      final deleted = await repository.deleteItem(folderItem);
+        final deleted = await repository.deleteItem(folderItem);
 
-      expect(deleted, isTrue);
-      expect(apiClient.deleteCalls, hasLength(1));
-      expect(apiClient.deleteCalls.single, <String>['stable:${folderItem.id}']);
-      expect(apiClient.metaRequests, isEmpty);
-      expect(idResolver.forgotten, <String>[folderItem.id]);
-    });
+        expect(deleted, isTrue);
+        expect(apiClient.deleteCalls, hasLength(1));
+        expect(apiClient.deleteCalls.single, <String>[
+          'stable:${folderItem.id}',
+        ]);
+        expect(apiClient.metaRequests, isEmpty);
+        expect(idResolver.forgotten, <String>[folderItem.id]);
+      },
+    );
 
     test('throws when the deletion cannot be verified', () async {
-      final apiClient = _FakeRemoteMediaApiClient()..markDeletedOnDelete = false;
+      final apiClient = _FakeRemoteMediaApiClient()
+        ..markDeletedOnDelete = false;
       final repository = RemoteMediaRepository(
         apiClient: apiClient,
         idResolver: _FakeMediaIdResolver(),
@@ -201,7 +215,9 @@ void main() {
         localPickerRepository: const _StubMediaRepository(),
       );
 
-      final items = await repository.listMedia(const FolderHandle(r'C:\library'));
+      final items = await repository.listMedia(
+        const FolderHandle(r'C:\library'),
+      );
       final pair = await repository.readThumbPair(items.single, maxWidth: 240);
 
       expect(pair.front, isNotEmpty);
@@ -241,11 +257,18 @@ void main() {
       expect(result.skippedCount, 1);
       expect(result.failedCount, 0);
       expect(apiClient.lastDownloadUrlFolderRaw, r'C:\library');
-      expect(apiClient.lastDownloadUrl, 'https://kemono.su/patreon/user/123/post/456');
+      expect(
+        apiClient.lastDownloadUrl,
+        'https://kemono.su/patreon/user/123/post/456',
+      );
       expect(apiClient.lastDownloadUrlMetadata?.artistTag, 'Artist');
       expect(apiClient.lastDownloadUrlMetadata?.seriesTag, 'Series');
-      expect(apiClient.lastDownloadUrlMetadata?.freeTags, const <String>['free-1']);
-      expect(apiClient.lastDownloadUrlMetadata?.characterTags, const <String>['heroine']);
+      expect(apiClient.lastDownloadUrlMetadata?.freeTags, const <String>[
+        'free-1',
+      ]);
+      expect(apiClient.lastDownloadUrlMetadata?.characterTags, const <String>[
+        'heroine',
+      ]);
       expect(apiClient.lastDownloadUrlMetadata?.targetCollection, 'library');
       expect(apiClient.lastDownloadUrlMetadata?.organizeAfterImport, isTrue);
     });
@@ -300,7 +323,10 @@ void main() {
           importMetadata: metadata,
         );
 
-        expect(apiClient.lastDownloadUrlFolderRaw, r'C:\Users\Host\Documents\library');
+        expect(
+          apiClient.lastDownloadUrlFolderRaw,
+          r'C:\Users\Host\Documents\library',
+        );
         expect(
           localRepository.lastImportedUrl,
           'https://kemono.su/patreon/user/123/post/456',
@@ -309,7 +335,10 @@ void main() {
         expect(result.importedCount, 1);
         expect(result.skippedCount, 0);
         expect(result.failedCount, 0);
-        expect(apiClient.lastUploadFolderRaw, r'C:\Users\Host\Documents\library');
+        expect(
+          apiClient.lastUploadFolderRaw,
+          r'C:\Users\Host\Documents\library',
+        );
         expect(apiClient.lastUploadMetadata?.artistTag, 'Artist');
         expect(apiClient.lastUploadMetadata?.targetCollection, 'library');
         expect(apiClient.lastUploadFiles, hasLength(1));
@@ -350,7 +379,7 @@ void main() {
               .toSet(),
           containsAll(<String>{
             'artist:ArtistName',
-            'series:Sample Title',
+            'series:Original Series',
             'mediaType:hitomi',
           }),
         );
@@ -384,117 +413,126 @@ void main() {
       expect(apiClient.lastUploadFolderRaw, r'C:\library');
       expect(apiClient.lastUploadMetadata?.artistTag, 'Artist');
       expect(apiClient.lastUploadMetadata?.seriesTag, 'Series');
-      expect(
-        apiClient.lastUploadMetadata?.freeTags,
-        const <String>['free-1', 'free-2'],
-      );
-      expect(
-        apiClient.lastUploadMetadata?.characterTags,
-        const <String>['heroine'],
-      );
+      expect(apiClient.lastUploadMetadata?.freeTags, const <String>[
+        'free-1',
+        'free-2',
+      ]);
+      expect(apiClient.lastUploadMetadata?.characterTags, const <String>[
+        'heroine',
+      ]);
       expect(apiClient.lastUploadMetadata?.targetCollection, 'library');
       expect(apiClient.lastUploadMetadata?.organizeAfterImport, isTrue);
       expect(apiClient.lastUploadFiles, hasLength(1));
       expect(apiClient.lastUploadFiles.single.fileName, 'old.jpg');
     });
 
-    test('includes locally stored tags using the normalized upload path key', () async {
-      final apiClient = _FakeRemoteMediaApiClient();
-      final tempDir = await Directory.systemTemp.createTemp('remote-upload-tags');
-      addTearDown(() async {
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
-        }
-      });
+    test(
+      'includes locally stored tags using the normalized upload path key',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient();
+        final tempDir = await Directory.systemTemp.createTemp(
+          'remote-upload-tags',
+        );
+        addTearDown(() async {
+          if (await tempDir.exists()) {
+            await tempDir.delete(recursive: true);
+          }
+        });
 
-      final sourceFile = File('${tempDir.path}${Platform.pathSeparator}old.jpg');
-      await sourceFile.writeAsBytes(<int>[1, 2, 3], flush: true);
-      final repository = RemoteMediaRepository(
-        apiClient: apiClient,
-        idResolver: _FakeMediaIdResolver(),
-        localPickerRepository: const _StubMediaRepository(),
-        localUploadTagsProvider: (_) async => <String, List<Tag>>{
-          sourceFile.path: const <Tag>[
-            Tag(name: 'Agua Larson', category: TagCategory.artist),
-            Tag(name: 'Summer Line', category: TagCategory.series),
-            Tag(name: 'Heroine X', category: TagCategory.character),
-            Tag(name: 'bonus', category: TagCategory.free),
+        final sourceFile = File(
+          '${tempDir.path}${Platform.pathSeparator}old.jpg',
+        );
+        await sourceFile.writeAsBytes(<int>[1, 2, 3], flush: true);
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: const _StubMediaRepository(),
+          localUploadTagsProvider: (_) async => <String, List<Tag>>{
+            sourceFile.path: const <Tag>[
+              Tag(name: 'Agua Larson', category: TagCategory.artist),
+              Tag(name: 'Summer Line', category: TagCategory.series),
+              Tag(name: 'Heroine X', category: TagCategory.character),
+              Tag(name: 'bonus', category: TagCategory.free),
+            ],
+          },
+        );
+
+        final importedCount = await repository.importItemsIntoFolder(
+          const FolderHandle(r'C:\library'),
+          <MediaItem>[
+            MediaItem(
+              id: sourceFile.uri.toString(),
+              displayName: 'old.jpg',
+              kind: MediaKind.image,
+              folderRaw: tempDir.path,
+            ),
           ],
-        },
-      );
+        );
 
-      final importedCount = await repository.importItemsIntoFolder(
-        const FolderHandle(r'C:\library'),
-        <MediaItem>[
-          MediaItem(
-            id: sourceFile.uri.toString(),
-            displayName: 'old.jpg',
-            kind: MediaKind.image,
-            folderRaw: tempDir.path,
-          ),
-        ],
-      );
-
-      expect(importedCount, 1);
-      expect(apiClient.lastUploadFiles, hasLength(1));
-      expect(
-        apiClient.lastUploadFiles.single.tags
-            .map((tag) => '${tag.category.name}:${tag.name}')
-            .toSet(),
-        <String>{
-          'artist:Agua Larson',
-          'series:Summer Line',
-          'character:Heroine X',
-          'free:bonus',
-        },
-      );
-    });
+        expect(importedCount, 1);
+        expect(apiClient.lastUploadFiles, hasLength(1));
+        expect(
+          apiClient.lastUploadFiles.single.tags
+              .map((tag) => '${tag.category.name}:${tag.name}')
+              .toSet(),
+          <String>{
+            'artist:Agua Larson',
+            'series:Summer Line',
+            'character:Heroine X',
+            'free:bonus',
+          },
+        );
+      },
+    );
   });
 
   group('Repository capabilities', () {
-    test('SwitchingMediaRepository exposes the active repository capabilities', () {
-      const localCapabilities = RepositoryCapabilities(
-        canRename: true,
-        canDelete: true,
-        canUpload: true,
-        canRecursiveSearch: true,
-        canExportPdf: true,
-        canOrganizeLibrary: true,
-        canPickFolder: true,
-        canAddLocalFolder: true,
-        canImportToHost: false,
-        canBatchUpload: true,
-        canAssignImportTags: true,
-      );
-      const localRepository = _StubMediaRepository(
-        capabilities: localCapabilities,
-      );
+    test(
+      'SwitchingMediaRepository exposes the active repository capabilities',
+      () {
+        const localCapabilities = RepositoryCapabilities(
+          canRename: true,
+          canDelete: true,
+          canUpload: true,
+          canRecursiveSearch: true,
+          canExportPdf: true,
+          canOrganizeLibrary: true,
+          canPickFolder: true,
+          canAddLocalFolder: true,
+          canImportToHost: false,
+          canBatchUpload: true,
+          canAssignImportTags: true,
+        );
+        const localRepository = _StubMediaRepository(
+          capabilities: localCapabilities,
+        );
 
-      final standalone = SwitchingMediaRepository(
-        localRepository,
-        initialSettings: const MetadataSettings(appMode: AppMode.standalone),
-      );
-      final remote = SwitchingMediaRepository(
-        localRepository,
-        initialSettings: const MetadataSettings(
-          appMode: AppMode.client,
-          clientApiBaseUrl: 'http://example.com',
-        ),
-      );
+        final standalone = SwitchingMediaRepository(
+          localRepository,
+          initialSettings: const MetadataSettings(appMode: AppMode.standalone),
+        );
+        final remote = SwitchingMediaRepository(
+          localRepository,
+          initialSettings: const MetadataSettings(
+            appMode: AppMode.client,
+            clientApiBaseUrl: 'http://example.com',
+          ),
+        );
 
-      expect(standalone.capabilities.canExportPdf, isTrue);
-      expect(standalone.capabilities.canOrganizeLibrary, isTrue);
-      expect(standalone.capabilities.canPickFolder, isTrue);
-      expect(standalone.capabilities.canAddLocalFolder, isTrue);
-      expect(standalone.capabilities.canImportToHost, isFalse);
-      expect(remote.capabilities.canUpload, isTrue);
-      expect(remote.capabilities.canExportPdf, isFalse);
-      expect(remote.capabilities.canOrganizeLibrary, isFalse);
-      expect(remote.capabilities.canPickFolder, isFalse);
-      expect(remote.capabilities.canAddLocalFolder, isFalse);
-      expect(remote.capabilities.canImportToHost, isTrue);
-      expect(remote.capabilities.canAssignImportTags, isTrue);
-    });
+        expect(standalone.capabilities.canExportPdf, isTrue);
+        expect(standalone.capabilities.canOrganizeLibrary, isTrue);
+        expect(standalone.capabilities.canPickFolder, isTrue);
+        expect(standalone.capabilities.canAddLocalFolder, isTrue);
+        expect(standalone.capabilities.canImportToHost, isFalse);
+        expect(remote.capabilities.canUpload, isTrue);
+        expect(remote.capabilities.canExportPdf, isFalse);
+        expect(remote.capabilities.canOrganizeLibrary, isFalse);
+        expect(remote.capabilities.canPickFolder, isFalse);
+        expect(remote.capabilities.canAddLocalFolder, isFalse);
+        expect(remote.capabilities.canImportToHost, isTrue);
+        expect(remote.capabilities.canAssignImportTags, isTrue);
+      },
+    );
   });
 }
 
@@ -516,10 +554,7 @@ class _RenameCall {
   final String oldPath;
   final String newPath;
 
-  const _RenameCall({
-    required this.oldPath,
-    required this.newPath,
-  });
+  const _RenameCall({required this.oldPath, required this.newPath});
 }
 
 class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
@@ -586,7 +621,8 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
     int limit = 100,
     int offset = 0,
   }) async {
-    final entries = folderEntriesByFolder[folderRaw] ?? const <RemoteFolderEntry>[];
+    final entries =
+        folderEntriesByFolder[folderRaw] ?? const <RemoteFolderEntry>[];
     final paged = entries.skip(offset).take(limit).toList(growable: false);
     return RemoteFolderPage(
       items: paged,
@@ -642,6 +678,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
     }
     return const UrlImportResult(importedCount: 3, skippedCount: 1);
   }
+
   @override
   Future<RemoteUploadResponse> uploadFiles({
     required String folderRaw,
@@ -684,9 +721,7 @@ class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
   String? lastImportedFolderRaw;
   String? lastImportedUrl;
 
-  _RecordingLocalUrlImportRepository({
-    this.createHitomiPdfBundle = false,
-  });
+  _RecordingLocalUrlImportRepository({this.createHitomiPdfBundle = false});
 
   @override
   bool get canImportFromUrl => true;
@@ -717,7 +752,20 @@ class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
       await file.parent.create(recursive: true);
       await file.writeAsBytes(<int>[1, 2, 3], flush: true);
     }
-    return const UrlImportResult(importedCount: 1);
+    final hitomiMetadataByRelativePath = createHitomiPdfBundle
+        ? <String, HitomiGalleryMetadata>{
+            HitomiGalleryMetadata.normalizeRelativePathKey(
+              'hitomi/[12345] ArtistName/[20241105] [3114110] Sample Title.pdf',
+            )!: const HitomiGalleryMetadata(
+              artists: <String>['ArtistName'],
+              series: <String>['Original Series'],
+            ),
+          }
+        : const <String, HitomiGalleryMetadata>{};
+    return UrlImportResult(
+      importedCount: 1,
+      hitomiMetadataByRelativePath: hitomiMetadataByRelativePath,
+    );
   }
 
   @override
@@ -730,7 +778,10 @@ class _RecordingLocalUrlImportRepository extends _StubMediaRepository {
       return const <MediaItem>[];
     }
     final items = <MediaItem>[];
-    await for (final entity in rootDir.list(recursive: true, followLinks: false)) {
+    await for (final entity in rootDir.list(
+      recursive: true,
+      followLinks: false,
+    )) {
       if (entity is! File) {
         continue;
       }
@@ -797,7 +848,8 @@ class _StubMediaRepository implements MediaRepository {
   Future<void> reloadSettings() async {}
 
   @override
-  Future<List<FolderHandle>> listAvailableFolders() async => const <FolderHandle>[];
+  Future<List<FolderHandle>> listAvailableFolders() async =>
+      const <FolderHandle>[];
 
   @override
   Future<FolderHandle?> pickFolder() async => null;
@@ -818,7 +870,8 @@ class _StubMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<FolderHandle> getAppLibraryFolder() async => const FolderHandle(r'C:\library');
+  Future<FolderHandle> getAppLibraryFolder() async =>
+      const FolderHandle(r'C:\library');
 
   @override
   Future<List<MediaItem>> listMedia(
@@ -895,7 +948,3 @@ class _StubMediaRepository implements MediaRepository {
     void Function(int processed, int total)? onProgress,
   }) async => const PagedMediaResult(items: <MediaItem>[], total: 0);
 }
-
-
-
-

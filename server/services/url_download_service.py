@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import inspect
@@ -26,7 +26,7 @@ class UrlDownloadResult:
     status: str = "idle"
     current_file: str | None = None
     log_lines: list[str] = field(default_factory=list)
-
+    hitomi_metadata_by_relative_path: dict[str, dict[str, object]] = field(default_factory=dict)
 
 @dataclass(slots=True)
 class UrlDownloadOptions:
@@ -121,15 +121,15 @@ class UrlDownloadService:
     ) -> UrlDownloadResult:
         effective_options = options or UrlDownloadOptions()
         if not effective_options.has_any_source(source_url):
-            raise UrlDownloadError("URL、URL 一覧ファイル、またはお気に入り条件を入力してください")
+            raise UrlDownloadError("Provide a URL, URL list file, or favorites condition")
         if effective_options.has_favorite_sources:
             cookie_file_path = (effective_options.cookie_file_path or "").strip()
             if effective_options.cookie_mode == "none" or (
                 effective_options.cookie_mode == "custom" and not cookie_file_path
             ):
-                raise UrlDownloadError("お気に入り取得には Cookie が必要です")
+                raise UrlDownloadError("Favorites import requires a cookie")
             if not effective_options.normalized_sites:
-                raise UrlDownloadError("お気に入り取得には対象サイトを選択してください")
+                raise UrlDownloadError("Favorites import requires at least one target site")
 
         result = UrlDownloadResult(status="starting")
         log_lines: deque[str] = deque(maxlen=80)
@@ -169,7 +169,7 @@ class UrlDownloadService:
                     except json.JSONDecodeError:
                         log_lines.append(f"[stdout] {line}")
                         continue
-                    _apply_event(result, event)
+                    _apply_event(result, event, destination_folder=destination_folder)
                     if on_event is not None:
                         maybe_awaitable = on_event(event)
                         if inspect.isawaitable(maybe_awaitable):
@@ -194,7 +194,7 @@ class UrlDownloadService:
         if return_code != 0:
             raise UrlDownloadError(_tail_message(result.log_lines, return_code))
         if not event_seen:
-            raise UrlDownloadError("ダウンローダーから進捗応答を受け取れませんでした")
+            raise UrlDownloadError("Downloader progress events were not received")
         return result
 
     def _build_task_args(self, source_url: str, options: UrlDownloadOptions) -> list[str]:
@@ -242,7 +242,35 @@ class UrlDownloadService:
         return args
 
 
-def _apply_event(result: UrlDownloadResult, event: dict[str, object]) -> None:
+def _apply_event(
+    result: UrlDownloadResult,
+    event: dict[str, object],
+    *,
+    destination_folder: str,
+) -> None:
+    event_type = str(event.get("type") or "").strip().lower()
+    if event_type == "hitomi_metadata":
+        relative_key = _relative_key_from_path(
+            event.get("pdf_path"),
+            destination_folder=destination_folder,
+        )
+        if relative_key is not None:
+            result.hitomi_metadata_by_relative_path[relative_key] = {
+                "artists": _string_list(event.get("artists")),
+                "groups": _string_list(event.get("groups")),
+                "series": _string_list(event.get("series")),
+                "characters": _string_list(event.get("characters")),
+                "tags": _string_list(event.get("tags")),
+                "title": _string_or_none(event.get("title")),
+                "english_title": _string_or_none(event.get("english_title")),
+                "japanese_title": _string_or_none(event.get("japanese_title")),
+                "media_type": _string_or_none(event.get("media_type")),
+                "language": _string_or_none(event.get("language")),
+                "source_url": _string_or_none(event.get("source_url")),
+                "reader_url": _string_or_none(event.get("reader_url")),
+            }
+        return
+
     result.total_count = _as_int(event.get("total"), default=result.total_count)
     result.completed_count = _as_int(
         event.get("completed"),
@@ -259,6 +287,38 @@ def _apply_event(result: UrlDownloadResult, event: dict[str, object]) -> None:
         result.current_file = current_file
 
 
+def _relative_key_from_path(value: object, *, destination_folder: str) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        normalized_path = os.path.normpath(value)
+        normalized_root = os.path.normpath(destination_folder)
+        if normalized_path == normalized_root:
+            return None
+        relative_path = os.path.relpath(normalized_path, normalized_root)
+    except ValueError:
+        return None
+    if relative_path.startswith(".."):
+        return None
+    return relative_path.replace("\\", "/").casefold()
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for entry in value:
+        text = str(entry or "").strip()
+        if text:
+            items.append(text)
+    return items
+
+
+def _string_or_none(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 def _as_int(value: object, *, default: int) -> int:
     if value is None:
         return default
@@ -273,7 +333,4 @@ def _as_int(value: object, *, default: int) -> int:
 def _tail_message(log_lines: list[str], return_code: int) -> str:
     if log_lines:
         return log_lines[-1]
-    return f"ダウンローダーが異常終了しました (exit={return_code})"
-
-
-
+    return f"驛｢謨鳴驛｢・ｧ繝ｻ・ｦ驛｢譎｢・ｽ・ｳ驛｢譎｢・ｽ・ｭ驛｢譎｢・ｽ・ｼ驛｢謨鳴驛｢譎｢・ｽ・ｼ驍ｵ・ｺ隶吝ｮ医・髯晢ｽｶ繝ｻ・ｸ鬩搾ｽｨ郢ｧ繝ｻ・ｽ・ｺ郢晢ｽｻ繝ｻ・ｰ驍ｵ・ｺ繝ｻ・ｾ驍ｵ・ｺ陷会ｽｱ隨ｳ繝ｻ(exit={return_code})"

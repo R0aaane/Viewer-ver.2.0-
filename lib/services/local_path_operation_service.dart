@@ -34,32 +34,10 @@ class LocalPathOperationService {
     }
 
     try {
-      if (await FileSystemEntity.identical(sourcePath, targetPath)) {
-        return true;
-      }
-    } catch (_) {}
-
-    final sourceType = await FileSystemEntity.type(sourcePath, followLinks: false);
-    final targetType = await FileSystemEntity.type(targetPath, followLinks: false);
-    if (sourceType == FileSystemEntityType.notFound ||
-        targetType == FileSystemEntityType.notFound ||
-        sourceType != targetType) {
+      return await FileSystemEntity.identical(sourcePath, targetPath);
+    } catch (_) {
       return false;
     }
-
-    if (sourceType == FileSystemEntityType.file) {
-      try {
-        final sourceStat = await File(sourcePath).stat();
-        final targetStat = await File(targetPath).stat();
-        return sourceStat.size == targetStat.size &&
-            sourceStat.modified.millisecondsSinceEpoch ==
-                targetStat.modified.millisecondsSinceEpoch;
-      } catch (_) {
-        return false;
-      }
-    }
-
-    return false;
   }
 
   static Future<LocalPathConflictResult> checkNameConflict({

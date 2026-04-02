@@ -1,6 +1,7 @@
 import 'package:path/path.dart' as p;
 
 import '../models/tag.dart';
+import '../repository/mediaRepository.dart';
 
 class InferredImportTags {
   final String relativePathHint;
@@ -74,6 +75,7 @@ class ImportTagRuleService {
     required String generatedFileName,
     String? libraryRootRaw,
     List<String> sourceUrls = const <String>[],
+    HitomiGalleryMetadata? hitomiMetadata,
   }) {
     final relativePathHint = _buildRelativePathHint(
       sourceFolderRaw: sourceFolderRaw,
@@ -86,6 +88,7 @@ class ImportTagRuleService {
       tags: inferFromRelativePath(
         relativePathHint: relativePathHint,
         sourceUrls: sourceUrls,
+        hitomiMetadata: hitomiMetadata,
       ),
     );
   }
@@ -95,6 +98,7 @@ class ImportTagRuleService {
     required String rootFolderRaw,
     String? displayName,
     List<String> sourceUrls = const <String>[],
+    HitomiGalleryMetadata? hitomiMetadata,
   }) {
     final relativePathHint = _buildRelativePathHintForImportedItem(
       itemPath: itemPath,
@@ -106,6 +110,7 @@ class ImportTagRuleService {
       tags: inferFromRelativePath(
         relativePathHint: relativePathHint,
         sourceUrls: sourceUrls,
+        hitomiMetadata: hitomiMetadata,
       ),
     );
   }
@@ -113,6 +118,7 @@ class ImportTagRuleService {
   static List<Tag> inferFromRelativePath({
     String? relativePathHint,
     List<String> sourceUrls = const <String>[],
+    HitomiGalleryMetadata? hitomiMetadata,
   }) {
     final segments = _relativeDirectoryParts(relativePathHint);
     final loweredSegments = segments
@@ -124,7 +130,9 @@ class ImportTagRuleService {
         .toList(growable: false);
 
     final out = <Tag>[];
-    final artistTag = _inferArtistTagFromParts(segments);
+    final artistTag =
+        _cleanArtistTagCandidate(hitomiMetadata?.primaryArtist ?? '') ??
+        _inferArtistTagFromParts(segments);
     if (artistTag != null) {
       out.add(Tag(name: artistTag, category: TagCategory.artist));
     }
@@ -138,9 +146,8 @@ class ImportTagRuleService {
     }
     final isHitomiContext = mediaTypeTags.contains('hitomi');
     final seriesTag = _inferSeriesTagFromParts(
-      segments,
-      relativePathHint: relativePathHint,
       isHitomiContext: isHitomiContext,
+      hitomiMetadata: hitomiMetadata,
       artistTag: artistTag,
     );
     if (seriesTag != null) {
@@ -201,11 +208,12 @@ class ImportTagRuleService {
       return '$cleanedRelativeFolder/$normalizedFileName';
     }
 
-    final folderSegments = rawFolder.isEmpty || rawFolder.startsWith('content://')
+    final folderSegments =
+        rawFolder.isEmpty || rawFolder.startsWith('content://')
         ? const <String>[]
         : _pathTailSegments(rawFolder);
-    final effectiveSegments = folderSegments.isEmpty &&
-            sourceFolderLabel.trim().isNotEmpty
+    final effectiveSegments =
+        folderSegments.isEmpty && sourceFolderLabel.trim().isNotEmpty
         ? <String>[sourceFolderLabel.trim()]
         : folderSegments;
     if (effectiveSegments.isEmpty) {
@@ -219,7 +227,9 @@ class ImportTagRuleService {
     final parts = normalized
         .split('/')
         .map((segment) => segment.trim())
-        .where((segment) => segment.isNotEmpty && !_windowsDrive.hasMatch(segment))
+        .where(
+          (segment) => segment.isNotEmpty && !_windowsDrive.hasMatch(segment),
+        )
         .toList(growable: false);
     if (parts.length <= 4) {
       return parts;
@@ -245,14 +255,12 @@ class ImportTagRuleService {
         isWithinLibrary(itemPath: rawItemPath, libraryRoot: rawRoot)) {
       final ctx = _pathContextFor(rawItemPath, rawRoot);
       return ctx
-          .relative(
-            ctx.normalize(rawItemPath),
-            from: ctx.normalize(rawRoot),
-          )
+          .relative(ctx.normalize(rawItemPath), from: ctx.normalize(rawRoot))
           .replaceAll('\\', '/');
     }
 
-    final tailSegments = rawItemPath.isEmpty || rawItemPath.startsWith('content://')
+    final tailSegments =
+        rawItemPath.isEmpty || rawItemPath.startsWith('content://')
         ? const <String>[]
         : _pathTailSegments(rawItemPath);
     if (tailSegments.isEmpty) {
@@ -306,33 +314,19 @@ class ImportTagRuleService {
     return null;
   }
 
-  static String? _inferSeriesTagFromParts(
-    List<String> parts, {
-    required String? relativePathHint,
+  static String? _inferSeriesTagFromParts({
     required bool isHitomiContext,
+    HitomiGalleryMetadata? hitomiMetadata,
     String? artistTag,
   }) {
     if (!isHitomiContext) {
       return null;
     }
 
-    final serviceIndexes = <int>[];
-    for (var i = 0; i < parts.length; i++) {
-      if (_isServiceSegment(parts[i])) {
-        serviceIndexes.add(i);
-      }
-    }
-
-    final startIndex = serviceIndexes.isEmpty ? 0 : serviceIndexes.last + 1;
-    for (var i = startIndex + 1; i < parts.length; i++) {
-      final candidate = _cleanSeriesTagCandidate(parts[i], artistTag: artistTag);
-      if (candidate != null) {
-        return candidate;
-      }
-    }
-
-    final fileStem = _relativeFileStem(relativePathHint);
-    return _cleanSeriesTagCandidate(fileStem, artistTag: artistTag);
+    return _cleanSeriesTagCandidate(
+      hitomiMetadata?.primarySeries,
+      artistTag: artistTag,
+    );
   }
 
   static String? _cleanArtistTagCandidate(String segment) {
@@ -346,7 +340,8 @@ class ImportTagRuleService {
     }
 
     final lowered = cleaned.toLowerCase();
-    if (_serviceSegments.contains(lowered) || _genericSegments.contains(lowered)) {
+    if (_serviceSegments.contains(lowered) ||
+        _genericSegments.contains(lowered)) {
       return null;
     }
     if (_digitsOnly.hasMatch(cleaned)) {
@@ -375,29 +370,6 @@ class ImportTagRuleService {
       }
     }
     return cleaned;
-  }
-
-  static String? _relativeFileStem(String? relativePathHint) {
-    final raw = (relativePathHint ?? '').trim();
-    if (raw.isEmpty) {
-      return null;
-    }
-
-    final parts = raw
-        .split(RegExp(r'[\\/]+'))
-        .map((segment) => segment.trim())
-        .where((segment) => segment.isNotEmpty)
-        .toList(growable: false);
-    if (parts.isEmpty) {
-      return null;
-    }
-
-    final fileName = parts.last;
-    final dot = fileName.lastIndexOf('.');
-    if (dot <= 0) {
-      return fileName;
-    }
-    return fileName.substring(0, dot);
   }
 
   static bool _isServiceSegment(String segment) {

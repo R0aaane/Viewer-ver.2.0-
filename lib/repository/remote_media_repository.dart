@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
@@ -22,21 +22,13 @@ import '../services/media_id_resolver.dart';
 import '../services/remote_media_api_client.dart';
 import 'mediaRepository.dart';
 
-enum _UploadSourceKind {
-  contentUri,
-  fileUri,
-  path,
-  unknown,
-}
+enum _UploadSourceKind { contentUri, fileUri, path, unknown }
 
 class _UploadReadResult {
   final Uint8List bytes;
   final String strategy;
 
-  const _UploadReadResult({
-    required this.bytes,
-    required this.strategy,
-  });
+  const _UploadReadResult({required this.bytes, required this.strategy});
 }
 
 class RemoteMediaRepository implements MediaRepository {
@@ -76,10 +68,7 @@ class RemoteMediaRepository implements MediaRepository {
        _localUploadTagsProvider = localUploadTagsProvider,
        _client =
            apiClient ??
-           RemoteMediaApiClient(
-             baseUrl: baseUrl,
-             authToken: authToken,
-           ),
+           RemoteMediaApiClient(baseUrl: baseUrl, authToken: authToken),
        _idResolver = idResolver ?? MediaIdResolver();
 
   factory RemoteMediaRepository.fromSettings(
@@ -217,7 +206,10 @@ class RemoteMediaRepository implements MediaRepository {
     final normalizedRaw =
         ImportSourceNormalizer.normalizeSingleValue(raw)?.trim() ?? raw.trim();
     try {
-      return _winPath.normalize(normalizedRaw).replaceAll('/', '\\').toLowerCase();
+      return _winPath
+          .normalize(normalizedRaw)
+          .replaceAll('/', '\\')
+          .toLowerCase();
     } on ArgumentError {
       return normalizedRaw.replaceAll('/', '\\').toLowerCase();
     }
@@ -248,9 +240,7 @@ class RemoteMediaRepository implements MediaRepository {
     final normalizedFolder = _normalizeRemotePath(trimmed);
     final prefix = '$normalizedFolder\\';
     final keys = _remoteMediaIdsByPath.keys
-        .where(
-          (key) => key == normalizedFolder || key.startsWith(prefix),
-        )
+        .where((key) => key == normalizedFolder || key.startsWith(prefix))
         .toList(growable: false);
     for (final key in keys) {
       _remoteMediaIdsByPath.remove(key);
@@ -350,10 +340,7 @@ class RemoteMediaRepository implements MediaRepository {
     }
   }
 
-  Future<void> _assertDeleted(
-    MediaItem item,
-    String stableId,
-  ) async {
+  Future<void> _assertDeleted(MediaItem item, String stableId) async {
     try {
       await _client.fetchMediaMeta(stableId);
     } on RemoteMediaException catch (error) {
@@ -440,7 +427,9 @@ class RemoteMediaRepository implements MediaRepository {
     MediaItem item, {
     bool forceRefresh = false,
   }) async {
-    var meta = forceRefresh ? await _refreshMetaForItem(item) : await _metaForItem(item);
+    var meta = forceRefresh
+        ? await _refreshMetaForItem(item)
+        : await _metaForItem(item);
     final expectedKind = _expectedRemoteKind(item);
     if (expectedKind != null && meta.kind != expectedKind) {
       meta = await _refreshMetaForItem(item);
@@ -505,8 +494,7 @@ class RemoteMediaRepository implements MediaRepository {
     final meta = await _validatedMetaForItem(item, forceRefresh: forceRefresh);
     final mediaId = meta.mediaId;
     final fileDir = await _ensureCacheSubdir('files');
-    final etagKey =
-        (meta.etag == null || meta.etag!.isEmpty)
+    final etagKey = (meta.etag == null || meta.etag!.isEmpty)
         ? 'noetag'
         : _cacheHash(meta.etag!);
     final fileName =
@@ -553,26 +541,31 @@ class RemoteMediaRepository implements MediaRepository {
     Directory dir, {
     required int maxEntries,
   }) async {
-    final files =
-        await dir.list().where((entity) => entity is File).cast<File>().toList();
+    final files = await dir
+        .list()
+        .where((entity) => entity is File)
+        .cast<File>()
+        .toList();
     final regularFiles = files
         .where((file) => !file.path.endsWith('.part'))
         .toList(growable: false);
     if (regularFiles.length <= maxEntries) {
       return;
     }
-    final pinnedPaths = <String>{
-      ..._downloadInFlight.keys,
-      ..._pdfCache.keys,
-    };
+    final pinnedPaths = <String>{..._downloadInFlight.keys, ..._pdfCache.keys};
     final children = regularFiles
         .where((file) => !pinnedPaths.contains(file.path))
         .toList(growable: true);
     if (children.isEmpty) {
       return;
     }
-    children.sort((a, b) => a.statSync().modified.compareTo(b.statSync().modified));
-    final removeCount = (regularFiles.length - maxEntries).clamp(0, children.length);
+    children.sort(
+      (a, b) => a.statSync().modified.compareTo(b.statSync().modified),
+    );
+    final removeCount = (regularFiles.length - maxEntries).clamp(
+      0,
+      children.length,
+    );
     for (var index = 0; index < removeCount; index++) {
       try {
         await children[index].delete();
@@ -622,7 +615,10 @@ class RemoteMediaRepository implements MediaRepository {
         );
         await _evictCachedPdfDocument(file.path);
         await _deleteFileQuietly(file);
-        final refreshedFile = await _ensureCachedMediaFile(item, forceRefresh: true);
+        final refreshedFile = await _ensureCachedMediaFile(
+          item,
+          forceRefresh: true,
+        );
         return openAndCache(refreshedFile);
       }
     })();
@@ -675,9 +671,7 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<FolderHandle?> pickFolder() async {
-    throw const RemoteMediaException(
-      'クライアントモードではホスト側フォルダを直接選択できません',
-    );
+    throw const RemoteMediaException('クライアントモードではホスト側フォルダを直接選択できません');
   }
 
   @override
@@ -906,6 +900,7 @@ class RemoteMediaRepository implements MediaRepository {
       final uploadItems = _prepareFallbackUploadItems(
         stagedItems,
         stagingRoot: stagingDir.path,
+        hitomiMetadataByRelativePath: localResult.hitomiMetadataByRelativePath,
         sourceUrls: options.collectSourceUrls(sourceUrl),
       );
       if (uploadItems.isEmpty) {
@@ -929,8 +924,9 @@ class RemoteMediaRepository implements MediaRepository {
         skipIfExists: !options.overwriteExistingFiles,
         onProgress: onProgress,
       );
-      final uploadSkipCount =
-          (uploadItems.length - importedCount).clamp(0, uploadItems.length).toInt();
+      final uploadSkipCount = (uploadItems.length - importedCount)
+          .clamp(0, uploadItems.length)
+          .toInt();
       return UrlImportResult(
         importedCount: importedCount,
         skippedCount: localResult.skippedCount + uploadSkipCount,
@@ -948,6 +944,7 @@ class RemoteMediaRepository implements MediaRepository {
   List<MediaItem> _prepareFallbackUploadItems(
     List<MediaItem> stagedItems, {
     required String stagingRoot,
+    required Map<String, HitomiGalleryMetadata> hitomiMetadataByRelativePath,
     required List<String> sourceUrls,
   }) {
     final mediaItems = stagedItems
@@ -961,31 +958,39 @@ class RemoteMediaRepository implements MediaRepository {
       mediaItems,
       stagingRoot: stagingRoot,
     );
-    return filteredItems.map((item) {
-      final inferredTags = item.kind == MediaKind.pdf
-          ? ImportTagRuleService.inferForImportedItem(
-              itemPath: item.id,
-              rootFolderRaw: stagingRoot,
-              displayName: item.displayName,
-              sourceUrls: sourceUrls,
-            ).tags
-          : const <Tag>[];
-      final mergedTags = _mergeUploadTags(
-        item.tags,
-        inferredTags,
-        const <Tag>[],
-        const <Tag>[],
-      );
-      return MediaItem(
-        id: item.id,
-        displayName: item.displayName,
-        kind: item.kind,
-        folderRaw: stagingRoot,
-        modified: item.modified,
-        sizeBytes: item.sizeBytes,
-        tags: mergedTags,
-      );
-    }).toList(growable: false);
+    return filteredItems
+        .map((item) {
+          final relativePath = _stagingRelativePath(item.id, stagingRoot);
+          final hitomiMetadata =
+              hitomiMetadataByRelativePath[HitomiGalleryMetadata.normalizeRelativePathKey(
+                relativePath,
+              )];
+          final inferredTags = item.kind == MediaKind.pdf
+              ? ImportTagRuleService.inferForImportedItem(
+                  itemPath: item.id,
+                  rootFolderRaw: stagingRoot,
+                  displayName: item.displayName,
+                  sourceUrls: sourceUrls,
+                  hitomiMetadata: hitomiMetadata,
+                ).tags
+              : const <Tag>[];
+          final mergedTags = _mergeUploadTags(
+            item.tags,
+            inferredTags,
+            const <Tag>[],
+            const <Tag>[],
+          );
+          return MediaItem(
+            id: item.id,
+            displayName: item.displayName,
+            kind: item.kind,
+            folderRaw: stagingRoot,
+            modified: item.modified,
+            sizeBytes: item.sizeBytes,
+            tags: mergedTags,
+          );
+        })
+        .toList(growable: false);
   }
 
   List<MediaItem> _filterOutGeneratedPdfSourceImages(
@@ -1002,28 +1007,34 @@ class RemoteMediaRepository implements MediaRepository {
       return items;
     }
 
-    return items.where((item) {
-      if (item.kind != MediaKind.image) {
-        return true;
-      }
-      final relativePath = _stagingRelativePath(item.id, stagingRoot);
-      if (relativePath == null) {
-        return true;
-      }
-      final ctx = _pathContextFor(item.id.contains('\\'));
-      final normalizedRelative = relativePath.replaceAll('\\', '/');
-      final parentDir = ctx.dirname(normalizedRelative);
-      if (parentDir.isEmpty || parentDir == '.') {
-        return true;
-      }
-      final galleryFolder = ctx.basename(parentDir);
-      final creatorDir = ctx.dirname(parentDir);
-      if (galleryFolder.isEmpty || galleryFolder == '.' || creatorDir == '.') {
-        return true;
-      }
-      final candidatePdf = ctx.join(creatorDir, '$galleryFolder.pdf');
-      return !pdfRelativePaths.contains(_normalizedRelativeKey(candidatePdf));
-    }).toList(growable: false);
+    return items
+        .where((item) {
+          if (item.kind != MediaKind.image) {
+            return true;
+          }
+          final relativePath = _stagingRelativePath(item.id, stagingRoot);
+          if (relativePath == null) {
+            return true;
+          }
+          final ctx = _pathContextFor(item.id.contains('\\'));
+          final normalizedRelative = relativePath.replaceAll('\\', '/');
+          final parentDir = ctx.dirname(normalizedRelative);
+          if (parentDir.isEmpty || parentDir == '.') {
+            return true;
+          }
+          final galleryFolder = ctx.basename(parentDir);
+          final creatorDir = ctx.dirname(parentDir);
+          if (galleryFolder.isEmpty ||
+              galleryFolder == '.' ||
+              creatorDir == '.') {
+            return true;
+          }
+          final candidatePdf = ctx.join(creatorDir, '$galleryFolder.pdf');
+          return !pdfRelativePaths.contains(
+            _normalizedRelativeKey(candidatePdf),
+          );
+        })
+        .toList(growable: false);
   }
 
   String? _stagingRelativePath(String itemPath, String stagingRoot) {
@@ -1040,10 +1051,9 @@ class RemoteMediaRepository implements MediaRepository {
       final normalizedRoot = ctx.normalize(trimmedRoot);
       if (normalizedPath == normalizedRoot ||
           ctx.isWithin(normalizedRoot, normalizedPath)) {
-        return ctx.relative(normalizedPath, from: normalizedRoot).replaceAll(
-          '\\',
-          '/',
-        );
+        return ctx
+            .relative(normalizedPath, from: normalizedRoot)
+            .replaceAll('\\', '/');
       }
     } on ArgumentError {
       return null;
@@ -1097,7 +1107,6 @@ class RemoteMediaRepository implements MediaRepository {
       return raw.trim();
     }
   }
-
 
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
@@ -1164,11 +1173,7 @@ class RemoteMediaRepository implements MediaRepository {
     }
 
     final future = _client
-        .fetchThumbnail(
-          mediaId,
-          width: targetWidth,
-          height: targetHeight,
-        )
+        .fetchThumbnail(mediaId, width: targetWidth, height: targetHeight)
         .then((bytes) async {
           await cacheFile.parent.create(recursive: true);
           await cacheFile.writeAsBytes(bytes, flush: false);
@@ -1227,7 +1232,9 @@ class RemoteMediaRepository implements MediaRepository {
       payload.add((
         item,
         await _idResolver.resolve(item),
-        item.kind == MediaKind.folder ? null : await _remoteMediaIdForItem(item),
+        item.kind == MediaKind.folder
+            ? null
+            : await _remoteMediaIdForItem(item),
       ));
     }
 
@@ -1275,7 +1282,10 @@ class RemoteMediaRepository implements MediaRepository {
       beforeIdentity: beforeIdentity,
     );
 
-    final refreshed = await _findFolderChildByPath(nextItem.folderRaw, nextPath);
+    final refreshed = await _findFolderChildByPath(
+      nextItem.folderRaw,
+      nextPath,
+    );
     if (refreshed == null) {
       throw const RemoteMediaException('リネーム後のメディア取得に失敗しました');
     }
@@ -1315,10 +1325,9 @@ class RemoteMediaRepository implements MediaRepository {
   }) async {
     final requestId = _buildUploadRequestId();
     try {
-      final uploadTargets =
-          items.where((item) => item.kind != MediaKind.folder).toList(
-            growable: false,
-          );
+      final uploadTargets = items
+          .where((item) => item.kind != MediaKind.folder)
+          .toList(growable: false);
       if (uploadTargets.isEmpty) {
         return 0;
       }
@@ -1356,7 +1365,8 @@ class RemoteMediaRepository implements MediaRepository {
 
       final unsupported = uploadTargets
           .map(
-            (item) => _sanitizeUploadFileName(item.displayName) ?? item.displayName,
+            (item) =>
+                _sanitizeUploadFileName(item.displayName) ?? item.displayName,
           )
           .where((name) => !MediaFileTypes.isSupportedMediaFileName(name))
           .toList(growable: false);
@@ -1383,7 +1393,10 @@ class RemoteMediaRepository implements MediaRepository {
       for (final rawItem in uploadTargets) {
         final item = await _normalizeUploadSourceItem(rawItem);
         final fileName = _normalizedUploadFileName(item);
-        final sourceKindLabel = _sourceKindLabelForItem(item, rawId: rawItem.id);
+        final sourceKindLabel = _sourceKindLabelForItem(
+          item,
+          rawId: rawItem.id,
+        );
         final sourceKind = _sourceKindNameForItem(item, rawId: rawItem.id);
         debugPrint(
           '[UPLOAD][CLIENT][req:$requestId] source '
@@ -1547,16 +1560,22 @@ class RemoteMediaRepository implements MediaRepository {
   }) async {
     final provider = _localUploadTagsProvider;
     if (provider == null || items.isEmpty) {
-      debugPrint('[TAG][CLIENT][req:$requestId] local tag lookup skipped provider=${provider == null} itemCount=${items.length}');
+      debugPrint(
+        '[TAG][CLIENT][req:$requestId] local tag lookup skipped provider=${provider == null} itemCount=${items.length}',
+      );
       return const <String, List<Tag>>{};
     }
 
     try {
       final result = await provider(items);
-      debugPrint('[TAG][CLIENT][req:$requestId] local tag lookup success keys=${_debugUploadStringList(result.keys)}');
+      debugPrint(
+        '[TAG][CLIENT][req:$requestId] local tag lookup success keys=${_debugUploadStringList(result.keys)}',
+      );
       return result;
     } catch (error, stackTrace) {
-      debugPrint('[UPLOAD][ERROR][req:$requestId] local tag lookup failed: $error');
+      debugPrint(
+        '[UPLOAD][ERROR][req:$requestId] local tag lookup failed: $error',
+      );
       debugPrintStack(
         label: '[UPLOAD][ERROR][req:$requestId] local tag lookup stack',
         stackTrace: stackTrace,
@@ -1586,22 +1605,20 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   String _debugUploadTagList(Iterable<Tag> tags) {
-    final values =
-        tags
-            .map((tag) => '${tag.category.name}:${tag.name.trim()}')
-            .where((entry) => entry.isNotEmpty)
-            .toList(growable: false);
+    final values = tags
+        .map((tag) => '${tag.category.name}:${tag.name.trim()}')
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
     return _debugUploadStringList(values);
   }
 
   String _debugUploadResponseTags(Iterable<RemoteUploadedMediaTags> items) {
-    final values =
-        items
-            .map(
-              (item) =>
-                  '{mediaId:${_debugUploadValue(item.mediaId)}, tags:${_debugUploadStringList(item.tags)}}',
-            )
-            .toList(growable: false);
+    final values = items
+        .map(
+          (item) =>
+              '{mediaId:${_debugUploadValue(item.mediaId)}, tags:${_debugUploadStringList(item.tags)}}',
+        )
+        .toList(growable: false);
     if (values.isEmpty) {
       return '[]';
     }
@@ -1677,7 +1694,8 @@ class RemoteMediaRepository implements MediaRepository {
         tags: item.tags,
       );
     } catch (error, stackTrace) {
-      final fallbackDisplayName = _sanitizeUploadFileName(item.displayName) ??
+      final fallbackDisplayName =
+          _sanitizeUploadFileName(item.displayName) ??
           _sanitizeUploadFileName(
             ImportSourceNormalizer.basenameFromPathish(item.id),
           ) ??
@@ -1779,8 +1797,8 @@ class RemoteMediaRepository implements MediaRepository {
       );
     }
 
-    final fileUriPath = _filePathFromFileUri(rawId) ??
-        _filePathFromFileUri(normalizedId);
+    final fileUriPath =
+        _filePathFromFileUri(rawId) ?? _filePathFromFileUri(normalizedId);
     if (fileUriPath != null) {
       return _readBytesViaFilePath(
         originalItem: originalItem,
@@ -1855,12 +1873,14 @@ class RemoteMediaRepository implements MediaRepository {
     );
     final watch = Stopwatch()..start();
     try {
-      final bytes = await _localPickerRepository.readBytes(normalizedItem).timeout(
-        _sourceReadTimeout,
-        onTimeout: () => throw RemoteMediaException(
-          '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
-        ),
-      );
+      final bytes = await _localPickerRepository
+          .readBytes(normalizedItem)
+          .timeout(
+            _sourceReadTimeout,
+            onTimeout: () => throw RemoteMediaException(
+              '$sourceKindLabel の読み込みがタイムアウトしました: $fileName',
+            ),
+          );
       watch.stop();
       _logUploadReadSuccess(
         strategy: strategy,
@@ -1951,30 +1971,31 @@ class RemoteMediaRepository implements MediaRepository {
     required MediaItem normalizedItem,
     required String fileName,
   }) async {
-    final folderCandidates = <String>{
-      normalizedItem.folderRaw,
-      originalItem.folderRaw,
-    }
-        .map(_normalizeLocalPathCandidate)
-        .whereType<String>()
-        .where((value) => value.isNotEmpty)
-        .toList(growable: false);
-    final nameCandidates = <String>{
-      fileName,
-      normalizedItem.displayName,
-      ImportSourceNormalizer.basenameFromPathish(originalItem.id),
-      ImportSourceNormalizer.basenameFromPathish(normalizedItem.id),
-    }
-        .map(_sanitizeUploadFileName)
-        .whereType<String>()
-        .where((value) => value.isNotEmpty)
-        .toList(growable: false);
+    final folderCandidates =
+        <String>{normalizedItem.folderRaw, originalItem.folderRaw}
+            .map(_normalizeLocalPathCandidate)
+            .whereType<String>()
+            .where((value) => value.isNotEmpty)
+            .toList(growable: false);
+    final nameCandidates =
+        <String>{
+              fileName,
+              normalizedItem.displayName,
+              ImportSourceNormalizer.basenameFromPathish(originalItem.id),
+              ImportSourceNormalizer.basenameFromPathish(normalizedItem.id),
+            }
+            .map(_sanitizeUploadFileName)
+            .whereType<String>()
+            .where((value) => value.isNotEmpty)
+            .toList(growable: false);
 
     for (final folderPath in folderCandidates) {
       final ctx = _pathContextFor(folderPath.contains('\\'));
       for (final name in nameCandidates) {
         try {
-          final candidate = _normalizeLocalPathCandidate(ctx.join(folderPath, name));
+          final candidate = _normalizeLocalPathCandidate(
+            ctx.join(folderPath, name),
+          );
           if (candidate == null) {
             continue;
           }
@@ -2132,25 +2153,31 @@ class RemoteMediaRepository implements MediaRepository {
   }) {
     try {
       final rawPath =
-          ImportSourceNormalizer.normalizeSingleValue(item.id) ?? item.id.trim();
+          ImportSourceNormalizer.normalizeSingleValue(item.id) ??
+          item.id.trim();
       final rawRoot =
           ImportSourceNormalizer.normalizeSingleValue(item.folderRaw) ??
           item.folderRaw.trim();
       if (rawPath.isEmpty || rawRoot.isEmpty) {
         return null;
       }
-      if (rawPath.startsWith('content://') || rawRoot.startsWith('content://')) {
+      if (rawPath.startsWith('content://') ||
+          rawRoot.startsWith('content://')) {
         return null;
       }
 
-      final ctx = _pathContextFor(rawPath.contains('\\') || rawRoot.contains('\\'));
+      final ctx = _pathContextFor(
+        rawPath.contains('\\') || rawRoot.contains('\\'),
+      );
       final normalizedPath = ctx.normalize(rawPath);
       final normalizedRoot = ctx.normalize(rawRoot);
       if (!ctx.isWithin(normalizedRoot, normalizedPath)) {
         return fallbackFileName;
       }
 
-      final relative = ctx.relative(normalizedPath, from: normalizedRoot).trim();
+      final relative = ctx
+          .relative(normalizedPath, from: normalizedRoot)
+          .trim();
       if (relative.isEmpty || relative == '.') {
         return fallbackFileName;
       }
@@ -2204,7 +2231,11 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<int> countMedia(FolderHandle folder) async {
-    final page = await _client.listFolderChildren(folder.raw, offset: 0, limit: 1);
+    final page = await _client.listFolderChildren(
+      folder.raw,
+      offset: 0,
+      limit: 1,
+    );
     return page.total;
   }
 
@@ -2335,7 +2366,8 @@ class SwitchingMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<FolderHandle> getAppLibraryFolder() => _activeRepository.getAppLibraryFolder();
+  Future<FolderHandle> getAppLibraryFolder() =>
+      _activeRepository.getAppLibraryFolder();
 
   @override
   Future<List<MediaItem>> listMedia(
@@ -2356,7 +2388,6 @@ class SwitchingMediaRepository implements MediaRepository {
     onProgress: onProgress,
   );
 
-
   @override
   Future<UrlImportResult> importFromUrlIntoFolder(
     FolderHandle folder,
@@ -2373,16 +2404,19 @@ class SwitchingMediaRepository implements MediaRepository {
       onProgress: onProgress,
     );
   }
+
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) {
     return _activeRepository.readThumbPair(item, maxWidth: maxWidth);
   }
 
   @override
-  Future<Uint8List> readBytes(MediaItem item) => _activeRepository.readBytes(item);
+  Future<Uint8List> readBytes(MediaItem item) =>
+      _activeRepository.readBytes(item);
 
   @override
-  Future<int> getPageCount(MediaItem item) => _activeRepository.getPageCount(item);
+  Future<int> getPageCount(MediaItem item) =>
+      _activeRepository.getPageCount(item);
 
   @override
   Future<Uint8List> renderPageBytes(
@@ -2397,7 +2431,8 @@ class SwitchingMediaRepository implements MediaRepository {
   Future<bool> deleteItem(MediaItem item) => _activeRepository.deleteItem(item);
 
   @override
-  Future<int> deleteItems(List<MediaItem> items) => _activeRepository.deleteItems(items);
+  Future<int> deleteItems(List<MediaItem> items) =>
+      _activeRepository.deleteItems(items);
 
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) {
@@ -2426,11 +2461,15 @@ class SwitchingMediaRepository implements MediaRepository {
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) {
-    return _activeRepository.listMediaRecursiveFiles(folder, onProgress: onProgress);
+    return _activeRepository.listMediaRecursiveFiles(
+      folder,
+      onProgress: onProgress,
+    );
   }
 
   @override
-  Future<int> countMedia(FolderHandle folder) => _activeRepository.countMedia(folder);
+  Future<int> countMedia(FolderHandle folder) =>
+      _activeRepository.countMedia(folder);
 
   @override
   Future<PagedMediaResult> listMediaPage(

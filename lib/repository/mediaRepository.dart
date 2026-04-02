@@ -1,4 +1,4 @@
-﻿import 'dart:typed_data';
+import 'dart:typed_data';
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
@@ -36,24 +36,90 @@ class RepositoryCapabilities {
   });
 }
 
+class HitomiGalleryMetadata {
+  final List<String> artists;
+  final List<String> groups;
+  final List<String> series;
+  final List<String> characters;
+  final List<String> tags;
+  final String? title;
+  final String? englishTitle;
+  final String? japaneseTitle;
+  final String? mediaType;
+  final String? language;
+  final String? sourceUrl;
+  final String? readerUrl;
+
+  const HitomiGalleryMetadata({
+    this.artists = const <String>[],
+    this.groups = const <String>[],
+    this.series = const <String>[],
+    this.characters = const <String>[],
+    this.tags = const <String>[],
+    this.title,
+    this.englishTitle,
+    this.japaneseTitle,
+    this.mediaType,
+    this.language,
+    this.sourceUrl,
+    this.readerUrl,
+  });
+
+  String? get primaryArtist => _firstNonBlank(artists);
+  String? get primarySeries => _firstNonBlank(series);
+
+  static String? normalizeRelativePathKey(String? relativePath) {
+    final raw = (relativePath ?? '').trim();
+    if (raw.isEmpty) {
+      return null;
+    }
+    return raw.replaceAll('\\', '/').toLowerCase();
+  }
+
+  static String? basenameKey(String? relativePath) {
+    final normalized = normalizeRelativePathKey(relativePath);
+    if (normalized == null) {
+      return null;
+    }
+    final parts = normalized
+        .split('/')
+        .map((segment) => segment.trim())
+        .where((segment) => segment.isNotEmpty)
+        .toList(growable: false);
+    if (parts.isEmpty) {
+      return null;
+    }
+    return parts.last;
+  }
+
+  static String? _firstNonBlank(List<String> values) {
+    for (final value in values) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+    return null;
+  }
+}
+
 class UrlImportResult {
   final int importedCount;
   final int skippedCount;
   final int failedCount;
+  final Map<String, HitomiGalleryMetadata> hitomiMetadataByRelativePath;
 
   const UrlImportResult({
     required this.importedCount,
     this.skippedCount = 0,
     this.failedCount = 0,
+    this.hitomiMetadataByRelativePath = const <String, HitomiGalleryMetadata>{},
   });
 
   bool get hasChanges => importedCount > 0;
 }
 
-enum ImportSourceKind {
-  files,
-  folder,
-}
+enum ImportSourceKind { files, folder }
 
 class ImportMetadata {
   final String? artistTag;
@@ -92,12 +158,7 @@ class ImportRequest {
   });
 }
 
-enum UrlImportMediaType {
-  images,
-  videos,
-  imagesVideos,
-  all,
-}
+enum UrlImportMediaType { images, videos, imagesVideos, all }
 
 extension UrlImportMediaTypeValue on UrlImportMediaType {
   String get apiValue => switch (this) {
@@ -421,9 +482,3 @@ abstract class MediaRepository {
     void Function(int processed, int total)? onProgress,
   });
 }
-
-
-
-
-
-

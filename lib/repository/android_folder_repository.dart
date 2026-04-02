@@ -75,7 +75,7 @@ class AndroidFolderRepository implements MediaRepository {
   Future<T> _docmanSync<T>(Future<T> Function() action) {
     return _docmanMutex.synchronized(action);
   }
-  
+
   // SAF shallow cache keyed by directory URI.
   final Map<String, _ShallowCacheEntry> _safShallowCache = {};
 
@@ -85,7 +85,6 @@ class AndroidFolderRepository implements MediaRepository {
     sizeOf: (pair) =>
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
-  
 
   // Small in-memory PDF document cache.
   final Map<String, _AsyncMutex> _pdfLocks = {};
@@ -102,7 +101,7 @@ class AndroidFolderRepository implements MediaRepository {
   // Limit concurrent thumbnail generation work.
   int _thumbActive = 0;
   final List<Completer<void>> _thumbWaiters = [];
-  
+
   Future<void> _acquireThumbSlot([int max = 2]) async {
     if (_thumbActive < max) {
       _thumbActive++;
@@ -113,7 +112,7 @@ class AndroidFolderRepository implements MediaRepository {
     await c.future;
     _thumbActive++;
   }
-  
+
   void _releaseThumbSlot() {
     _thumbActive--;
     if (_thumbWaiters.isNotEmpty) {
@@ -121,76 +120,80 @@ class AndroidFolderRepository implements MediaRepository {
     }
   }
 
-MediaKind _dbKindToMediaKind(int k) {
-  final e = db.FolderEntryKindDb.values[k];
-  switch (e) {
-    case db.FolderEntryKindDb.folder:
-      return MediaKind.folder;
-    case db.FolderEntryKindDb.image:
-      return MediaKind.image;
-    case db.FolderEntryKindDb.pdf:
-      return MediaKind.pdf;
+  MediaKind _dbKindToMediaKind(int k) {
+    final e = db.FolderEntryKindDb.values[k];
+    switch (e) {
+      case db.FolderEntryKindDb.folder:
+        return MediaKind.folder;
+      case db.FolderEntryKindDb.image:
+        return MediaKind.image;
+      case db.FolderEntryKindDb.pdf:
+        return MediaKind.pdf;
+    }
   }
-}
 
-int _mediaKindToFolderEntryKind(MediaKind k) {
-  switch (k) {
-    case MediaKind.folder:
-      return db.FolderEntryKindDb.folder.index;
-    case MediaKind.image:
-      return db.FolderEntryKindDb.image.index;
-    case MediaKind.pdf:
-      return db.FolderEntryKindDb.pdf.index;
+  int _mediaKindToFolderEntryKind(MediaKind k) {
+    switch (k) {
+      case MediaKind.folder:
+        return db.FolderEntryKindDb.folder.index;
+      case MediaKind.image:
+        return db.FolderEntryKindDb.image.index;
+      case MediaKind.pdf:
+        return db.FolderEntryKindDb.pdf.index;
+    }
   }
-}
 
-String _sortKey(String name) => name.trim().toLowerCase();
+  String _sortKey(String name) => name.trim().toLowerCase();
 
-Future<db.DbFolderIndex?> _getFolderIndexRow(String folderRaw) {
-  return (_db.select(_db.folderIndexes)..where((t) => t.folderRaw.equals(folderRaw)))
-      .getSingleOrNull();
-}
+  Future<db.DbFolderIndex?> _getFolderIndexRow(String folderRaw) {
+    return (_db.select(
+      _db.folderIndexes,
+    )..where((t) => t.folderRaw.equals(folderRaw))).getSingleOrNull();
+  }
 
-bool _isIndexFresh(db.DbFolderIndex idx) {
-  final scanned = DateTime.fromMillisecondsSinceEpoch(idx.scannedAtEpochMs);
-  return DateTime.now().difference(scanned) <= _folderIndexTtl;
-}
+  bool _isIndexFresh(db.DbFolderIndex idx) {
+    final scanned = DateTime.fromMillisecondsSinceEpoch(idx.scannedAtEpochMs);
+    return DateTime.now().difference(scanned) <= _folderIndexTtl;
+  }
 
-Future<PagedMediaResult?> _tryListPageFromDb(
-  FolderHandle folder, {
-  required int offset,
-  required int limit,
-}) async {
-  final raw = folder.raw;
-  final idx = await _getFolderIndexRow(raw);
-  if (idx == null) return null;
+  Future<PagedMediaResult?> _tryListPageFromDb(
+    FolderHandle folder, {
+    required int offset,
+    required int limit,
+  }) async {
+    final raw = folder.raw;
+    final idx = await _getFolderIndexRow(raw);
+    if (idx == null) return null;
 
-  final q = _db.select(_db.folderEntries)
-    ..where((t) => t.folderRaw.equals(raw))
-    ..orderBy([
-      (t) => drift.OrderingTerm.asc(t.kind),      // folder(0) -> image(1) -> pdf(2)
-      (t) => drift.OrderingTerm.asc(t.sortName),  // name sort
-    ])
-    ..limit(limit, offset: offset);
+    final q = _db.select(_db.folderEntries)
+      ..where((t) => t.folderRaw.equals(raw))
+      ..orderBy([
+        (t) =>
+            drift.OrderingTerm.asc(t.kind), // folder(0) -> image(1) -> pdf(2)
+        (t) => drift.OrderingTerm.asc(t.sortName), // name sort
+      ])
+      ..limit(limit, offset: offset);
 
-  final rows = await q.get();
+    final rows = await q.get();
 
-  final items = rows.map((r) {
-    final kind = _dbKindToMediaKind(r.kind);
-    return MediaItem(
-      id: r.entryId,
-      displayName: r.displayName,
-      kind: kind,
-      folderRaw: raw,
-      modified: r.modifiedEpochMs == null
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch(r.modifiedEpochMs!),
-      tags: const [],
-    );
-  }).toList(growable: false);
+    final items = rows
+        .map((r) {
+          final kind = _dbKindToMediaKind(r.kind);
+          return MediaItem(
+            id: r.entryId,
+            displayName: r.displayName,
+            kind: kind,
+            folderRaw: raw,
+            modified: r.modifiedEpochMs == null
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(r.modifiedEpochMs!),
+            tags: const [],
+          );
+        })
+        .toList(growable: false);
 
-  return PagedMediaResult(items: items, total: idx.totalCount);
-}
+    return PagedMediaResult(items: items, total: idx.totalCount);
+  }
 
   /// Rebuild the folder index for a SAF directory.
   Future<void> _rebuildFolderIndexSaf(String folderRaw) async {
@@ -201,38 +204,44 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     final out = <db.FolderEntriesCompanion>[];
     for (final e in entries) {
       if (e.isDir) {
-        out.add(db.FolderEntriesCompanion.insert(
-          folderRaw: folderRaw,
-          entryId: e.documentUri,
-          displayName: e.name,
-          kind: _mediaKindToFolderEntryKind(MediaKind.folder),
-          modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
-          sortName: _sortKey(e.name),
-        ));
+        out.add(
+          db.FolderEntriesCompanion.insert(
+            folderRaw: folderRaw,
+            entryId: e.documentUri,
+            displayName: e.name,
+            kind: _mediaKindToFolderEntryKind(MediaKind.folder),
+            modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
+            sortName: _sortKey(e.name),
+          ),
+        );
         continue;
       }
 
       final ext = _lowerExt(e.name);
       if (ext == _pdfExt) {
-        out.add(db.FolderEntriesCompanion.insert(
-          folderRaw: folderRaw,
-          entryId: e.documentUri,
-          displayName: e.name,
-          kind: _mediaKindToFolderEntryKind(MediaKind.pdf),
-          modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
-          sortName: _sortKey(e.name),
-        ));
+        out.add(
+          db.FolderEntriesCompanion.insert(
+            folderRaw: folderRaw,
+            entryId: e.documentUri,
+            displayName: e.name,
+            kind: _mediaKindToFolderEntryKind(MediaKind.pdf),
+            modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
+            sortName: _sortKey(e.name),
+          ),
+        );
         continue;
       }
       if (_imageExt.contains(ext)) {
-        out.add(db.FolderEntriesCompanion.insert(
-          folderRaw: folderRaw,
-          entryId: e.documentUri,
-          displayName: e.name,
-          kind: _mediaKindToFolderEntryKind(MediaKind.image),
-          modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
-          sortName: _sortKey(e.name),
-        ));
+        out.add(
+          db.FolderEntriesCompanion.insert(
+            folderRaw: folderRaw,
+            entryId: e.documentUri,
+            displayName: e.name,
+            kind: _mediaKindToFolderEntryKind(MediaKind.image),
+            modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
+            sortName: _sortKey(e.name),
+          ),
+        );
         continue;
       }
     }
@@ -250,25 +259,36 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
     await _db.transaction(() async {
       // Replace cached folder rows before inserting the fresh snapshot.
-      await (_db.delete(_db.folderEntries)..where((t) => t.folderRaw.equals(folderRaw))).go();
+      await (_db.delete(
+        _db.folderEntries,
+      )..where((t) => t.folderRaw.equals(folderRaw))).go();
 
-      await _db.into(_db.folderIndexes).insertOnConflictUpdate(
-        db.FolderIndexesCompanion.insert(
-          folderRaw: folderRaw,
-          scannedAtEpochMs: nowMs,
-          totalCount: total,
-        ),
-      );
+      await _db
+          .into(_db.folderIndexes)
+          .insertOnConflictUpdate(
+            db.FolderIndexesCompanion.insert(
+              folderRaw: folderRaw,
+              scannedAtEpochMs: nowMs,
+              totalCount: total,
+            ),
+          );
 
       if (out.isNotEmpty) {
         await _db.batch((b) {
-          b.insertAll(_db.folderEntries, out, mode: drift.InsertMode.insertOrReplace);
+          b.insertAll(
+            _db.folderEntries,
+            out,
+            mode: drift.InsertMode.insertOrReplace,
+          );
         });
       }
     });
   }
 
-  Future<void> _ensureFolderIndexSaf(String folderRaw, {bool force = false}) async {
+  Future<void> _ensureFolderIndexSaf(
+    String folderRaw, {
+    bool force = false,
+  }) async {
     final idx = await _getFolderIndexRow(folderRaw);
     if (!force && idx != null && _isIndexFresh(idx)) return;
 
@@ -285,8 +305,12 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
   Future<void> _invalidateFolderIndex(String folderRaw) async {
     await _db.transaction(() async {
-      await (_db.delete(_db.folderEntries)..where((t) => t.folderRaw.equals(folderRaw))).go();
-      await (_db.delete(_db.folderIndexes)..where((t) => t.folderRaw.equals(folderRaw))).go();
+      await (_db.delete(
+        _db.folderEntries,
+      )..where((t) => t.folderRaw.equals(folderRaw))).go();
+      await (_db.delete(
+        _db.folderIndexes,
+      )..where((t) => t.folderRaw.equals(folderRaw))).go();
     });
   }
 
@@ -363,16 +387,19 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         final rawName = f.name.trim();
         final isDir = f.isDirectory == true;
 
-        final name =
-            rawName.isNotEmpty ? rawName : (isDir ? fallbackNameFromUri(f.uri) : '');
+        final name = rawName.isNotEmpty
+            ? rawName
+            : (isDir ? fallbackNameFromUri(f.uri) : '');
         if (name.isEmpty) continue;
 
-        out.add(_SafEntry(
-          documentUri: f.uri,
-          name: name,
-          modified: null,
-          isDir: isDir,
-        ));
+        out.add(
+          _SafEntry(
+            documentUri: f.uri,
+            name: name,
+            modified: null,
+            isDir: isDir,
+          ),
+        );
       }
       return out;
     });
@@ -508,7 +535,9 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       if (ent is Directory) {
         total++;
       } else if (ent is File) {
-        final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+        final name = ent.uri.pathSegments.isNotEmpty
+            ? ent.uri.pathSegments.last
+            : ent.path;
         if (_isTargetFileName(name)) total++;
       }
     }
@@ -526,20 +555,28 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
     if (raw.startsWith('content://')) {
       // 1) Return cached DB page first when available.
-      final cached = await _tryListPageFromDb(folder, offset: offset, limit: limit);
+      final cached = await _tryListPageFromDb(
+        folder,
+        offset: offset,
+        limit: limit,
+      );
       if (cached != null) {
         // 2) Refresh the index in background if TTL expired.
         final idx = await _getFolderIndexRow(raw);
         if (idx != null && !_isIndexFresh(idx)) {
           // ignore: unawaited_futures
-          _ensureFolderIndexSaf(raw); 
+          _ensureFolderIndexSaf(raw);
         }
         return cached;
       }
 
       // Build the initial index, then serve the page from cached DB rows.
       await _ensureFolderIndexSaf(raw, force: true);
-      final after = await _tryListPageFromDb(folder, offset: offset, limit: limit);
+      final after = await _tryListPageFromDb(
+        folder,
+        offset: offset,
+        limit: limit,
+      );
       return after ?? const PagedMediaResult(items: [], total: 0);
     }
     // Filesystem-backed folders are paged directly from disk.
@@ -551,35 +588,47 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
     await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is Directory) {
-        dirItems.add(MediaItem(
-          id: ent.path,
-          displayName: _fileName(ent.path),
-          kind: MediaKind.folder,
-          folderRaw: folder.raw,
-          modified: null,
-          tags: const [],
-        ));
+        dirItems.add(
+          MediaItem(
+            id: ent.path,
+            displayName: _fileName(ent.path),
+            kind: MediaKind.folder,
+            folderRaw: folder.raw,
+            modified: null,
+            tags: const [],
+          ),
+        );
       } else if (ent is File) {
-        final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+        final name = ent.uri.pathSegments.isNotEmpty
+            ? ent.uri.pathSegments.last
+            : ent.path;
         if (!_isTargetFileName(name)) continue;
 
         final ext = _lowerExt(name);
         final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
         final stat = await ent.stat();
 
-        fileItems.add(MediaItem(
-          id: ent.path,
-          displayName: name,
-          kind: kind,
-          folderRaw: folder.raw,
-          modified: stat.modified,
-          tags: const [],
-        ));
+        fileItems.add(
+          MediaItem(
+            id: ent.path,
+            displayName: name,
+            kind: kind,
+            folderRaw: folder.raw,
+            modified: stat.modified,
+            tags: const [],
+          ),
+        );
       }
     }
 
-    dirItems.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
-    fileItems.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    dirItems.sort(
+      (a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+    );
+    fileItems.sort(
+      (a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+    );
 
     final all = <MediaItem>[...dirItems, ...fileItems];
     final total = all.length;
@@ -609,7 +658,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       if (e.isDir) {
         folders.add(
           MediaItem(
-            id: e.documentUri,          // Child folder document URI.
+            id: e.documentUri, // Child folder document URI.
             displayName: e.name,
             kind: MediaKind.folder,
             folderRaw: folder.raw,
@@ -644,7 +693,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     // Return folders before files for a consistent gallery order.
     return <MediaItem>[...folders, ...files];
   }
-  
+
   Future<int> _safCountMedia(String treeUri) async {
     return _docmanSync(() async {
       int total = 0;
@@ -691,14 +740,16 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }) async {
     final dir = Directory(folder.raw);
     if (!await dir.exists()) return const [];
-  
+
     bool isTarget(FileSystemEntity e) {
       if (e is! File) return false;
-      final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+      final name = e.uri.pathSegments.isNotEmpty
+          ? e.uri.pathSegments.last
+          : e.path;
       final ext = _lowerExt(name);
       return ext == _pdfExt || _imageExt.contains(ext);
     }
-  
+
     // Count only target media when progress reporting is enabled.
     int total = 0;
     if (onProgress != null) {
@@ -706,19 +757,19 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         if (isTarget(ent)) total++;
       }
     }
-  
+
     final items = <MediaItem>[];
     int processed = 0;
-  
+
     await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is! File) continue;
-  
+
       final name = ent.uri.pathSegments.isNotEmpty
           ? ent.uri.pathSegments.last
           : ent.path;
-  
+
       final ext = _lowerExt(name);
-  
+
       MediaKind? kind;
       if (ext == _pdfExt) {
         kind = MediaKind.pdf;
@@ -726,7 +777,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         kind = MediaKind.image;
       }
       if (kind == null) continue;
-  
+
       final stat = await ent.stat();
       items.add(
         MediaItem(
@@ -738,11 +789,11 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           tags: const [],
         ),
       );
-  
+
       processed++;
       if (onProgress != null) onProgress(processed, total);
     }
-  
+
     return items;
   }
 
@@ -764,13 +815,13 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     void Function(int processed, int total)? onProgress,
   }) async {
     // Count recursively only when progress reporting is enabled.
-    final total = (onProgress == null) ? 0 : await _docmanSync(() => _safCountMedia(folder.raw));
+    final total = (onProgress == null)
+        ? 0
+        : await _docmanSync(() => _safCountMedia(folder.raw));
 
-    final entries = await _docmanSync(() => _safListRecursive(
-          folder.raw,
-          onProgress: onProgress,
-          total: total,
-        ));
+    final entries = await _docmanSync(
+      () => _safListRecursive(folder.raw, onProgress: onProgress, total: total),
+    );
 
     // Convert file entries into MediaItem instances.
     final items = <MediaItem>[];
@@ -781,14 +832,17 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       if (_imageExt.contains(ext)) kind = MediaKind.image;
       if (kind == null) continue;
 
-      items.add(MediaItem(
-        id: e.documentUri,
-        displayName: e.name,
-        kind: kind,
-        folderRaw: folder.raw, // Preserve the registered root folder as folderRaw.
-        modified: e.modified,
-        tags: const [],
-      ));
+      items.add(
+        MediaItem(
+          id: e.documentUri,
+          displayName: e.name,
+          kind: kind,
+          folderRaw:
+              folder.raw, // Preserve the registered root folder as folderRaw.
+          modified: e.modified,
+          tags: const [],
+        ),
+      );
     }
     return items;
   }
@@ -799,49 +853,56 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }) async {
     final dir = Directory(folder.raw);
     if (!await dir.exists()) return const [];
-  
+
     bool isTarget(FileSystemEntity e) {
       if (e is! File) return false;
-      final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+      final name = e.uri.pathSegments.isNotEmpty
+          ? e.uri.pathSegments.last
+          : e.path;
       final ext = _lowerExt(name);
       return ext == _pdfExt || _imageExt.contains(ext);
     }
-  
+
     int total = 0;
     if (onProgress != null) {
       await for (final ent in dir.list(recursive: true, followLinks: false)) {
         if (isTarget(ent)) total++;
       }
     }
-  
+
     final items = <MediaItem>[];
     int processed = 0;
-  
+
     await for (final ent in dir.list(recursive: true, followLinks: false)) {
       if (ent is! File) continue;
-  
-      final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+
+      final name = ent.uri.pathSegments.isNotEmpty
+          ? ent.uri.pathSegments.last
+          : ent.path;
       final ext = _lowerExt(name);
-  
+
       MediaKind? kind;
       if (ext == _pdfExt) kind = MediaKind.pdf;
       if (_imageExt.contains(ext)) kind = MediaKind.image;
       if (kind == null) continue;
-  
+
       final stat = await ent.stat();
-      items.add(MediaItem(
-        id: ent.path,
-        displayName: name,
-        kind: kind,
-        folderRaw: folder.raw, // Preserve the registered root folder as folderRaw.
-        modified: stat.modified,
-        tags: const [],
-      ));
-  
+      items.add(
+        MediaItem(
+          id: ent.path,
+          displayName: name,
+          kind: kind,
+          folderRaw:
+              folder.raw, // Preserve the registered root folder as folderRaw.
+          modified: stat.modified,
+          tags: const [],
+        ),
+      );
+
       processed++;
       if (onProgress != null) onProgress(processed, total);
     }
-  
+
     return items;
   }
 
@@ -929,7 +990,8 @@ Future<PagedMediaResult?> _tryListPageFromDb(
   }) async {
     if (item.kind != MediaKind.pdf) {
       final bytes = await readBytes(item);
-      if (_lowerExt(item.displayName) == '.avif' || _lowerExt(item.id) == '.avif') {
+      if (_lowerExt(item.displayName) == '.avif' ||
+          _lowerExt(item.id) == '.avif') {
         try {
           return await _makeImageThumb(bytes, maxWidth);
         } catch (_) {
@@ -1027,16 +1089,19 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       if (documentUri.startsWith('content://')) {
         doc = await _docmanSync(() async {
           final docFile = await DocumentFile.fromUri(documentUri);
-          if (docFile == null) throw Exception('DocumentFile.fromUri failed: $documentUri');
+          if (docFile == null)
+            throw Exception('DocumentFile.fromUri failed: $documentUri');
 
           final cachedFile = await docFile.cache();
-          if (cachedFile == null) throw Exception('cache() failed: $documentUri');
+          if (cachedFile == null)
+            throw Exception('cache() failed: $documentUri');
 
           return PdfDocument.openFile(cachedFile.path);
         });
       } else {
         final f = File(documentUri);
-        if (!await f.exists()) throw Exception('PDF file not found: $documentUri');
+        if (!await f.exists())
+          throw Exception('PDF file not found: $documentUri');
         doc = await PdfDocument.openFile(documentUri);
       }
 
@@ -1229,10 +1294,14 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       }
 
       final conflict = await dir.find(fixedName);
-      if (conflict != null && conflict.exists == true && conflict.uri != src.uri) {
+      if (conflict != null &&
+          conflict.exists == true &&
+          conflict.uri != src.uri) {
         throw Exception('同名のファイルまたはフォルダが既に存在します');
       }
-      if (conflict != null && conflict.exists == true && conflict.uri == src.uri) {
+      if (conflict != null &&
+          conflict.exists == true &&
+          conflict.uri == src.uri) {
         return MediaItem(
           id: src.uri,
           displayName: fixedName,
@@ -1340,12 +1409,14 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           final ext = _lowerExt(name);
           if (!(ext == _pdfExt || _imageExt.contains(ext))) continue;
 
-          out.add(_SafEntry(
-            documentUri: f.uri,
-            name: name,
-            modified: _toDateTimeSafe(f.lastModified),
-            isDir: false,
-          ));
+          out.add(
+            _SafEntry(
+              documentUri: f.uri,
+              name: name,
+              modified: _toDateTimeSafe(f.lastModified),
+              isDir: false,
+            ),
+          );
 
           processed++;
           if (onProgress != null) onProgress(processed, total);
@@ -1410,8 +1481,10 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
     return _docmanSync(() async {
       final dir = await DocumentFile.fromUri(folder.raw);
-      if (dir == null) throw Exception('DocumentFile.fromUri failed: ${folder.raw}');
-      if (dir.isDirectory != true) throw Exception('Target is not a directory: ${folder.raw}');
+      if (dir == null)
+        throw Exception('DocumentFile.fromUri failed: ${folder.raw}');
+      if (dir.isDirectory != true)
+        throw Exception('Target is not a directory: ${folder.raw}');
 
       if (dir.canCreate == true) {
         int ok = 0;
@@ -1461,6 +1534,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
       return ok;
     });
   }
+
   @override
   Future<UrlImportResult> importFromUrlIntoFolder(
     FolderHandle folder,
@@ -1490,6 +1564,7 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         importedCount: result.importedCount,
         skippedCount: result.skippedCount,
         failedCount: result.failedCount,
+        hitomiMetadataByRelativePath: result.hitomiMetadataByRelativePath,
       );
     }
 
@@ -1513,6 +1588,8 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           importedCount: downloadResult.importedCount,
           skippedCount: downloadResult.skippedCount,
           failedCount: downloadResult.failedCount,
+          hitomiMetadataByRelativePath:
+              downloadResult.hitomiMetadataByRelativePath,
         );
       }
 
@@ -1534,12 +1611,18 @@ Future<PagedMediaResult?> _tryListPageFromDb(
         onProgress: onProgress,
       );
 
-      final stagedCount = stagedItems.where((item) => item.kind != MediaKind.folder).length;
-      final importedSkips = (stagedCount - importedCount).clamp(0, stagedCount).toInt();
+      final stagedCount = stagedItems
+          .where((item) => item.kind != MediaKind.folder)
+          .length;
+      final importedSkips = (stagedCount - importedCount)
+          .clamp(0, stagedCount)
+          .toInt();
       return UrlImportResult(
         importedCount: importedCount,
         skippedCount: downloadResult.skippedCount + importedSkips,
         failedCount: downloadResult.failedCount,
+        hitomiMetadataByRelativePath:
+            downloadResult.hitomiMetadataByRelativePath,
       );
     } finally {
       if (await stagingDir.exists()) {
@@ -1606,11 +1689,16 @@ Future<PagedMediaResult?> _tryListPageFromDb(
             targetPath: targetPath,
           );
           if (conflict == LocalPathConflictResult.sameFile) {
-            debugPrint('[MOVE] skipped same-file source=${it.id} target=$targetPath');
+            debugPrint(
+              '[MOVE] skipped same-file source=${it.id} target=$targetPath',
+            );
             continue;
           }
-          if (conflict == LocalPathConflictResult.duplicateName && skipIfExists) {
-            debugPrint('[COPY] blocked duplicate-name source=${it.id} target=$targetPath');
+          if (conflict == LocalPathConflictResult.duplicateName &&
+              skipIfExists) {
+            debugPrint(
+              '[COPY] blocked duplicate-name source=${it.id} target=$targetPath',
+            );
             continue;
           }
           if (conflict == LocalPathConflictResult.duplicateName) {
@@ -1626,9 +1714,12 @@ Future<PagedMediaResult?> _tryListPageFromDb(
 
     return _docmanSync(() async {
       final dir = await DocumentFile.fromUri(dest.raw);
-      if (dir == null) throw Exception('DocumentFile.fromUri failed: ${dest.raw}');
-      if (dir.isDirectory != true) throw Exception('Target is not a directory: ${dest.raw}');
-      if (dir.canCreate != true) throw Exception('Target folder is not writable: ${dest.raw}');
+      if (dir == null)
+        throw Exception('DocumentFile.fromUri failed: ${dest.raw}');
+      if (dir.isDirectory != true)
+        throw Exception('Target is not a directory: ${dest.raw}');
+      if (dir.canCreate != true)
+        throw Exception('Target folder is not writable: ${dest.raw}');
 
       int ok = 0;
       for (final it in items) {
@@ -1641,7 +1732,9 @@ Future<PagedMediaResult?> _tryListPageFromDb(
           final existing = await dir.find(it.displayName);
           if (existing != null && existing.exists == true) {
             if (skipIfExists) {
-              debugPrint('[COPY] blocked duplicate-name source=${it.id} target=${it.displayName}');
+              debugPrint(
+                '[COPY] blocked duplicate-name source=${it.id} target=${it.displayName}',
+              );
               continue;
             }
             final deleted = await _deleteDoc(existing);
@@ -1694,7 +1787,6 @@ Future<PagedMediaResult?> _tryListPageFromDb(
     return null;
   }
 
-  
   Future<bool> _deleteDoc(DocumentFile doc) async {
     final d = doc as dynamic;
     // Pattern 1: delete()
@@ -1843,9 +1935,6 @@ class _SafEntry {
     required this.isDir,
   });
 }
-
-
-
 
 class _LruCache<K, V extends Object> {
   final int maxBytes;

@@ -450,11 +450,15 @@ async def download_url(
         has_any_tags = bool(common_tags)
         for saved_path, relative_path_hint in flattened_entries:
             inferred_tags = []
+            hitomi_metadata = download_result.hitomi_metadata_by_relative_path.get(
+                relative_path_hint.replace("\\", "/").casefold()
+            )
             if normalized_extension(saved_path) == ".pdf":
                 inferred_tags = filter_hitomi_pdf_auto_tags(
                     build_inferred_import_tags(
                         relative_path=relative_path_hint,
                         source_urls=source_urls,
+                        hitomi_metadata=hitomi_metadata,
                     )
                 )
             merged_tags = _merge_import_tags(common_tags, inferred_tags)

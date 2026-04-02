@@ -208,12 +208,15 @@ void main() {
       kind: MediaKind.pdf,
       folderRaw: libraryRoot.path,
     );
+
     await store.addTagToItem(
       source,
       const Tag(name: 'Conflict Artist', category: TagCategory.artist),
-    final conflictDir = Directory(p.join(libraryRoot.path, '作者別', 'Conflict Artist'));
+    );
 
-    final conflictDir = Directory(p.join(libraryRoot.path, '作者別', 'Conflict Artist'));
+    final conflictDir = Directory(
+      p.join(libraryRoot.path, '\u4f5c\u8005\u5225', 'Conflict Artist'),
+    );
     await conflictDir.create(recursive: true);
     final conflictPath = p.join(conflictDir.path, 'sample.pdf');
     await File(conflictPath).writeAsBytes(const <int>[9, 9, 9]);

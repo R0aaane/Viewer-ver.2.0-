@@ -277,7 +277,9 @@ class WindowsFolderRepository implements MediaRepository {
       // 騾ｶ・ｴ闕ｳ荵昴＠郢晄じ繝ｵ郢ｧ・ｩ郢晢ｽｫ郢敖
       if (e is Directory) {
         final stat = await e.stat();
-        final name = _fileName(e.path); // 隴鯉ｽ｢陝・･繝ｻ郢晏･ﾎ晉ｹ昜ｻ｣繝ｻ雎ｬ竏ｫ逡代・蝓溷ｿｰ陝・ｽｾ陷ｷ讎雁徐陟墓圜・ｼ繝ｻ
+        final name = _fileName(
+          e.path,
+        ); // 隴鯉ｽ｢陝・･繝ｻ郢晏･ﾎ晉ｹ昜ｻ｣繝ｻ雎ｬ竏ｫ逡代・蝓溷ｿｰ陝・ｽｾ陷ｷ讎雁徐陟墓圜・ｼ繝ｻ
         folders.add(
           MediaItem(
             id: e.path,
@@ -421,7 +423,10 @@ class WindowsFolderRepository implements MediaRepository {
 
     for (final entry in slice) {
       if (entry.kind == MediaKind.folder) {
-        final stat = await _withFsRetry(entry.path, () => Directory(entry.path).stat());
+        final stat = await _withFsRetry(
+          entry.path,
+          () => Directory(entry.path).stat(),
+        );
         items.add(
           MediaItem(
             id: entry.path,
@@ -433,7 +438,10 @@ class WindowsFolderRepository implements MediaRepository {
           ),
         );
       } else {
-        final stat = await _withFsRetry(entry.path, () => File(entry.path).stat());
+        final stat = await _withFsRetry(
+          entry.path,
+          () => File(entry.path).stat(),
+        );
         items.add(
           MediaItem(
             id: entry.path,
@@ -464,7 +472,7 @@ class WindowsFolderRepository implements MediaRepository {
     // Windows邵ｺ・ｯ陝ｶ・ｸ邵ｺ・ｫ郢晁ｼ斐＜郢ｧ・､郢晢ｽｫ郢昜ｻ｣縺幄恆閧ｴ鄂ｲ
     return _listMediaFsRecursiveFiles(folder, onProgress: onProgress);
   }
-  
+
   Future<List<MediaItem>> _listMediaFsRecursiveFiles(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
@@ -474,7 +482,9 @@ class WindowsFolderRepository implements MediaRepository {
 
     bool isTarget(FileSystemEntity e) {
       if (e is! File) return false;
-      final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+      final name = e.uri.pathSegments.isNotEmpty
+          ? e.uri.pathSegments.last
+          : e.path;
       final ext = _lowerExt(name);
       return ext == _pdfExt || MediaFileTypes.imageExtensions.contains(ext);
     }
@@ -492,7 +502,9 @@ class WindowsFolderRepository implements MediaRepository {
     await for (final ent in dir.list(recursive: true, followLinks: false)) {
       if (ent is! File) continue;
 
-      final name = ent.uri.pathSegments.isNotEmpty ? ent.uri.pathSegments.last : ent.path;
+      final name = ent.uri.pathSegments.isNotEmpty
+          ? ent.uri.pathSegments.last
+          : ent.path;
       final ext = _lowerExt(name);
 
       MediaKind? kind;
@@ -579,8 +591,6 @@ class WindowsFolderRepository implements MediaRepository {
     }
     return ok;
   }
-
-  
 
   @override
   Future<Uint8List> readBytes(MediaItem item) async {
@@ -719,7 +729,10 @@ class WindowsFolderRepository implements MediaRepository {
 
   Future<ThumbPair> _buildThumbPair(MediaItem item, int maxWidth) async {
     if (item.kind == MediaKind.image) {
-      final bytes = await _withFsRetry(item.id, () => File(item.id).readAsBytes());
+      final bytes = await _withFsRetry(
+        item.id,
+        () => File(item.id).readAsBytes(),
+      );
       if (_isAvifPath(item.id)) {
         try {
           final thumb = await _makeImageThumb(bytes, maxWidth);
@@ -924,6 +937,7 @@ class WindowsFolderRepository implements MediaRepository {
       importedCount: result.importedCount,
       skippedCount: result.skippedCount,
       failedCount: result.failedCount,
+      hitomiMetadataByRelativePath: result.hitomiMetadataByRelativePath,
     );
   }
 

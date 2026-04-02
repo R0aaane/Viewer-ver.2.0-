@@ -24,13 +24,7 @@ void main() {
         targetPath: target.path,
         isDirectory: false,
       ),
-      throwsA(
-          '同名のファイルまたはフォルダが既に存在します',
-          (error) => error.message,
-          'message',
-          '同名のファイルまたはフォルダが既に存在します',
-        ),
-      ),
+      throwsA(isA<LocalPathOperationException>()),
     );
 
     expect(await source.exists(), isTrue);

@@ -354,6 +354,27 @@ class downloader:
             'raw': info,
         }
 
+        pdf_path = os.path.join(
+            os.path.dirname(post['post_path']),
+            f"{os.path.basename(post['post_path'])}.pdf",
+        )
+        self.emit_ui_event(
+            'hitomi_metadata',
+            pdf_path=pdf_path,
+            source_url=gallery['normalized_url'],
+            reader_url=gallery['reader_url'],
+            title=title,
+            english_title=english_title,
+            japanese_title=japanese_title,
+            media_type=info.get('type'),
+            language=info.get('language'),
+            artists=artists,
+            groups=groups,
+            series=series,
+            characters=characters,
+            tags=tags,
+        )
+
         if self.content:
             metadata = {
                 'source_url': gallery['normalized_url'],

@@ -21,12 +21,14 @@ class LocalUrlDownloadResult {
   final int skippedCount;
   final int failedCount;
   final List<String> logLines;
+  final Map<String, HitomiGalleryMetadata> hitomiMetadataByRelativePath;
 
   const LocalUrlDownloadResult({
     required this.importedCount,
     this.skippedCount = 0,
     this.failedCount = 0,
     this.logLines = const <String>[],
+    this.hitomiMetadataByRelativePath = const <String, HitomiGalleryMetadata>{},
   });
 }
 
@@ -54,12 +56,16 @@ class UrlImportDownloaderService {
             onProgress: onProgress,
           );
         } on ProcessException catch (error) {
-          stderr.writeln('[url-import] launcher unavailable: $launcher ($error)');
+          stderr.writeln(
+            '[url-import] launcher unavailable: $launcher ($error)',
+          );
         } on UrlImportDownloaderException catch (error) {
           if (!_looksLikeMissingLauncher(error.message)) {
             rethrow;
           }
-          stderr.writeln('[url-import] launcher fallback: $launcher (${error.message})');
+          stderr.writeln(
+            '[url-import] launcher fallback: $launcher (${error.message})',
+          );
         }
       }
     }
@@ -105,6 +111,7 @@ class UrlImportDownloaderService {
     var skippedCount = 0;
     var failedCount = 0;
     var sawEvent = false;
+    final hitomiMetadataByRelativePath = <String, HitomiGalleryMetadata>{};
 
     void appendLog(String line) {
       logLines.add(line);
@@ -114,15 +121,21 @@ class UrlImportDownloaderService {
     }
 
     Future<void> consumeStdout() async {
-      await for (final line in process.stdout
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .transform(const LineSplitter())) {
+      await for (final line
+          in process.stdout
+              .transform(const Utf8Decoder(allowMalformed: true))
+              .transform(const LineSplitter())) {
         if (line.startsWith(_uiEventPrefix)) {
           sawEvent = true;
           final payload = line.substring(_uiEventPrefix.length);
           try {
             final event = jsonDecode(payload);
             if (event is Map<String, dynamic>) {
+              _storeHitomiMetadataEvent(
+                event,
+                destinationFolder: destinationFolder,
+                out: hitomiMetadataByRelativePath,
+              );
               importedCount = _asInt(event['success'], importedCount);
               skippedCount = _asInt(event['skipped'], skippedCount);
               failedCount = _asInt(event['failed'], failedCount);
@@ -149,9 +162,10 @@ class UrlImportDownloaderService {
     }
 
     Future<void> consumeStderr() async {
-      await for (final line in process.stderr
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .transform(const LineSplitter())) {
+      await for (final line
+          in process.stderr
+              .transform(const Utf8Decoder(allowMalformed: true))
+              .transform(const LineSplitter())) {
         appendLog('[stderr] $line');
       }
     }
@@ -167,9 +181,7 @@ class UrlImportDownloaderService {
       );
     }
     if (!sawEvent) {
-      throw const UrlImportDownloaderException(
-        'ダウンローダーから進捗応答を受け取れませんでした',
-      );
+      throw const UrlImportDownloaderException('ダウンローダーから進捗応答を受け取れませんでした');
     }
 
     return LocalUrlDownloadResult(
@@ -177,6 +189,7 @@ class UrlImportDownloaderService {
       skippedCount: skippedCount,
       failedCount: failedCount,
       logLines: logLines,
+      hitomiMetadataByRelativePath: hitomiMetadataByRelativePath,
     );
   }
 
@@ -195,9 +208,7 @@ class UrlImportDownloaderService {
 
     final urls = await _collectDirectUrls(sourceUrl, options);
     if (urls.isEmpty) {
-      throw const UrlImportDownloaderException(
-        '直接ダウンロードできる URL が見つかりませんでした',
-      );
+      throw const UrlImportDownloaderException('直接ダウンロードできる URL が見つかりませんでした');
     }
 
     final destinationDir = Directory(destinationFolder);
@@ -249,7 +260,10 @@ class UrlImportDownloaderService {
         }
 
         request.followRedirects = true;
-        request.headers.set(HttpHeaders.userAgentHeader, 'pdf_viewer/standalone');
+        request.headers.set(
+          HttpHeaders.userAgentHeader,
+          'pdf_viewer/standalone',
+        );
 
         HttpClientResponse response;
         try {
@@ -380,9 +394,13 @@ class UrlImportDownloaderService {
   }) {
     final disposition = response.headers.value(_contentDispositionHeader);
     final fromDisposition = _decodeContentDispositionFileName(disposition);
-    final fromUrl = uri.pathSegments.isNotEmpty ? Uri.decodeComponent(uri.pathSegments.last) : '';
+    final fromUrl = uri.pathSegments.isNotEmpty
+        ? Uri.decodeComponent(uri.pathSegments.last)
+        : '';
     final preferred = (fromDisposition ?? fromUrl).trim();
-    final inferredExtension = _extensionFromContentType(response.headers.contentType);
+    final inferredExtension = _extensionFromContentType(
+      response.headers.contentType,
+    );
 
     var fileName = _sanitizeFileName(preferred);
     if (fileName == null) {
@@ -495,12 +513,16 @@ class UrlImportDownloaderService {
     final args = <String>[];
 
     for (final url in options.collectSourceUrls(sourceUrl)) {
-      args..add('--url')..add(url);
+      args
+        ..add('--url')
+        ..add(url);
     }
 
     final cookieFilePath = options.normalizedCookieFilePath;
     if (cookieFilePath != null) {
-      args..add('--cookies')..add(cookieFilePath);
+      args
+        ..add('--cookies')
+        ..add(cookieFilePath);
     }
 
     args
@@ -509,12 +531,16 @@ class UrlImportDownloaderService {
 
     final urlListFilePath = options.normalizedUrlListFilePath;
     if (urlListFilePath != null) {
-      args..add('--from-file')..add(urlListFilePath);
+      args
+        ..add('--from-file')
+        ..add(urlListFilePath);
     }
 
     final sites = options.normalizedFavoriteSites;
     if (sites.isNotEmpty) {
-      args..add('--sites')..add(sites.join(','));
+      args
+        ..add('--sites')
+        ..add(sites.join(','));
     }
     if (options.favoritePosts) {
       args.add('--fav-posts');
@@ -522,7 +548,9 @@ class UrlImportDownloaderService {
 
     final favoriteUserServices = options.normalizedFavoriteUserServices;
     if (favoriteUserServices.isNotEmpty) {
-      args..add('--fav-users')..add(favoriteUserServices.join(','));
+      args
+        ..add('--fav-users')
+        ..add(favoriteUserServices.join(','));
     }
 
     args
@@ -554,5 +582,80 @@ class UrlImportDownloaderService {
     }
 
     return args;
+  }
+
+  void _storeHitomiMetadataEvent(
+    Map<String, dynamic> event, {
+    required String destinationFolder,
+    required Map<String, HitomiGalleryMetadata> out,
+  }) {
+    final type = event['type']?.toString().trim().toLowerCase();
+    if (type != 'hitomi_metadata') {
+      return;
+    }
+
+    final pdfPath = event['pdf_path']?.toString();
+    final relativePath = _relativePathFromAbsolute(
+      pdfPath,
+      rootFolder: destinationFolder,
+    );
+    final key = HitomiGalleryMetadata.normalizeRelativePathKey(relativePath);
+    if (key == null) {
+      return;
+    }
+
+    out[key] = HitomiGalleryMetadata(
+      artists: _stringListFromEvent(event['artists']),
+      groups: _stringListFromEvent(event['groups']),
+      series: _stringListFromEvent(event['series']),
+      characters: _stringListFromEvent(event['characters']),
+      tags: _stringListFromEvent(event['tags']),
+      title: _trimmedOrNull(event['title']),
+      englishTitle: _trimmedOrNull(event['english_title']),
+      japaneseTitle: _trimmedOrNull(event['japanese_title']),
+      mediaType: _trimmedOrNull(event['media_type']),
+      language: _trimmedOrNull(event['language']),
+      sourceUrl: _trimmedOrNull(event['source_url']),
+      readerUrl: _trimmedOrNull(event['reader_url']),
+    );
+  }
+
+  String? _relativePathFromAbsolute(
+    String? rawPath, {
+    required String rootFolder,
+  }) {
+    final trimmedPath = rawPath?.trim() ?? '';
+    final trimmedRoot = rootFolder.trim();
+    if (trimmedPath.isEmpty || trimmedRoot.isEmpty) {
+      return null;
+    }
+
+    final normalizedPath = p.normalize(trimmedPath);
+    final normalizedRoot = p.normalize(trimmedRoot);
+    if (normalizedPath == normalizedRoot ||
+        !p.isWithin(normalizedRoot, normalizedPath)) {
+      return null;
+    }
+    return p
+        .relative(normalizedPath, from: normalizedRoot)
+        .replaceAll('\\', '/');
+  }
+
+  List<String> _stringListFromEvent(Object? value) {
+    if (value is! List) {
+      return const <String>[];
+    }
+    return value
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  String? _trimmedOrNull(Object? value) {
+    final trimmed = value?.toString().trim() ?? '';
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
   }
 }
