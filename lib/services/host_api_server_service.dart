@@ -643,8 +643,7 @@ class HostApiServerService extends ChangeNotifier {
     env['MEDIA_SERVER_AUTH_TOKEN'] = settings.authToken?.trim() ?? '';
     env['MEDIA_SERVER_DATA_DIR'] = dataDir.path;
     env['MEDIA_SERVER_STARTUP_RESCAN'] = 'true';
-    env['MEDIA_SERVER_CORS_ORIGINS'] =
-        'http://127.0.0.1;http://localhost;http://${Platform.localHostname}';
+    env['MEDIA_SERVER_CORS_ORIGINS'] = '*';
     return env;
   }
 
