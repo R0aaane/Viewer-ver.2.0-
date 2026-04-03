@@ -39,6 +39,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   late TextEditingController _clientUrlController;
   late TextEditingController _hostPortController;
   late TextEditingController _authTokenController;
+  late TextEditingController _hostLibraryPathController;
   late bool _autoStartHostServer;
 
   final UrlImportProjectCookieStoreService _projectCookieStore =
@@ -66,6 +67,9 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     _clientUrlController = TextEditingController(text: settings.clientApiBaseUrl);
     _hostPortController = TextEditingController(text: '${settings.hostPort}');
     _authTokenController = TextEditingController(text: settings.authToken ?? '');
+    _hostLibraryPathController = TextEditingController(
+      text: settings.hostLibraryPath,
+    );
     _autoStartHostServer = settings.autoStartHostServer;
     _status = settings.isStandaloneMode ? _localModeStatus() : _unknownStatus();
     widget.hostServerService.refresh();
@@ -77,6 +81,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     _clientUrlController.dispose();
     _hostPortController.dispose();
     _authTokenController.dispose();
+    _hostLibraryPathController.dispose();
     super.dispose();
   }
 
@@ -231,6 +236,88 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
           ? null
           : _authTokenController.text.trim(),
       autoStartHostServer: _autoStartHostServer,
+      hostLibraryPath: _hostLibraryPathController.text.trim(),
+    );
+  }
+
+  Future<void> _pickHostLibraryFolder() async {
+    try {
+      final selected = await getDirectoryPath(
+        confirmButtonText: 'Library フォルダに設定',
+      );
+      if (selected == null || selected.trim().isEmpty || !mounted) {
+        return;
+      }
+      setState(() {
+        _hostLibraryPathController.text = selected.trim();
+      });
+    } catch (error) {
+      _showSnackBar('Library フォルダの選択に失敗しました: $error');
+    }
+  }
+
+  void _resetHostLibraryFolder() {
+    setState(() {
+      _hostLibraryPathController.clear();
+    });
+  }
+
+  Widget _buildLibraryFolderSection(BuildContext context) {
+    final trimmed = _hostLibraryPathController.text.trim();
+    final summary = trimmed.isEmpty
+        ? '未設定なら既定の Library フォルダを使います。ホストモードでは共有先にも使われます。'
+        : trimmed;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).colorScheme.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Library フォルダ',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _hostLibraryPathController,
+            enabled: !_saving,
+            decoration: const InputDecoration(
+              labelText: '保存先フォルダ',
+              hintText: '未設定なら既定の Library フォルダを使用',
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            summary,
+            style: Theme.of(context).textTheme.bodySmall,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _pickHostLibraryFolder,
+                icon: const Icon(Icons.folder_open_outlined),
+                label: const Text('フォルダを選択'),
+              ),
+              TextButton.icon(
+                onPressed: (_saving || trimmed.isEmpty)
+                    ? null
+                    : _resetHostLibraryFolder,
+                icon: const Icon(Icons.restart_alt),
+                label: const Text('既定に戻す'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -635,6 +722,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   Widget build(BuildContext context) {
     final isClient = _mode == AppMode.client;
     final isHost = _mode == AppMode.host;
+    final usesLocalLibrary = _mode != AppMode.client;
 
     return AlertDialog(
       title: const Text('動作モード設定'),
@@ -711,6 +799,10 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                   title: const Text('ホストモードで自動起動'),
                   contentPadding: EdgeInsets.zero,
                 ),
+                const SizedBox(height: 12),
+              ],
+              if (usesLocalLibrary) ...[
+                _buildLibraryFolderSection(context),
                 const SizedBox(height: 12),
               ],
               TextField(

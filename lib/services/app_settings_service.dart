@@ -11,6 +11,7 @@ class AppSettingsService {
   static const String _metadataAuthTokenKey = 'prefs.metadata.authToken';
   static const String _hostPortKey = 'prefs.host.port';
   static const String _hostAutoStartKey = 'prefs.host.autoStartServer';
+  static const String _hostLibraryPathKey = 'prefs.host.libraryPath';
 
   Future<MetadataSettings> loadMetadataSettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -28,6 +29,7 @@ class AppSettingsService {
       hostPort: hostPort < 1 ? 8080 : hostPort,
       authToken: prefs.getString(_metadataAuthTokenKey),
       autoStartHostServer: prefs.getBool(_hostAutoStartKey) ?? false,
+      hostLibraryPath: prefs.getString(_hostLibraryPathKey) ?? '',
     );
   }
 
@@ -61,6 +63,12 @@ class AppSettingsService {
     );
     await prefs.setInt(_hostPortKey, settings.hostPort);
     await prefs.setBool(_hostAutoStartKey, settings.autoStartHostServer);
+    final libraryPath = settings.hostLibraryPath.trim();
+    if (libraryPath.isEmpty) {
+      await prefs.remove(_hostLibraryPathKey);
+    } else {
+      await prefs.setString(_hostLibraryPathKey, libraryPath);
+    }
 
     final token = settings.authToken?.trim();
     if (token == null || token.isEmpty) {

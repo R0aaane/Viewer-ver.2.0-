@@ -650,13 +650,16 @@ class HostApiServerService extends ChangeNotifier {
 
   Future<List<String>> _loadMediaRoots() async {
     final prefs = await SharedPreferences.getInstance();
+    final settings = await _settingsService.loadMetadataSettings();
     final roots = <String>[
       ...(prefs.getStringList(_foldersPrefsKey) ?? const <String>[])
           .where((entry) => entry.trim().isNotEmpty && !entry.startsWith('content://')),
     ].toSet().toList(growable: true);
 
-    final docsDir = await getApplicationDocumentsDirectory();
-    final libraryPath = '${docsDir.path}${Platform.pathSeparator}library';
+    final configuredPath = settings.hostLibraryPath.trim();
+    final libraryPath = configuredPath.isNotEmpty
+        ? configuredPath
+        : '${(await getApplicationDocumentsDirectory()).path}${Platform.pathSeparator}library';
     final libraryDir = Directory(libraryPath);
     if (!await libraryDir.exists()) {
       await libraryDir.create(recursive: true);

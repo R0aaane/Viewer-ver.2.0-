@@ -3777,6 +3777,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     final progress = ValueNotifier<MediaTransferProgress?>(null);
     var dialogShown = false;
+    final dialogHandle = _RouteBoundDialogHandle();
 
     try {
       final lib = await widget.repo.getAppLibraryFolder();
@@ -3792,7 +3793,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         showDialog<void>(
           context: context,
           barrierDismissible: false,
-          builder: (_) => AlertDialog(
+          builder: (dialogContext) => dialogHandle.bind(
+            dialogContext,
+            AlertDialog(
             title: const Text('ホストへ取り込み中...'),
             content: ValueListenableBuilder<MediaTransferProgress?>(
               valueListenable: progress,
@@ -3826,6 +3829,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 );
               },
             ),
+          ),
           ),
         ),
       );
@@ -3888,10 +3892,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     } finally {
       progress.dispose();
       await _cleanupHostImportSelection(selection);
-      if (dialogShown &&
-          mounted &&
-          Navigator.of(context, rootNavigator: true).canPop()) {
-        Navigator.of(context, rootNavigator: true).pop();
+      if (dialogShown) {
+        dialogHandle.close();
       }
     }
   }
@@ -3954,6 +3956,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           ),
         );
         var dialogShown = false;
+        final dialogHandle = _RouteBoundDialogHandle();
         try {
           void ensureDialogShown() {
             if (dialogShown || !mounted) {
@@ -3964,7 +3967,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               showDialog<void>(
                 context: context,
                 barrierDismissible: false,
-                builder: (_) => AlertDialog(
+                builder: (dialogContext) => dialogHandle.bind(
+                  dialogContext,
+                  AlertDialog(
                   title: const Text('取り込み元を確認中...'),
                   content: ValueListenableBuilder<MediaTransferProgress?>(
                     valueListenable: progress,
@@ -3990,6 +3995,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         ],
                       );
                     },
+                  ),
                   ),
                 ),
               ),
@@ -4039,10 +4045,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           );
         } finally {
           progress.dispose();
-          if (dialogShown &&
-              mounted &&
-              Navigator.of(context, rootNavigator: true).canPop()) {
-            Navigator.of(context, rootNavigator: true).pop();
+          if (dialogShown) {
+            dialogHandle.close();
           }
         }
     }
@@ -4366,13 +4370,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final folder = FolderHandle(_currentFolderRaw!);
     final progress = ValueNotifier<MediaTransferProgress?>(null);
     var dialogShown = false;
+    final dialogHandle = _RouteBoundDialogHandle();
     try {
       dialogShown = true;
       unawaited(
         showDialog<void>(
           context: context,
           barrierDismissible: false,
-          builder: (_) => AlertDialog(
+          builder: (dialogContext) => dialogHandle.bind(
+            dialogContext,
+            AlertDialog(
             title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
             content: ValueListenableBuilder<MediaTransferProgress?>(
               valueListenable: progress,
@@ -4401,6 +4408,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 );
               },
             ),
+            ),
           ),
         ),
       );
@@ -4427,10 +4435,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ).showSnackBar(SnackBar(content: Text('取り込みに失敗しました: $e')));
     } finally {
       progress.dispose();
-      if (dialogShown &&
-          mounted &&
-          Navigator.of(context, rootNavigator: true).canPop()) {
-        Navigator.of(context, rootNavigator: true).pop();
+      if (dialogShown) {
+        dialogHandle.close();
       }
     }
   }
@@ -4449,6 +4455,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
     final progress = ValueNotifier<MediaTransferProgress?>(null);
     var dialogShown = false;
+    final dialogHandle = _RouteBoundDialogHandle();
     try {
       final lib = await widget.repo.getAppLibraryFolder();
       final libRaw = lib.raw;
@@ -4468,7 +4475,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         showDialog<void>(
           context: context,
           barrierDismissible: false,
-          builder: (_) => AlertDialog(
+          builder: (dialogContext) => dialogHandle.bind(
+            dialogContext,
+            AlertDialog(
             title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
             content: ValueListenableBuilder<MediaTransferProgress?>(
               valueListenable: progress,
@@ -4496,6 +4505,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   ],
                 );
               },
+            ),
             ),
           ),
         ),
@@ -4569,10 +4579,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ).showSnackBar(SnackBar(content: Text('ライブラリ取り込みに失敗しました: $e')));
     } finally {
       progress.dispose();
-      if (dialogShown &&
-          mounted &&
-          Navigator.of(context, rootNavigator: true).canPop()) {
-        Navigator.of(context, rootNavigator: true).pop();
+      if (dialogShown) {
+        dialogHandle.close();
       }
     }
   }
@@ -4702,34 +4710,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
       if (!mounted) return;
 
-      List<MediaItem>? afterItemsSnapshot;
+      final observedImport = await _observeUrlImportChanges(
+        folder: folder,
+        beforeItemIds: beforeItemIds,
+      );
+      final afterItemsSnapshot = observedImport.afterItemsSnapshot;
       var effectiveImportedCount = result.importedCount;
-      if (beforeItemIds != null) {
-        try {
-          afterItemsSnapshot = await widget.repo.listMediaRecursiveFiles(
-            folder,
-          );
-          final afterItemIds = afterItemsSnapshot
-              .where((item) => item.kind != MediaKind.folder)
-              .map((item) => item.id)
-              .toSet();
-          final observedImportedCount = afterItemIds
-              .difference(beforeItemIds)
-              .length;
-          if (observedImportedCount > effectiveImportedCount) {
-            debugPrint(
-              '[url-import] corrected imported count from '
-              '${result.importedCount} to $observedImportedCount '
-              'folder=${folder.raw}',
-            );
-            effectiveImportedCount = observedImportedCount;
-          }
-        } catch (error) {
-          debugPrint(
-            '[url-import] failed to snapshot imported items after import: '
-            '$error',
-          );
-        }
+      if (observedImport.observedImportedCount > effectiveImportedCount) {
+        debugPrint(
+          '[url-import] corrected imported count from '
+          '${result.importedCount} to ${observedImport.observedImportedCount} '
+          'folder=${folder.raw}',
+        );
+        effectiveImportedCount = observedImport.observedImportedCount;
       }
 
       if (effectiveImportedCount <= 0) {
@@ -4807,6 +4800,68 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
+      final observedImport = await _observeUrlImportChanges(
+        folder: folder,
+        beforeItemIds: beforeItemIds,
+      );
+      if (observedImport.observedImportedCount > 0) {
+        if (!mounted) return;
+
+        var inferredTaggedCount = 0;
+        if (!widget.repo.isRemoteMode && beforeItemIds != null) {
+          inferredTaggedCount = await _applyInferredTagsToImportedItems(
+            folder: folder,
+            beforeItemIds: beforeItemIds,
+            sourceUrl: importRequest.sourceUrl,
+            options: importRequest.options,
+            afterItemsSnapshot: observedImport.afterItemsSnapshot,
+          );
+        }
+
+        _folderItemsCache.clear();
+        _folderItemsCacheRecursive.clear();
+        _dirStack.clear();
+
+        if (activateFolder) {
+          setState(() {
+            _currentFolderRaw = folder.raw;
+            _folder = folder;
+            _page = _MainPage.gallery;
+          });
+          await _persistFolders();
+        }
+
+        await _loadFolder(folder, saveAsLast: false);
+        if (!mounted) return;
+
+        await _refreshDetailedBrowseIfNeeded();
+        await _refreshCurrentPageTags();
+        await _refreshArtistTagCounts();
+
+        final recoveryNote = _isLikelyTimeoutImportError(e)
+            ? 'ホスト応答はタイムアウトしましたが、取り込み結果を確認できました'
+            : 'エラー後に取り込み結果を確認できました';
+        final parts = <String>[
+          '${observedImport.observedImportedCount} 件',
+          if (inferredTaggedCount > 0) 'タグ ${inferredTaggedCount} 件',
+          recoveryNote,
+        ];
+        final message = '$successLabel: ${parts.join(' / ')}';
+        _updateUrlImportQueueEntry(
+          queueId,
+          (current) => current.copyWith(
+            status: _UrlImportQueueStatus.completed,
+            clearProgress: true,
+            message: message,
+            finishedAt: DateTime.now(),
+          ),
+        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+        return;
+      }
+
       if (!mounted) return;
       final message = 'URL取り込みに失敗しました: $e';
       _updateUrlImportQueueEntry(
@@ -4822,6 +4877,58 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     }
+  }
+
+  Future<({List<MediaItem>? afterItemsSnapshot, int observedImportedCount})>
+      _observeUrlImportChanges({
+        required FolderHandle folder,
+        required Set<String>? beforeItemIds,
+      }) async {
+    if (beforeItemIds == null) {
+      return (afterItemsSnapshot: null, observedImportedCount: 0);
+    }
+    Object? lastError;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final afterItemsSnapshot = await widget.repo.listMediaRecursiveFiles(
+          folder,
+        );
+        final afterItemIds = afterItemsSnapshot
+            .where((item) => item.kind != MediaKind.folder)
+            .map((item) => item.id)
+            .toSet();
+        final observedImportedCount = afterItemIds
+            .difference(beforeItemIds)
+            .length;
+        if (observedImportedCount > 0 || attempt == 2) {
+          return (
+            afterItemsSnapshot: afterItemsSnapshot,
+            observedImportedCount: observedImportedCount,
+          );
+        }
+      } catch (error) {
+        lastError = error;
+        if (attempt == 2) {
+          break;
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+    }
+    if (lastError != null) {
+      debugPrint(
+        '[url-import] failed to snapshot imported items after import: '
+        '$lastError',
+      );
+    }
+    return (afterItemsSnapshot: null, observedImportedCount: 0);
+  }
+
+  bool _isLikelyTimeoutImportError(Object error) {
+    if (error is TimeoutException) {
+      return true;
+    }
+    final message = error.toString().toLowerCase();
+    return message.contains('timeout') || message.contains('タイムアウト');
   }
 
   Future<int> _applyInferredTagsToImportedItems({
@@ -5124,6 +5231,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _openMetadataSettings() async {
+    final previousSettings = widget.tagService.settings;
+    final wasHostRunning =
+        widget.hostServerService.status.state == HostServerState.running;
     final changed = await MetadataSettingsDialog.show(
       context,
       tagService: widget.tagService,
@@ -5133,9 +5243,26 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await widget.repo.reloadSettings();
     await widget.hostServerService.refresh();
     final nextSettings = widget.tagService.settings;
+    final shouldRestartHostServer =
+        wasHostRunning &&
+        nextSettings.isHostMode &&
+        (previousSettings.hostPort != nextSettings.hostPort ||
+            (previousSettings.authToken?.trim() ?? '') !=
+                (nextSettings.authToken?.trim() ?? '') ||
+            previousSettings.hostLibraryPath.trim() !=
+                nextSettings.hostLibraryPath.trim());
     if (!nextSettings.isHostMode &&
         widget.hostServerService.status.state == HostServerState.running) {
       await widget.hostServerService.stopServer();
+    } else if (shouldRestartHostServer) {
+      await widget.hostServerService.stopServer();
+      try {
+        await widget.hostServerService.startServer(
+          tagService: widget.tagService,
+        );
+      } catch (error, stackTrace) {
+        _logUiError('openMetadataSettings.restartServer', error, stackTrace);
+      }
     } else if (nextSettings.isHostMode && nextSettings.autoStartHostServer) {
       try {
         await widget.hostServerService.startServer(
@@ -7492,6 +7619,34 @@ class _TileShell extends StatelessWidget {
             : const Icon(Icons.broken_image_outlined),
       ),
     );
+  }
+}
+
+class _RouteBoundDialogHandle {
+  BuildContext? _dialogContext;
+  bool _closeRequested = false;
+
+  Widget bind(BuildContext context, Widget child) {
+    _dialogContext = context;
+    if (_closeRequested) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        close();
+      });
+    }
+    return child;
+  }
+
+  void close() {
+    _closeRequested = true;
+    final dialogContext = _dialogContext;
+    if (dialogContext == null || !dialogContext.mounted) {
+      return;
+    }
+    final navigator = Navigator.of(dialogContext);
+    if (navigator.canPop()) {
+      navigator.pop();
+    }
+    _dialogContext = null;
   }
 }
 

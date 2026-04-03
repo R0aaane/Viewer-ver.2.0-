@@ -15,6 +15,7 @@ class MetadataSettings {
   final int hostPort;
   final String? authToken;
   final bool autoStartHostServer;
+  final String hostLibraryPath;
 
   const MetadataSettings({
     this.appMode = AppMode.standalone,
@@ -22,6 +23,7 @@ class MetadataSettings {
     this.hostPort = 8080,
     this.authToken,
     this.autoStartHostServer = false,
+    this.hostLibraryPath = '',
   });
 
   bool get isStandaloneMode => appMode == AppMode.standalone;
@@ -48,6 +50,7 @@ class MetadataSettings {
     String? authToken,
     bool clearAuthToken = false,
     bool? autoStartHostServer,
+    String? hostLibraryPath,
   }) {
     final resolvedAppMode = appMode ??
         (storageMode == null
@@ -63,6 +66,7 @@ class MetadataSettings {
       hostPort: hostPort ?? this.hostPort,
       authToken: clearAuthToken ? null : (authToken ?? this.authToken),
       autoStartHostServer: autoStartHostServer ?? this.autoStartHostServer,
+      hostLibraryPath: hostLibraryPath ?? this.hostLibraryPath,
     );
   }
 }

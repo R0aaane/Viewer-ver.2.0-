@@ -14,6 +14,7 @@ import '../media_file_types.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
 import '../services/import_source_normalizer.dart';
 import '../services/local_path_operation_service.dart';
@@ -26,6 +27,7 @@ class AndroidFolderRepository implements MediaRepository {
   final db.AppDb _db;
   final UrlImportDownloaderService _urlImportDownloader =
       UrlImportDownloaderService();
+  final AppSettingsService _settingsService = AppSettingsService();
   AndroidFolderRepository(this._db);
 
   @override
@@ -434,8 +436,12 @@ class AndroidFolderRepository implements MediaRepository {
 
   @override
   Future<FolderHandle> getAppLibraryFolder() async {
-    final base = await getApplicationDocumentsDirectory();
-    final libDir = Directory('${base.path}/library');
+    final settings = await _settingsService.loadMetadataSettings();
+    final configuredPath = settings.hostLibraryPath.trim();
+    final libraryPath = configuredPath.isNotEmpty
+        ? configuredPath
+        : '${(await getApplicationDocumentsDirectory()).path}/library';
+    final libDir = Directory(libraryPath);
     if (!await libDir.exists()) {
       await libDir.create(recursive: true);
     }
