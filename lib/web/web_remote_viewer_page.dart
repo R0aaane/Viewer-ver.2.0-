@@ -117,18 +117,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   String? _inferApiBaseUrlFromCurrentLocation(int port) {
     final currentUri = Uri.base;
-    final scheme = currentUri.scheme.trim().toLowerCase();
-    if (scheme != 'http' && scheme != 'https') {
-      return null;
-    }
-
     final host = currentUri.host.trim();
     if (host.isEmpty) {
       return null;
     }
 
     final normalizedHost = _isLoopbackHost(host) ? '127.0.0.1' : host;
-    return Uri(scheme: scheme, host: normalizedHost, port: port).toString();
+    // Host API is served over plain HTTP today.
+    return Uri(scheme: 'http', host: normalizedHost, port: port).toString();
   }
 
   bool _isLoopbackHost(String host) {
@@ -137,6 +133,28 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         lowered == '127.0.0.1' ||
         lowered == '::1' ||
         lowered == '[::1]';
+  }
+
+  String? _browserCompatibilityError(String apiBaseUrl) {
+    final currentHost = Uri.base.host.trim();
+    final currentScheme = Uri.base.scheme.trim().toLowerCase();
+    final apiUri = Uri.tryParse(apiBaseUrl.trim());
+    if (apiUri == null || !apiUri.hasScheme || apiUri.host.trim().isEmpty) {
+      return null;
+    }
+
+    final apiScheme = apiUri.scheme.trim().toLowerCase();
+    final apiHost = apiUri.host.trim();
+
+    if (!_isLoopbackHost(currentHost) && _isLoopbackHost(apiHost)) {
+      return 'この端末からは 127.0.0.1 / localhost の API に接続できません。PC の LAN IP またはホスト名を指定してください。';
+    }
+
+    if (currentScheme == 'https' && apiScheme == 'http') {
+      return 'HTTPS の Web ページから HTTP API には接続できません。Safari では特にブロックされやすいため、Web ビューアーも HTTP で開くか、API 側を HTTPS で公開してください。';
+    }
+
+    return null;
   }
 
   Future<void> _saveAndConnect({bool showSuccessMessage = true}) async {
@@ -167,6 +185,21 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _selectedFolderRaw = null;
         _isConnecting = false;
         _statusMessage = 'API URL を入力すると Web から閲覧できます';
+      });
+      return;
+    }
+
+    final compatibilityError = _browserCompatibilityError(apiBaseUrl);
+    if (compatibilityError != null) {
+      if (!mounted) return;
+      setState(() {
+        _client = null;
+        _folders = const <WebRemoteFolder>[];
+        _entries = const <WebRemoteEntry>[];
+        _selectedEntry = null;
+        _selectedFolderRaw = null;
+        _isConnecting = false;
+        _errorMessage = compatibilityError;
       });
       return;
     }
