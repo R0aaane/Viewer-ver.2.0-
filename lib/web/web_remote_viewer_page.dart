@@ -1,4 +1,8 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+
+import 'dart:html' as html;
 import 'dart:typed_data';
+import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -273,40 +277,74 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     await _loadEntries();
   }
 
-  Future<void> _handleEntryTap(WebRemoteEntry entry, {required bool splitView}) async {
-    if (entry.isFolder) {
-      await _selectFolder(entry.fullPath ?? entry.entryId);
-      return;
-    }
-    if (splitView) {
-      setState(() {
-        _selectedEntry = entry;
-      });
-      return;
-    }
-    if (!mounted || _client == null) return;
+  Future<void> _openDetailPage(
+    WebRemoteEntry entry, {
+    bool allowOpenPdfViewer = true,
+  }) async {
+    final client = _client;
+    if (!mounted || client == null) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder:
-            (context) => Scaffold(
+            (pageContext) => Scaffold(
               appBar: AppBar(title: Text(entry.displayName)),
               body: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: WebMediaDetailView(
-                    client: _client!,
+                    client: client,
                     entry: entry,
                     onApplyTagQuery: (query) async {
                       _searchController.text = query;
                       await _loadEntries();
-                      if (context.mounted) Navigator.of(context).pop();
+                      if (pageContext.mounted) {
+                        Navigator.of(pageContext).pop();
+                      }
                     },
+                    onOpenPdfViewerPage:
+                        allowOpenPdfViewer && entry.isPdf
+                            ? () => _openPdfViewerPage(entry)
+                            : null,
                   ),
                 ),
               ),
             ),
       ),
     );
+  }
+
+  Future<void> _openPdfViewerPage(WebRemoteEntry entry) async {
+    final client = _client;
+    if (!mounted || client == null || !entry.isPdf) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder:
+            (_) => WebPdfViewerPage(
+              client: client,
+              entry: entry,
+              onOpenDetail:
+                  () => _openDetailPage(entry, allowOpenPdfViewer: false),
+            ),
+      ),
+    );
+  }
+
+  Future<void> _handleEntryTap(WebRemoteEntry entry, {required bool splitView}) async {
+    if (entry.isFolder) {
+      await _selectFolder(entry.fullPath ?? entry.entryId);
+      return;
+    }
+    setState(() {
+      _selectedEntry = entry;
+    });
+    if (entry.isPdf) {
+      await _openPdfViewerPage(entry);
+      return;
+    }
+    if (splitView) {
+      return;
+    }
+    await _openDetailPage(entry);
   }
 
   Future<void> _applyTagQuery(String query) async {
@@ -518,7 +556,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     if (_selectedEntry == null) {
       return Column(
         children: <Widget>[
-          _buildInfoCard('詳細表示', '一覧から PDF または画像を選ぶと、ここに詳細ビューを表示します。', Colors.white70),
+          _buildInfoCard(
+            '詳細表示',
+            '一覧から画像を選ぶとここに詳細を表示し、PDF は専用の表示ページへ開けます。',
+            Colors.white70,
+          ),
           const SizedBox(height: 16),
           _buildUnsupportedFeaturesCard(),
         ],
@@ -528,6 +570,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       client: _client!,
       entry: _selectedEntry!,
       onApplyTagQuery: _applyTagQuery,
+      onOpenPdfViewerPage:
+          _selectedEntry!.isPdf ? () => _openPdfViewerPage(_selectedEntry!) : null,
     );
   }
 
@@ -574,7 +618,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             bullet('ローカル Library の直接参照、フォルダ追加、ホスト取込み'),
             bullet('Host API サーバーの起動 / 停止、ローカル DB の編集'),
             bullet('ファイル名変更、削除、タグ編集、URL 取込みなどの書き込み操作'),
-            bullet('ネイティブ版と同等の PDF ビューア全機能。Web ではページ画像プレビューと別タブ表示を提供'),
+            bullet('ネイティブ版と同等の PDF ビューア全機能。Web ではページ画像プレビュー、同じタブ内の PDF 表示ページ、別タブ表示を提供'),
             bullet('HTTPS の Web ページから HTTP API へはブラウザ制限で接続できません'),
           ],
         ),
@@ -906,12 +950,14 @@ class WebMediaDetailView extends StatefulWidget {
   final WebRemoteApiClient client;
   final WebRemoteEntry entry;
   final Future<void> Function(String query) onApplyTagQuery;
+  final VoidCallback? onOpenPdfViewerPage;
 
   const WebMediaDetailView({
     super.key,
     required this.client,
     required this.entry,
     required this.onApplyTagQuery,
+    this.onOpenPdfViewerPage,
   });
 
   @override
@@ -1089,9 +1135,21 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                         icon: const Icon(Icons.chevron_right),
                         label: const Text('次へ'),
                       ),
-                      Text('ページ $_pdfPageNo', style: const TextStyle(color: Colors.white70)),
+                      Text(
+                        'ページ $_pdfPageNo',
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      if (widget.onOpenPdfViewerPage != null)
+                        FilledButton.icon(
+                          onPressed: widget.onOpenPdfViewerPage,
+                          icon: const Icon(Icons.open_in_full),
+                          label: const Text('PDF 表示ページ'),
+                        ),
                       FilledButton.icon(
-                        onPressed: () => widget.client.openPdfInNewTab(widget.entry.mediaId!),
+                        onPressed:
+                            () => widget.client.openPdfInNewTab(
+                              widget.entry.mediaId!,
+                            ),
                         icon: const Icon(Icons.open_in_new),
                         label: const Text('別タブで開く'),
                       ),
@@ -1243,7 +1301,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                 border: Border.all(color: Colors.white12),
               ),
               child: const Text(
-                'Web 版では PDF のネイティブ埋め込みビューアは使わず、ページ画像プレビューと別タブ表示で閲覧します。',
+                'Web 版では PDF の簡易プレビューに加えて、同じタブ内の PDF 表示ページと別タブ表示を使い分けられます。',
                 style: TextStyle(color: Colors.white70),
               ),
             ),
@@ -1251,6 +1309,262 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
         ),
       ),
     );
+  }
+}
+
+class WebPdfViewerPage extends StatefulWidget {
+  final WebRemoteApiClient client;
+  final WebRemoteEntry entry;
+  final Future<void> Function()? onOpenDetail;
+
+  const WebPdfViewerPage({
+    super.key,
+    required this.client,
+    required this.entry,
+    this.onOpenDetail,
+  });
+
+  @override
+  State<WebPdfViewerPage> createState() => _WebPdfViewerPageState();
+}
+
+class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
+  String? _objectUrl;
+  Object? _loadError;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPdf();
+  }
+
+  @override
+  void didUpdateWidget(covariant WebPdfViewerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.stableId != widget.entry.stableId) {
+      _releaseObjectUrl();
+      _loadPdf();
+    }
+  }
+
+  Future<void> _loadPdf() async {
+    final mediaId = widget.entry.mediaId;
+    if (mediaId == null || mediaId.isEmpty) {
+      setState(() {
+        _loadError = StateError('PDF を開くための mediaId がありません');
+        _loading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _loadError = null;
+    });
+
+    try {
+      final objectUrl = await widget.client.createPdfObjectUrl(mediaId);
+      if (!mounted) {
+        widget.client.revokeObjectUrl(objectUrl);
+        return;
+      }
+      _releaseObjectUrl();
+      setState(() {
+        _objectUrl = objectUrl;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  void _releaseObjectUrl() {
+    final objectUrl = _objectUrl;
+    if (objectUrl == null) return;
+    widget.client.revokeObjectUrl(objectUrl);
+    _objectUrl = null;
+  }
+
+  Future<void> _handleOpenDetail() async {
+    final onOpenDetail = widget.onOpenDetail;
+    if (onOpenDetail == null) return;
+    await onOpenDetail();
+  }
+
+  @override
+  void dispose() {
+    _releaseObjectUrl();
+    super.dispose();
+  }
+
+  Widget _buildViewerBody() {
+    if (_loading && _objectUrl == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_loadError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'PDF 表示ページを読み込めませんでした: $_loadError',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.red.shade200),
+          ),
+        ),
+      );
+    }
+    final objectUrl = _objectUrl;
+    if (objectUrl == null) {
+      return const Center(
+        child: Text('PDF データがありません', style: TextStyle(color: Colors.white70)),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: _EmbeddedPdfView(
+        objectUrl: objectUrl,
+        title: widget.entry.displayName,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        titleSpacing: 0,
+        title: Row(
+          children: <Widget>[
+            if (widget.onOpenDetail != null) ...[
+              TextButton.icon(
+                onPressed: _handleOpenDetail,
+                style: TextButton.styleFrom(foregroundColor: Colors.white),
+                icon: const Icon(Icons.description_outlined),
+                label: const Text('PDF詳細'),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: Text(
+                widget.entry.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          IconButton(
+            onPressed:
+                widget.entry.mediaId == null
+                    ? null
+                    : () => widget.client.openPdfInNewTab(widget.entry.mediaId!),
+            tooltip: '別タブで開く',
+            icon: const Icon(Icons.open_in_new),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  const Chip(
+                    avatar: Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    label: Text('PDF'),
+                  ),
+                  Chip(
+                    avatar: const Icon(Icons.folder_open, size: 18),
+                    label: Text(widget.entry.folderRaw),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0E1117),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: _buildViewerBody(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmbeddedPdfView extends StatefulWidget {
+  final String objectUrl;
+  final String title;
+
+  const _EmbeddedPdfView({
+    required this.objectUrl,
+    required this.title,
+  });
+
+  @override
+  State<_EmbeddedPdfView> createState() => _EmbeddedPdfViewState();
+}
+
+class _EmbeddedPdfViewState extends State<_EmbeddedPdfView> {
+  static int _nextViewId = 0;
+
+  late final String _viewType;
+  late final html.IFrameElement _iframe;
+
+  @override
+  void initState() {
+    super.initState();
+    _viewType = 'web-embedded-pdf-${_nextViewId++}';
+    _iframe =
+        html.IFrameElement()
+          ..style.border = '0'
+          ..style.width = '100%'
+          ..style.height = '100%'
+          ..style.backgroundColor = '#0E1117'
+          ..src = _viewerUrl(widget.objectUrl)
+          ..title = widget.title;
+    ui_web.platformViewRegistry.registerViewFactory(
+      _viewType,
+      (viewId) => _iframe,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _EmbeddedPdfView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.objectUrl != widget.objectUrl) {
+      _iframe.src = _viewerUrl(widget.objectUrl);
+    }
+    if (oldWidget.title != widget.title) {
+      _iframe.title = widget.title;
+    }
+  }
+
+  String _viewerUrl(String objectUrl) => '$objectUrl#toolbar=1&navpanes=0';
+
+  @override
+  Widget build(BuildContext context) {
+    return HtmlElementView(viewType: _viewType);
   }
 }
 

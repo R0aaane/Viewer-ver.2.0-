@@ -418,16 +418,24 @@ class WebRemoteApiClient {
     return _getBytes('/media/${Uri.encodeComponent(mediaId)}/download');
   }
 
-  Future<void> openPdfInNewTab(String mediaId) async {
-    final popup = html.window.open('', '_blank');
+  Future<String> createPdfObjectUrl(String mediaId) async {
     final bytes = await fetchImageDownload(mediaId);
     final blob = html.Blob(<Object>[bytes], 'application/pdf');
-    final objectUrl = html.Url.createObjectUrlFromBlob(blob);
+    return html.Url.createObjectUrlFromBlob(blob);
+  }
+
+  void revokeObjectUrl(String objectUrl) {
+    html.Url.revokeObjectUrl(objectUrl);
+  }
+
+  Future<void> openPdfInNewTab(String mediaId) async {
+    final popup = html.window.open('', '_blank');
+    final objectUrl = await createPdfObjectUrl(mediaId);
     popup.location.href = objectUrl;
     unawaited(
       Future<void>.delayed(
         const Duration(minutes: 2),
-        () => html.Url.revokeObjectUrl(objectUrl),
+        () => revokeObjectUrl(objectUrl),
       ),
     );
   }
