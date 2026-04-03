@@ -3759,11 +3759,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
+    final selection = await _pickHostImportSelection();
+    if (selection == null || selection.items.isEmpty) {
+      return;
+    }
+
     final request = await ImportToHostDialog.show(
       context,
       tagService: widget.tagService,
+      sourceKind: selection.sourceKind,
+      selectedItems: selection.items,
     );
     if (request == null) {
+      await _cleanupHostImportSelection(selection);
       return;
     }
 
@@ -3822,9 +3830,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ),
       );
 
-      final importedCount = await widget.repo.importIntoFolder(
+      final importedCount = await widget.repo.importItemsIntoFolder(
         lib,
-        request: request,
+        selection.items,
+        importMetadata: request.metadata,
+        skipIfExists: request.skipIfExists,
         onProgress: (next) => progress.value = next,
       );
       if (!mounted) return;
@@ -3877,10 +3887,295 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ).showSnackBar(SnackBar(content: Text('ホスト取り込みに失敗しました: $e')));
     } finally {
       progress.dispose();
+      await _cleanupHostImportSelection(selection);
       if (dialogShown &&
           mounted &&
           Navigator.of(context, rootNavigator: true).canPop()) {
         Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
+  }
+
+  Future<ImportSourceKind?> _pickHostImportSourceKind() async {
+    return showModalBottomSheet<ImportSourceKind>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.upload_file_outlined),
+                title: const Text('複数ファイル'),
+                subtitle: const Text('PDF や画像を複数選んで取り込みます'),
+                onTap: () => Navigator.of(context).pop(ImportSourceKind.files),
+              ),
+              ListTile(
+                leading: const Icon(Icons.folder_open_outlined),
+                title: const Text('画像フォルダ'),
+                subtitle: const Text('フォルダを選び、中の画像や PDF をまとめて取り込みます'),
+                onTap: () => Navigator.of(context).pop(ImportSourceKind.folder),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<_HostImportSelection?> _pickHostImportSelection() async {
+    final sourceKind = await _pickHostImportSourceKind();
+    if (sourceKind == null) {
+      return null;
+    }
+
+    switch (sourceKind) {
+      case ImportSourceKind.files:
+        final items = await widget.repo.pickExternalMediaFiles(
+          allowMultiple: true,
+          includeImages: true,
+          includePdf: true,
+        );
+        if (items.isEmpty) {
+          return null;
+        }
+        return _HostImportSelection(
+          sourceKind: sourceKind,
+          items: items,
+        );
+      case ImportSourceKind.folder:
+        final progress = ValueNotifier<MediaTransferProgress?>(
+          const MediaTransferProgress(
+            sentBytes: 0,
+            totalBytes: 0,
+            completedFiles: 0,
+            totalFiles: 0,
+            statusLabel: '取り込み元フォルダを選択しています',
+          ),
+        );
+        var dialogShown = false;
+        try {
+          void ensureDialogShown() {
+            if (dialogShown || !mounted) {
+              return;
+            }
+            dialogShown = true;
+            unawaited(
+              showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => AlertDialog(
+                  title: const Text('取り込み元を確認中...'),
+                  content: ValueListenableBuilder<MediaTransferProgress?>(
+                    valueListenable: progress,
+                    builder: (context, value, _) {
+                      final completed = value?.completedFiles ?? 0;
+                      final total = value?.totalFiles ?? 0;
+                      final statusLabel = value?.statusLabel?.trim();
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const LinearProgressIndicator(),
+                          const SizedBox(height: 12),
+                          if (total > 0)
+                            Text('$completed / $total')
+                          else
+                            const Text('準備中...'),
+                          if (statusLabel != null &&
+                              statusLabel.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(statusLabel),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
+            );
+          }
+
+          final pickedItems = await widget.repo.pickExternalMediaFolderItems(
+            onProgress: (processed, total) {
+              ensureDialogShown();
+              progress.value = MediaTransferProgress(
+                sentBytes: 0,
+                totalBytes: 0,
+                completedFiles: processed,
+                totalFiles: total,
+                statusLabel: '取り込み元フォルダを走査しています',
+              );
+            },
+          );
+          if (pickedItems.isEmpty) {
+            return null;
+          }
+          ensureDialogShown();
+          progress.value = const MediaTransferProgress(
+            sentBytes: 0,
+            totalBytes: 0,
+            completedFiles: 0,
+            totalFiles: 0,
+            statusLabel: '画像フォルダを PDF に変換しています',
+          );
+          final converted = await _convertHostFolderSelectionToPdf(
+            pickedItems,
+            onProgress: (done, total) {
+              ensureDialogShown();
+              progress.value = MediaTransferProgress(
+                sentBytes: 0,
+                totalBytes: 0,
+                completedFiles: done,
+                totalFiles: total,
+                statusLabel: '画像フォルダを PDF に変換しています',
+              );
+            },
+          );
+          return _HostImportSelection(
+            sourceKind: sourceKind,
+            items: converted.items,
+            cleanupPaths: converted.cleanupPaths,
+          );
+        } finally {
+          progress.dispose();
+          if (dialogShown &&
+              mounted &&
+              Navigator.of(context, rootNavigator: true).canPop()) {
+            Navigator.of(context, rootNavigator: true).pop();
+          }
+        }
+    }
+  }
+
+  Future<_HostImportSelection> _convertHostFolderSelectionToPdf(
+    List<MediaItem> items, {
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final pdfItems = items
+        .where((item) => item.kind == MediaKind.pdf)
+        .toList(growable: false);
+    final imageItems = items
+        .where((item) => item.kind == MediaKind.image)
+        .toList(growable: false);
+    if (imageItems.isEmpty || pdfItems.isNotEmpty) {
+      return _HostImportSelection(
+        sourceKind: ImportSourceKind.folder,
+        items: items,
+      );
+    }
+
+    final folderLabel = _hostImportFolderLabel(imageItems);
+    final created = await PdfExportService.exportFolderToTemporaryPdf(
+      widget.repo,
+      imageItems,
+      folderLabel,
+      onProgress: onProgress,
+    );
+    final generatedItem = await _buildGeneratedPdfItem(created);
+    if (generatedItem == null) {
+      throw Exception('画像フォルダの PDF 変換結果を読み込めませんでした');
+    }
+
+    final sourceFolderRaw = _hostImportSourceFolderRaw(imageItems);
+    final inferred = ImportTagRuleService.inferForGeneratedPdf(
+      sourceFolderRaw: sourceFolderRaw,
+      sourceFolderLabel: folderLabel,
+      generatedFileName: created.savedName,
+    );
+    final mergedTags = _mergeDistinctTags(inferred.tags);
+    final taggedItem = MediaItem(
+      id: generatedItem.id,
+      displayName: generatedItem.displayName,
+      kind: generatedItem.kind,
+      folderRaw: generatedItem.folderRaw,
+      modified: generatedItem.modified,
+      sizeBytes: generatedItem.sizeBytes,
+      tags: mergedTags,
+    );
+
+    return _HostImportSelection(
+      sourceKind: ImportSourceKind.folder,
+      items: <MediaItem>[taggedItem],
+      cleanupPaths: <String>[
+        if (created.savedPath?.trim().isNotEmpty ?? false)
+          created.savedPath!.trim(),
+      ],
+    );
+  }
+
+  String _hostImportFolderLabel(List<MediaItem> items) {
+    if (items.isEmpty) {
+      return 'import_folder';
+    }
+    final rawFolder = _hostImportSourceFolderRaw(items);
+    if (rawFolder.isNotEmpty && !rawFolder.startsWith('content://')) {
+      final normalized = rawFolder.replaceAll('\\', '/');
+      final parts = normalized
+          .split('/')
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .toList(growable: false);
+      if (parts.isNotEmpty) {
+        return parts.last;
+      }
+    }
+    final folderRaw = items.first.folderRaw.trim();
+    if (folderRaw.isNotEmpty && !folderRaw.startsWith('content://')) {
+      final name = p.basename(folderRaw);
+      if (name.trim().isNotEmpty) {
+        return name.trim();
+      }
+    }
+    return 'import_folder_${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  String _hostImportSourceFolderRaw(List<MediaItem> items) {
+    final candidates = items
+        .map((item) => item.folderRaw.trim())
+        .where((raw) => raw.isNotEmpty)
+        .toList(growable: false);
+    if (candidates.isEmpty) {
+      return '';
+    }
+    final first = candidates.first;
+    final allSame = candidates.every((raw) => raw == first);
+    if (allSame) {
+      return first;
+    }
+    return first;
+  }
+
+  List<Tag> _mergeDistinctTags(Iterable<Tag> tags) {
+    final out = <Tag>[];
+    final seen = <String>{};
+    for (final tag in tags) {
+      final name = tag.name.trim();
+      if (name.isEmpty) {
+        continue;
+      }
+      final key = '${tag.category.name}\u0000${name.toLowerCase()}';
+      if (!seen.add(key)) {
+        continue;
+      }
+      out.add(Tag(name: name, category: tag.category));
+    }
+    return out;
+  }
+
+  Future<void> _cleanupHostImportSelection(_HostImportSelection selection) async {
+    for (final path in selection.cleanupPaths) {
+      final trimmed = path.trim();
+      if (trimmed.isEmpty || trimmed.startsWith('content://')) {
+        continue;
+      }
+      try {
+        final file = File(trimmed);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (error) {
+        debugPrint('[host-import] temp cleanup failed path=$trimmed error=$error');
       }
     }
   }
@@ -7198,4 +7493,16 @@ class _TileShell extends StatelessWidget {
       ),
     );
   }
+}
+
+class _HostImportSelection {
+  final ImportSourceKind sourceKind;
+  final List<MediaItem> items;
+  final List<String> cleanupPaths;
+
+  const _HostImportSelection({
+    required this.sourceKind,
+    required this.items,
+    this.cleanupPaths = const <String>[],
+  });
 }

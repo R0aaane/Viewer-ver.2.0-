@@ -1,14 +1,14 @@
-import 'dart:io' show File, Platform;
+import 'dart:io' show Directory, File, Platform;
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:docman/docman.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:image/image.dart' as im;
+import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
-import '../media_file_types.dart';
 import '../models/mediaItem.dart';
 import '../repository/mediaRepository.dart';
 
@@ -115,6 +115,42 @@ class PdfExportService {
     );
   }
 
+  static Future<PdfExportResult> exportFolderToTemporaryPdf(
+    MediaRepository repo,
+    List<MediaItem> items,
+    String fileName, {
+    double longSidePt = 842.0,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final safeName = _sanitizePdfName(fileName);
+    final pdfBytes = await _buildPdfBytesIsolate(
+      repo,
+      items,
+      longSidePt: longSidePt,
+      onProgress: onProgress,
+    );
+
+    final tempDir = await getTemporaryDirectory();
+    final exportDir = Directory(
+      '${tempDir.path}${Platform.pathSeparator}host_import_pdf',
+    );
+    await exportDir.create(recursive: true);
+
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final out = File(
+      '${exportDir.path}${Platform.pathSeparator}${timestamp}_$safeName.pdf',
+    );
+    await out.writeAsBytes(pdfBytes, flush: true);
+
+    return PdfExportResult(
+      savedName: out.uri.pathSegments.isNotEmpty
+          ? out.uri.pathSegments.last
+          : '$safeName.pdf',
+      savedPath: out.path,
+      savedFolderRaw: out.parent.path,
+    );
+  }
+
   static String sanitizePdfName(String name) => _sanitizePdfName(name);
 
   static String _sanitizePdfName(String name) {
@@ -138,9 +174,7 @@ class PdfExportService {
     try {
       for (int i = 0; i < total; i++) {
         final item = targets[i];
-        final bytes = MediaFileTypes.extensionOf(item.displayName) == '.avif'
-            ? await repo.renderPageBytes(item, 1, maxWidth: 2800)
-            : await repo.readBytes(item);
+        final bytes = await repo.readPdfSourceBytes(item, maxWidth: 2800);
         await worker.addImage(TransferableTypedData.fromList([bytes]));
         onProgress?.call(i + 1, total);
 
@@ -175,8 +209,11 @@ class _PdfWorker {
   Future<void> addImage(TransferableTypedData data) async {
     final rp = ReceivePort();
     _sendPort.send({'cmd': 'add', 'reply': rp.sendPort, 'data': data});
-    await rp.first;
+    final message = await rp.first;
     rp.close();
+    if (message is Map && message['error'] is String) {
+      throw Exception(message['error'] as String);
+    }
   }
 
   Future<Uint8List> save() async {
@@ -213,43 +250,52 @@ void _pdfIsolateEntry(_IsolateInit init) {
 
     if (cmd == 'add') {
       final SendPort reply = msg['reply'] as SendPort;
-      final TransferableTypedData ttd = msg['data'] as TransferableTypedData;
-      final bytes = ttd.materialize().asUint8List();
+      try {
+        final TransferableTypedData ttd = msg['data'] as TransferableTypedData;
+        final bytes = ttd.materialize().asUint8List();
 
-      final decoded = im.decodeImage(bytes);
-      if (decoded == null || decoded.width <= 0 || decoded.height <= 0) {
-        reply.send(true);
-        return;
-      }
+        final decoded = im.decodeImage(bytes);
+        if (decoded == null || decoded.width <= 0 || decoded.height <= 0) {
+          reply.send(true);
+          return;
+        }
 
-      final w = decoded.width.toDouble();
-      final h = decoded.height.toDouble();
+        final w = decoded.width.toDouble();
+        final h = decoded.height.toDouble();
 
-      final bool landscape = w >= h;
-      final double pageW =
-          landscape ? init.longSidePt : init.longSidePt * (w / h);
-      final double pageH =
-          landscape ? init.longSidePt * (h / w) : init.longSidePt;
+        final bool landscape = w >= h;
+        final double pageW =
+            landscape ? init.longSidePt : init.longSidePt * (w / h);
+        final double pageH =
+            landscape ? init.longSidePt * (h / w) : init.longSidePt;
 
-      final img = pw.MemoryImage(bytes);
+        // Re-encode to PNG so the PDF layer receives a format it can embed
+        // reliably even when the source image came from WebP/AVIF/etc.
+        final imageBytes = Uint8List.fromList(im.encodePng(decoded));
+        final img = pw.MemoryImage(imageBytes);
 
-      pdf.addPage(
-        pw.Page(
-          pageFormat: PdfPageFormat(pageW, pageH),
-          margin: pw.EdgeInsets.zero,
-          build: (_) => pw.FullPage(
-            ignoreMargins: true,
-            child: pw.Image(
-              img,
-              width: pageW,
-              height: pageH,
-              fit: pw.BoxFit.contain,
+        pdf.addPage(
+          pw.Page(
+            pageFormat: PdfPageFormat(pageW, pageH),
+            margin: pw.EdgeInsets.zero,
+            build: (_) => pw.FullPage(
+              ignoreMargins: true,
+              child: pw.Image(
+                img,
+                width: pageW,
+                height: pageH,
+                fit: pw.BoxFit.contain,
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      reply.send(true);
+        reply.send(true);
+      } catch (error, stackTrace) {
+        reply.send({
+          'error': 'PDF 変換中に画像を追加できませんでした: $error\n$stackTrace',
+        });
+      }
       return;
     }
 

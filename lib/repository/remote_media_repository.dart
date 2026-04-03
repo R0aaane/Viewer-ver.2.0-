@@ -693,6 +693,20 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> pickExternalMediaFolderItems({
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final sourceFolder = await _localPickerRepository.pickFolder();
+    if (sourceFolder == null) {
+      return const <MediaItem>[];
+    }
+    return _localPickerRepository.listMediaRecursiveFiles(
+      sourceFolder,
+      onProgress: onProgress,
+    );
+  }
+
+  @override
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) {
     return _localPickerRepository.resolveExternalItems(rawItems);
   }
@@ -1182,6 +1196,24 @@ class RemoteMediaRepository implements MediaRepository {
     return file.readAsBytes();
   }
 
+  @override
+  Future<Uint8List> readPdfSourceBytes(
+    MediaItem item, {
+    int maxWidth = 2800,
+  }) async {
+    if (await _isLocalExternalItem(item)) {
+      return _localPickerRepository.readPdfSourceBytes(
+        item,
+        maxWidth: maxWidth,
+      );
+    }
+    final ext = MediaFileTypes.extensionOf(item.displayName);
+    if (ext == '.avif') {
+      return renderPageBytes(item, 1, maxWidth: maxWidth);
+    }
+    return readBytes(item);
+  }
+
   Future<Uint8List> _readDisplayImageBytes(
     MediaItem item, {
     required int maxWidth,
@@ -1220,6 +1252,21 @@ class RemoteMediaRepository implements MediaRepository {
 
     _previewInFlight[cacheFile.path] = future;
     return future;
+  }
+
+  Future<bool> _isLocalExternalItem(MediaItem item) async {
+    final rawId = item.id.trim();
+    if (rawId.isEmpty) {
+      return false;
+    }
+    if (rawId.startsWith('content://') || rawId.startsWith('file://')) {
+      return true;
+    }
+    try {
+      return File(rawId).exists();
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -2393,6 +2440,15 @@ class SwitchingMediaRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> pickExternalMediaFolderItems({
+    void Function(int processed, int total)? onProgress,
+  }) {
+    return _activeRepository.pickExternalMediaFolderItems(
+      onProgress: onProgress,
+    );
+  }
+
+  @override
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) {
     return _activeRepository.resolveExternalItems(rawItems);
   }
@@ -2445,6 +2501,17 @@ class SwitchingMediaRepository implements MediaRepository {
   @override
   Future<Uint8List> readBytes(MediaItem item) =>
       _activeRepository.readBytes(item);
+
+  @override
+  Future<Uint8List> readPdfSourceBytes(
+    MediaItem item, {
+    int maxWidth = 2800,
+  }) {
+    return _activeRepository.readPdfSourceBytes(
+      item,
+      maxWidth: maxWidth,
+    );
+  }
 
   @override
   Future<int> getPageCount(MediaItem item) =>

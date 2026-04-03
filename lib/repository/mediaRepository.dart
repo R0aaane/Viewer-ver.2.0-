@@ -417,6 +417,9 @@ abstract class MediaRepository {
     bool includeImages = true,
     bool includePdf = true,
   });
+  Future<List<MediaItem>> pickExternalMediaFolderItems({
+    void Function(int processed, int total)? onProgress,
+  });
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems);
 
   Future<FolderHandle> getAppLibraryFolder();
@@ -445,6 +448,11 @@ abstract class MediaRepository {
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360});
 
   Future<Uint8List> readBytes(MediaItem item);
+
+  Future<Uint8List> readPdfSourceBytes(
+    MediaItem item, {
+    int maxWidth = 2800,
+  });
 
   Future<int> getPageCount(MediaItem item);
 

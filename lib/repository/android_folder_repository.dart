@@ -487,6 +487,17 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> pickExternalMediaFolderItems({
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final sourceFolder = await pickFolder();
+    if (sourceFolder == null) {
+      return const <MediaItem>[];
+    }
+    return listMediaRecursiveFiles(sourceFolder, onProgress: onProgress);
+  }
+
+  @override
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
     final items = <MediaItem>[];
     final normalized = ImportSourceNormalizer.normalizeRawInputs(rawItems);
@@ -817,10 +828,12 @@ class AndroidFolderRepository implements MediaRepository {
     // Count recursively only when progress reporting is enabled.
     final total = (onProgress == null)
         ? 0
-        : await _docmanSync(() => _safCountMedia(folder.raw));
+        : await _safCountMedia(folder.raw);
 
-    final entries = await _docmanSync(
-      () => _safListRecursive(folder.raw, onProgress: onProgress, total: total),
+    final entries = await _safListRecursive(
+      folder.raw,
+      onProgress: onProgress,
+      total: total,
     );
 
     // Convert file entries into MediaItem instances.
@@ -973,6 +986,17 @@ class AndroidFolderRepository implements MediaRepository {
       );
       rethrow;
     }
+  }
+
+  @override
+  Future<Uint8List> readPdfSourceBytes(
+    MediaItem item, {
+    int maxWidth = 2800,
+  }) async {
+    if (_lowerExt(item.displayName) == '.avif' || _lowerExt(item.id) == '.avif') {
+      return renderPageBytes(item, 1, maxWidth: maxWidth);
+    }
+    return readBytes(item);
   }
 
   @override

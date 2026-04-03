@@ -232,6 +232,17 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> pickExternalMediaFolderItems({
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final sourceFolder = await pickFolder();
+    if (sourceFolder == null) {
+      return const <MediaItem>[];
+    }
+    return listMediaRecursiveFiles(sourceFolder, onProgress: onProgress);
+  }
+
+  @override
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
     final items = <MediaItem>[];
     final normalized = ImportSourceNormalizer.normalizeRawInputs(rawItems);
@@ -638,6 +649,17 @@ class WindowsFolderRepository implements MediaRepository {
       );
       rethrow;
     }
+  }
+
+  @override
+  Future<Uint8List> readPdfSourceBytes(
+    MediaItem item, {
+    int maxWidth = 2800,
+  }) async {
+    if (_isAvifPath(item.id) || _isAvifPath(item.displayName)) {
+      return renderPageBytes(item, 1, maxWidth: maxWidth);
+    }
+    return readBytes(item);
   }
 
   bool _isAvifPath(String path) => _lowerExt(path) == '.avif';

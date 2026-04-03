@@ -866,6 +866,11 @@ class _StubMediaRepository implements MediaRepository {
   }) async => const <MediaItem>[];
 
   @override
+  Future<List<MediaItem>> pickExternalMediaFolderItems({
+    void Function(int processed, int total)? onProgress,
+  }) async => const <MediaItem>[];
+
+  @override
   Future<List<MediaItem>> resolveExternalItems(List<String> rawItems) async {
     return const <MediaItem>[];
   }
@@ -903,6 +908,12 @@ class _StubMediaRepository implements MediaRepository {
 
   @override
   Future<Uint8List> readBytes(MediaItem item) async => Uint8List(0);
+
+  @override
+  Future<Uint8List> readPdfSourceBytes(
+    MediaItem item, {
+    int maxWidth = 2800,
+  }) async => Uint8List(0);
 
   @override
   Future<int> getPageCount(MediaItem item) async => 1;
