@@ -77,16 +77,66 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   MetadataSettings _resolveInitialSettings(MetadataSettings settings) {
     final apiFromUri = Uri.base.queryParameters['api']?.trim();
     final tokenFromUri = Uri.base.queryParameters['token']?.trim();
-    if ((apiFromUri == null || apiFromUri.isEmpty) &&
-        (tokenFromUri == null || tokenFromUri.isEmpty)) {
-      return settings;
-    }
+    final fallbackApiBaseUrl = _resolveInitialApiBaseUrl(
+      settings,
+      apiFromUri: apiFromUri,
+    );
     return settings.copyWith(
       appMode: AppMode.client,
-      clientApiBaseUrl: apiFromUri ?? settings.clientApiBaseUrl,
+      clientApiBaseUrl: apiFromUri ?? fallbackApiBaseUrl,
       authToken: tokenFromUri ?? settings.authToken,
       clearAuthToken: tokenFromUri != null && tokenFromUri.isEmpty,
     );
+  }
+
+  String _resolveInitialApiBaseUrl(
+    MetadataSettings settings, {
+    required String? apiFromUri,
+  }) {
+    final apiFromQuery = apiFromUri?.trim();
+    if (apiFromQuery != null && apiFromQuery.isNotEmpty) {
+      return apiFromQuery;
+    }
+
+    final storedApi = settings.clientApiBaseUrl.trim();
+    if (storedApi.isNotEmpty) {
+      return storedApi;
+    }
+
+    final inferredApi = _inferApiBaseUrlFromCurrentLocation(settings.hostPort);
+    if (inferredApi != null && inferredApi.isNotEmpty) {
+      return inferredApi;
+    }
+
+    if (settings.isHostMode) {
+      return settings.hostLoopbackApiBaseUrl;
+    }
+
+    return '';
+  }
+
+  String? _inferApiBaseUrlFromCurrentLocation(int port) {
+    final currentUri = Uri.base;
+    final scheme = currentUri.scheme.trim().toLowerCase();
+    if (scheme != 'http' && scheme != 'https') {
+      return null;
+    }
+
+    final host = currentUri.host.trim();
+    if (host.isEmpty) {
+      return null;
+    }
+
+    final normalizedHost = _isLoopbackHost(host) ? '127.0.0.1' : host;
+    return Uri(scheme: scheme, host: normalizedHost, port: port).toString();
+  }
+
+  bool _isLoopbackHost(String host) {
+    final lowered = host.trim().toLowerCase();
+    return lowered == 'localhost' ||
+        lowered == '127.0.0.1' ||
+        lowered == '::1' ||
+        lowered == '[::1]';
   }
 
   Future<void> _saveAndConnect({bool showSuccessMessage = true}) async {
