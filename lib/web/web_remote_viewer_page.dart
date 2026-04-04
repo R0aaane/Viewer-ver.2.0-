@@ -1492,8 +1492,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _loading = true;
       _loadError = null;
       _pageFutureCache.clear();
+      _page = 1;
+      _totalPages = 1;
       _leftFuture = null;
       _rightFuture = null;
+      _syncPageFutures();
     });
 
     try {
@@ -1513,11 +1516,13 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       });
     } catch (error) {
       if (!mounted) return;
-      setState(() {
-        _loadError = error;
-        _leftFuture = null;
-        _rightFuture = null;
-      });
+      if (_leftFuture == null) {
+        setState(() {
+          _loadError = error;
+          _leftFuture = null;
+          _rightFuture = null;
+        });
+      }
     } finally {
       if (mounted) {
         setState(() {
