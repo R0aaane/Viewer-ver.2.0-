@@ -797,6 +797,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                     final entry = _entries[index];
                     final selected = _selectedEntry?.stableId == entry.stableId;
                     return _EntryCard(
+                      key: ValueKey<String>(entry.stableId),
                       client: _client,
                       entry: entry,
                       selected: selected,
@@ -1042,6 +1043,49 @@ class _BrowserHeader extends StatelessWidget {
   }
 }
 
+String _formatBrowseDateTime(DateTime? value) {
+  if (value == null) {
+    return 'N/A';
+  }
+  final local = value.toLocal();
+  final two = (int number) => number.toString().padLeft(2, '0');
+  return '${local.year}/${two(local.month)}/${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}';
+}
+
+String _formatBrowseBytes(int? bytes) {
+  if (bytes == null) {
+    return 'N/A';
+  }
+  if (bytes < 1024) {
+    return '$bytes B';
+  }
+  const units = <String>['KB', 'MB', 'GB', 'TB'];
+  var value = bytes.toDouble();
+  var index = -1;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  final digits = value >= 100 ? 0 : 1;
+  return '${value.toStringAsFixed(digits)} ${units[index]}';
+}
+
+Color _entryAccentColor(WebRemoteEntry entry) {
+  if (entry.isFolder) {
+    return const Color(0xFF94A7BD);
+  }
+  const palette = <Color>[
+    Color(0xFFD0A2A5),
+    Color(0xFFD4B18E),
+    Color(0xFFBF97C9),
+    Color(0xFF96A9CC),
+    Color(0xFF95B69A),
+  ];
+  final index = (entry.stableId.hashCode & 0x7fffffff) % palette.length;
+  return palette[index];
+}
+
 class _EntryCard extends StatelessWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
@@ -1050,6 +1094,7 @@ class _EntryCard extends StatelessWidget {
   final String Function(String raw) folderName;
 
   const _EntryCard({
+    super.key,
     required this.client,
     required this.entry,
     required this.selected,
@@ -1059,59 +1104,87 @@ class _EntryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 760;
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFF1E3F69) : const Color(0xFF171A1F),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: selected ? const Color(0xFF74B4FF) : Colors.white12,
-          ),
+    final compact = MediaQuery.sizeOf(context).width < 920;
+    final accent = _entryAccentColor(entry);
+    final borderColor =
+        selected ? Color.lerp(accent, const Color(0xFF4B2B33), 0.30)! : accent.withOpacity(0.58);
+    final backgroundColor =
+        selected ? const Color(0xFFFDF7F4) : const Color(0xFFF7F0EC);
+
+    final preview = _EntryThumbnailStack(
+      client: client,
+      entry: entry,
+      accent: accent,
+      compact: compact,
+    );
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _EntryTitleBand(
+          entry: entry,
+          accent: accent,
+          selected: selected,
         ),
-        child:
-            compact
-                ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    _EntryHeader(entry: entry, folderName: folderName),
-                    const SizedBox(height: 12),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        _RemoteThumbnail(client: client, entry: entry),
-                        const SizedBox(width: 12),
-                        Expanded(child: _EntryMeta(entry: entry)),
-                      ],
-                    ),
-                  ],
-                )
-                : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    _RemoteThumbnail(client: client, entry: entry),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          _EntryHeader(entry: entry, folderName: folderName),
-                          const SizedBox(height: 12),
-                          _EntryMeta(entry: entry),
-                        ],
+        const SizedBox(height: 8),
+        _EntryMetadataSummary(
+          client: client,
+          entry: entry,
+          accent: accent,
+          folderName: folderName,
+        ),
+      ],
+    );
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: borderColor, width: selected ? 1.6 : 1),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: accent.withOpacity(selected ? 0.18 : 0.10),
+                blurRadius: selected ? 24 : 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child:
+              compact
+                  ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: preview,
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Icon(Icons.chevron_right, color: Colors.white60),
-                    ),
-                  ],
-                ),
+                      const SizedBox(height: 16),
+                      details,
+                    ],
+                  )
+                  : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      preview,
+                      const SizedBox(width: 22),
+                      Expanded(child: details),
+                      const SizedBox(width: 12),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Icon(
+                          entry.isFolder ? Icons.arrow_forward : Icons.chevron_right,
+                          color: const Color(0xFF6E5354),
+                        ),
+                      ),
+                    ],
+                  ),
+        ),
       ),
     );
   }
@@ -1257,6 +1330,637 @@ class _EntryMeta extends StatelessWidget {
         _row('更新', _formatDateTime(entry.modifiedAt)),
         _row('サイズ', _formatBytes(entry.sizeBytes)),
       ],
+    );
+  }
+}
+
+class _EntryTitleBand extends StatelessWidget {
+  final WebRemoteEntry entry;
+  final Color accent;
+  final bool selected;
+
+  const _EntryTitleBand({
+    required this.entry,
+    required this.accent,
+    required this.selected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: selected ? accent : accent.withOpacity(0.84),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        entry.displayName,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: Color(0xFF362324),
+          fontSize: 28,
+          fontWeight: FontWeight.w800,
+          height: 1.04,
+        ),
+      ),
+    );
+  }
+}
+
+class _EntryThumbnailStack extends StatelessWidget {
+  final WebRemoteApiClient? client;
+  final WebRemoteEntry entry;
+  final Color accent;
+  final bool compact;
+
+  const _EntryThumbnailStack({
+    required this.client,
+    required this.entry,
+    required this.accent,
+    required this.compact,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final width = compact ? 206.0 : 250.0;
+    final height = compact ? 230.0 : 280.0;
+    final thumbWidth = compact ? 134.0 : 164.0;
+    final thumbHeight = compact ? 188.0 : 228.0;
+
+    Widget panel({
+      required double left,
+      required double top,
+      required double angle,
+      required Color color,
+    }) {
+      return Positioned(
+        left: left,
+        top: top,
+        child: Transform.rotate(
+          angle: angle,
+          child: Container(
+            width: thumbWidth,
+            height: thumbHeight,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: <Widget>[
+          panel(
+            left: 18,
+            top: 18,
+            angle: -0.06,
+            color: const Color(0xFF2A2734),
+          ),
+          panel(
+            left: 48,
+            top: 12,
+            angle: 0.03,
+            color: const Color(0xFF242230),
+          ),
+          panel(
+            left: 78,
+            top: 6,
+            angle: -0.02,
+            color: const Color(0xFF1D1B29),
+          ),
+          Positioned(
+            left: 84,
+            top: 38,
+            child: _RemoteThumbnail(
+              client: client,
+              entry: entry,
+              width: thumbWidth,
+              height: thumbHeight,
+              borderRadius: 10,
+              backgroundColor: const Color(0xFF151721),
+            ),
+          ),
+          Positioned(
+            left: 10,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              height: 18,
+              decoration: BoxDecoration(
+                color: accent.withOpacity(0.30),
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EntryMetadataSummary extends StatefulWidget {
+  final WebRemoteApiClient? client;
+  final WebRemoteEntry entry;
+  final Color accent;
+  final String Function(String raw) folderName;
+
+  const _EntryMetadataSummary({
+    required this.client,
+    required this.entry,
+    required this.accent,
+    required this.folderName,
+  });
+
+  @override
+  State<_EntryMetadataSummary> createState() => _EntryMetadataSummaryState();
+}
+
+class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
+  late Future<_EntrySummaryData> _summaryFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _summaryFuture = _loadSummary();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EntryMetadataSummary oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.stableId != widget.entry.stableId ||
+        oldWidget.client != widget.client) {
+      _summaryFuture = _loadSummary();
+    }
+  }
+
+  Future<_EntrySummaryData> _loadSummary() async {
+    if (widget.entry.isFolder ||
+        widget.client == null ||
+        widget.entry.mediaId == null) {
+      return _EntrySummaryData.forFolder(widget.entry);
+    }
+
+    final mediaId = widget.entry.mediaId!;
+    final metaFuture = widget.client!.fetchMediaMeta(mediaId);
+    final tagsFuture = widget.client!.fetchItemTags(mediaId);
+    final meta = await metaFuture;
+    final tags = await tagsFuture;
+    return _EntrySummaryData.fromRemoteData(
+      entry: widget.entry,
+      meta: meta,
+      tags: tags,
+    );
+  }
+
+  Widget _badge(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4E3DE),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: widget.accent.withOpacity(0.36)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(icon, size: 15, color: const Color(0xFF654A4B)),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF4C3838),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(String label, String value, {int maxLines = 1}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(
+            width: 86,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF5D4747),
+                fontWeight: FontWeight.w800,
+                fontSize: 15,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              maxLines: maxLines,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF3E2E2E),
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tag(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF908E95),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+
+  Widget _loadingBody(String folderLabel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: widget.accent.withOpacity(0.36),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Text(
+            'Loading metadata...',
+            style: TextStyle(
+              color: Color(0xFF4F393A),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            _badge(
+              widget.entry.isFolder
+                  ? Icons.folder_outlined
+                  : widget.entry.isPdf
+                  ? Icons.picture_as_pdf_outlined
+                  : Icons.image_outlined,
+              widget.entry.isFolder
+                  ? 'Folder'
+                  : widget.entry.isPdf
+                  ? 'PDF'
+                  : 'Image',
+            ),
+            _badge(Icons.folder_open_outlined, folderLabel),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _errorBody(String folderLabel, Object error) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: widget.accent.withOpacity(0.36),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Text(
+            'Failed to load metadata',
+            style: TextStyle(
+              color: Color(0xFF4F393A),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            _badge(
+              widget.entry.isPdf ? Icons.picture_as_pdf_outlined : Icons.image_outlined,
+              widget.entry.isPdf ? 'PDF' : 'Image',
+            ),
+            _badge(Icons.folder_open_outlined, folderLabel),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Text(
+          error.toString(),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: Colors.red.shade400, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+
+  Widget _contentBody(_EntrySummaryData data) {
+    final folderLabel = widget.folderName(widget.entry.folderRaw);
+    final badges = <Widget>[
+      _badge(
+        widget.entry.isFolder
+            ? Icons.folder_outlined
+            : widget.entry.isPdf
+            ? Icons.picture_as_pdf_outlined
+            : Icons.image_outlined,
+        data.mediaType,
+      ),
+      _badge(Icons.folder_open_outlined, folderLabel),
+    ];
+    if (data.pageInfo != null) {
+      badges.add(_badge(Icons.menu_book_outlined, data.pageInfo!));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: widget.accent.withOpacity(0.36),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Text(
+            data.subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF4F393A),
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(spacing: 8, runSpacing: 8, children: badges),
+        const SizedBox(height: 14),
+        if (data.isFolder) ...<Widget>[
+          _row('Location', data.location, maxLines: 2),
+          _row('Updated', data.updatedAt),
+          const SizedBox(height: 8),
+          const Text(
+            'Tap to open this folder',
+            style: TextStyle(
+              color: Color(0xFF6E5959),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ] else ...<Widget>[
+          _row('Creator', data.artist),
+          _row('Series', data.series),
+          _row('Type', data.mediaType),
+          _row('Language', data.language),
+          _row('Saved In', data.location, maxLines: 2),
+          const SizedBox(height: 8),
+          const Text(
+            'Tags',
+            style: TextStyle(
+              color: Color(0xFF5D4747),
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (data.tags.isEmpty)
+            const Text(
+              'No tags yet',
+              style: TextStyle(
+                color: Color(0xFF6E5959),
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                for (final tagLabel in data.tags) _tag(tagLabel),
+                if (data.extraTagCount > 0) _tag('+${data.extraTagCount}'),
+              ],
+            ),
+        ],
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 14,
+          runSpacing: 8,
+          children: <Widget>[
+            Text(
+              data.updatedAt,
+              style: TextStyle(
+                color: Color.lerp(widget.accent, const Color(0xFF7D5858), 0.20),
+                fontWeight: FontWeight.w800,
+                fontSize: 15,
+              ),
+            ),
+            Text(
+              data.sizeLabel,
+              style: const TextStyle(
+                color: Color(0xFF6E5959),
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final folderLabel = widget.folderName(widget.entry.folderRaw);
+    return FutureBuilder<_EntrySummaryData>(
+      future: _summaryFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _loadingBody(folderLabel);
+        }
+        if (snapshot.hasError) {
+          return _errorBody(folderLabel, snapshot.error!);
+        }
+        final data = snapshot.data ?? _EntrySummaryData.forFolder(widget.entry);
+        return _contentBody(data);
+      },
+    );
+  }
+}
+
+class _EntrySummaryData {
+  final bool isFolder;
+  final String subtitle;
+  final String artist;
+  final String series;
+  final String mediaType;
+  final String language;
+  final String location;
+  final String updatedAt;
+  final String sizeLabel;
+  final String? pageInfo;
+  final List<String> tags;
+  final int extraTagCount;
+
+  const _EntrySummaryData({
+    required this.isFolder,
+    required this.subtitle,
+    required this.artist,
+    required this.series,
+    required this.mediaType,
+    required this.language,
+    required this.location,
+    required this.updatedAt,
+    required this.sizeLabel,
+    required this.pageInfo,
+    required this.tags,
+    required this.extraTagCount,
+  });
+
+  factory _EntrySummaryData.forFolder(WebRemoteEntry entry) {
+    final location = (entry.fullPath ?? entry.entryId).trim();
+    return _EntrySummaryData(
+      isFolder: true,
+      subtitle: 'Open folder',
+      artist: 'N/A',
+      series: 'N/A',
+      mediaType: 'Folder',
+      language: 'N/A',
+      location: location.isEmpty ? entry.folderRaw : location,
+      updatedAt: _formatBrowseDateTime(entry.modifiedAt),
+      sizeLabel: '-',
+      pageInfo: null,
+      tags: const <String>[],
+      extraTagCount: 0,
+    );
+  }
+
+  factory _EntrySummaryData.fromRemoteData({
+    required WebRemoteEntry entry,
+    required WebRemoteMediaMeta meta,
+    required List<Tag> tags,
+  }) {
+    List<String> valuesFor(TagCategory category) {
+      final seen = <String>{};
+      final out = <String>[];
+      for (final tag in tags) {
+        if (tag.category != category) {
+          continue;
+        }
+        final value = tag.name.trim();
+        if (value.isEmpty || !seen.add(value.toLowerCase())) {
+          continue;
+        }
+        out.add(value);
+      }
+      return out;
+    }
+
+    String joinOrFallback(List<String> values, {String fallback = 'N/A'}) {
+      if (values.isEmpty) {
+        return fallback;
+      }
+      return values.take(2).join(' / ');
+    }
+
+    String resolveLanguage(List<Tag> values) {
+      final normalized = values
+          .map((tag) => tag.name.trim().toLowerCase())
+          .where((name) => name.isNotEmpty)
+          .toList(growable: false);
+      bool hasLanguage(Iterable<String> keywords) {
+        return normalized.any(
+          (name) => keywords.any((keyword) => name.contains(keyword)),
+        );
+      }
+
+      if (hasLanguage(const <String>['japanese'])) {
+        return 'Japanese';
+      }
+      if (hasLanguage(const <String>['english'])) {
+        return 'English';
+      }
+      if (hasLanguage(const <String>['chinese'])) {
+        return 'Chinese';
+      }
+      if (hasLanguage(const <String>['korean'])) {
+        return 'Korean';
+      }
+      return 'N/A';
+    }
+
+    final artists = valuesFor(TagCategory.artist);
+    final seriesValues = valuesFor(TagCategory.series);
+    final mediaTypeValues = valuesFor(TagCategory.mediaType);
+    final tagCandidates = <String>[];
+    final seenTags = <String>{};
+    for (final tag in tags) {
+      if (tag.category == TagCategory.artist ||
+          tag.category == TagCategory.series ||
+          tag.category == TagCategory.mediaType) {
+        continue;
+      }
+      final label = tag.name.trim();
+      if (label.isEmpty || !seenTags.add(label.toLowerCase())) {
+        continue;
+      }
+      tagCandidates.add(label);
+    }
+
+    final subtitle =
+        artists.firstOrNull ??
+        seriesValues.firstOrNull ??
+        (entry.folderRaw.trim().isEmpty ? entry.displayName : entry.folderRaw);
+    final pageInfo =
+        entry.isPdf && meta.pageCount != null && meta.pageCount! > 0
+            ? '${meta.pageCount} pages'
+            : null;
+
+    return _EntrySummaryData(
+      isFolder: false,
+      subtitle: subtitle,
+      artist: joinOrFallback(artists),
+      series: joinOrFallback(seriesValues),
+      mediaType:
+          mediaTypeValues.firstOrNull ??
+          (entry.isPdf ? 'PDF' : entry.isImage ? 'Image' : 'Media'),
+      language: resolveLanguage(tags),
+      location: entry.folderRaw,
+      updatedAt: _formatBrowseDateTime(meta.modifiedAt ?? entry.modifiedAt),
+      sizeLabel: _formatBrowseBytes(meta.sizeBytes ?? entry.sizeBytes),
+      pageInfo: pageInfo,
+      tags: tagCandidates.take(9).toList(growable: false),
+      extraTagCount: tagCandidates.length > 9 ? tagCandidates.length - 9 : 0,
     );
   }
 }
@@ -2523,10 +3227,19 @@ class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
 class _RemoteThumbnail extends StatefulWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
+  final double width;
+  final double height;
+  final double borderRadius;
+  final Color backgroundColor;
 
   const _RemoteThumbnail({
+    super.key,
     required this.client,
     required this.entry,
+    this.width = 132,
+    this.height = 184,
+    this.borderRadius = 14,
+    this.backgroundColor = const Color(0xFF0F141C),
   });
 
   @override
@@ -2559,19 +3272,19 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
     }
     _future = client.fetchThumbnail(
       widget.entry.mediaId!,
-      width: 240,
-      height: 320,
+      width: (widget.width * 1.8).round(),
+      height: (widget.height * 1.8).round(),
       page: widget.entry.isPdf ? 1 : null,
     );
   }
 
   Widget _shell(Widget child) {
     return Container(
-      width: 132,
-      height: 184,
+      width: widget.width,
+      height: widget.height,
       decoration: BoxDecoration(
-        color: const Color(0xFF0F141C),
-        borderRadius: BorderRadius.circular(14),
+        color: widget.backgroundColor,
+        borderRadius: BorderRadius.circular(widget.borderRadius),
         border: Border.all(color: Colors.white12),
       ),
       alignment: Alignment.center,
@@ -2621,11 +3334,11 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
           );
         }
         return ClipRRect(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(widget.borderRadius),
           child: Image.memory(
             bytes,
-            width: 132,
-            height: 184,
+            width: widget.width,
+            height: widget.height,
             fit: BoxFit.cover,
             gaplessPlayback: true,
           ),

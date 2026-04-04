@@ -3,12 +3,164 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 import 'dart:typed_data';
 
 import 'package:pdfx/src/renderer/web/pdfjs.dart';
 
 import '../repository/mediaRepository.dart';
 import '../models/tag.dart';
+
+const String _pdfJsScriptId = 'pdfjs-runtime-loader';
+const String _pdfJsLibraryUrl =
+    'https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js';
+const String _pdfJsWorkerUrl =
+    'https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
+
+Future<void>? _pdfJsLoadFuture;
+
+Object? _pdfJsLibObject() {
+  try {
+    return js_util.getProperty<Object?>(html.window, 'pdfjsLib');
+  } catch (_) {
+    return null;
+  }
+}
+
+bool _pdfJsHasGetDocument(Object? lib) {
+  if (lib == null) {
+    return false;
+  }
+  try {
+    return js_util.getProperty<Object?>(lib, 'getDocument') != null;
+  } catch (_) {
+    return false;
+  }
+}
+
+void _configurePdfJsWorkerSource(Object? lib) {
+  if (lib == null) {
+    return;
+  }
+  try {
+    final options = js_util.getProperty<Object?>(lib, 'GlobalWorkerOptions');
+    if (options == null) {
+      return;
+    }
+    final current = js_util.getProperty<Object?>(options, 'workerSrc');
+    final currentText = current?.toString().trim() ?? '';
+    if (currentText.isEmpty) {
+      js_util.setProperty(options, 'workerSrc', _pdfJsWorkerUrl);
+    }
+  } catch (_) {
+    // Ignore worker configuration failures and let the caller use its fallback.
+  }
+}
+
+Future<void> _ensurePdfJsReady() async {
+  final existing = _pdfJsLibObject();
+  if (_pdfJsHasGetDocument(existing)) {
+    _configurePdfJsWorkerSource(existing);
+    return;
+  }
+
+  final inFlight = _pdfJsLoadFuture;
+  if (inFlight != null) {
+    await inFlight;
+    return;
+  }
+
+  final future = _loadPdfJsScript();
+  _pdfJsLoadFuture = future;
+  try {
+    await future;
+  } catch (_) {
+    _pdfJsLoadFuture = null;
+    rethrow;
+  }
+}
+
+Future<void> _loadPdfJsScript() async {
+  final alreadyLoaded = _pdfJsLibObject();
+  if (_pdfJsHasGetDocument(alreadyLoaded)) {
+    _configurePdfJsWorkerSource(alreadyLoaded);
+    return;
+  }
+
+  final completer = Completer<void>();
+  StreamSubscription<html.Event>? loadSubscription;
+  StreamSubscription<html.Event>? errorSubscription;
+
+  void finishSuccessfully() {
+    if (completer.isCompleted) {
+      return;
+    }
+    final lib = _pdfJsLibObject();
+    if (!_pdfJsHasGetDocument(lib)) {
+      completer.completeError(
+        const WebRemoteException('PDF.js は読み込まれましたが初期化に失敗しました'),
+      );
+      return;
+    }
+    _configurePdfJsWorkerSource(lib);
+    completer.complete();
+  }
+
+  void finishWithError(Object error) {
+    if (completer.isCompleted) {
+      return;
+    }
+    completer.completeError(error);
+  }
+
+  try {
+    final existingElement = html.document.getElementById(_pdfJsScriptId);
+    final script =
+        existingElement is html.ScriptElement
+            ? existingElement
+            : html.ScriptElement()
+              ..id = _pdfJsScriptId
+              ..async = true
+              ..defer = true
+              ..crossOrigin = 'anonymous'
+              ..src = _pdfJsLibraryUrl;
+
+    loadSubscription = script.onLoad.listen((_) {
+      finishSuccessfully();
+    });
+    errorSubscription = script.onError.listen((_) {
+      finishWithError(
+        const WebRemoteException('PDF.js の読み込みに失敗しました'),
+      );
+    });
+
+    if (existingElement == null) {
+      final root = html.document.head ?? html.document.body;
+      if (root == null) {
+        finishWithError(
+          const WebRemoteException('PDF.js を追加する DOM を取得できませんでした'),
+        );
+      } else {
+        root.append(script);
+      }
+    }
+
+    // If another part of the page finished loading PDF.js before the listeners
+    // were attached, complete immediately.
+    if (_pdfJsHasGetDocument(_pdfJsLibObject())) {
+      finishSuccessfully();
+    }
+
+    await completer.future.timeout(
+      const Duration(seconds: 20),
+      onTimeout:
+          () => throw const WebRemoteException('PDF.js の読み込みがタイムアウトしました'),
+    );
+  } finally {
+    await loadSubscription?.cancel();
+    await errorSubscription?.cancel();
+  }
+}
 
 class WebRemoteException implements Exception {
   final String message;
@@ -573,6 +725,7 @@ class WebRemoteApiClient {
     }
 
     try {
+      await _ensurePdfJsReady();
       final bytes = Uint8List.fromList(await fetchImageDownload(mediaId));
       final document = await pdfjsGetDocumentFromData(bytes.buffer);
       try {

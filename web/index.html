@@ -39,28 +39,13 @@
 <body>
   <script>
     window.pdfRenderOptions = {
-      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/cmaps/',
+      cMapUrl: 'https://unpkg.com/pdfjs-dist@3.11.174/cmaps/',
       cMapPacked: true,
     };
 
-    // Keep Flutter booting even if pdf.js fails on older mobile Safari.
     window.pdfjsLib = window.pdfjsLib || {
       GlobalWorkerOptions: {},
     };
-  </script>
-  <script type="module">
-    (async () => {
-      try {
-        const pdfjsLib = await import(
-          'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/legacy/build/pdf.min.mjs'
-        );
-        window.pdfjsLib = pdfjsLib;
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-          'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/legacy/build/pdf.worker.min.mjs';
-      } catch (error) {
-        console.warn('pdf.js failed to load; continuing without early PDF support.', error);
-      }
-    })();
   </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
