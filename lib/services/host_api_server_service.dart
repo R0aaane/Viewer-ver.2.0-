@@ -113,6 +113,80 @@ class HostApiServerService extends ChangeNotifier {
 
   HostServerStatus get status => _status;
 
+  Future<String> resolveLibraryPath([MetadataSettings? settings]) async {
+    final resolvedSettings =
+        settings ?? await _settingsService.loadMetadataSettings();
+    final configuredPath = resolvedSettings.hostLibraryPath.trim();
+    if (configuredPath.isNotEmpty) {
+      return Directory(configuredPath).path;
+    }
+
+    final docsDir = await getApplicationDocumentsDirectory();
+    return Directory(
+      '${docsDir.path}${Platform.pathSeparator}library',
+    ).path;
+  }
+
+  Future<void> migrateLibrary({
+    required MetadataSettings fromSettings,
+    required MetadataSettings toSettings,
+  }) async {
+    if (!fromSettings.isHostMode || !toSettings.isHostMode) {
+      throw StateError('Library の移行はホストモードでのみ利用できます');
+    }
+
+    final sourcePath = await resolveLibraryPath(fromSettings);
+    final targetPath = await resolveLibraryPath(toSettings);
+    if (_pathsEqual(sourcePath, targetPath)) {
+      return;
+    }
+
+    await _validateLibraryMigrationTarget(
+      sourcePath: sourcePath,
+      targetPath: targetPath,
+    );
+
+    final sourceDir = Directory(sourcePath);
+    if (!await sourceDir.exists()) {
+      return;
+    }
+
+    final initialHealth = await _checkHealth(fromSettings);
+    final wasReachable =
+        initialHealth.state == MetadataConnectionState.connected;
+    var startedTemporarily = false;
+    final targetDir = Directory(targetPath);
+
+    try {
+      if (!wasReachable) {
+        if (_process != null) {
+          await stopServer();
+        }
+        await startServer();
+        final startedHealth = await _checkHealth(fromSettings);
+        if (startedHealth.state != MetadataConnectionState.connected) {
+          throw StateError(
+            _status.message.isNotEmpty ? _status.message : startedHealth.message,
+          );
+        }
+        startedTemporarily = true;
+      }
+
+      if (await targetDir.exists()) {
+        await targetDir.delete();
+      }
+
+      await _loopbackClient(fromSettings).renamePath(
+        oldPath: sourcePath,
+        newPath: targetPath,
+      );
+    } finally {
+      if (startedTemporarily) {
+        await stopServer();
+      }
+    }
+  }
+
   Future<void> refresh() async {
     final settings = await _settingsService.loadMetadataSettings();
     final networkInfo = await _loadNetworkInfo(settings.hostPort);
@@ -655,10 +729,7 @@ class HostApiServerService extends ChangeNotifier {
           .where((entry) => entry.trim().isNotEmpty && !entry.startsWith('content://')),
     ].toSet().toList(growable: true);
 
-    final configuredPath = settings.hostLibraryPath.trim();
-    final libraryPath = configuredPath.isNotEmpty
-        ? configuredPath
-        : '${(await getApplicationDocumentsDirectory()).path}${Platform.pathSeparator}library';
+    final libraryPath = await resolveLibraryPath(settings);
     final libraryDir = Directory(libraryPath);
     if (!await libraryDir.exists()) {
       await libraryDir.create(recursive: true);
@@ -754,6 +825,50 @@ class HostApiServerService extends ChangeNotifier {
   void _setStatus(HostServerStatus next) {
     _status = next.copyWith(updatedAt: DateTime.now());
     notifyListeners();
+  }
+
+  Future<void> _validateLibraryMigrationTarget({
+    required String sourcePath,
+    required String targetPath,
+  }) async {
+    if (_isChildPath(candidatePath: targetPath, parentPath: sourcePath)) {
+      throw StateError('移行先に現在の Library 配下は指定できません');
+    }
+
+    final targetDir = Directory(targetPath);
+    if (!await targetDir.exists()) {
+      return;
+    }
+
+    final entries = await targetDir.list(followLinks: false).take(1).toList();
+    if (entries.isNotEmpty) {
+      throw StateError('移行先は空フォルダ、または未作成パスを指定してください');
+    }
+  }
+
+  bool _pathsEqual(String left, String right) {
+    return _normalizePathForComparison(left) == _normalizePathForComparison(right);
+  }
+
+  bool _isChildPath({
+    required String candidatePath,
+    required String parentPath,
+  }) {
+    final candidate = _normalizePathForComparison(candidatePath);
+    final parent = _normalizePathForComparison(parentPath);
+    return candidate.startsWith('$parent\\');
+  }
+
+  String _normalizePathForComparison(String value) {
+    final trimmed = value.trim().replaceAll('/', '\\');
+    final isDriveRoot =
+        trimmed.length == 3 &&
+        trimmed.codeUnitAt(1) == 58 &&
+        trimmed.endsWith('\\');
+    if (trimmed.length > 3 && trimmed.endsWith('\\') && !isDriveRoot) {
+      return trimmed.substring(0, trimmed.length - 1).toLowerCase();
+    }
+    return trimmed.toLowerCase();
   }
 }
 

@@ -202,6 +202,19 @@ class RemoteTagApiClient {
     return moved;
   }
 
+  Future<void> renamePath({
+    required String oldPath,
+    required String newPath,
+  }) async {
+    await _postJson(
+      '/rename',
+      <String, dynamic>{
+        'oldPath': oldPath,
+        'newPath': newPath,
+      },
+    );
+  }
+
   Future<void> notifyRename({
     required MediaItem beforeItem,
     required MediaItem afterItem,

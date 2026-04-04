@@ -35,12 +35,15 @@ class MetadataSettingsDialog extends StatefulWidget {
 }
 
 class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
+  late MetadataSettings _initialSettings;
   late AppMode _mode;
   late TextEditingController _clientUrlController;
   late TextEditingController _hostPortController;
   late TextEditingController _authTokenController;
   late TextEditingController _hostLibraryPathController;
   late bool _autoStartHostServer;
+  String? _defaultLibraryPath;
+  bool _migrateLibrary = false;
 
   final UrlImportProjectCookieStoreService _projectCookieStore =
       UrlImportProjectCookieStoreService();
@@ -63,6 +66,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   void initState() {
     super.initState();
     final settings = widget.tagService.settings;
+    _initialSettings = settings;
     _mode = settings.appMode;
     _clientUrlController = TextEditingController(text: settings.clientApiBaseUrl);
     _hostPortController = TextEditingController(text: '${settings.hostPort}');
@@ -73,6 +77,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     _autoStartHostServer = settings.autoStartHostServer;
     _status = settings.isStandaloneMode ? _localModeStatus() : _unknownStatus();
     widget.hostServerService.refresh();
+    _loadDefaultLibraryPath();
     _loadProjectCookies();
   }
 
@@ -116,6 +121,17 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     final slots = await _projectCookieStore.loadSlots();
     if (!mounted) return;
     setState(() => _projectCookieSlots = slots);
+  }
+
+  Future<void> _loadDefaultLibraryPath() async {
+    final defaultPath = await widget.hostServerService.resolveLibraryPath(
+      const MetadataSettings(),
+    );
+    if (!mounted) return;
+    setState(() {
+      _defaultLibraryPath = defaultPath;
+      _syncMigrationSelection();
+    });
   }
 
   Future<void> _importProjectCookie(ProjectCookieProfile profile) async {
@@ -240,6 +256,45 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     );
   }
 
+  String _effectiveLibraryPathForSettings(MetadataSettings settings) {
+    final configured = settings.hostLibraryPath.trim();
+    if (configured.isNotEmpty) {
+      return configured;
+    }
+    return _defaultLibraryPath ?? '';
+  }
+
+  String _normalizeComparablePath(String value) {
+    final trimmed = value.trim().replaceAll('/', '\\');
+    final isDriveRoot =
+        trimmed.length == 3 &&
+        trimmed.codeUnitAt(1) == 58 &&
+        trimmed.endsWith('\\');
+    if (trimmed.length > 3 && trimmed.endsWith('\\') && !isDriveRoot) {
+      return trimmed.substring(0, trimmed.length - 1).toLowerCase();
+    }
+    return trimmed.toLowerCase();
+  }
+
+  bool _canOfferLibraryMigration(MetadataSettings draft) {
+    if (!_initialSettings.isHostMode || !draft.isHostMode) {
+      return false;
+    }
+    final sourcePath = _effectiveLibraryPathForSettings(_initialSettings);
+    final targetPath = _effectiveLibraryPathForSettings(draft);
+    if (sourcePath.isEmpty || targetPath.isEmpty) {
+      return false;
+    }
+    return _normalizeComparablePath(sourcePath) !=
+        _normalizeComparablePath(targetPath);
+  }
+
+  void _syncMigrationSelection() {
+    if (!_canOfferLibraryMigration(_draftSettings())) {
+      _migrateLibrary = false;
+    }
+  }
+
   Future<void> _pickHostLibraryFolder() async {
     try {
       final selected = await getDirectoryPath(
@@ -250,6 +305,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
       }
       setState(() {
         _hostLibraryPathController.text = selected.trim();
+        _syncMigrationSelection();
       });
     } catch (error) {
       _showSnackBar('Library フォルダの選択に失敗しました: $error');
@@ -259,6 +315,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   void _resetHostLibraryFolder() {
     setState(() {
       _hostLibraryPathController.clear();
+      _syncMigrationSelection();
     });
   }
 
@@ -288,7 +345,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
               labelText: '保存先フォルダ',
               hintText: '未設定なら既定の Library フォルダを使用',
             ),
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) => setState(_syncMigrationSelection),
           ),
           const SizedBox(height: 8),
           Text(
@@ -319,6 +376,87 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
         ],
       ),
     );
+  }
+
+  Widget _buildLibraryMigrationSection(
+    BuildContext context,
+    MetadataSettings draft,
+  ) {
+    final sourcePath = _effectiveLibraryPathForSettings(_initialSettings);
+    final targetPath = _effectiveLibraryPathForSettings(draft);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).colorScheme.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _migrateLibrary,
+            onChanged: _saving
+                ? null
+                : (value) => setState(() => _migrateLibrary = value ?? false),
+            title: const Text('既存 Library を新しい保存先へ移行する'),
+            subtitle: const Text(
+              '保存先の変更だけではファイルは移動しません。チェックを入れた場合のみ、ホスト PC 上の Library を移行します。移行先は空フォルダ、または未作成パスに限定されます。',
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '移行元: $sourcePath',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '移行先: $targetPath',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _confirmLibraryMigration({
+    required String sourcePath,
+    required String targetPath,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Library を移行しますか'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '現在の Library を新しい保存先へ移動し、ホスト側のメタデータ参照先も更新します。',
+              ),
+              const SizedBox(height: 12),
+              Text('移行元: $sourcePath'),
+              const SizedBox(height: 4),
+              Text('移行先: $targetPath'),
+              const SizedBox(height: 12),
+              const Text('移行先は空フォルダ、または未作成パスのみ使用できます。'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('移行する'),
+            ),
+          ],
+        );
+      },
+    );
+    return confirmed == true;
   }
 
   Future<void> _applyDraft() async {
@@ -387,6 +525,14 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   }
 
   Future<void> _startHostServer() async {
+    final draft = _draftSettings();
+    if (_canOfferLibraryMigration(draft)) {
+      _showSnackBar(
+        'Library フォルダの変更は保存から適用してください。移行する場合はチェックを入れて保存します。',
+      );
+      return;
+    }
+
     setState(() => _hostWorking = true);
     try {
       await _applyDraft();
@@ -430,9 +576,31 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      await _applyDraft();
+      final nextSettings = _draftSettings();
+      if (_migrateLibrary && _canOfferLibraryMigration(nextSettings)) {
+        final sourcePath = await widget.hostServerService.resolveLibraryPath(
+          _initialSettings,
+        );
+        final targetPath = await widget.hostServerService.resolveLibraryPath(
+          nextSettings,
+        );
+        final confirmed = await _confirmLibraryMigration(
+          sourcePath: sourcePath,
+          targetPath: targetPath,
+        );
+        if (!confirmed) {
+          return;
+        }
+        await widget.hostServerService.migrateLibrary(
+          fromSettings: _initialSettings,
+          toSettings: nextSettings,
+        );
+      }
+      await widget.tagService.updateMetadataSettings(nextSettings);
       if (!mounted) return;
       Navigator.of(context).pop(true);
+    } catch (error) {
+      _showSnackBar('設定の保存に失敗しました: $error');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -720,9 +888,11 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final draft = _draftSettings();
     final isClient = _mode == AppMode.client;
     final isHost = _mode == AppMode.host;
     final usesLocalLibrary = _mode != AppMode.client;
+    final showLibraryMigration = _canOfferLibraryMigration(draft);
 
     return AlertDialog(
       title: const Text('動作モード設定'),
@@ -755,6 +925,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                           } else if (_status.state == MetadataConnectionState.localMode) {
                             _status = _unknownStatus();
                           }
+                          _syncMigrationSelection();
                         });
                       },
               ),
@@ -803,6 +974,10 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
               ],
               if (usesLocalLibrary) ...[
                 _buildLibraryFolderSection(context),
+                if (showLibraryMigration) ...[
+                  const SizedBox(height: 12),
+                  _buildLibraryMigrationSection(context, draft),
+                ],
                 const SizedBox(height: 12),
               ],
               TextField(
