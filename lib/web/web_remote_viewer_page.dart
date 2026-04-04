@@ -3300,7 +3300,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                     ),
                   ),
                   if (isSpread) ...<Widget>[
-                    const SizedBox(width: gap),
+                    SizedBox(width: gap),
                     SizedBox(
                       width: pageWidth,
                       child: _buildPageImage(
