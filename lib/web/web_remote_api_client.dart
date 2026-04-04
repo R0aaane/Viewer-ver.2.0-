@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:typed_data';
 
-import 'package:pdfx/pdfx.dart';
+import 'package:pdfx/src/renderer/web/pdfjs.dart';
 
 import '../models/tag.dart';
 
@@ -428,11 +428,12 @@ class WebRemoteApiClient {
     }
 
     try {
-      final document = await PdfDocument.openData(fetchImageDownload(mediaId));
+      final bytes = Uint8List.fromList(await fetchImageDownload(mediaId));
+      final document = await pdfjsGetDocumentFromData(bytes.buffer);
       try {
-        return document.pagesCount;
+        return document.numPages;
       } finally {
-        await document.close();
+        document.destroy();
       }
     } catch (_) {
       return _resolvePdfPageCountByPageProbe(mediaId);

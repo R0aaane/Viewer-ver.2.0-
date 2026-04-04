@@ -419,10 +419,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     setState(() {
       _selectedEntry = entry;
     });
-    if (entry.isPdf) {
-      await _openPdfViewerPage(entry);
-      return;
-    }
     if (splitView) {
       return;
     }
@@ -1252,7 +1248,9 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                         label: const Text('次へ'),
                       ),
                       Text(
-                        'ページ $_pdfPageNo',
+                        _pdfTotalPages == null
+                            ? 'ページ $_pdfPageNo'
+                            : 'ページ $_pdfPageNo / $_pdfTotalPages',
                         style: const TextStyle(color: Colors.white70),
                       ),
                       if (widget.onOpenPdfViewerPage != null)
