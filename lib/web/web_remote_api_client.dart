@@ -66,6 +66,7 @@ class WebRemoteMediaMeta {
   final DateTime? modifiedAt;
   final String? etag;
   final bool supportsRange;
+  final int? pageCount;
 
   const WebRemoteMediaMeta({
     required this.mediaId,
@@ -76,6 +77,7 @@ class WebRemoteMediaMeta {
     required this.modifiedAt,
     required this.etag,
     required this.supportsRange,
+    required this.pageCount,
   });
 }
 
@@ -382,6 +384,7 @@ class WebRemoteApiClient {
       modifiedAt: _parseDateTime(json['modifiedAt']),
       etag: json['etag']?.toString(),
       supportsRange: json['supportsRange'] == true,
+      pageCount: _asInt(json['pageCount']),
     );
   }
 

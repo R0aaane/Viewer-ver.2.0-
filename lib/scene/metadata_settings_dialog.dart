@@ -166,7 +166,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
           ),
           const SizedBox(height: 8),
           Text(
-            '選択した Cookie をプロジェクト内の `data/url_import_cookies` に保存します。URL 取り込みでは Auto / Kemono / Coomer / 共通 から選択できます。',
+            '選択した Cookie をアプリが利用できる保存先に保持します。URL 取り込みでは Auto / Kemono / Coomer / 共通 から選択できます。',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),

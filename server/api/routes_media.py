@@ -14,6 +14,10 @@ router = APIRouter(tags=["media"], dependencies=[Depends(require_bearer_token)])
 @router.get("/items/{media_id}", response_model=MediaMetaResponse)
 def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
     meta = request.app.state.stream_service.get_media_meta(media_id)
+    if meta["kind"] == "pdf":
+        meta["pageCount"] = request.app.state.thumbnail_service.get_pdf_page_count(
+            media_id
+        )
     return MediaMetaResponse(**meta)
 
 

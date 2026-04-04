@@ -95,6 +95,23 @@ class ThumbnailService:
             image.save(output, format="PNG")
             return output.getvalue(), "image/png"
 
+    def get_pdf_page_count(self, media_id: str) -> int:
+        record = self._metadata.get_media(media_id)
+        if record["isDeleted"]:
+            raise not_found("削除済みメディアです")
+        if record["kind"] != "pdf":
+            raise bad_request("PDF 以外では pageCount を取得できません")
+
+        path = record["fullPath"]
+        if not os.path.exists(path):
+            raise not_found("PDF ファイルが見つかりません")
+
+        pdf = pdfium.PdfDocument(path)
+        try:
+            return len(pdf)
+        finally:
+            pdf.close()
+
     def _render_pdf_page(self, path: str, page_no: int, width: int) -> Image.Image:
         pdf = pdfium.PdfDocument(path)
         try:

@@ -214,5 +214,6 @@ class MediaMetaResponse(BaseModel):
     modifiedAt: datetime | None = None
     etag: str | None = None
     supportsRange: bool = True
+    pageCount: int | None = None
 
 

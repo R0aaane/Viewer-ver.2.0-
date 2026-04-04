@@ -1,6 +1,7 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 enum ProjectCookieProfile { kemono, coomer, combined }
 
@@ -37,19 +38,32 @@ class ProjectCookieSlot {
 }
 
 class UrlImportProjectCookieStoreService {
-  Directory get _cookieDirectory =>
-      Directory(p.join(Directory.current.path, 'data', 'url_import_cookies'));
+  Future<Directory>? _cookieDirectoryFuture;
+
+  Future<Directory> _resolveCookieDirectory() {
+    return _cookieDirectoryFuture ??= () async {
+      if (Platform.isAndroid || Platform.isIOS) {
+        final baseDir = await getApplicationSupportDirectory();
+        return Directory(p.join(baseDir.path, 'url_import_cookies'));
+      }
+
+      return Directory(
+        p.join(Directory.current.path, 'data', 'url_import_cookies'),
+      );
+    }();
+  }
 
   Future<Directory> ensureCookieDirectory() async {
-    final dir = _cookieDirectory;
+    final dir = await _resolveCookieDirectory();
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
     return dir;
   }
 
-  String pathForProfile(ProjectCookieProfile profile) {
-    return p.join(_cookieDirectory.path, profile.fileName);
+  Future<String> pathForProfile(ProjectCookieProfile profile) async {
+    final dir = await ensureCookieDirectory();
+    return p.join(dir.path, profile.fileName);
   }
 
   Future<ProjectCookieSlot> getSlot(ProjectCookieProfile profile) async {
@@ -101,7 +115,7 @@ class UrlImportProjectCookieStoreService {
   }
 
   Future<void> deleteCookieFile(ProjectCookieProfile profile) async {
-    final file = File(pathForProfile(profile));
+    final file = File(await pathForProfile(profile));
     if (await file.exists()) {
       await file.delete();
     }

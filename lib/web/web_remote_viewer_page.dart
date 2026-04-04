@@ -1,11 +1,10 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
-import 'dart:html' as html;
 import 'dart:typed_data';
-import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/metadata_settings.dart';
 import '../models/tag.dart';
@@ -1412,31 +1411,45 @@ class WebPdfViewerPage extends StatefulWidget {
 }
 
 class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
-  String? _objectUrl;
+  static const String _twoPagePrefsKey = 'prefs.readerTwoPage';
+
   Object? _loadError;
   bool _loading = false;
+  int _page = 1;
+  int _totalPages = 1;
+  bool _twoPage = false;
+  final Map<int, Future<Uint8List>> _pageFutureCache =
+      <int, Future<Uint8List>>{};
+  Future<Uint8List>? _leftFuture;
+  Future<Uint8List>? _rightFuture;
 
   @override
   void initState() {
     super.initState();
-    _loadPdf();
+    _loadViewer();
   }
 
   @override
   void didUpdateWidget(covariant WebPdfViewerPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.entry.stableId != widget.entry.stableId) {
-      _releaseObjectUrl();
-      _loadPdf();
+      _pageFutureCache.clear();
+      _page = 1;
+      _totalPages = 1;
+      _leftFuture = null;
+      _rightFuture = null;
+      _loadViewer();
     }
   }
 
-  Future<void> _loadPdf() async {
+  Future<void> _loadViewer() async {
     final mediaId = widget.entry.mediaId;
     if (mediaId == null || mediaId.isEmpty) {
       setState(() {
-        _loadError = StateError('PDF を開くための mediaId がありません');
+        _loadError = StateError('PDF を表示するための mediaId がありません');
         _loading = false;
+        _leftFuture = null;
+        _rightFuture = null;
       });
       return;
     }
@@ -1444,22 +1457,28 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     setState(() {
       _loading = true;
       _loadError = null;
+      _pageFutureCache.clear();
+      _leftFuture = null;
+      _rightFuture = null;
     });
 
     try {
-      final objectUrl = await widget.client.createPdfObjectUrl(mediaId);
-      if (!mounted) {
-        widget.client.revokeObjectUrl(objectUrl);
-        return;
-      }
-      _releaseObjectUrl();
+      final prefs = await SharedPreferences.getInstance();
+      final twoPage = prefs.getBool(_twoPagePrefsKey);
+      final meta = await widget.client.fetchMediaMeta(mediaId);
+      if (!mounted) return;
       setState(() {
-        _objectUrl = objectUrl;
+        _twoPage = twoPage ?? _twoPage;
+        _totalPages = (meta.pageCount ?? 1).clamp(1, 1 << 30);
+        _page = _page.clamp(1, _totalPages);
+        _syncPageFutures();
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _loadError = error;
+        _leftFuture = null;
+        _rightFuture = null;
       });
     } finally {
       if (mounted) {
@@ -1470,11 +1489,59 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     }
   }
 
-  void _releaseObjectUrl() {
-    final objectUrl = _objectUrl;
-    if (objectUrl == null) return;
-    widget.client.revokeObjectUrl(objectUrl);
-    _objectUrl = null;
+  Future<Uint8List> _loadPageBytes(int pageNo) {
+    final mediaId = widget.entry.mediaId;
+    if (mediaId == null || mediaId.isEmpty) {
+      return Future<Uint8List>.error(
+        StateError('PDF を表示するための mediaId がありません'),
+      );
+    }
+    return _pageFutureCache.putIfAbsent(pageNo, () {
+      return widget.client.fetchPdfPage(mediaId, pageNo, width: 1600);
+    });
+  }
+
+  void _syncPageFutures() {
+    _leftFuture = _loadPageBytes(_page);
+    if (_twoPage) {
+      final nextPage = _page + 1;
+      _rightFuture = nextPage <= _totalPages ? _loadPageBytes(nextPage) : null;
+      return;
+    }
+    _rightFuture = null;
+  }
+
+  void _setCurrentPage(int page) {
+    setState(() {
+      _page = page.clamp(1, _totalPages);
+      _syncPageFutures();
+    });
+  }
+
+  void _next() {
+    final step = _twoPage ? 2 : 1;
+    final next = _page + step;
+    if (next <= _totalPages) {
+      _setCurrentPage(next);
+    }
+  }
+
+  void _prev() {
+    final step = _twoPage ? 2 : 1;
+    final prev = _page - step;
+    if (prev >= 1) {
+      _setCurrentPage(prev);
+    }
+  }
+
+  Future<void> _toggleTwoPage() async {
+    final nextValue = !_twoPage;
+    setState(() {
+      _twoPage = nextValue;
+      _syncPageFutures();
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_twoPagePrefsKey, nextValue);
   }
 
   Future<void> _handleOpenDetail() async {
@@ -1483,40 +1550,203 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     await onOpenDetail();
   }
 
-  @override
-  void dispose() {
-    _releaseObjectUrl();
-    super.dispose();
+  Widget _buildLoadError(String message, {required VoidCallback onRetry}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Icon(
+              Icons.cloud_off_outlined,
+              color: Colors.white70,
+              size: 34,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('再試行'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPageImage(
+    Future<Uint8List>? future, {
+    required Alignment align,
+    required bool isSpread,
+    required int pageNumber,
+  }) {
+    if (future == null) {
+      return const SizedBox.shrink();
+    }
+
+    return FutureBuilder<Uint8List>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return _buildLoadError(
+            'ページ画像の読み込みに失敗しました。\n${snapshot.error}',
+            onRetry: () {
+              setState(() {
+                _pageFutureCache.remove(pageNumber);
+                _syncPageFutures();
+              });
+            },
+          );
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final image = Image.memory(
+          snapshot.data!,
+          fit: isSpread ? BoxFit.fitHeight : BoxFit.contain,
+          alignment: align,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.high,
+        );
+
+        return InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 6,
+          alignment: align,
+          child: Align(
+            alignment: align,
+            child: DecoratedBox(
+              decoration: const BoxDecoration(color: Colors.white),
+              child: image,
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildViewerBody() {
-    if (_loading && _objectUrl == null) {
+    if (_loading && _leftFuture == null) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_loadError != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'PDF 表示ページを読み込めませんでした: $_loadError',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.red.shade200),
+      return _buildLoadError(
+        'PDF 表示ページを読み込めませんでした。\n$_loadError',
+        onRetry: _loadViewer,
+      );
+    }
+    return Stack(
+      children: <Widget>[
+        Center(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const gap = 12.0;
+              final isSpread = _twoPage;
+              final pageWidth = isSpread
+                  ? (constraints.maxWidth - gap) / 2.0
+                  : constraints.maxWidth;
+
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: <Widget>[
+                  SizedBox(
+                    width: pageWidth,
+                    child: _buildPageImage(
+                      _leftFuture,
+                      align: isSpread
+                          ? Alignment.centerRight
+                          : Alignment.center,
+                      isSpread: isSpread,
+                      pageNumber: _page,
+                    ),
+                  ),
+                  if (isSpread) ...<Widget>[
+                    const SizedBox(width: gap),
+                    SizedBox(
+                      width: pageWidth,
+                      child: _buildPageImage(
+                        _rightFuture,
+                        align: Alignment.centerLeft,
+                        isSpread: isSpread,
+                        pageNumber: _page + 1,
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
           ),
         ),
-      );
-    }
-    final objectUrl = _objectUrl;
-    if (objectUrl == null) {
-      return const Center(
-        child: Text('PDF データがありません', style: TextStyle(color: Colors.white70)),
-      );
-    }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(18),
-      child: _EmbeddedPdfView(
-        objectUrl: objectUrl,
-        title: widget.entry.displayName,
-      ),
+        Positioned.fill(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTapUp: (details) {
+                  final dx = details.localPosition.dx;
+                  final width = constraints.maxWidth;
+                  final leftEdge = width * 0.35;
+                  final rightEdge = width * 0.65;
+                  if (dx < leftEdge) {
+                    _prev();
+                  } else if (dx > rightEdge) {
+                    _next();
+                  }
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildToolbar() {
+    final canPrev = _page > 1;
+    final canNext = _page + (_twoPage ? 2 : 1) <= _totalPages;
+    final pageText = '$_page/$_totalPages';
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: <Widget>[
+        OutlinedButton.icon(
+          onPressed: canPrev ? _prev : null,
+          icon: const Icon(Icons.chevron_left),
+          label: const Text('前'),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white12,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Text(pageText),
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: canNext ? _next : null,
+          icon: const Icon(Icons.chevron_right),
+          label: const Text('次'),
+        ),
+        TextButton.icon(
+          onPressed: _toggleTwoPage,
+          icon: const Icon(Icons.swap_horiz),
+          label: Text(_twoPage ? '見開き ON' : '見開き OFF'),
+        ),
+      ],
     );
   }
 
@@ -1547,11 +1777,10 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         ),
         actions: <Widget>[
           IconButton(
-            onPressed:
-                widget.entry.mediaId == null
-                    ? null
-                    : () => widget.client.openPdfInNewTab(widget.entry.mediaId!),
-            tooltip: '別タブで開く',
+            onPressed: widget.entry.mediaId == null
+                ? null
+                : () => widget.client.openPdfInNewTab(widget.entry.mediaId!),
+            tooltip: '新しいタブで開く',
             icon: const Icon(Icons.open_in_new),
           ),
         ],
@@ -1574,8 +1803,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                     avatar: const Icon(Icons.folder_open, size: 18),
                     label: Text(widget.entry.folderRaw),
                   ),
+                  Chip(
+                    avatar: const Icon(Icons.menu_book_outlined, size: 18),
+                    label: Text('$_totalPages ページ'),
+                  ),
                 ],
               ),
+              const SizedBox(height: 12),
+              _buildToolbar(),
               const SizedBox(height: 12),
               Expanded(
                 child: DecoratedBox(
@@ -1594,63 +1829,6 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     );
   }
 }
-
-class _EmbeddedPdfView extends StatefulWidget {
-  final String objectUrl;
-  final String title;
-
-  const _EmbeddedPdfView({
-    required this.objectUrl,
-    required this.title,
-  });
-
-  @override
-  State<_EmbeddedPdfView> createState() => _EmbeddedPdfViewState();
-}
-
-class _EmbeddedPdfViewState extends State<_EmbeddedPdfView> {
-  static int _nextViewId = 0;
-
-  late final String _viewType;
-  late final html.IFrameElement _iframe;
-
-  @override
-  void initState() {
-    super.initState();
-    _viewType = 'web-embedded-pdf-${_nextViewId++}';
-    _iframe =
-        html.IFrameElement()
-          ..style.border = '0'
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..style.backgroundColor = '#0E1117'
-          ..src = _viewerUrl(widget.objectUrl)
-          ..title = widget.title;
-    ui_web.platformViewRegistry.registerViewFactory(
-      _viewType,
-      (viewId) => _iframe,
-    );
-  }
-
-  @override
-  void didUpdateWidget(covariant _EmbeddedPdfView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.objectUrl != widget.objectUrl) {
-      _iframe.src = _viewerUrl(widget.objectUrl);
-    }
-    if (oldWidget.title != widget.title) {
-      _iframe.title = widget.title;
-    }
-  }
-
-  String _viewerUrl(String objectUrl) => '$objectUrl#toolbar=1&navpanes=0';
-
-  @override
-  Widget build(BuildContext context) {
-    return HtmlElementView(viewType: _viewType);
-  }
-}
-
 class _RemoteThumbnail extends StatefulWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;

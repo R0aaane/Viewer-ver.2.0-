@@ -122,6 +122,13 @@ class AndroidFolderRepository implements MediaRepository {
     }
   }
 
+  int _thumbConcurrencyFor(MediaItem item) {
+    if (item.kind == MediaKind.image && item.id.startsWith('content://')) {
+      return 1;
+    }
+    return 2;
+  }
+
   MediaKind _dbKindToMediaKind(int k) {
     final e = db.FolderEntryKindDb.values[k];
     switch (e) {
@@ -427,6 +434,24 @@ class AndroidFolderRepository implements MediaRepository {
         throw Exception('cached file is empty: $documentUri');
       }
       return fb;
+    });
+  }
+
+  Future<String> _cachedFilePathForContentUri(String documentUri) async {
+    return _docmanSync(() async {
+      final doc = await DocumentFile.fromUri(documentUri);
+      if (doc == null) {
+        throw Exception('DocumentFile.fromUri failed: $documentUri');
+      }
+      if (doc.isDirectory == true) {
+        throw Exception('Tried to read directory as file: $documentUri');
+      }
+
+      final cached = await doc.cache();
+      if (cached == null) {
+        throw Exception('cache() failed: $documentUri');
+      }
+      return cached.path;
     });
   }
 
@@ -1049,7 +1074,7 @@ class AndroidFolderRepository implements MediaRepository {
     if (inflight != null) return inflight;
 
     final future = () async {
-      await _acquireThumbSlot(2);
+      await _acquireThumbSlot(_thumbConcurrencyFor(item));
       try {
         // 3) Disk cache.
         try {
@@ -1089,8 +1114,7 @@ class AndroidFolderRepository implements MediaRepository {
 
   Future<ThumbPair> _buildThumbPair(MediaItem item, int maxWidth) async {
     if (item.kind == MediaKind.image) {
-      final bytes = await readBytes(item);
-      final thumb = await _makeImageThumb(bytes, maxWidth);
+      final thumb = await _readImageThumb(item, maxWidth);
       return ThumbPair(front: thumb, back: null);
     }
 
@@ -1104,6 +1128,35 @@ class AndroidFolderRepository implements MediaRepository {
       back = await _renderPage(item.id, doc, mid, maxWidth);
     }
     return ThumbPair(front: front, back: back);
+  }
+
+  Future<Uint8List> _readImageThumb(MediaItem item, int maxWidth) async {
+    try {
+      final sourcePath = await _thumbSourcePathForImage(item);
+      return await _makeImageThumbFromPath(sourcePath, maxWidth);
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[android-thumb] file-path thumb fallback item=${item.id} '
+        'display=${item.displayName} error=$error',
+      );
+      debugPrintStack(
+        label: '[android-thumb] file-path thumb fallback stack',
+        stackTrace: stackTrace,
+      );
+      final bytes = await readBytes(item);
+      return _makeImageThumb(bytes, maxWidth);
+    }
+  }
+
+  Future<String> _thumbSourcePathForImage(MediaItem item) async {
+    final rawId = item.id.trim();
+    if (rawId.startsWith('content://')) {
+      return _cachedFilePathForContentUri(rawId);
+    }
+    if (rawId.startsWith('file://')) {
+      return Uri.parse(rawId).toFilePath();
+    }
+    return rawId;
   }
 
   Future<PdfDocument> _openPdf(String documentUri) {
@@ -2013,13 +2066,52 @@ class _LruCache<K, V extends Object> {
 Future<Uint8List> _makeImageThumb(Uint8List src, int targetWidth) async {
   if (src.isEmpty) return src;
   final codec = await ui.instantiateImageCodec(src, targetWidth: targetWidth);
-  final frame = await codec.getNextFrame();
-  final ui.Image image = frame.image;
+  ui.Image? image;
+  try {
+    final frame = await codec.getNextFrame();
+    image = frame.image;
 
-  final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-  if (byteData == null) return src;
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) return src;
 
-  return byteData.buffer.asUint8List();
+    return byteData.buffer.asUint8List(
+      byteData.offsetInBytes,
+      byteData.lengthInBytes,
+    );
+  } finally {
+    image?.dispose();
+    codec.dispose();
+  }
+}
+
+Future<Uint8List> _makeImageThumbFromPath(String sourcePath, int targetWidth) async {
+  ui.ImmutableBuffer? buffer;
+  ui.ImageDescriptor? descriptor;
+  ui.Codec? codec;
+  ui.Image? image;
+
+  try {
+    buffer = await ui.ImmutableBuffer.fromFilePath(sourcePath);
+    descriptor = await ui.ImageDescriptor.encoded(buffer);
+    codec = await descriptor.instantiateCodec(targetWidth: targetWidth);
+    final frame = await codec.getNextFrame();
+    image = frame.image;
+
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) {
+      throw Exception('Image thumbnail encoding failed: $sourcePath');
+    }
+
+    return byteData.buffer.asUint8List(
+      byteData.offsetInBytes,
+      byteData.lengthInBytes,
+    );
+  } finally {
+    image?.dispose();
+    codec?.dispose();
+    descriptor?.dispose();
+    buffer?.dispose();
+  }
 }
 
 class _AsyncMutex {
