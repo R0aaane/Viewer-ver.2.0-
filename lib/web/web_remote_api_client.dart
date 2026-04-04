@@ -236,6 +236,16 @@ class WebRemoteMediaMeta {
   });
 }
 
+class WebRemotePdfPageCountInfo {
+  final int count;
+  final bool isReliable;
+
+  const WebRemotePdfPageCountInfo({
+    required this.count,
+    required this.isReliable,
+  });
+}
+
 class WebRemoteOrganizeResult {
   final Map<String, String> moved;
   final int movedCount;
@@ -716,12 +726,12 @@ class WebRemoteApiClient {
     );
   }
 
-  Future<int> resolvePdfPageCount(
+  Future<WebRemotePdfPageCountInfo> resolvePdfPageCountInfo(
     String mediaId, {
     int? pageCountHint,
   }) async {
     if (pageCountHint != null && pageCountHint > 0) {
-      return pageCountHint;
+      return WebRemotePdfPageCountInfo(count: pageCountHint, isReliable: true);
     }
 
     try {
@@ -729,13 +739,30 @@ class WebRemoteApiClient {
       final bytes = Uint8List.fromList(await fetchImageDownload(mediaId));
       final document = await pdfjsGetDocumentFromData(bytes.buffer);
       try {
-        return document.numPages;
+        return WebRemotePdfPageCountInfo(
+          count: document.numPages,
+          isReliable: true,
+        );
       } finally {
         document.destroy();
       }
     } catch (_) {
-      return _resolvePdfPageCountByPageProbe(mediaId);
+      return WebRemotePdfPageCountInfo(
+        count: await _resolvePdfPageCountByPageProbe(mediaId),
+        isReliable: false,
+      );
     }
+  }
+
+  Future<int> resolvePdfPageCount(
+    String mediaId, {
+    int? pageCountHint,
+  }) async {
+    final info = await resolvePdfPageCountInfo(
+      mediaId,
+      pageCountHint: pageCountHint,
+    );
+    return info.count;
   }
 
   Future<int> _resolvePdfPageCountByPageProbe(String mediaId) async {

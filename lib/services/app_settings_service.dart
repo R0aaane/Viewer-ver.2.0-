@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/metadata_settings.dart';
@@ -12,25 +13,36 @@ class AppSettingsService {
   static const String _hostPortKey = 'prefs.host.port';
   static const String _hostAutoStartKey = 'prefs.host.autoStartServer';
   static const String _hostLibraryPathKey = 'prefs.host.libraryPath';
+  MetadataSettings? _memorySettings;
 
   Future<MetadataSettings> loadMetadataSettings() async {
-    final prefs = await SharedPreferences.getInstance();
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-    final mode = _loadAppMode(prefs);
-    final clientApiBaseUrl =
-        prefs.getString(_clientApiBaseUrlKey) ??
-        prefs.getString(_legacyMetadataApiBaseUrlKey) ??
-        '';
-    final hostPort = prefs.getInt(_hostPortKey) ?? 8080;
-
-    return MetadataSettings(
-      appMode: mode,
-      clientApiBaseUrl: clientApiBaseUrl,
-      hostPort: hostPort < 1 ? 8080 : hostPort,
-      authToken: prefs.getString(_metadataAuthTokenKey),
-      autoStartHostServer: prefs.getBool(_hostAutoStartKey) ?? false,
-      hostLibraryPath: prefs.getString(_hostLibraryPathKey) ?? '',
-    );
+      final mode = _loadAppMode(prefs);
+      final clientApiBaseUrl =
+          prefs.getString(_clientApiBaseUrlKey) ??
+          prefs.getString(_legacyMetadataApiBaseUrlKey) ??
+          '';
+      final hostPort = prefs.getInt(_hostPortKey) ?? 8080;
+      final settings = MetadataSettings(
+        appMode: mode,
+        clientApiBaseUrl: clientApiBaseUrl,
+        hostPort: hostPort < 1 ? 8080 : hostPort,
+        authToken: prefs.getString(_metadataAuthTokenKey),
+        autoStartHostServer: prefs.getBool(_hostAutoStartKey) ?? false,
+        hostLibraryPath: prefs.getString(_hostLibraryPathKey) ?? '',
+      );
+      _memorySettings = settings;
+      return settings;
+    } catch (error, stackTrace) {
+      debugPrint('[AppSettingsService] Failed to load settings: $error');
+      debugPrintStack(
+        label: '[AppSettingsService] loadMetadataSettings',
+        stackTrace: stackTrace,
+      );
+      return _memorySettings ?? const MetadataSettings();
+    }
   }
 
   AppMode _loadAppMode(SharedPreferences prefs) {
@@ -53,28 +65,37 @@ class AppSettingsService {
   }
 
   Future<void> saveMetadataSettings(MetadataSettings settings) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_appModeKey, settings.appMode.index);
-    await prefs.setInt(_legacyMetadataModeKey, settings.storageMode.index);
-    await prefs.setString(_clientApiBaseUrlKey, settings.clientApiBaseUrl);
-    await prefs.setString(
-      _legacyMetadataApiBaseUrlKey,
-      settings.clientApiBaseUrl,
-    );
-    await prefs.setInt(_hostPortKey, settings.hostPort);
-    await prefs.setBool(_hostAutoStartKey, settings.autoStartHostServer);
-    final libraryPath = settings.hostLibraryPath.trim();
-    if (libraryPath.isEmpty) {
-      await prefs.remove(_hostLibraryPathKey);
-    } else {
-      await prefs.setString(_hostLibraryPathKey, libraryPath);
-    }
+    _memorySettings = settings;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_appModeKey, settings.appMode.index);
+      await prefs.setInt(_legacyMetadataModeKey, settings.storageMode.index);
+      await prefs.setString(_clientApiBaseUrlKey, settings.clientApiBaseUrl);
+      await prefs.setString(
+        _legacyMetadataApiBaseUrlKey,
+        settings.clientApiBaseUrl,
+      );
+      await prefs.setInt(_hostPortKey, settings.hostPort);
+      await prefs.setBool(_hostAutoStartKey, settings.autoStartHostServer);
+      final libraryPath = settings.hostLibraryPath.trim();
+      if (libraryPath.isEmpty) {
+        await prefs.remove(_hostLibraryPathKey);
+      } else {
+        await prefs.setString(_hostLibraryPathKey, libraryPath);
+      }
 
-    final token = settings.authToken?.trim();
-    if (token == null || token.isEmpty) {
-      await prefs.remove(_metadataAuthTokenKey);
-    } else {
-      await prefs.setString(_metadataAuthTokenKey, token);
+      final token = settings.authToken?.trim();
+      if (token == null || token.isEmpty) {
+        await prefs.remove(_metadataAuthTokenKey);
+      } else {
+        await prefs.setString(_metadataAuthTokenKey, token);
+      }
+    } catch (error, stackTrace) {
+      debugPrint('[AppSettingsService] Failed to save settings: $error');
+      debugPrintStack(
+        label: '[AppSettingsService] saveMetadataSettings',
+        stackTrace: stackTrace,
+      );
     }
   }
 }

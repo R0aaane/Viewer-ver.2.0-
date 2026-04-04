@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -2586,14 +2587,19 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     final stableId = widget.entry.stableId;
     try {
       final meta = await _metaFuture;
-      final totalPages = await widget.client.resolvePdfPageCount(
+      final pageCountInfo = await widget.client.resolvePdfPageCountInfo(
         mediaId,
         pageCountHint: meta.pageCount,
       );
       if (!mounted || widget.entry.stableId != stableId) return;
       setState(() {
-        _pdfTotalPages = totalPages;
-        _pdfPageNo = _pdfPageNo.clamp(1, totalPages);
+        _pdfTotalPages =
+            pageCountInfo.isReliable || pageCountInfo.count > 1
+                ? pageCountInfo.count
+                : null;
+        if (_pdfTotalPages != null) {
+          _pdfPageNo = _pdfPageNo.clamp(1, _pdfTotalPages!);
+        }
       });
     } catch (_) {
       // Keep the preview usable even when the server cannot report page counts.
@@ -2949,6 +2955,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   bool _loading = false;
   int _page = 1;
   int _totalPages = 1;
+  bool _pageCountReliable = false;
   bool _twoPage = false;
   final Map<int, Future<Uint8List>> _pageFutureCache =
       <int, Future<Uint8List>>{};
@@ -2968,6 +2975,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _pageFutureCache.clear();
       _page = 1;
       _totalPages = 1;
+      _pageCountReliable = false;
       _leftFuture = null;
       _rightFuture = null;
       _loadViewer();
@@ -2992,23 +3000,34 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _pageFutureCache.clear();
       _page = 1;
       _totalPages = 1;
+      _pageCountReliable = false;
       _leftFuture = null;
       _rightFuture = null;
       _syncPageFutures();
     });
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final twoPage = prefs.getBool(_twoPagePrefsKey);
+      final twoPageFuture = SharedPreferences.getInstance()
+          .then((prefs) => prefs.getBool(_twoPagePrefsKey))
+          .catchError((Object error, StackTrace stackTrace) {
+            debugPrint('[WebPdfViewerPage] Failed to load reader prefs: $error');
+            debugPrintStack(
+              label: '[WebPdfViewerPage] _loadViewer',
+              stackTrace: stackTrace,
+            );
+            return null;
+          });
       final meta = await widget.client.fetchMediaMeta(mediaId);
-      final totalPages = await widget.client.resolvePdfPageCount(
+      final pageCountInfo = await widget.client.resolvePdfPageCountInfo(
         mediaId,
         pageCountHint: meta.pageCount,
       );
+      final twoPage = await twoPageFuture;
       if (!mounted) return;
       setState(() {
         _twoPage = twoPage ?? _twoPage;
-        _totalPages = totalPages.clamp(1, 1 << 30);
+        _totalPages = pageCountInfo.count.clamp(1, 1 << 30);
+        _pageCountReliable = pageCountInfo.isReliable;
         _page = _page.clamp(1, _totalPages);
         _syncPageFutures();
       });
@@ -3059,16 +3078,72 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     });
   }
 
+  Future<bool> _tryOpenPage(int page) async {
+    if (page < 1) {
+      return false;
+    }
+    if (page <= _totalPages) {
+      _setCurrentPage(page);
+      return true;
+    }
+    if (_pageCountReliable || _loading) {
+      return false;
+    }
+    final mediaId = widget.entry.mediaId;
+    if (mediaId == null || mediaId.isEmpty) {
+      return false;
+    }
+
+    setState(() {
+      _loading = true;
+    });
+    try {
+      final bytes = await widget.client.fetchPdfPage(mediaId, page, width: 1600);
+      if (!mounted) {
+        return false;
+      }
+      setState(() {
+        _pageFutureCache[page] = Future<Uint8List>.value(bytes);
+        _totalPages = page;
+        _page = page;
+        _syncPageFutures();
+      });
+      return true;
+    } catch (_) {
+      if (!mounted) {
+        return false;
+      }
+      setState(() {
+        _pageCountReliable = true;
+        _totalPages = page > 1 ? page - 1 : 1;
+        _page = _page.clamp(1, _totalPages);
+        _pageFutureCache.remove(page);
+        _syncPageFutures();
+      });
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
   void _next() {
-    final step = _twoPage ? 2 : 1;
+    final step = _twoPage && _rightFuture == null ? 1 : (_twoPage ? 2 : 1);
     final next = _page + step;
     if (next <= _totalPages) {
       _setCurrentPage(next);
+      return;
+    }
+    if (!_pageCountReliable) {
+      unawaited(_tryOpenPage(next));
     }
   }
 
   void _prev() {
-    final step = _twoPage ? 2 : 1;
+    final step = _twoPage && _rightFuture == null ? 1 : (_twoPage ? 2 : 1);
     final prev = _page - step;
     if (prev >= 1) {
       _setCurrentPage(prev);
@@ -3081,8 +3156,16 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _twoPage = nextValue;
       _syncPageFutures();
     });
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_twoPagePrefsKey, nextValue);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_twoPagePrefsKey, nextValue);
+    } catch (error, stackTrace) {
+      debugPrint('[WebPdfViewerPage] Failed to save reader prefs: $error');
+      debugPrintStack(
+        label: '[WebPdfViewerPage] _toggleTwoPage',
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<void> _handleOpenDetail() async {
@@ -3253,8 +3336,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
   Widget _buildToolbar() {
     final canPrev = _page > 1;
-    final canNext = _page + (_twoPage ? 2 : 1) <= _totalPages;
-    final pageText = '$_page/$_totalPages';
+    final canNext =
+        !_loading &&
+        (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _totalPages);
+    final totalPagesText = _pageCountReliable ? '$_totalPages' : '$_totalPages+';
+    final pageText = '$_page/$totalPagesText';
 
     return Wrap(
       spacing: 8,
