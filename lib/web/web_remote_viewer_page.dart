@@ -1900,73 +1900,80 @@ class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
   }
 
   Widget _grid(List<WebRemoteEntry> entries) {
-    final gap = widget.width < 190 ? 6.0 : 8.0;
-    final mainWidth = widget.width * 0.58;
-    final sideWidth = widget.width - mainWidth - gap - 16;
-    final sideHeight = (widget.height - gap - 16) / 2;
     final lead = entries.first;
     final second = entries.length > 1 ? entries[1] : null;
     final third = entries.length > 2 ? entries[2] : null;
 
     return _frame(
-      Row(
-        children: <Widget>[
-          _RemoteThumbnail(
-            key: ValueKey<String>('folder-main-${lead.stableId}'),
-            client: widget.client,
-            entry: lead,
-            width: mainWidth,
-            height: widget.height - 16,
-            borderRadius: 12,
-            backgroundColor: const Color(0xFF12141B),
-          ),
-          SizedBox(width: gap),
-          SizedBox(
-            width: sideWidth,
-            child: Column(
-              children: <Widget>[
-                if (second != null)
-                  _RemoteThumbnail(
-                    key: ValueKey<String>('folder-side-a-${second.stableId}'),
-                    client: widget.client,
-                    entry: second,
-                    width: sideWidth,
-                    height: sideHeight,
-                    borderRadius: 12,
-                    backgroundColor: const Color(0xFF12141B),
-                  )
-                else
-                  SizedBox(
-                    width: sideWidth,
-                    height: sideHeight,
-                    child: _placeholder(),
-                  ),
-                SizedBox(height: gap),
-                if (third != null)
-                  _RemoteThumbnail(
-                    key: ValueKey<String>('folder-side-b-${third.stableId}'),
-                    client: widget.client,
-                    entry: third,
-                    width: sideWidth,
-                    height: sideHeight,
-                    borderRadius: 12,
-                    backgroundColor: const Color(0xFF12141B),
-                  )
-                else
-                  SizedBox(
-                    width: sideWidth,
-                    height: sideHeight,
-                    child: _placeholder(
-                      child: const Icon(
-                        Icons.picture_as_pdf_outlined,
-                        color: Colors.white38,
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final gap = constraints.maxWidth < 190 ? 6.0 : 8.0;
+          final mainWidth = constraints.maxWidth * 0.58;
+          final sideWidth = (constraints.maxWidth - mainWidth - gap)
+              .clamp(0.0, constraints.maxWidth);
+          final sideHeight = ((constraints.maxHeight - gap) / 2)
+              .clamp(0.0, constraints.maxHeight);
+
+          return Row(
+            children: <Widget>[
+              _RemoteThumbnail(
+                key: ValueKey<String>('folder-main-${lead.stableId}'),
+                client: widget.client,
+                entry: lead,
+                width: mainWidth,
+                height: constraints.maxHeight,
+                borderRadius: 12,
+                backgroundColor: const Color(0xFF12141B),
+              ),
+              SizedBox(width: gap),
+              SizedBox(
+                width: sideWidth,
+                child: Column(
+                  children: <Widget>[
+                    if (second != null)
+                      _RemoteThumbnail(
+                        key: ValueKey<String>('folder-side-a-${second.stableId}'),
+                        client: widget.client,
+                        entry: second,
+                        width: sideWidth,
+                        height: sideHeight,
+                        borderRadius: 12,
+                        backgroundColor: const Color(0xFF12141B),
+                      )
+                    else
+                      SizedBox(
+                        width: sideWidth,
+                        height: sideHeight,
+                        child: _placeholder(),
                       ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
+                    SizedBox(height: gap),
+                    if (third != null)
+                      _RemoteThumbnail(
+                        key: ValueKey<String>('folder-side-b-${third.stableId}'),
+                        client: widget.client,
+                        entry: third,
+                        width: sideWidth,
+                        height: sideHeight,
+                        borderRadius: 12,
+                        backgroundColor: const Color(0xFF12141B),
+                      )
+                    else
+                      SizedBox(
+                        width: sideWidth,
+                        height: sideHeight,
+                        child: _placeholder(
+                          child: const Icon(
+                            Icons.picture_as_pdf_outlined,
+                            color: Colors.white38,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
