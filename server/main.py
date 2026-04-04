@@ -1,6 +1,9 @@
 ﻿from __future__ import annotations
 
+import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,10 +21,16 @@ from server.services.media_stream_service import MediaStreamService
 from server.services.metadata_store import MetadataStore
 from server.services.thumbnail_service import ThumbnailService
 from server.services.url_download_service import UrlDownloadService
+from server.web_static import mount_web_build
 
 
 settings = load_settings()
 configure_logging(settings.log_level)
+logger = logging.getLogger(__name__)
+project_root = Path(__file__).resolve().parents[1]
+web_build_dir = Path(
+    os.getenv("MEDIA_SERVER_WEB_BUILD_DIR") or str(project_root / "build" / "web")
+).resolve()
 
 
 @asynccontextmanager
@@ -72,3 +81,4 @@ app.include_router(search_router)
 app.include_router(actions_router)
 app.include_router(media_router)
 
+mount_web_build(app, web_build_dir, logger=logger)
