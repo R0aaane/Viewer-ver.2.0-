@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/tag_service.dart';
 import '../models/metadata_settings.dart';
+import 'app_storage_paths.dart';
 import 'app_settings_service.dart';
 import 'remote_tag_api_client.dart';
 
@@ -704,11 +705,7 @@ class HostApiServerService extends ChangeNotifier {
     MetadataSettings settings,
     List<String> roots,
   ) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final dataDir = Directory('${docsDir.path}${Platform.pathSeparator}host_api');
-    if (!await dataDir.exists()) {
-      await dataDir.create(recursive: true);
-    }
+    final dataDir = await getHostApiDataDirectory();
 
     final env = Map<String, String>.from(Platform.environment);
     env['MEDIA_SERVER_HOST'] = '0.0.0.0';

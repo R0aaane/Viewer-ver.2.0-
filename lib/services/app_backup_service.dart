@@ -3,10 +3,10 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/app_db.dart';
+import 'app_storage_paths.dart';
 
 class AppBackupService {
   AppBackupService(this._db);
@@ -353,8 +353,7 @@ class AppBackupService {
   }
 
   Future<File> _getDbFile() async {
-    final dir = await getApplicationDocumentsDirectory();
-    return File(p.join(dir.path, 'media_viewer.sqlite'));
+    return getAppDatabaseFile();
   }
 
   String _yyyymmdd_HHmm(DateTime dt) {

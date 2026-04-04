@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+
+import '../services/app_storage_paths.dart';
 
 part 'app_db.g.dart';
 
@@ -102,8 +102,7 @@ class AppDb extends _$AppDb {
 
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final Directory dir = await getApplicationDocumentsDirectory();
-    final File file = File(p.join(dir.path, 'media_viewer.sqlite'));
+    final File file = await getAppDatabaseFile();
     return NativeDatabase(file);
   });
 }
