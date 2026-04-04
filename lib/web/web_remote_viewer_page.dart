@@ -609,8 +609,17 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       builder: (context, constraints) {
         final showSidebar = constraints.maxWidth >= 980;
         final splitView = constraints.maxWidth >= 1180;
+        final compactScreen = constraints.maxWidth < 720;
+        final keyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+        final contentPadding = EdgeInsets.fromLTRB(
+          compactScreen ? 10 : 16,
+          compactScreen ? 10 : 16,
+          compactScreen ? 10 : 16,
+          keyboardVisible ? 10 : 16,
+        );
 
         return Scaffold(
+          resizeToAvoidBottomInset: true,
           appBar: AppBar(
             title: const Text('Web メディアビューア'),
             leading:
@@ -645,7 +654,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 if (showSidebar) const VerticalDivider(width: 1),
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
+                    padding: contentPadding,
                     child:
                         splitView
                             ? Row(
@@ -736,7 +745,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _BrowserHeader(
+        _ResponsiveBrowserHeader(
           folderName: _selectedFolderRaw == null ? null : _folderName(_selectedFolderRaw!),
           itemCount: _entries.length,
           searchController: _searchController,
@@ -772,6 +781,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Widget _buildList(bool splitView) {
+    final compact = MediaQuery.of(context).size.width < 720;
     return Card(
       child: RefreshIndicator(
         onRefresh: _loadEntries,
@@ -790,9 +800,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   ],
                 )
                 : ListView.separated(
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.all(compact ? 10 : 16),
                   itemCount: _entries.length,
-                  separatorBuilder: (context, index) => const SizedBox(height: 12),
+                  separatorBuilder:
+                      (context, index) =>
+                          SizedBox(height: compact ? 10 : 12),
                   itemBuilder: (context, index) {
                     final entry = _entries[index];
                     final selected = _selectedEntry?.stableId == entry.stableId;
@@ -1043,6 +1055,277 @@ class _BrowserHeader extends StatelessWidget {
   }
 }
 
+enum _BrowserHeaderMenuAction {
+  goParent,
+  importUrl,
+  organize,
+  rescan,
+}
+
+class _ResponsiveBrowserHeader extends StatelessWidget {
+  final String? folderName;
+  final int itemCount;
+  final TextEditingController searchController;
+  final bool isLoading;
+  final bool actionsBusy;
+  final bool parentFolderAvailable;
+  final Future<void> Function() onSearch;
+  final VoidCallback? onGoParent;
+  final VoidCallback? onImportUrl;
+  final VoidCallback? onOrganizeFolder;
+  final VoidCallback? onRescan;
+  final _WebMediaFilter filter;
+  final ValueChanged<_WebMediaFilter> onFilterChanged;
+
+  const _ResponsiveBrowserHeader({
+    required this.folderName,
+    required this.itemCount,
+    required this.searchController,
+    required this.isLoading,
+    required this.actionsBusy,
+    required this.parentFolderAvailable,
+    required this.onSearch,
+    required this.onGoParent,
+    required this.onImportUrl,
+    required this.onOrganizeFolder,
+    required this.onRescan,
+    required this.filter,
+    required this.onFilterChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    final compact = mediaQuery.size.width < 720;
+    final keyboardVisible = mediaQuery.viewInsets.bottom > 0;
+    final title = folderName ?? 'Library';
+    final filterChips = _WebMediaFilter.values
+        .map(
+          (entry) => Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: Text(_filterLabel(entry)),
+              selected: filter == entry,
+              onSelected: (_) => onFilterChanged(entry),
+            ),
+          ),
+        )
+        .toList(growable: false);
+    final menuActions = <PopupMenuEntry<_BrowserHeaderMenuAction>>[
+      if (parentFolderAvailable)
+        const PopupMenuItem<_BrowserHeaderMenuAction>(
+          value: _BrowserHeaderMenuAction.goParent,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.arrow_upward),
+            title: Text('Up Folder'),
+          ),
+        ),
+      if (onImportUrl != null)
+        const PopupMenuItem<_BrowserHeaderMenuAction>(
+          value: _BrowserHeaderMenuAction.importUrl,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.download_outlined),
+            title: Text('Import URL'),
+          ),
+        ),
+      if (onOrganizeFolder != null)
+        const PopupMenuItem<_BrowserHeaderMenuAction>(
+          value: _BrowserHeaderMenuAction.organize,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.auto_fix_high_outlined),
+            title: Text('Organize'),
+          ),
+        ),
+      if (onRescan != null)
+        const PopupMenuItem<_BrowserHeaderMenuAction>(
+          value: _BrowserHeaderMenuAction.rescan,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.refresh),
+            title: Text('Rescan'),
+          ),
+        ),
+    ];
+
+    void handleMenu(_BrowserHeaderMenuAction action) {
+      switch (action) {
+        case _BrowserHeaderMenuAction.goParent:
+          onGoParent?.call();
+          break;
+        case _BrowserHeaderMenuAction.importUrl:
+          onImportUrl?.call();
+          break;
+        case _BrowserHeaderMenuAction.organize:
+          onOrganizeFolder?.call();
+          break;
+        case _BrowserHeaderMenuAction.rescan:
+          onRescan?.call();
+          break;
+      }
+    }
+
+    if (compact) {
+      return Card(
+        child: Padding(
+          padding: EdgeInsets.all(keyboardVisible ? 10 : 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A2432),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '$itemCount',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (menuActions.isNotEmpty)
+                    PopupMenuButton<_BrowserHeaderMenuAction>(
+                      enabled: !actionsBusy,
+                      onSelected: handleMenu,
+                      itemBuilder: (context) => menuActions,
+                      icon: const Icon(Icons.more_horiz),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: searchController,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => onSearch(),
+                decoration: InputDecoration(
+                  isDense: true,
+                  labelText: 'Search',
+                  hintText: 'artist:"name"  type:pdf  #tag',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: IconButton(
+                    onPressed: isLoading ? null : onSearch,
+                    icon: const Icon(Icons.arrow_forward),
+                  ),
+                ),
+              ),
+              if (!keyboardVisible) ...<Widget>[
+                const SizedBox(height: 10),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: filterChips),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                Chip(
+                  avatar: const Icon(Icons.folder_open, size: 18),
+                  label: Text(title),
+                ),
+                if (parentFolderAvailable)
+                  OutlinedButton.icon(
+                    onPressed: onGoParent,
+                    icon: const Icon(Icons.arrow_upward),
+                    label: const Text('Up Folder'),
+                  ),
+                Text(
+                  '$itemCount items',
+                  style: const TextStyle(color: Colors.white60),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: TextField(
+                    controller: searchController,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => onSearch(),
+                    decoration: const InputDecoration(
+                      labelText: 'Search',
+                      hintText: 'artist:"name"  type:pdf  #tag  untagged',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                FilledButton(
+                  onPressed: isLoading ? null : onSearch,
+                  child: const Text('Search'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: filterChips,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                FilledButton.icon(
+                  onPressed: actionsBusy ? null : onImportUrl,
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('Import URL'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: actionsBusy ? null : onOrganizeFolder,
+                  icon: const Icon(Icons.auto_fix_high_outlined),
+                  label: const Text('Organize'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: actionsBusy ? null : onRescan,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Rescan'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 String _formatBrowseDateTime(DateTime? value) {
   if (value == null) {
     return 'N/A';
@@ -1069,6 +1352,17 @@ String _formatBrowseBytes(int? bytes) {
   }
   final digits = value >= 100 ? 0 : 1;
   return '${value.toStringAsFixed(digits)} ${units[index]}';
+}
+
+String _filterLabel(_WebMediaFilter filter) {
+  switch (filter) {
+    case _WebMediaFilter.all:
+      return 'All';
+    case _WebMediaFilter.pdf:
+      return 'PDF';
+    case _WebMediaFilter.image:
+      return 'Image';
+  }
 }
 
 Color _entryAccentColor(WebRemoteEntry entry) {
@@ -1347,6 +1641,7 @@ class _EntryTitleBand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.of(context).size.width < 560;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -1358,9 +1653,9 @@ class _EntryTitleBand extends StatelessWidget {
         entry.displayName,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
+        style: TextStyle(
           color: Color(0xFF362324),
-          fontSize: 28,
+          fontSize: compact ? 22 : 28,
           fontWeight: FontWeight.w800,
           height: 1.04,
         ),
@@ -1384,10 +1679,21 @@ class _EntryThumbnailStack extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = compact ? 206.0 : 250.0;
-    final height = compact ? 230.0 : 280.0;
-    final thumbWidth = compact ? 134.0 : 164.0;
-    final thumbHeight = compact ? 188.0 : 228.0;
+    final veryCompact = MediaQuery.of(context).size.width < 560;
+    final width = veryCompact ? 172.0 : compact ? 206.0 : 250.0;
+    final height = veryCompact ? 196.0 : compact ? 230.0 : 280.0;
+    final thumbWidth = veryCompact ? 110.0 : compact ? 134.0 : 164.0;
+    final thumbHeight = veryCompact ? 150.0 : compact ? 188.0 : 228.0;
+
+    if (entry.isFolder) {
+      return _FolderPreviewPanel(
+        client: client,
+        entry: entry,
+        accent: accent,
+        width: width,
+        height: height,
+      );
+    }
 
     Widget panel({
       required double left,
@@ -1419,26 +1725,26 @@ class _EntryThumbnailStack extends StatelessWidget {
         clipBehavior: Clip.none,
         children: <Widget>[
           panel(
-            left: 18,
-            top: 18,
+            left: veryCompact ? 10 : 18,
+            top: veryCompact ? 12 : 18,
             angle: -0.06,
             color: const Color(0xFF2A2734),
           ),
           panel(
-            left: 48,
-            top: 12,
+            left: veryCompact ? 28 : 48,
+            top: veryCompact ? 8 : 12,
             angle: 0.03,
             color: const Color(0xFF242230),
           ),
           panel(
-            left: 78,
-            top: 6,
+            left: veryCompact ? 46 : 78,
+            top: veryCompact ? 4 : 6,
             angle: -0.02,
             color: const Color(0xFF1D1B29),
           ),
           Positioned(
-            left: 84,
-            top: 38,
+            left: veryCompact ? 52 : 84,
+            top: veryCompact ? 22 : 38,
             child: _RemoteThumbnail(
               client: client,
               entry: entry,
@@ -1462,6 +1768,252 @@ class _EntryThumbnailStack extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _FolderPreviewPanel extends StatefulWidget {
+  final WebRemoteApiClient? client;
+  final WebRemoteEntry entry;
+  final Color accent;
+  final double width;
+  final double height;
+
+  const _FolderPreviewPanel({
+    required this.client,
+    required this.entry,
+    required this.accent,
+    required this.width,
+    required this.height,
+  });
+
+  @override
+  State<_FolderPreviewPanel> createState() => _FolderPreviewPanelState();
+}
+
+class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
+  Future<List<WebRemoteEntry>>? _previewFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshPreview();
+  }
+
+  @override
+  void didUpdateWidget(covariant _FolderPreviewPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.stableId != widget.entry.stableId ||
+        oldWidget.client != widget.client) {
+      _refreshPreview();
+    }
+  }
+
+  void _refreshPreview() {
+    final client = widget.client;
+    final folderRaw = (widget.entry.fullPath ?? widget.entry.entryId).trim();
+    if (client == null || folderRaw.isEmpty) {
+      _previewFuture = null;
+      return;
+    }
+    _previewFuture = _loadPreview(client, folderRaw);
+  }
+
+  Future<List<WebRemoteEntry>> _loadPreview(
+    WebRemoteApiClient client,
+    String folderRaw,
+  ) async {
+    final children = await client.listFolderChildren(folderRaw, limit: 24);
+    final mediaEntries = children.where((entry) => !entry.isFolder).toList();
+    mediaEntries.sort((left, right) {
+      final leftModified = left.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      final rightModified = right.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      final modifiedCompare = rightModified.compareTo(leftModified);
+      if (modifiedCompare != 0) {
+        return modifiedCompare;
+      }
+      return left.displayName
+          .toLowerCase()
+          .compareTo(right.displayName.toLowerCase());
+    });
+    return mediaEntries.take(3).toList(growable: false);
+  }
+
+  Widget _frame(Widget child) {
+    return Container(
+      width: widget.width,
+      height: widget.height,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF171A23),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Stack(
+        children: <Widget>[
+          Positioned.fill(child: child),
+          Positioned(
+            left: 0,
+            top: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: widget.accent.withOpacity(0.92),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.folder_open, size: 14, color: Color(0xFF352324)),
+                  SizedBox(width: 4),
+                  Text(
+                    'Folder',
+                    style: TextStyle(
+                      color: Color(0xFF352324),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _placeholder({Widget? child}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF242633),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      alignment: Alignment.center,
+      child:
+          child ??
+          const Icon(
+            Icons.insert_drive_file_outlined,
+            color: Colors.white38,
+          ),
+    );
+  }
+
+  Widget _grid(List<WebRemoteEntry> entries) {
+    final gap = widget.width < 190 ? 6.0 : 8.0;
+    final mainWidth = widget.width * 0.58;
+    final sideWidth = widget.width - mainWidth - gap - 16;
+    final sideHeight = (widget.height - gap - 16) / 2;
+    final lead = entries.first;
+    final second = entries.length > 1 ? entries[1] : null;
+    final third = entries.length > 2 ? entries[2] : null;
+
+    return _frame(
+      Row(
+        children: <Widget>[
+          _RemoteThumbnail(
+            key: ValueKey<String>('folder-main-${lead.stableId}'),
+            client: widget.client,
+            entry: lead,
+            width: mainWidth,
+            height: widget.height - 16,
+            borderRadius: 12,
+            backgroundColor: const Color(0xFF12141B),
+          ),
+          SizedBox(width: gap),
+          SizedBox(
+            width: sideWidth,
+            child: Column(
+              children: <Widget>[
+                if (second != null)
+                  _RemoteThumbnail(
+                    key: ValueKey<String>('folder-side-a-${second.stableId}'),
+                    client: widget.client,
+                    entry: second,
+                    width: sideWidth,
+                    height: sideHeight,
+                    borderRadius: 12,
+                    backgroundColor: const Color(0xFF12141B),
+                  )
+                else
+                  SizedBox(
+                    width: sideWidth,
+                    height: sideHeight,
+                    child: _placeholder(),
+                  ),
+                SizedBox(height: gap),
+                if (third != null)
+                  _RemoteThumbnail(
+                    key: ValueKey<String>('folder-side-b-${third.stableId}'),
+                    client: widget.client,
+                    entry: third,
+                    width: sideWidth,
+                    height: sideHeight,
+                    borderRadius: 12,
+                    backgroundColor: const Color(0xFF12141B),
+                  )
+                else
+                  SizedBox(
+                    width: sideWidth,
+                    height: sideHeight,
+                    child: _placeholder(
+                      child: const Icon(
+                        Icons.picture_as_pdf_outlined,
+                        color: Colors.white38,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final future = _previewFuture;
+    if (future == null) {
+      return _frame(
+        _placeholder(
+          child: const Icon(
+            Icons.folder_copy_outlined,
+            size: 42,
+            color: Colors.white60,
+          ),
+        ),
+      );
+    }
+
+    return FutureBuilder<List<WebRemoteEntry>>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _frame(
+            const Center(
+              child: SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        final entries = snapshot.data ?? const <WebRemoteEntry>[];
+        if (entries.isEmpty) {
+          return _frame(
+            _placeholder(
+              child: const Icon(
+                Icons.folder_copy_outlined,
+                size: 42,
+                color: Colors.white60,
+              ),
+            ),
+          );
+        }
+        return _grid(entries);
+      },
     );
   }
 }
