@@ -212,7 +212,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     );
 
     try {
-      await client.checkHealth();
       final folders = await client.listFolders();
       final selectedFolder = _selectedFolderRaw ?? (folders.isNotEmpty ? folders.first.raw : null);
       if (!mounted) return;

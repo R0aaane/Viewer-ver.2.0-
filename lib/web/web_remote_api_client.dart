@@ -482,13 +482,106 @@ class WebRemoteApiClient {
   final String? authToken;
   final Duration timeout;
   final Duration actionTimeout;
+  Future<List<WebRemoteFolder>>? _foldersFuture;
+  final Map<String, Future<List<WebRemoteEntry>>> _folderChildrenCache =
+      <String, Future<List<WebRemoteEntry>>>{};
+  final Map<String, Future<List<WebRemoteEntry>>> _searchCache =
+      <String, Future<List<WebRemoteEntry>>>{};
+  final Map<String, Future<List<Tag>>> _itemTagsCache =
+      <String, Future<List<Tag>>>{};
+  final Map<String, Future<WebRemoteMediaMeta>> _mediaMetaCache =
+      <String, Future<WebRemoteMediaMeta>>{};
+  final Map<String, Future<WebRemotePdfPageCountInfo>> _pdfPageCountCache =
+      <String, Future<WebRemotePdfPageCountInfo>>{};
 
-  const WebRemoteApiClient({
+  WebRemoteApiClient({
     required this.baseUrl,
     this.authToken,
     this.timeout = const Duration(seconds: 20),
     this.actionTimeout = const Duration(minutes: 10),
   });
+
+  void clearCaches() {
+    _foldersFuture = null;
+    _folderChildrenCache.clear();
+    _searchCache.clear();
+    _itemTagsCache.clear();
+    _mediaMetaCache.clear();
+    _pdfPageCountCache.clear();
+  }
+
+  Future<T> _memoize<T>(
+    Map<String, Future<T>> cache,
+    String key,
+    Future<T> Function() loader,
+  ) {
+    final existing = cache[key];
+    if (existing != null) {
+      return existing;
+    }
+    final future = loader();
+    cache[key] = future;
+    future.catchError((_) {
+      if (identical(cache[key], future)) {
+        cache.remove(key);
+      }
+    });
+    return future;
+  }
+
+  String _cacheKey(
+    String path, {
+    Map<String, String>? queryParameters,
+  }) {
+    final uri = Uri(
+      path: path,
+      queryParameters:
+          queryParameters == null || queryParameters.isEmpty
+              ? null
+              : Map<String, String>.fromEntries(
+                queryParameters.entries.toList()
+                  ..sort((left, right) => left.key.compareTo(right.key)),
+              ),
+    );
+    return uri.toString();
+  }
+
+  bool _shouldRetryRequest(String method, WebRemoteException error) {
+    if (method.toUpperCase() != 'GET') {
+      return false;
+    }
+    final statusCode = error.statusCode;
+    if (statusCode == null) {
+      return true;
+    }
+    return statusCode == 408 ||
+        statusCode == 425 ||
+        statusCode == 429 ||
+        statusCode == 500 ||
+        statusCode == 502 ||
+        statusCode == 503 ||
+        statusCode == 504;
+  }
+
+  Future<T> _runGetWithRetry<T>(
+    String method,
+    Future<T> Function() loader,
+  ) async {
+    WebRemoteException? lastError;
+    for (var attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await loader();
+      } on WebRemoteException catch (error) {
+        if (attempt > 0 || !_shouldRetryRequest(method, error)) {
+          rethrow;
+        }
+        lastError = error;
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+    }
+    throw lastError ??
+        const WebRemoteException('サーバーへの接続に失敗しました');
+  }
 
   Future<void> checkHealth() async {
     final json = await _getJson('/health');
@@ -498,12 +591,25 @@ class WebRemoteApiClient {
   }
 
   Future<List<WebRemoteFolder>> listFolders() async {
-    final json = await _getJson('/folders');
-    return _unwrapItems(json)
-        .whereType<Map>()
-        .map(_parseFolder)
-        .where((folder) => folder.raw.trim().isNotEmpty)
-        .toList(growable: false);
+    final existing = _foldersFuture;
+    if (existing != null) {
+      return existing;
+    }
+    final future = () async {
+      final json = await _getJson('/folders');
+      return _unwrapItems(json)
+          .whereType<Map>()
+          .map(_parseFolder)
+          .where((folder) => folder.raw.trim().isNotEmpty)
+          .toList(growable: false);
+    }();
+    _foldersFuture = future;
+    future.catchError((_) {
+      if (identical(_foldersFuture, future)) {
+        _foldersFuture = null;
+      }
+    });
+    return future;
   }
 
   Future<List<WebRemoteEntry>> listFolderChildren(
@@ -511,18 +617,25 @@ class WebRemoteApiClient {
     int limit = 200,
     int offset = 0,
   }) async {
-    final json = await _getJson(
-      '/folders/children',
-      queryParameters: <String, String>{
-        'folderRaw': folderRaw,
-        'limit': '$limit',
-        'offset': '$offset',
+    final queryParameters = <String, String>{
+      'folderRaw': folderRaw,
+      'limit': '$limit',
+      'offset': '$offset',
+    };
+    return _memoize(
+      _folderChildrenCache,
+      _cacheKey('/folders/children', queryParameters: queryParameters),
+      () async {
+        final json = await _getJson(
+          '/folders/children',
+          queryParameters: queryParameters,
+        );
+        return _unwrapItems(json)
+            .whereType<Map>()
+            .map(_parseEntry)
+            .toList(growable: false);
       },
     );
-    return _unwrapItems(json)
-        .whereType<Map>()
-        .map(_parseEntry)
-        .toList(growable: false);
   }
 
   Future<List<WebRemoteEntry>> search(
@@ -531,44 +644,55 @@ class WebRemoteApiClient {
     int limit = 200,
     int offset = 0,
   }) async {
-    final json = await _getJson(
-      query.untagged ? '/untagged' : '/search',
-      queryParameters: <String, String>{
-        if (folderRaw != null && folderRaw.trim().isNotEmpty)
-          'folderRaw': folderRaw,
-        if (!query.untagged && query.q != null && query.q!.isNotEmpty)
-          'q': query.q!,
-        if (!query.untagged && query.artist != null && query.artist!.isNotEmpty)
-          'artist': query.artist!,
-        if (!query.untagged && query.series != null && query.series!.isNotEmpty)
-          'series': query.series!,
-        if (!query.untagged &&
-            query.character != null &&
-            query.character!.isNotEmpty)
-          'character': query.character!,
-        if (!query.untagged &&
-            query.mediaType != null &&
-            query.mediaType!.isNotEmpty)
-          'mediaType': query.mediaType!,
-        if (!query.untagged && query.name != null && query.name!.isNotEmpty)
-          'name': query.name!,
-        'limit': '$limit',
-        'offset': '$offset',
+    final path = query.untagged ? '/untagged' : '/search';
+    final queryParameters = <String, String>{
+      if (folderRaw != null && folderRaw.trim().isNotEmpty)
+        'folderRaw': folderRaw,
+      if (!query.untagged && query.q != null && query.q!.isNotEmpty)
+        'q': query.q!,
+      if (!query.untagged && query.artist != null && query.artist!.isNotEmpty)
+        'artist': query.artist!,
+      if (!query.untagged && query.series != null && query.series!.isNotEmpty)
+        'series': query.series!,
+      if (!query.untagged &&
+          query.character != null &&
+          query.character!.isNotEmpty)
+        'character': query.character!,
+      if (!query.untagged &&
+          query.mediaType != null &&
+          query.mediaType!.isNotEmpty)
+        'mediaType': query.mediaType!,
+      if (!query.untagged && query.name != null && query.name!.isNotEmpty)
+        'name': query.name!,
+      'limit': '$limit',
+      'offset': '$offset',
+    };
+
+    return _memoize(
+      _searchCache,
+      _cacheKey(path, queryParameters: queryParameters),
+      () async {
+        final json = await _getJson(path, queryParameters: queryParameters);
+        return _unwrapItems(json)
+            .whereType<Map>()
+            .map(_parseEntry)
+            .toList(growable: false);
       },
     );
-
-    return _unwrapItems(json)
-        .whereType<Map>()
-        .map(_parseEntry)
-        .toList(growable: false);
   }
 
   Future<List<Tag>> fetchItemTags(String mediaId) async {
-    final json = await _getJson('/items/${Uri.encodeComponent(mediaId)}/tags');
-    return _unwrapItems(json)
-        .whereType<Map>()
-        .map(_parseTag)
-        .toList(growable: false);
+    return _memoize(
+      _itemTagsCache,
+      mediaId,
+      () async {
+        final json = await _getJson('/items/${Uri.encodeComponent(mediaId)}/tags');
+        return _unwrapItems(json)
+            .whereType<Map>()
+            .map(_parseTag)
+            .toList(growable: false);
+      },
+    );
   }
 
   Future<void> requestRescan({String? folderRaw}) async {
@@ -581,6 +705,7 @@ class WebRemoteApiClient {
       },
       requestTimeout: actionTimeout,
     );
+    clearCaches();
   }
 
   Future<WebRemoteOrganizeResult> organizeLibrary(String folderRaw) async {
@@ -606,11 +731,13 @@ class WebRemoteApiClient {
       });
     }
 
-    return WebRemoteOrganizeResult(
+    final result = WebRemoteOrganizeResult(
       moved: moved,
       movedCount: _asInt(json['movedCount']) ?? moved.length,
       rescannedCount: _asInt(json['rescannedCount']) ?? 0,
     );
+    clearCaches();
+    return result;
   }
 
   Future<WebRemoteUrlImportResult> downloadUrl({
@@ -668,7 +795,7 @@ class WebRemoteApiClient {
       throw const WebRemoteException('URL 取り込み結果の形式が不正です');
     }
 
-    return WebRemoteUrlImportResult(
+    final result = WebRemoteUrlImportResult(
       importedCount: _asInt(json['importedCount']) ?? 0,
       skippedCount: _asInt(json['skippedCount']) ?? 0,
       failedCount: _asInt(json['failedCount']) ?? 0,
@@ -677,23 +804,31 @@ class WebRemoteApiClient {
       rescannedCount: _asInt(json['rescannedCount']) ?? 0,
       targetCollection: json['targetCollection']?.toString(),
     );
+    clearCaches();
+    return result;
   }
 
   Future<WebRemoteMediaMeta> fetchMediaMeta(String mediaId) async {
-    final json = await _getJson('/media/${Uri.encodeComponent(mediaId)}/meta');
-    if (json is! Map<String, dynamic>) {
-      throw const WebRemoteException('メディア情報の形式が不正です');
-    }
-    return WebRemoteMediaMeta(
-      mediaId: json['mediaId']?.toString() ?? mediaId,
-      displayName: json['displayName']?.toString() ?? mediaId,
-      kind: json['kind']?.toString() ?? 'image',
-      mimeType: json['mimeType']?.toString(),
-      sizeBytes: _asInt(json['sizeBytes']),
-      modifiedAt: _parseDateTime(json['modifiedAt']),
-      etag: json['etag']?.toString(),
-      supportsRange: json['supportsRange'] == true,
-      pageCount: _asInt(json['pageCount']),
+    return _memoize(
+      _mediaMetaCache,
+      mediaId,
+      () async {
+        final json = await _getJson('/media/${Uri.encodeComponent(mediaId)}/meta');
+        if (json is! Map<String, dynamic>) {
+          throw const WebRemoteException('メディア情報の形式が不正です');
+        }
+        return WebRemoteMediaMeta(
+          mediaId: json['mediaId']?.toString() ?? mediaId,
+          displayName: json['displayName']?.toString() ?? mediaId,
+          kind: json['kind']?.toString() ?? 'image',
+          mimeType: json['mimeType']?.toString(),
+          sizeBytes: _asInt(json['sizeBytes']),
+          modifiedAt: _parseDateTime(json['modifiedAt']),
+          etag: json['etag']?.toString(),
+          supportsRange: json['supportsRange'] == true,
+          pageCount: _asInt(json['pageCount']),
+        );
+      },
     );
   }
 
@@ -730,28 +865,38 @@ class WebRemoteApiClient {
     String mediaId, {
     int? pageCountHint,
   }) async {
-    if (pageCountHint != null && pageCountHint > 0) {
-      return WebRemotePdfPageCountInfo(count: pageCountHint, isReliable: true);
-    }
+    final cacheKey = '$mediaId:${pageCountHint ?? 0}';
+    return _memoize(
+      _pdfPageCountCache,
+      cacheKey,
+      () async {
+        if (pageCountHint != null && pageCountHint > 0) {
+          return WebRemotePdfPageCountInfo(
+            count: pageCountHint,
+            isReliable: true,
+          );
+        }
 
-    try {
-      await _ensurePdfJsReady();
-      final bytes = Uint8List.fromList(await fetchImageDownload(mediaId));
-      final document = await pdfjsGetDocumentFromData(bytes.buffer);
-      try {
-        return WebRemotePdfPageCountInfo(
-          count: document.numPages,
-          isReliable: true,
-        );
-      } finally {
-        document.destroy();
-      }
-    } catch (_) {
-      return WebRemotePdfPageCountInfo(
-        count: await _resolvePdfPageCountByPageProbe(mediaId),
-        isReliable: false,
-      );
-    }
+        try {
+          await _ensurePdfJsReady();
+          final bytes = Uint8List.fromList(await fetchImageDownload(mediaId));
+          final document = await pdfjsGetDocumentFromData(bytes.buffer);
+          try {
+            return WebRemotePdfPageCountInfo(
+              count: document.numPages,
+              isReliable: true,
+            );
+          } finally {
+            document.destroy();
+          }
+        } catch (_) {
+          return WebRemotePdfPageCountInfo(
+            count: await _resolvePdfPageCountByPageProbe(mediaId),
+            isReliable: false,
+          );
+        }
+      },
+    );
   }
 
   Future<int> resolvePdfPageCount(
@@ -910,13 +1055,32 @@ class WebRemoteApiClient {
     Duration? requestTimeout,
   }) async {
     final effectiveTimeout = requestTimeout ?? timeout;
+    return _runGetWithRetry(
+      method,
+      () => _requestTextOnce(
+        method,
+        path,
+        queryParameters: queryParameters,
+        body: body,
+        requestTimeout: effectiveTimeout,
+      ),
+    );
+  }
+
+  Future<String> _requestTextOnce(
+    String method,
+    String path, {
+    Map<String, String>? queryParameters,
+    Map<String, dynamic>? body,
+    required Duration requestTimeout,
+  }) async {
     try {
       final request = await html.HttpRequest.request(
         _buildUri(path, queryParameters: queryParameters).toString(),
         method: method,
         sendData: body == null ? null : jsonEncode(body),
         requestHeaders: _buildHeaders(jsonBody: body != null),
-      ).timeout(effectiveTimeout);
+      ).timeout(requestTimeout);
 
       final status = request.status ?? 0;
       final payload = request.responseText ?? '';
@@ -941,6 +1105,16 @@ class WebRemoteApiClient {
   }
 
   Future<Uint8List> _getBytes(
+    String path, {
+    Map<String, String>? queryParameters,
+  }) async {
+    return _runGetWithRetry(
+      'GET',
+      () => _getBytesOnce(path, queryParameters: queryParameters),
+    );
+  }
+
+  Future<Uint8List> _getBytesOnce(
     String path, {
     Map<String, String>? queryParameters,
   }) async {
