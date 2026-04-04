@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:typed_data';
 
+import 'package:pdfx/pdfx.dart';
+
 import '../models/tag.dart';
 
 class WebRemoteException implements Exception {
@@ -425,6 +427,19 @@ class WebRemoteApiClient {
       return pageCountHint;
     }
 
+    try {
+      final document = await PdfDocument.openData(fetchImageDownload(mediaId));
+      try {
+        return document.pagesCount;
+      } finally {
+        await document.close();
+      }
+    } catch (_) {
+      return _resolvePdfPageCountByPageProbe(mediaId);
+    }
+  }
+
+  Future<int> _resolvePdfPageCountByPageProbe(String mediaId) async {
     if (!await _pdfPageExists(mediaId, 1)) {
       return 1;
     }
