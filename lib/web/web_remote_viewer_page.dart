@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/metadata_settings.dart';
 import '../models/tag.dart';
+import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import 'web_remote_api_client.dart';
 
@@ -47,6 +48,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   String? _selectedFolderRaw;
   bool _isConnecting = false;
   bool _isLoading = false;
+  bool _actionBusy = false;
   String? _statusMessage;
   String? _errorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.all;
@@ -430,6 +432,177 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     await _loadEntries();
   }
 
+  Future<T?> _runRemoteAction<T>({
+    required String workingStatus,
+    required Future<T> Function(WebRemoteApiClient client) action,
+  }) async {
+    final client = _client;
+    if (client == null || _actionBusy) {
+      return null;
+    }
+
+    setState(() {
+      _actionBusy = true;
+      _errorMessage = null;
+      _statusMessage = workingStatus;
+    });
+
+    try {
+      return await action(client);
+    } catch (error) {
+      if (!mounted) {
+        return null;
+      }
+      setState(() {
+        _errorMessage = error.toString();
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      return null;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _actionBusy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _importUrlToCurrentFolder() async {
+    final folderRaw = _selectedFolderRaw?.trim();
+    if (folderRaw == null || folderRaw.isEmpty) {
+      return;
+    }
+
+    final request = await _WebUrlImportDialog.show(
+      context,
+      folderName: _folderName(folderRaw),
+    );
+    if (request == null || !request.hasAnySource) {
+      return;
+    }
+
+    final result = await _runRemoteAction<WebRemoteUrlImportResult>(
+      workingStatus: 'URL 取り込みを実行中...',
+      action: (client) {
+        return client.downloadUrl(
+          folderRaw: folderRaw,
+          sourceUrl: request.sourceUrl,
+          options: request.options,
+          importMetadata: request.importMetadata,
+        );
+      },
+    );
+    if (result == null || !mounted) {
+      return;
+    }
+
+    await _loadEntries();
+    if (!mounted) {
+      return;
+    }
+
+    final message =
+        'URL 取り込み完了: 追加 ${result.importedCount} 件 / '
+        '整理 ${result.organizedCount} 件 / '
+        'スキップ ${result.skippedCount} 件 / '
+        '失敗 ${result.failedCount} 件';
+    setState(() {
+      _statusMessage = message;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _organizeCurrentFolder() async {
+    final folderRaw = _selectedFolderRaw?.trim();
+    if (folderRaw == null || folderRaw.isEmpty) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('現在フォルダを整理'),
+          content: Text(
+            'ホストに整理を依頼します。\n\n$folderRaw',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('整理する'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+
+    final result = await _runRemoteAction<WebRemoteOrganizeResult>(
+      workingStatus: 'フォルダ整理を実行中...',
+      action: (client) => client.organizeLibrary(folderRaw),
+    );
+    if (result == null || !mounted) {
+      return;
+    }
+
+    await _loadEntries();
+    if (!mounted) {
+      return;
+    }
+
+    final message =
+        '整理完了: 移動 ${result.movedCount} 件 / '
+        '再スキャン ${result.rescannedCount} 件';
+    setState(() {
+      _statusMessage = message;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _requestRescanCurrentFolder() async {
+    final folderRaw = _selectedFolderRaw?.trim();
+
+    final completed = await _runRemoteAction<bool>(
+      workingStatus: folderRaw == null || folderRaw.isEmpty
+          ? 'ホスト全体を再スキャン中...'
+          : '現在フォルダを再スキャン中...',
+      action: (client) async {
+        await client.requestRescan(folderRaw: folderRaw);
+        return true;
+      },
+    );
+    if (completed != true || !mounted) {
+      return;
+    }
+
+    await _loadEntries();
+    if (!mounted) {
+      return;
+    }
+
+    final message = folderRaw == null || folderRaw.isEmpty
+        ? '再スキャンを完了しました'
+        : '現在フォルダの再スキャンを完了しました';
+    setState(() {
+      _statusMessage = message;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -451,7 +624,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                           ),
                     ),
             actions: <Widget>[
-              if (_isConnecting || _isLoading)
+              if (_isConnecting || _isLoading || _actionBusy)
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16),
                   child: Center(
@@ -568,9 +741,22 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           itemCount: _entries.length,
           searchController: _searchController,
           isLoading: _isLoading,
+          actionsBusy: _actionBusy,
           parentFolderAvailable: parentFolder != null,
           onSearch: _loadEntries,
           onGoParent: parentFolder == null ? null : () => _selectFolder(parentFolder),
+          onImportUrl:
+              _client == null || _selectedFolderRaw == null || _actionBusy
+                  ? null
+                  : _importUrlToCurrentFolder,
+          onOrganizeFolder:
+              _client == null || _selectedFolderRaw == null || _actionBusy
+                  ? null
+                  : _organizeCurrentFolder,
+          onRescan:
+              _client == null || _actionBusy
+                  ? null
+                  : _requestRescanCurrentFolder,
           filter: _filter,
           onFilterChanged: (filter) {
             setState(() {
@@ -691,6 +877,27 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
+            const Text(
+              'Web の注意点',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            bullet('ローカル Library の直接追加、フォルダ選択、端末ファイルの一括読み込みには未対応です'),
+            bullet('Host API の構築やローカル DB の保守は引き続きネイティブ側の役割です'),
+            bullet('URL 取り込みはホストへ依頼できますが、ブラウザ端末のローカル cookie / URL 一覧ファイル参照には未対応です'),
+            bullet('PDF は Web 側でのページ描画に依存するため、新しいタブ表示と詳細表示で挙動差が出る場合があります'),
+            bullet('HTTPS の Web ページから HTTP API へはブラウザ制約で接続できません'),
+          ],
+        ),
+      ),
+    );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
             const Text('Web 未対応機能', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 10),
             bullet('ローカル Library の直接参照、フォルダ追加、ホスト取込み'),
@@ -717,9 +924,13 @@ class _BrowserHeader extends StatelessWidget {
   final int itemCount;
   final TextEditingController searchController;
   final bool isLoading;
+  final bool actionsBusy;
   final bool parentFolderAvailable;
   final Future<void> Function() onSearch;
   final VoidCallback? onGoParent;
+  final VoidCallback? onImportUrl;
+  final VoidCallback? onOrganizeFolder;
+  final VoidCallback? onRescan;
   final _WebMediaFilter filter;
   final ValueChanged<_WebMediaFilter> onFilterChanged;
 
@@ -728,9 +939,13 @@ class _BrowserHeader extends StatelessWidget {
     required this.itemCount,
     required this.searchController,
     required this.isLoading,
+    required this.actionsBusy,
     required this.parentFolderAvailable,
     required this.onSearch,
     required this.onGoParent,
+    required this.onImportUrl,
+    required this.onOrganizeFolder,
+    required this.onRescan,
     required this.filter,
     required this.onFilterChanged,
   });
@@ -797,6 +1012,28 @@ class _BrowserHeader extends StatelessWidget {
                         ),
                       )
                       .toList(growable: false),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                FilledButton.icon(
+                  onPressed: actionsBusy ? null : onImportUrl,
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('URL取込'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: actionsBusy ? null : onOrganizeFolder,
+                  icon: const Icon(Icons.auto_fix_high_outlined),
+                  label: const Text('整理'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: actionsBusy ? null : onRescan,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('再スキャン'),
+                ),
+              ],
             ),
           ],
         ),
@@ -1870,6 +2107,419 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     );
   }
 }
+
+class _WebUrlImportRequest {
+  final String sourceUrl;
+  final UrlImportOptions options;
+  final ImportMetadata importMetadata;
+
+  const _WebUrlImportRequest({
+    required this.sourceUrl,
+    required this.options,
+    required this.importMetadata,
+  });
+
+  bool get hasAnySource => options.hasAnySource(sourceUrl);
+}
+
+class _WebUrlImportDialog extends StatefulWidget {
+  final String folderName;
+
+  const _WebUrlImportDialog({
+    required this.folderName,
+  });
+
+  static Future<_WebUrlImportRequest?> show(
+    BuildContext context, {
+    required String folderName,
+  }) {
+    return showDialog<_WebUrlImportRequest>(
+      context: context,
+      builder: (_) => _WebUrlImportDialog(folderName: folderName),
+    );
+  }
+
+  @override
+  State<_WebUrlImportDialog> createState() => _WebUrlImportDialogState();
+}
+
+class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
+  final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _favoriteUsersController =
+      TextEditingController();
+  final TextEditingController _parallelDownloadsController =
+      TextEditingController(text: '6');
+
+  bool _siteKemono = true;
+  bool _siteCoomer = false;
+  bool _favoritePosts = false;
+  bool _includeInlineImages = false;
+  bool _includePostContent = false;
+  bool _includeComments = false;
+  bool _saveJson = false;
+  bool _overwriteExistingFiles = false;
+  bool _verbose = false;
+  bool _convertHitomiToPdf = true;
+  bool _organizeAfterImport = false;
+  UrlImportMediaType _mediaType = UrlImportMediaType.all;
+  UrlImportCookieMode _cookieMode = UrlImportCookieMode.auto;
+  String? _validationMessage;
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _favoriteUsersController.dispose();
+    _parallelDownloadsController.dispose();
+    super.dispose();
+  }
+
+  UrlImportOptions get _options => UrlImportOptions(
+    cookieMode: _cookieMode,
+    favoriteSites: <String>[
+      if (_siteKemono) 'kemono',
+      if (_siteCoomer) 'coomer',
+    ],
+    favoritePosts: _favoritePosts,
+    favoriteUserServices: _splitCommaSeparated(_favoriteUsersController.text),
+    mediaType: _mediaType,
+    parallelDownloads:
+        int.tryParse(_parallelDownloadsController.text.trim()) ?? 6,
+    includeInlineImages: _includeInlineImages,
+    includePostContent: _includePostContent,
+    includeComments: _includeComments,
+    saveJson: _saveJson,
+    overwriteExistingFiles: _overwriteExistingFiles,
+    verbose: _verbose,
+    convertHitomiToPdf: _convertHitomiToPdf,
+  );
+
+  ImportMetadata get _importMetadata => ImportMetadata(
+    organizeAfterImport: _organizeAfterImport,
+  );
+
+  List<String> _splitCommaSeparated(String raw) {
+    final values = <String>[];
+    final seen = <String>{};
+    for (final chunk in raw.split(',')) {
+      final trimmed = chunk.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      final normalized = trimmed.toLowerCase();
+      if (seen.add(normalized)) {
+        values.add(trimmed);
+      }
+    }
+    return values;
+  }
+
+  String _cookieModeLabel(UrlImportCookieMode mode) {
+    switch (mode) {
+      case UrlImportCookieMode.auto:
+        return '自動';
+      case UrlImportCookieMode.none:
+        return '使わない';
+      case UrlImportCookieMode.projectKemono:
+        return 'Host Kemono Cookie';
+      case UrlImportCookieMode.projectCoomer:
+        return 'Host Coomer Cookie';
+      case UrlImportCookieMode.projectCombined:
+        return 'Host Combined Cookie';
+      case UrlImportCookieMode.customFile:
+        return 'カスタム';
+    }
+  }
+
+  bool _validate({required bool showMessage}) {
+    final sourceUrl = _urlController.text.trim();
+    final options = _options;
+    String? message;
+
+    if (!options.hasAnySource(sourceUrl)) {
+      message = 'URL または favorites 条件を入力してください。';
+    } else if (options.hasFavoriteTargets && !options.hasCookieSelection) {
+      message = 'favorites を使う場合は Cookie を選択してください。';
+    } else if (options.hasFavoriteTargets &&
+        options.normalizedFavoriteSites.isEmpty) {
+      message = 'favorites を使う場合は対象サイトを選択してください。';
+    }
+
+    if (showMessage) {
+      setState(() {
+        _validationMessage = message;
+      });
+    }
+    return message == null;
+  }
+
+  void _submit() {
+    if (!_validate(showMessage: true)) {
+      return;
+    }
+
+    Navigator.of(context).pop(
+      _WebUrlImportRequest(
+        sourceUrl: _urlController.text.trim(),
+        options: _options,
+        importMetadata: _importMetadata,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('ホストへ URL 取り込み'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 760),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text('保存先: ${widget.folderName}'),
+              const SizedBox(height: 8),
+              const Text(
+                'Hitomi / Kemono / Coomer の URL や favorites 条件をホストへ送って実行します。',
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _urlController,
+                autofocus: true,
+                minLines: 4,
+                maxLines: 8,
+                onChanged: (_) => setState(() => _validationMessage = null),
+                decoration: const InputDecoration(
+                  labelText: 'URL 一覧',
+                  alignLabelWithHint: true,
+                  hintText:
+                      '1 行 1 件、またはカンマ区切りで複数 URL を入力\nhttps://hitomi.la/...\nhttps://kemono.su/...',
+                  helperText: 'favorites だけで実行する場合は空でも構いません',
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Cookie と favorites',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<UrlImportCookieMode>(
+                value: _cookieMode,
+                decoration: const InputDecoration(labelText: 'Cookie の使い方'),
+                items: const <UrlImportCookieMode>[
+                  UrlImportCookieMode.auto,
+                  UrlImportCookieMode.none,
+                  UrlImportCookieMode.projectKemono,
+                  UrlImportCookieMode.projectCoomer,
+                  UrlImportCookieMode.projectCombined,
+                ]
+                    .map(
+                      (mode) => DropdownMenuItem(
+                        value: mode,
+                        child: Text(_cookieModeLabel(mode)),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _cookieMode = value;
+                    _validationMessage = null;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Web からはホスト側の project cookie を使います。ブラウザ端末のローカル cookie.txt は指定できません。',
+                style: TextStyle(color: Colors.white60),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  FilterChip(
+                    label: const Text('Kemono'),
+                    selected: _siteKemono,
+                    onSelected: (selected) {
+                      setState(() {
+                        _siteKemono = selected;
+                        _validationMessage = null;
+                      });
+                    },
+                  ),
+                  FilterChip(
+                    label: const Text('Coomer'),
+                    selected: _siteCoomer,
+                    onSelected: (selected) {
+                      setState(() {
+                        _siteCoomer = selected;
+                        _validationMessage = null;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: _favoritePosts,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('favorite posts を取り込む'),
+                onChanged: (value) {
+                  setState(() {
+                    _favoritePosts = value ?? false;
+                    _validationMessage = null;
+                  });
+                },
+              ),
+              TextField(
+                controller: _favoriteUsersController,
+                onChanged: (_) => setState(() => _validationMessage = null),
+                decoration: const InputDecoration(
+                  labelText: 'favorite users サービス',
+                  hintText: 'all / patreon,fanbox / onlyfans',
+                  helperText: '空欄なら favorite users は使いません',
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'ダウンロード設定',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<UrlImportMediaType>(
+                value: _mediaType,
+                decoration: const InputDecoration(labelText: 'メディア種別'),
+                items: const <DropdownMenuItem<UrlImportMediaType>>[
+                  DropdownMenuItem(
+                    value: UrlImportMediaType.all,
+                    child: Text('すべて'),
+                  ),
+                  DropdownMenuItem(
+                    value: UrlImportMediaType.images,
+                    child: Text('画像のみ'),
+                  ),
+                  DropdownMenuItem(
+                    value: UrlImportMediaType.videos,
+                    child: Text('動画のみ'),
+                  ),
+                  DropdownMenuItem(
+                    value: UrlImportMediaType.imagesVideos,
+                    child: Text('画像と動画'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _mediaType = value;
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _parallelDownloadsController,
+                keyboardType: TextInputType.number,
+                onChanged: (_) => setState(() => _validationMessage = null),
+                decoration: const InputDecoration(
+                  labelText: '並列ダウンロード数',
+                  helperText: '既定は 6 です',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  FilterChip(
+                    label: const Text('Hitomi を PDF 化'),
+                    selected: _convertHitomiToPdf,
+                    onSelected: (selected) => setState(() {
+                      _convertHitomiToPdf = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('取り込み後に整理'),
+                    selected: _organizeAfterImport,
+                    onSelected: (selected) => setState(() {
+                      _organizeAfterImport = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('inline 画像'),
+                    selected: _includeInlineImages,
+                    onSelected: (selected) => setState(() {
+                      _includeInlineImages = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('本文保存'),
+                    selected: _includePostContent,
+                    onSelected: (selected) => setState(() {
+                      _includePostContent = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('コメント保存'),
+                    selected: _includeComments,
+                    onSelected: (selected) => setState(() {
+                      _includeComments = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('JSON 保存'),
+                    selected: _saveJson,
+                    onSelected: (selected) => setState(() {
+                      _saveJson = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('上書き'),
+                    selected: _overwriteExistingFiles,
+                    onSelected: (selected) => setState(() {
+                      _overwriteExistingFiles = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('詳細ログ'),
+                    selected: _verbose,
+                    onSelected: (selected) => setState(() {
+                      _verbose = selected;
+                    }),
+                  ),
+                ],
+              ),
+              if (_validationMessage != null) ...<Widget>[
+                const SizedBox(height: 12),
+                Text(
+                  _validationMessage!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton.icon(
+          onPressed: _validate(showMessage: false) ? _submit : null,
+          icon: const Icon(Icons.download_outlined),
+          label: const Text('ホストで実行'),
+        ),
+      ],
+    );
+  }
+}
+
 class _RemoteThumbnail extends StatefulWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;

@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import 'package:pdfx/src/renderer/web/pdfjs.dart';
 
+import '../repository/mediaRepository.dart';
 import '../models/tag.dart';
 
 class WebRemoteException implements Exception {
@@ -81,6 +82,40 @@ class WebRemoteMediaMeta {
     required this.supportsRange,
     required this.pageCount,
   });
+}
+
+class WebRemoteOrganizeResult {
+  final Map<String, String> moved;
+  final int movedCount;
+  final int rescannedCount;
+
+  const WebRemoteOrganizeResult({
+    required this.moved,
+    required this.movedCount,
+    required this.rescannedCount,
+  });
+}
+
+class WebRemoteUrlImportResult {
+  final int importedCount;
+  final int skippedCount;
+  final int failedCount;
+  final int taggedCount;
+  final int organizedCount;
+  final int rescannedCount;
+  final String? targetCollection;
+
+  const WebRemoteUrlImportResult({
+    required this.importedCount,
+    required this.skippedCount,
+    required this.failedCount,
+    this.taggedCount = 0,
+    this.organizedCount = 0,
+    this.rescannedCount = 0,
+    this.targetCollection,
+  });
+
+  bool get hasChanges => importedCount > 0 || organizedCount > 0;
 }
 
 class WebSearchQuery {
@@ -284,11 +319,13 @@ class WebRemoteApiClient {
   final String baseUrl;
   final String? authToken;
   final Duration timeout;
+  final Duration actionTimeout;
 
   const WebRemoteApiClient({
     required this.baseUrl,
     this.authToken,
     this.timeout = const Duration(seconds: 20),
+    this.actionTimeout = const Duration(minutes: 10),
   });
 
   Future<void> checkHealth() async {
@@ -370,6 +407,114 @@ class WebRemoteApiClient {
         .whereType<Map>()
         .map(_parseTag)
         .toList(growable: false);
+  }
+
+  Future<void> requestRescan({String? folderRaw}) async {
+    final trimmedFolder = folderRaw?.trim();
+    await _postJson(
+      '/rescan',
+      <String, dynamic>{
+        if (trimmedFolder != null && trimmedFolder.isNotEmpty)
+          'folderRaw': trimmedFolder,
+      },
+      requestTimeout: actionTimeout,
+    );
+  }
+
+  Future<WebRemoteOrganizeResult> organizeLibrary(String folderRaw) async {
+    final json = await _postJson(
+      '/organize',
+      <String, dynamic>{'folderRaw': folderRaw},
+      requestTimeout: actionTimeout,
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const WebRemoteException('整理結果の形式が不正です');
+    }
+
+    final moved = <String, String>{};
+    final movedRaw = json['moved'];
+    if (movedRaw is Map) {
+      movedRaw.forEach((key, value) {
+        final before = key?.toString().trim() ?? '';
+        final after = value?.toString().trim() ?? '';
+        if (before.isEmpty || after.isEmpty) {
+          return;
+        }
+        moved[before] = after;
+      });
+    }
+
+    return WebRemoteOrganizeResult(
+      moved: moved,
+      movedCount: _asInt(json['movedCount']) ?? moved.length,
+      rescannedCount: _asInt(json['rescannedCount']) ?? 0,
+    );
+  }
+
+  Future<WebRemoteUrlImportResult> downloadUrl({
+    required String folderRaw,
+    required String sourceUrl,
+    UrlImportOptions? options,
+    ImportMetadata? importMetadata,
+  }) async {
+    final effectiveOptions = options ?? const UrlImportOptions();
+    final sourceUrls = effectiveOptions.collectSourceUrls(sourceUrl);
+    final artistTag = importMetadata?.artistTag?.trim();
+    final seriesTag = importMetadata?.seriesTag?.trim();
+    final targetCollection = importMetadata?.targetCollection?.trim();
+    final cookieFilePath = effectiveOptions.normalizedCookieFilePath;
+    final urlListFilePath = effectiveOptions.normalizedUrlListFilePath;
+    final favoriteSites = effectiveOptions.normalizedFavoriteSites;
+    final favoriteUserServices = effectiveOptions.normalizedFavoriteUserServices;
+
+    final json = await _postJson(
+      '/download-url',
+      <String, dynamic>{
+        'folderRaw': folderRaw,
+        'url': sourceUrl,
+        'urls': sourceUrls,
+        if (cookieFilePath != null) 'cookieFilePath': cookieFilePath,
+        'cookieMode': effectiveOptions.cookieMode.apiValue,
+        if (urlListFilePath != null) 'urlListFilePath': urlListFilePath,
+        if (favoriteSites.isNotEmpty) 'sites': favoriteSites,
+        'favoritePosts': effectiveOptions.favoritePosts,
+        if (favoriteUserServices.isNotEmpty)
+          'favoriteUserServices': favoriteUserServices,
+        'mediaType': effectiveOptions.mediaType.apiValue,
+        'parallelDownloads': effectiveOptions.effectiveParallelDownloads,
+        'inline': effectiveOptions.includeInlineImages,
+        'content': effectiveOptions.includePostContent,
+        'comments': effectiveOptions.includeComments,
+        'saveJson': effectiveOptions.saveJson,
+        'overwrite': effectiveOptions.overwriteExistingFiles,
+        'verbose': effectiveOptions.verbose,
+        'convertHitomiToPdf': effectiveOptions.convertHitomiToPdf,
+        if (artistTag != null && artistTag.isNotEmpty) 'artistTag': artistTag,
+        if (seriesTag != null && seriesTag.isNotEmpty) 'seriesTag': seriesTag,
+        if (importMetadata != null && importMetadata.freeTags.isNotEmpty)
+          'freeTags': importMetadata.freeTags,
+        if (importMetadata != null && importMetadata.characterTags.isNotEmpty)
+          'characterTags': importMetadata.characterTags,
+        if (targetCollection != null && targetCollection.isNotEmpty)
+          'targetCollection': targetCollection,
+        'organizeAfterImport': importMetadata?.organizeAfterImport ?? false,
+      },
+      requestTimeout: actionTimeout,
+    );
+
+    if (json is! Map<String, dynamic>) {
+      throw const WebRemoteException('URL 取り込み結果の形式が不正です');
+    }
+
+    return WebRemoteUrlImportResult(
+      importedCount: _asInt(json['importedCount']) ?? 0,
+      skippedCount: _asInt(json['skippedCount']) ?? 0,
+      failedCount: _asInt(json['failedCount']) ?? 0,
+      taggedCount: _asInt(json['taggedCount']) ?? 0,
+      organizedCount: _asInt(json['organizedCount']) ?? 0,
+      rescannedCount: _asInt(json['rescannedCount']) ?? 0,
+      targetCollection: json['targetCollection']?.toString(),
+    );
   }
 
   Future<WebRemoteMediaMeta> fetchMediaMeta(String mediaId) async {
@@ -522,19 +667,76 @@ class WebRemoteApiClient {
     return jsonDecode(raw);
   }
 
+  Future<dynamic> _postJson(
+    String path,
+    Map<String, dynamic> body, {
+    Map<String, String>? queryParameters,
+    Duration? requestTimeout,
+  }) async {
+    final raw = await _requestText(
+      'POST',
+      path,
+      queryParameters: queryParameters,
+      body: body,
+      requestTimeout: requestTimeout,
+    );
+    if (raw.trim().isEmpty) {
+      return <String, dynamic>{};
+    }
+    return jsonDecode(raw);
+  }
+
+  Future<dynamic> _putJson(
+    String path,
+    Map<String, dynamic> body, {
+    Map<String, String>? queryParameters,
+    Duration? requestTimeout,
+  }) async {
+    final raw = await _requestText(
+      'PUT',
+      path,
+      queryParameters: queryParameters,
+      body: body,
+      requestTimeout: requestTimeout,
+    );
+    if (raw.trim().isEmpty) {
+      return <String, dynamic>{};
+    }
+    return jsonDecode(raw);
+  }
+
+  Future<dynamic> _deleteJson(
+    String path, {
+    Map<String, String>? queryParameters,
+    Duration? requestTimeout,
+  }) async {
+    final raw = await _requestText(
+      'DELETE',
+      path,
+      queryParameters: queryParameters,
+      requestTimeout: requestTimeout,
+    );
+    if (raw.trim().isEmpty) {
+      return <String, dynamic>{};
+    }
+    return jsonDecode(raw);
+  }
+
   Future<String> _requestText(
     String method,
     String path, {
     Map<String, String>? queryParameters,
     Map<String, dynamic>? body,
+    Duration? requestTimeout,
   }) async {
+    final effectiveTimeout = requestTimeout ?? timeout;
     try {
       final request = await html.HttpRequest.request(
         _buildUri(path, queryParameters: queryParameters).toString(),
         method: method,
         sendData: body == null ? null : jsonEncode(body),
         requestHeaders: _buildHeaders(jsonBody: body != null),
-      ).timeout(timeout);
+      ).timeout(effectiveTimeout);
 
       final status = request.status ?? 0;
       final payload = request.responseText ?? '';
