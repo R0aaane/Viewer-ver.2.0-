@@ -3168,7 +3168,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     }
   }
 
-  Future<void> _handleOpenDetail() async {
+  Future<void> _handleOpenDetail([BuildContext? context]) async {
+    if (context != null) {
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) {
+        navigator.pop();
+        return;
+      }
+    }
     final onOpenDetail = widget.onOpenDetail;
     if (onOpenDetail == null) return;
     await onOpenDetail();
@@ -3235,7 +3242,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
         final image = Image.memory(
           snapshot.data!,
-          fit: isSpread ? BoxFit.fitHeight : BoxFit.contain,
+          fit: isSpread ? BoxFit.fitHeight : BoxFit.fitWidth,
           alignment: align,
           gaplessPlayback: true,
           filterQuality: FilterQuality.high,
@@ -3272,7 +3279,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         Center(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              const gap = 12.0;
+              final gap = constraints.maxWidth < 720 ? 6.0 : 12.0;
               final isSpread = _twoPage;
               final pageWidth = isSpread
                   ? (constraints.maxWidth - gap) / 2.0
@@ -3377,8 +3384,93 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     );
   }
 
+  Widget _buildCompactViewerHeader(BuildContext context) {
+    final canPrev = _page > 1;
+    final canNext =
+        !_loading &&
+        (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _totalPages);
+    final totalPagesText = _pageCountReliable ? '$_totalPages' : '$_totalPages+';
+    final pageText = '$_page / $totalPagesText';
+    final canReturn = Navigator.of(context).canPop() || widget.onOpenDetail != null;
+
+    return Material(
+      color: Colors.black,
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: 56,
+          child: Row(
+            children: <Widget>[
+              IconButton(
+                onPressed: canReturn ? () => _handleOpenDetail(context) : null,
+                tooltip: '詳細へ戻る',
+                icon: const Icon(Icons.arrow_back_ios_new_rounded),
+              ),
+              IconButton(
+                onPressed: canPrev ? _prev : null,
+                tooltip: '前のページ',
+                icon: const Icon(Icons.chevron_left_rounded),
+              ),
+              IconButton(
+                onPressed: canNext ? _next : null,
+                tooltip: '次のページ',
+                icon: const Icon(Icons.chevron_right_rounded),
+              ),
+              IconButton(
+                onPressed: _toggleTwoPage,
+                tooltip: _twoPage ? '見開きをオフ' : '見開きをオン',
+                icon: Icon(
+                  _twoPage
+                      ? Icons.chrome_reader_mode_rounded
+                      : Icons.menu_book_rounded,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                margin: const EdgeInsets.only(right: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white12,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Text(
+                  pageText,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.entry.isPdf) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Column(
+          children: <Widget>[
+            _buildCompactViewerHeader(context),
+            Expanded(
+              child: ColoredBox(
+                color: const Color(0xFF0E1117),
+                child: SafeArea(
+                  top: false,
+                  child: _buildViewerBody(),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
