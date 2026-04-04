@@ -11,7 +11,15 @@ Future<void> bootstrapApp() async {
   configureGlobalErrorHandling();
 
   final settingsService = AppSettingsService();
-  final settings = await settingsService.loadMetadataSettings();
+  MetadataSettings settings = const MetadataSettings();
+  try {
+    settings = await settingsService
+        .loadMetadataSettings()
+        .timeout(const Duration(seconds: 4));
+  } catch (error, stackTrace) {
+    debugPrint('[WebBootstrap] Failed to load settings: $error');
+    debugPrintStack(label: '[WebBootstrap]', stackTrace: stackTrace);
+  }
 
   runApp(
     WebViewerApp(
