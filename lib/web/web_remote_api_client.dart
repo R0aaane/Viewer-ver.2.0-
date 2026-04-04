@@ -417,6 +417,58 @@ class WebRemoteApiClient {
     );
   }
 
+  Future<int> resolvePdfPageCount(
+    String mediaId, {
+    int? pageCountHint,
+  }) async {
+    if (pageCountHint != null && pageCountHint > 0) {
+      return pageCountHint;
+    }
+
+    if (!await _pdfPageExists(mediaId, 1)) {
+      return 1;
+    }
+
+    var low = 1;
+    var high = 2;
+    while (await _pdfPageExists(mediaId, high)) {
+      low = high;
+      if (high >= 4096) {
+        return high;
+      }
+      high *= 2;
+    }
+
+    while (low + 1 < high) {
+      final mid = low + ((high - low) ~/ 2);
+      if (await _pdfPageExists(mediaId, mid)) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+
+    return low;
+  }
+
+  Future<bool> _pdfPageExists(String mediaId, int pageNo) async {
+    try {
+      await fetchThumbnail(
+        mediaId,
+        width: 64,
+        height: 64,
+        page: pageNo,
+      );
+      return true;
+    } on WebRemoteException catch (error) {
+      final statusCode = error.statusCode;
+      if (statusCode != null && statusCode != 401 && statusCode != 403) {
+        return false;
+      }
+      rethrow;
+    }
+  }
+
   Future<Uint8List> fetchImageDownload(String mediaId) {
     return _getBytes('/media/${Uri.encodeComponent(mediaId)}/download');
   }

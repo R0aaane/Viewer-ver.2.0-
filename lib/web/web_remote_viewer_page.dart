@@ -1053,6 +1053,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   Uint8List? _pdfPageBytes;
   String? _pdfPageError;
   int _pdfPageNo = 1;
+  int? _pdfTotalPages;
   bool _loadingPdfPage = false;
 
   @override
@@ -1076,8 +1077,30 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     _pdfPageBytes = null;
     _pdfPageError = null;
     _pdfPageNo = 1;
+    _pdfTotalPages = null;
     if (widget.entry.isPdf) {
+      _loadPdfPageCount();
       _loadPdfPage(1);
+    }
+  }
+
+  Future<void> _loadPdfPageCount() async {
+    final mediaId = widget.entry.mediaId;
+    if (mediaId == null || mediaId.isEmpty) return;
+    final stableId = widget.entry.stableId;
+    try {
+      final meta = await _metaFuture;
+      final totalPages = await widget.client.resolvePdfPageCount(
+        mediaId,
+        pageCountHint: meta.pageCount,
+      );
+      if (!mounted || widget.entry.stableId != stableId) return;
+      setState(() {
+        _pdfTotalPages = totalPages;
+        _pdfPageNo = _pdfPageNo.clamp(1, totalPages);
+      });
+    } catch (_) {
+      // Keep the preview usable even when the server cannot report page counts.
     }
   }
 
@@ -1168,6 +1191,11 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
 
   @override
   Widget build(BuildContext context) {
+    final canOpenPreviousPdfPage = _pdfPageNo > 1;
+    final canOpenNextPdfPage =
+        !_loadingPdfPage &&
+        (_pdfTotalPages == null || _pdfPageNo < _pdfTotalPages!);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1208,12 +1236,18 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: <Widget>[
                       OutlinedButton.icon(
-                        onPressed: _pdfPageNo > 1 ? () => _loadPdfPage(_pdfPageNo - 1) : null,
+                        onPressed:
+                            canOpenPreviousPdfPage
+                                ? () => _loadPdfPage(_pdfPageNo - 1)
+                                : null,
                         icon: const Icon(Icons.chevron_left),
                         label: const Text('前へ'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: _loadingPdfPage ? null : () => _loadPdfPage(_pdfPageNo + 1),
+                        onPressed:
+                            canOpenNextPdfPage
+                                ? () => _loadPdfPage(_pdfPageNo + 1)
+                                : null,
                         icon: const Icon(Icons.chevron_right),
                         label: const Text('次へ'),
                       ),
@@ -1466,10 +1500,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       final prefs = await SharedPreferences.getInstance();
       final twoPage = prefs.getBool(_twoPagePrefsKey);
       final meta = await widget.client.fetchMediaMeta(mediaId);
+      final totalPages = await widget.client.resolvePdfPageCount(
+        mediaId,
+        pageCountHint: meta.pageCount,
+      );
       if (!mounted) return;
       setState(() {
         _twoPage = twoPage ?? _twoPage;
-        _totalPages = (meta.pageCount ?? 1).clamp(1, 1 << 30);
+        _totalPages = totalPages.clamp(1, 1 << 30);
         _page = _page.clamp(1, _totalPages);
         _syncPageFutures();
       });
