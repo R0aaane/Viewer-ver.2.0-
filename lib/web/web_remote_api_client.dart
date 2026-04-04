@@ -3,7 +3,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:pdfx/src/renderer/web/pdfjs.dart';
@@ -19,41 +19,35 @@ const String _pdfJsWorkerUrl =
 
 Future<void>? _pdfJsLoadFuture;
 
-Object? _pdfJsLibObject() {
-  try {
-    return js_util.getProperty<Object?>(html.window, 'pdfjsLib');
-  } catch (_) {
-    return null;
-  }
+@JS('pdfjsLib')
+external _PdfJsLib? get _pdfJsLib;
+
+extension type _PdfJsLib(JSObject _) implements JSObject {
+  @JS('getDocument')
+  external JSAny? get getDocumentMethod;
+
+  @JS('GlobalWorkerOptions')
+  external _PdfJsGlobalWorkerOptions? get globalWorkerOptions;
 }
 
-bool _pdfJsHasGetDocument(Object? lib) {
-  if (lib == null) {
-    return false;
-  }
-  try {
-    return js_util.getProperty<Object?>(lib, 'getDocument') != null;
-  } catch (_) {
-    return false;
-  }
+extension type _PdfJsGlobalWorkerOptions(JSObject _) implements JSObject {
+  external String? get workerSrc;
+  external set workerSrc(String? value);
 }
 
-void _configurePdfJsWorkerSource(Object? lib) {
-  if (lib == null) {
+_PdfJsLib? _pdfJsLibObject() => _pdfJsLib;
+
+bool _pdfJsHasGetDocument(_PdfJsLib? lib) => lib?.getDocumentMethod != null;
+
+void _configurePdfJsWorkerSource(_PdfJsLib? lib) {
+  final options = lib?.globalWorkerOptions;
+  if (options == null) {
     return;
   }
-  try {
-    final options = js_util.getProperty<Object?>(lib, 'GlobalWorkerOptions');
-    if (options == null) {
-      return;
-    }
-    final current = js_util.getProperty<Object?>(options, 'workerSrc');
-    final currentText = current?.toString().trim() ?? '';
-    if (currentText.isEmpty) {
-      js_util.setProperty(options, 'workerSrc', _pdfJsWorkerUrl);
-    }
-  } catch (_) {
-    // Ignore worker configuration failures and let the caller use its fallback.
+
+  final currentText = options.workerSrc?.trim() ?? '';
+  if (currentText.isEmpty) {
+    options.workerSrc = _pdfJsWorkerUrl;
   }
 }
 
