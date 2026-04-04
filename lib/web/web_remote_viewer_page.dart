@@ -213,7 +213,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     try {
       final folders = await client.listFolders();
-      final selectedFolder = _selectedFolderRaw ?? (folders.isNotEmpty ? folders.first.raw : null);
+      final availableFolderRaws = folders.map((folder) => folder.raw).toSet();
+      final previousSelected = _selectedFolderRaw?.trim();
+      final selectedFolder =
+          previousSelected != null && availableFolderRaws.contains(previousSelected)
+              ? previousSelected
+              : (folders.isNotEmpty ? folders.first.raw : null);
       if (!mounted) return;
       setState(() {
         _client = client;

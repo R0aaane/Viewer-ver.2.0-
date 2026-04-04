@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 
@@ -10,6 +10,36 @@ from server.services.metadata_store import SearchQuery
 
 
 router = APIRouter(tags=["search"], dependencies=[Depends(require_bearer_token)])
+
+
+def _normalize_path(raw: str) -> str:
+    return os.path.normpath(raw).replace('/', '\\').casefold()
+
+
+def _configured_media_roots(request: Request) -> list[str]:
+    roots: list[str] = []
+    seen: set[str] = set()
+    for root in request.app.state.settings.media_roots:
+        normalized_root = _normalize_path(root)
+        if not normalized_root or normalized_root in seen:
+            continue
+        seen.add(normalized_root)
+        roots.append(os.path.normpath(root))
+    return roots
+
+
+def _is_allowed_folder(folder_raw: str | None, roots: list[str]) -> bool:
+    if folder_raw is None:
+        return True
+
+    normalized_folder = _normalize_path(folder_raw)
+    for root in roots:
+        normalized_root = _normalize_path(root)
+        if normalized_folder == normalized_root:
+            return True
+        if normalized_folder.startswith(f"{normalized_root}\\"):
+            return True
+    return False
 
 
 @router.get("/search", response_model=SearchResponse)
@@ -28,6 +58,9 @@ def search_media(
 ) -> SearchResponse:
     safe_limit = max(1, min(limit, 1000))
     safe_offset = max(0, offset)
+    roots = _configured_media_roots(request)
+    if not _is_allowed_folder(folderRaw, roots):
+        return SearchResponse(items=[], total=0, limit=safe_limit, offset=safe_offset)
     items, total = request.app.state.metadata_store.search_media(
         SearchQuery(
             q=q,
@@ -54,6 +87,9 @@ def list_untagged(
 ) -> SearchResponse:
     safe_limit = max(1, min(limit, 1000))
     safe_offset = max(0, offset)
+    roots = _configured_media_roots(request)
+    if not _is_allowed_folder(folderRaw, roots):
+        return SearchResponse(items=[], total=0, limit=safe_limit, offset=safe_offset)
     items, total = request.app.state.metadata_store.list_untagged(
         folder_raw=folderRaw,
         limit=safe_limit,
@@ -64,13 +100,14 @@ def list_untagged(
 
 @router.get("/folders", response_model=FolderListResponse)
 def list_folders(request: Request) -> FolderListResponse:
-    settings = request.app.state.settings
     indexed_items = request.app.state.metadata_store.list_indexed_folders()
-    indexed_by_raw = {entry["folderRaw"]: entry for entry in indexed_items}
+    indexed_by_raw = {
+        _normalize_path(str(entry["folderRaw"])): entry for entry in indexed_items
+    }
 
     items: list[dict[str, object | None]] = []
-    for root in settings.media_roots:
-        entry = indexed_by_raw.pop(root, None)
+    for root in _configured_media_roots(request):
+        entry = indexed_by_raw.get(_normalize_path(root))
         if entry is None:
             items.append(
                 {
@@ -82,7 +119,6 @@ def list_folders(request: Request) -> FolderListResponse:
         else:
             items.append(entry)
 
-    items.extend(indexed_by_raw.values())
     return FolderListResponse(items=items)
 
 
@@ -96,6 +132,14 @@ def list_folder_children(
 ) -> FolderChildrenResponse:
     safe_limit = max(1, min(limit, 1000))
     safe_offset = max(0, offset)
+    roots = _configured_media_roots(request)
+    if not _is_allowed_folder(folderRaw, roots):
+        return FolderChildrenResponse(
+            items=[],
+            total=0,
+            limit=safe_limit,
+            offset=safe_offset,
+        )
     items, total = request.app.state.metadata_store.list_folder_children(
         folderRaw,
         limit=safe_limit,
@@ -107,4 +151,3 @@ def list_folder_children(
         limit=safe_limit,
         offset=safe_offset,
     )
-
