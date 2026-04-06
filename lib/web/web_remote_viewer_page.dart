@@ -46,6 +46,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   List<WebRemoteFolder> _folders = const <WebRemoteFolder>[];
   List<WebRemoteEntry> _entries = const <WebRemoteEntry>[];
   WebRemoteEntry? _selectedEntry;
+  WebRemoteFolder? _libraryRoot;
   String? _selectedFolderRaw;
   bool _isConnecting = false;
   bool _isLoading = false;
@@ -183,6 +184,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _client = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
+        _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
         _isConnecting = false;
@@ -198,6 +200,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _client = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
+        _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
         _isConnecting = false;
@@ -213,16 +216,22 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     try {
       final folders = await client.listFolders();
-      final availableFolderRaws = folders.map((folder) => folder.raw).toSet();
+      final libraryRoot = _resolveLibraryRoot(folders);
       final previousSelected = _selectedFolderRaw?.trim();
       final selectedFolder =
-          previousSelected != null && availableFolderRaws.contains(previousSelected)
+          previousSelected != null &&
+                  libraryRoot != null &&
+                  _isPathWithin(previousSelected, libraryRoot.raw)
               ? previousSelected
-              : (folders.isNotEmpty ? folders.first.raw : null);
+              : libraryRoot?.raw;
       if (!mounted) return;
       setState(() {
         _client = client;
-        _folders = folders;
+        _folders =
+            libraryRoot == null
+                ? const <WebRemoteFolder>[]
+                : <WebRemoteFolder>[libraryRoot];
+        _libraryRoot = libraryRoot;
         _selectedFolderRaw = selectedFolder;
         _statusMessage = '接続済み: ${_settings.clientApiBaseUrl}';
       });
@@ -239,6 +248,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _client = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
+        _libraryRoot = null;
         _selectedEntry = null;
         _errorMessage = error.toString();
       });
@@ -358,7 +368,127 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return parent;
   }
 
+  WebRemoteFolder? _resolveLibraryRoot(List<WebRemoteFolder> folders) {
+    if (folders.isEmpty) {
+      return null;
+    }
+
+    int scoreFolder(WebRemoteFolder folder) {
+      final raw = folder.raw.trim();
+      final displayName = folder.displayName.trim().toLowerCase();
+      final baseName = _folderName(raw).trim().toLowerCase();
+      var score = 0;
+      if (displayName == 'library' || baseName == 'library') {
+        score += 100;
+      }
+      if (displayName.contains('library') ||
+          baseName.contains('library') ||
+          raw.toLowerCase().contains('library')) {
+        score += 30;
+      }
+      score -= raw.length ~/ 12;
+      return score;
+    }
+
+    var best = folders.first;
+    var bestScore = scoreFolder(best);
+    for (final folder in folders.skip(1)) {
+      final currentScore = scoreFolder(folder);
+      if (currentScore > bestScore) {
+        best = folder;
+        bestScore = currentScore;
+      }
+    }
+    return best;
+  }
+
+  String _normalizePathForContext(String raw, p.Context context) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return '';
+    }
+    final normalized = context.normalize(trimmed);
+    final rootPrefix = context.rootPrefix(normalized);
+    var value = normalized;
+    while (value.length > rootPrefix.length &&
+        (value.endsWith('\\') || value.endsWith('/'))) {
+      value = value.substring(0, value.length - 1);
+    }
+    final ignoreCase =
+        trimmed.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(trimmed);
+    return ignoreCase ? value.toLowerCase() : value;
+  }
+
+  bool _isPathWithin(String raw, String rootRaw) {
+    final context = _pathContext(rootRaw);
+    final normalizedRaw = _normalizePathForContext(raw, context);
+    final normalizedRoot = _normalizePathForContext(rootRaw, context);
+    if (normalizedRaw.isEmpty || normalizedRoot.isEmpty) {
+      return false;
+    }
+    if (normalizedRaw == normalizedRoot) {
+      return true;
+    }
+    final separator =
+        rootRaw.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(rootRaw)
+            ? '\\'
+            : '/';
+    return normalizedRaw.startsWith('$normalizedRoot$separator');
+  }
+
+  bool _isSamePath(String left, String right) {
+    final context = _pathContext(left.trim().isNotEmpty ? left : right);
+    return _normalizePathForContext(left, context) ==
+        _normalizePathForContext(right, context);
+  }
+
+  String? _parentFolderWithinLibrary(String raw) {
+    final parent = _parentFolder(raw);
+    final libraryRootRaw = _libraryRoot?.raw;
+    if (parent == null) {
+      return null;
+    }
+    if (libraryRootRaw == null) {
+      return parent;
+    }
+    return _isPathWithin(parent, libraryRootRaw) ? parent : null;
+  }
+
+  String _currentFolderLabel(String? folderRaw) {
+    final libraryRoot = _libraryRoot;
+    final trimmed = folderRaw?.trim();
+    if (libraryRoot == null) {
+      return trimmed == null || trimmed.isEmpty ? 'Library' : _folderName(trimmed);
+    }
+    if (trimmed == null || trimmed.isEmpty || _isSamePath(trimmed, libraryRoot.raw)) {
+      return libraryRoot.displayName.trim().isEmpty
+          ? _folderName(libraryRoot.raw)
+          : libraryRoot.displayName.trim();
+    }
+    final context = _pathContext(libraryRoot.raw);
+    final relative = context.relative(
+      context.normalize(trimmed),
+      from: context.normalize(libraryRoot.raw),
+    );
+    final parts = relative
+        .split(RegExp(r'[\\/]'))
+        .where((part) => part.trim().isNotEmpty)
+        .toList(growable: false);
+    final rootLabel =
+        libraryRoot.displayName.trim().isEmpty
+            ? _folderName(libraryRoot.raw)
+            : libraryRoot.displayName.trim();
+    if (parts.isEmpty) {
+      return rootLabel;
+    }
+    return '$rootLabel / ${parts.join(' / ')}';
+  }
+
   Future<void> _selectFolder(String folderRaw) async {
+    final libraryRootRaw = _libraryRoot?.raw;
+    if (libraryRootRaw != null && !_isPathWithin(folderRaw, libraryRootRaw)) {
+      return;
+    }
     setState(() {
       _selectedFolderRaw = folderRaw;
       _selectedEntry = null;
@@ -727,7 +857,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: ListTile(
-                selected: _selectedFolderRaw == folder.raw,
+                selected:
+                    _selectedFolderRaw != null &&
+                    _isPathWithin(_selectedFolderRaw!, folder.raw),
                 selectedTileColor: const Color(0xFF1B2D47),
                 leading: const Icon(Icons.folder_outlined),
                 title: Text(folder.displayName),
@@ -746,16 +878,25 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Widget _buildBrowserPane(bool splitView) {
-    final parentFolder = _selectedFolderRaw == null ? null : _parentFolder(_selectedFolderRaw!);
+    final parentFolder =
+        _selectedFolderRaw == null ? null : _parentFolderWithinLibrary(_selectedFolderRaw!);
+    final currentFolderRaw = _selectedFolderRaw ?? _libraryRoot?.raw;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         _ResponsiveBrowserHeader(
-          folderName: _selectedFolderRaw == null ? null : _folderName(_selectedFolderRaw!),
+          folderName: _currentFolderLabel(currentFolderRaw),
+          folderPath: currentFolderRaw,
           itemCount: _entries.length,
           searchController: _searchController,
           isLoading: _isLoading,
           actionsBusy: _actionBusy,
+          onGoRoot:
+              currentFolderRaw == null ||
+                      _libraryRoot == null ||
+                      _isSamePath(currentFolderRaw, _libraryRoot!.raw)
+                  ? null
+                  : () => _selectFolder(_libraryRoot!.raw),
           parentFolderAvailable: parentFolder != null,
           onSearch: _loadEntries,
           onGoParent: parentFolder == null ? null : () => _selectFolder(parentFolder),
@@ -820,6 +961,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                       selected: selected,
                       onTap: () => _handleEntryTap(entry, splitView: splitView),
                       folderName: _folderName,
+                      onApplyTagQuery: _applyTagQuery,
                     );
                   },
                 ),
@@ -1061,6 +1203,7 @@ class _BrowserHeader extends StatelessWidget {
 }
 
 enum _BrowserHeaderMenuAction {
+  goRoot,
   goParent,
   importUrl,
   organize,
@@ -1068,11 +1211,13 @@ enum _BrowserHeaderMenuAction {
 }
 
 class _ResponsiveBrowserHeader extends StatelessWidget {
-  final String? folderName;
+  final String folderName;
+  final String? folderPath;
   final int itemCount;
   final TextEditingController searchController;
   final bool isLoading;
   final bool actionsBusy;
+  final VoidCallback? onGoRoot;
   final bool parentFolderAvailable;
   final Future<void> Function() onSearch;
   final VoidCallback? onGoParent;
@@ -1084,10 +1229,12 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
 
   const _ResponsiveBrowserHeader({
     required this.folderName,
+    required this.folderPath,
     required this.itemCount,
     required this.searchController,
     required this.isLoading,
     required this.actionsBusy,
+    required this.onGoRoot,
     required this.parentFolderAvailable,
     required this.onSearch,
     required this.onGoParent,
@@ -1103,7 +1250,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
     final mediaQuery = MediaQuery.of(context);
     final compact = mediaQuery.size.width < 720;
     final keyboardVisible = mediaQuery.viewInsets.bottom > 0;
-    final title = folderName ?? 'Library';
+    final title = folderName;
     final filterChips = _WebMediaFilter.values
         .map(
           (entry) => Padding(
@@ -1117,6 +1264,15 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
         )
         .toList(growable: false);
     final menuActions = <PopupMenuEntry<_BrowserHeaderMenuAction>>[
+      if (onGoRoot != null)
+        const PopupMenuItem<_BrowserHeaderMenuAction>(
+          value: _BrowserHeaderMenuAction.goRoot,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.home_outlined),
+            title: Text('Library Root'),
+          ),
+        ),
       if (parentFolderAvailable)
         const PopupMenuItem<_BrowserHeaderMenuAction>(
           value: _BrowserHeaderMenuAction.goParent,
@@ -1157,6 +1313,9 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
 
     void handleMenu(_BrowserHeaderMenuAction action) {
       switch (action) {
+        case _BrowserHeaderMenuAction.goRoot:
+          onGoRoot?.call();
+          break;
         case _BrowserHeaderMenuAction.goParent:
           onGoParent?.call();
           break;
@@ -1179,6 +1338,22 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
+              TextField(
+                controller: searchController,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => onSearch(),
+                decoration: InputDecoration(
+                  isDense: true,
+                  labelText: 'Search',
+                  hintText: 'artist:"name"  type:pdf  #tag',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: IconButton(
+                    onPressed: isLoading ? null : onSearch,
+                    icon: const Icon(Icons.arrow_forward),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: <Widget>[
                   Expanded(
@@ -1219,22 +1394,15 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                     ),
                 ],
               ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: searchController,
-                textInputAction: TextInputAction.search,
-                onSubmitted: (_) => onSearch(),
-                decoration: InputDecoration(
-                  isDense: true,
-                  labelText: 'Search',
-                  hintText: 'artist:"name"  type:pdf  #tag',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: IconButton(
-                    onPressed: isLoading ? null : onSearch,
-                    icon: const Icon(Icons.arrow_forward),
-                  ),
+              if (folderPath != null && folderPath!.trim().isNotEmpty) ...<Widget>[
+                const SizedBox(height: 6),
+                Text(
+                  folderPath!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white60),
                 ),
-              ),
+              ],
               if (!keyboardVisible) ...<Widget>[
                 const SizedBox(height: 10),
                 SingleChildScrollView(
@@ -1254,27 +1422,6 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: <Widget>[
-                Chip(
-                  avatar: const Icon(Icons.folder_open, size: 18),
-                  label: Text(title),
-                ),
-                if (parentFolderAvailable)
-                  OutlinedButton.icon(
-                    onPressed: onGoParent,
-                    icon: const Icon(Icons.arrow_upward),
-                    label: const Text('Up Folder'),
-                  ),
-                Text(
-                  '$itemCount items',
-                  style: const TextStyle(color: Colors.white60),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
             Row(
               children: <Widget>[
                 Expanded(
@@ -1293,6 +1440,44 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                 FilledButton(
                   onPressed: isLoading ? null : onSearch,
                   child: const Text('Search'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                Chip(
+                  avatar: const Icon(Icons.folder_open, size: 18),
+                  label: Text(title),
+                ),
+                if (folderPath != null && folderPath!.trim().isNotEmpty)
+                  Chip(
+                    avatar: const Icon(Icons.route_outlined, size: 18),
+                    label: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 360),
+                      child: Text(
+                        folderPath!,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                if (onGoRoot != null)
+                  OutlinedButton.icon(
+                    onPressed: onGoRoot,
+                    icon: const Icon(Icons.home_outlined),
+                    label: const Text('Library Root'),
+                  ),
+                if (parentFolderAvailable)
+                  OutlinedButton.icon(
+                    onPressed: onGoParent,
+                    icon: const Icon(Icons.arrow_upward),
+                    label: const Text('Up Folder'),
+                  ),
+                Text(
+                  '$itemCount items',
+                  style: const TextStyle(color: Colors.white60),
                 ),
               ],
             ),
@@ -1391,6 +1576,7 @@ class _EntryCard extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final String Function(String raw) folderName;
+  final Future<void> Function(String query)? onApplyTagQuery;
 
   const _EntryCard({
     super.key,
@@ -1399,6 +1585,7 @@ class _EntryCard extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.folderName,
+    this.onApplyTagQuery,
   });
 
   @override
@@ -1430,6 +1617,7 @@ class _EntryCard extends StatelessWidget {
           entry: entry,
           accent: accent,
           folderName: folderName,
+          onApplyTagQuery: onApplyTagQuery,
         ),
       ],
     );
@@ -2035,12 +2223,14 @@ class _EntryMetadataSummary extends StatefulWidget {
   final WebRemoteEntry entry;
   final Color accent;
   final String Function(String raw) folderName;
+  final Future<void> Function(String query)? onApplyTagQuery;
 
   const _EntryMetadataSummary({
     required this.client,
     required this.entry,
     required this.accent,
     required this.folderName,
+    this.onApplyTagQuery,
   });
 
   @override
@@ -2147,14 +2337,34 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
     );
   }
 
-  Widget _tag(String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFF908E95),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
+  Widget _tag(Tag tag) {
+    final onPressed = widget.onApplyTagQuery;
+    final label = tag.name.trim();
+    if (label.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (onPressed == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF908E95),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
+        ),
+      );
+    }
+    return ActionChip(
+      onPressed: () => onPressed(WebSearchParser.formatTagQuery(tag)),
+      backgroundColor: const Color(0xFF908E95),
+      side: BorderSide.none,
+      label: Text(
         label,
         style: const TextStyle(
           color: Colors.white,
@@ -2331,8 +2541,23 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
               spacing: 8,
               runSpacing: 8,
               children: <Widget>[
-                for (final tagLabel in data.tags) _tag(tagLabel),
-                if (data.extraTagCount > 0) _tag('+${data.extraTagCount}'),
+                for (final tag in data.tags) _tag(tag),
+                if (data.extraTagCount > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF908E95),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '+${data.extraTagCount}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
               ],
             ),
         ],
@@ -2393,7 +2618,7 @@ class _EntrySummaryData {
   final String updatedAt;
   final String sizeLabel;
   final String? pageInfo;
-  final List<String> tags;
+  final List<Tag> tags;
   final int extraTagCount;
 
   const _EntrySummaryData({
@@ -2424,7 +2649,7 @@ class _EntrySummaryData {
       updatedAt: _formatBrowseDateTime(entry.modifiedAt),
       sizeLabel: '-',
       pageInfo: null,
-      tags: const <String>[],
+      tags: const <Tag>[],
       extraTagCount: 0,
     );
   }
@@ -2486,7 +2711,7 @@ class _EntrySummaryData {
     final artists = valuesFor(TagCategory.artist);
     final seriesValues = valuesFor(TagCategory.series);
     final mediaTypeValues = valuesFor(TagCategory.mediaType);
-    final tagCandidates = <String>[];
+    final tagCandidates = <Tag>[];
     final seenTags = <String>{};
     for (final tag in tags) {
       if (tag.category == TagCategory.artist ||
@@ -2495,10 +2720,11 @@ class _EntrySummaryData {
         continue;
       }
       final label = tag.name.trim();
-      if (label.isEmpty || !seenTags.add(label.toLowerCase())) {
+      final key = '${tag.category.name}\u0000${label.toLowerCase()}';
+      if (label.isEmpty || !seenTags.add(key)) {
         continue;
       }
-      tagCandidates.add(label);
+      tagCandidates.add(Tag(name: label, category: tag.category));
     }
 
     final subtitle =
