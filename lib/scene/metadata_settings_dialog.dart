@@ -247,7 +247,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     return MetadataSettings(
       appMode: _mode,
       clientApiBaseUrl: _clientUrlController.text.trim(),
-      hostPort: parsedPort == null || parsedPort < 1 ? 8080 : parsedPort,
+      hostPort: parsedPort == null || parsedPort < 1 ? 8090 : parsedPort,
       authToken: _authTokenController.text.trim().isEmpty
           ? null
           : _authTokenController.text.trim(),
@@ -941,7 +941,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                   enabled: !_saving,
                   decoration: const InputDecoration(
                     labelText: '接続先 API URL',
-                    hintText: '例: http://100.x.y.z:8080',
+                    hintText: '例: http://100.x.y.z:8090',
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -958,7 +958,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     labelText: 'ホストポート',
-                    hintText: '例: 8080',
+                    hintText: '例: 8090',
                   ),
                 ),
                 const SizedBox(height: 12),

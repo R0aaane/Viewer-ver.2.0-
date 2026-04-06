@@ -20,7 +20,7 @@ class MetadataSettings {
   const MetadataSettings({
     this.appMode = AppMode.standalone,
     this.clientApiBaseUrl = '',
-    this.hostPort = 8080,
+    this.hostPort = 8090,
     this.authToken,
     this.autoStartHostServer = false,
     this.hostLibraryPath = '',

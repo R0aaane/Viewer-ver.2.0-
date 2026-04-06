@@ -60,7 +60,7 @@ class HostServerStatus {
       state: HostServerState.stopped,
       message: 'サーバーは停止しています',
       pid: null,
-      port: 8080,
+      port: 8090,
       hostname: '',
       localIpv4s: const <String>[],
       tailscaleIpv4s: const <String>[],

@@ -24,11 +24,11 @@ class AppSettingsService {
           prefs.getString(_clientApiBaseUrlKey) ??
           prefs.getString(_legacyMetadataApiBaseUrlKey) ??
           '';
-      final hostPort = prefs.getInt(_hostPortKey) ?? 8080;
+      final hostPort = prefs.getInt(_hostPortKey) ?? 8090;
       final settings = MetadataSettings(
         appMode: mode,
         clientApiBaseUrl: clientApiBaseUrl,
-        hostPort: hostPort < 1 ? 8080 : hostPort,
+        hostPort: hostPort < 1 ? 8090 : hostPort,
         authToken: prefs.getString(_metadataAuthTokenKey),
         autoStartHostServer: prefs.getBool(_hostAutoStartKey) ?? false,
         hostLibraryPath: prefs.getString(_hostLibraryPathKey) ?? '',
