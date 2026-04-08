@@ -12,6 +12,7 @@ import '../models/metadata_settings.dart';
 import '../models/tag.dart';
 import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
+import '../services/web_pdf_activity_service.dart';
 import 'web_remote_api_client.dart';
 
 enum _WebMediaFilter {
@@ -19,6 +20,11 @@ enum _WebMediaFilter {
 
   final String label;
   const _WebMediaFilter(this.label);
+}
+
+enum _WebRemoteSurface {
+  home,
+  browse,
 }
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -44,15 +50,22 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   WebRemoteApiClient? _client;
   List<WebRemoteFolder> _folders = const <WebRemoteFolder>[];
   List<WebRemoteEntry> _entries = const <WebRemoteEntry>[];
+  List<WebRemoteEntry> _homeEntries = const <WebRemoteEntry>[];
   WebRemoteEntry? _selectedEntry;
   WebRemoteFolder? _libraryRoot;
   String? _selectedFolderRaw;
   bool _isConnecting = false;
   bool _isLoading = false;
+  bool _homeLoading = false;
   bool _actionBusy = false;
   String? _statusMessage;
   String? _errorMessage;
+  String? _homeErrorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.pdf;
+  _WebRemoteSurface _surface = _WebRemoteSurface.home;
+  final WebPdfActivityService _activityService = WebPdfActivityService();
+  Map<String, WebPdfActivityRecord> _activityRecords =
+      const <String, WebPdfActivityRecord>{};
 
   @override
   void initState() {
@@ -183,10 +196,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _client = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
+        _homeEntries = const <WebRemoteEntry>[];
+        _activityRecords = const <String, WebPdfActivityRecord>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
         _isConnecting = false;
+        _homeErrorMessage = null;
         _statusMessage = 'API URL を入力すると Web から閲覧できます';
       });
       return;
@@ -199,11 +215,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _client = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
+        _homeEntries = const <WebRemoteEntry>[];
+        _activityRecords = const <String, WebPdfActivityRecord>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
         _isConnecting = false;
         _errorMessage = compatibilityError;
+        _homeErrorMessage = compatibilityError;
       });
       return;
     }
@@ -226,9 +245,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 : <WebRemoteFolder>[libraryRoot];
         _libraryRoot = libraryRoot;
         _selectedFolderRaw = selectedFolder;
+        _surface = _WebRemoteSurface.home;
         _statusMessage = '接続済み: ${_settings.clientApiBaseUrl}';
       });
       if (selectedFolder != null) {
+        await _refreshHomeEntries(force: true);
         await _loadEntries();
       }
       if (!mounted || !showSuccessMessage) return;
@@ -241,9 +262,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _client = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
+        _homeEntries = const <WebRemoteEntry>[];
+        _activityRecords = const <String, WebPdfActivityRecord>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _errorMessage = error.toString();
+        _homeErrorMessage = error.toString();
       });
     } finally {
       if (mounted) {
@@ -254,7 +278,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
   }
 
-  Future<void> _loadEntries() async {
+  Future<void> _loadEntries({bool reuseHomeOnEmptyQuery = true}) async {
     final client = _client;
     final folderRaw = _selectedFolderRaw;
     if (client == null || folderRaw == null || folderRaw.trim().isEmpty) {
@@ -272,22 +296,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     try {
       final rawQuery = _searchController.text.trim();
-      final fetched = await _loadPdfEntries(
-        client,
-        folderRaw: folderRaw,
-        rawQuery: rawQuery,
-      );
-
-      fetched.sort((left, right) {
-        final leftModified = left.modifiedAt?.millisecondsSinceEpoch ?? 0;
-        final rightModified = right.modifiedAt?.millisecondsSinceEpoch ?? 0;
-        final modifiedCompare = rightModified.compareTo(leftModified);
-        if (modifiedCompare != 0) {
-          return modifiedCompare;
-        }
-        return left.displayName.toLowerCase().compareTo(right.displayName.toLowerCase());
-      });
-
+      final fetched =
+          rawQuery.isEmpty && reuseHomeOnEmptyQuery && _homeEntries.isNotEmpty
+              ? _sortedPdfEntries(_homeEntries)
+              : _sortedPdfEntries(
+                await _loadPdfEntries(
+                  client,
+                  folderRaw: folderRaw,
+                  rawQuery: rawQuery,
+                ),
+              );
       final filtered = _applyFilter(fetched);
       WebRemoteEntry? nextSelected = _selectedEntry;
       if (nextSelected != null) {
@@ -298,11 +316,20 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             .firstOrNull;
       }
       nextSelected ??= filtered.cast<WebRemoteEntry?>().firstOrNull;
+      final activityRecords =
+          rawQuery.isEmpty
+              ? await _activityService.syncEntries(filtered)
+              : null;
 
       if (!mounted) return;
       setState(() {
         _entries = filtered;
         _selectedEntry = nextSelected;
+        if (activityRecords != null) {
+          _homeEntries = filtered;
+          _activityRecords = activityRecords;
+          _homeErrorMessage = null;
+        }
         _statusMessage =
             rawQuery.isEmpty
                 ? 'PDF list: ${filtered.length} items'
@@ -322,6 +349,91 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         });
       }
     }
+  }
+
+  List<WebRemoteEntry> _sortedPdfEntries(Iterable<WebRemoteEntry> entries) {
+    final sorted = entries.toList(growable: false);
+    sorted.sort((left, right) {
+      final leftModified = left.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      final rightModified = right.modifiedAt?.millisecondsSinceEpoch ?? 0;
+      final modifiedCompare = rightModified.compareTo(leftModified);
+      if (modifiedCompare != 0) {
+        return modifiedCompare;
+      }
+      return left.displayName.toLowerCase().compareTo(right.displayName.toLowerCase());
+    });
+    return sorted;
+  }
+
+  Future<void> _refreshHomeEntries({bool force = false}) async {
+    final client = _client;
+    final folderRaw = _libraryRoot?.raw ?? _selectedFolderRaw;
+    if (client == null || folderRaw == null || folderRaw.trim().isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _homeEntries = const <WebRemoteEntry>[];
+        _activityRecords = const <String, WebPdfActivityRecord>{};
+        _homeErrorMessage = null;
+      });
+      return;
+    }
+    if (!force && _homeEntries.isNotEmpty) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _homeLoading = true;
+        _homeErrorMessage = null;
+      });
+    }
+
+    try {
+      final fetched = await _loadPdfEntries(
+        client,
+        folderRaw: folderRaw,
+        rawQuery: '',
+      );
+      final sorted = _sortedPdfEntries(fetched);
+      final records = await _activityService.syncEntries(sorted);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _homeEntries = sorted;
+        _activityRecords = records;
+        _homeErrorMessage = null;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _homeEntries = const <WebRemoteEntry>[];
+        _homeErrorMessage = error.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _homeLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _recordEntryView(WebRemoteEntry entry) async {
+    if (!entry.isPdf) {
+      return;
+    }
+    final records = await _activityService.recordView(entry);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _activityRecords = records;
+    });
   }
 
   Future<List<WebRemoteEntry>> _loadPdfEntries(
@@ -515,6 +627,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
     setState(() {
+      _surface = _WebRemoteSurface.browse;
       _selectedFolderRaw = folderRaw;
       _selectedEntry = null;
     });
@@ -560,6 +673,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Future<void> _openPdfViewerPage(WebRemoteEntry entry) async {
     final client = _client;
     if (!mounted || client == null || !entry.isPdf) return;
+    await _recordEntryView(entry);
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder:
@@ -589,6 +703,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   Future<void> _applyTagQuery(String query) async {
     _searchController.text = query;
+    setState(() {
+      _surface = _WebRemoteSurface.browse;
+    });
     await _loadEntries();
   }
 
@@ -658,6 +775,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
+    await _refreshHomeEntries(force: true);
     await _loadEntries();
     if (!mounted) {
       return;
@@ -715,6 +833,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
+    await _refreshHomeEntries(force: true);
     await _loadEntries();
     if (!mounted) {
       return;
@@ -747,6 +866,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
+    await _refreshHomeEntries(force: true);
     await _loadEntries();
     if (!mounted) {
       return;
@@ -777,6 +897,18 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           compactScreen ? 10 : 16,
           keyboardVisible ? 10 : 16,
         );
+        final mainContent =
+            _surface == _WebRemoteSurface.home
+                ? _buildHomePane()
+                : splitView
+                ? Row(
+                  children: <Widget>[
+                    Expanded(flex: 6, child: _buildBrowserPane(splitView)),
+                    const SizedBox(width: 16),
+                    SizedBox(width: 420, child: _buildDetailPane()),
+                  ],
+                )
+                : _buildBrowserPane(splitView);
 
         return Scaffold(
           resizeToAvoidBottomInset: true,
@@ -815,16 +947,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 Expanded(
                   child: Padding(
                     padding: contentPadding,
-                    child:
-                        splitView
-                            ? Row(
-                              children: <Widget>[
-                                Expanded(flex: 6, child: _buildBrowserPane(splitView)),
-                                const SizedBox(width: 16),
-                                SizedBox(width: 420, child: _buildDetailPane()),
-                              ],
-                            )
-                            : _buildBrowserPane(splitView),
+                    child: mainContent,
                   ),
                 ),
               ],
@@ -876,6 +999,42 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           const SizedBox(height: 16),
           const Text('フォルダ', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
+          const Text('Navigation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Card(
+            margin: EdgeInsets.zero,
+            child: Column(
+              children: <Widget>[
+                ListTile(
+                  selected: _surface == _WebRemoteSurface.home,
+                  selectedTileColor: const Color(0xFF1B2D47),
+                  leading: const Icon(Icons.home_outlined),
+                  title: const Text('Home'),
+                  subtitle: const Text('Recently added / unread / popular'),
+                  onTap: () {
+                    setState(() {
+                      _surface = _WebRemoteSurface.home;
+                    });
+                  },
+                ),
+                ListTile(
+                  selected: _surface == _WebRemoteSurface.browse,
+                  selectedTileColor: const Color(0xFF1B2D47),
+                  leading: const Icon(Icons.picture_as_pdf_outlined),
+                  title: const Text('Browse PDFs'),
+                  subtitle: const Text('Search and inspect every PDF'),
+                  onTap: () {
+                    setState(() {
+                      _surface = _WebRemoteSurface.browse;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text('Library', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
           if (_folders.isEmpty)
             const Text('接続後に閲覧可能なフォルダを表示します。', style: TextStyle(color: Colors.white60)),
           for (final folder in _folders)
@@ -897,6 +1056,164 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             ),
           const SizedBox(height: 16),
           _buildUnsupportedFeaturesCard(),
+        ],
+      ),
+    );
+  }
+
+  WebPdfActivityRecord? _activityForEntry(WebRemoteEntry entry) {
+    return _activityRecords[entry.stableId];
+  }
+
+  DateTime _addedAtForEntry(WebRemoteEntry entry) {
+    return (_activityForEntry(entry)?.addedAt ?? entry.modifiedAt ?? DateTime.now()).toLocal();
+  }
+
+  int _viewCountForEntry(WebRemoteEntry entry) {
+    return _activityForEntry(entry)?.viewCount ?? 0;
+  }
+
+  DateTime? _lastViewedAtForEntry(WebRemoteEntry entry) {
+    return _activityForEntry(entry)?.lastViewedAt?.toLocal();
+  }
+
+  List<_WebHomeSectionData> _buildHomeSections(List<WebRemoteEntry> entries) {
+    final recentlyAdded = entries.toList(growable: false)
+      ..sort((left, right) => _addedAtForEntry(right).compareTo(_addedAtForEntry(left)));
+    final viewed = entries.where((entry) => _viewCountForEntry(entry) > 0).toList(growable: false);
+    final frequentlyViewed = viewed.toList(growable: false)
+      ..sort((left, right) {
+        final countCompare = _viewCountForEntry(right).compareTo(_viewCountForEntry(left));
+        if (countCompare != 0) {
+          return countCompare;
+        }
+        final rightViewed = _lastViewedAtForEntry(right) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final leftViewed = _lastViewedAtForEntry(left) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return rightViewed.compareTo(leftViewed);
+      });
+    final lightlyViewed = viewed.toList(growable: false)
+      ..sort((left, right) {
+        final countCompare = _viewCountForEntry(left).compareTo(_viewCountForEntry(right));
+        if (countCompare != 0) {
+          return countCompare;
+        }
+        final leftViewed = _lastViewedAtForEntry(left) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final rightViewed = _lastViewedAtForEntry(right) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return leftViewed.compareTo(rightViewed);
+      });
+    final unread = entries
+        .where((entry) => _viewCountForEntry(entry) == 0)
+        .toList(growable: false)
+      ..sort((left, right) => _addedAtForEntry(right).compareTo(_addedAtForEntry(left)));
+
+    return <_WebHomeSectionData>[
+      _WebHomeSectionData(
+        title: 'Recently Added',
+        subtitle: 'New PDFs picked up by the library.',
+        icon: Icons.schedule_outlined,
+        entries: recentlyAdded.take(12).toList(growable: false),
+      ),
+      _WebHomeSectionData(
+        title: 'Frequently Viewed',
+        subtitle: 'PDFs you open the most.',
+        icon: Icons.local_fire_department_outlined,
+        entries: frequentlyViewed.take(12).toList(growable: false),
+      ),
+      _WebHomeSectionData(
+        title: 'Lightly Viewed',
+        subtitle: 'PDFs you opened only a little.',
+        icon: Icons.visibility_outlined,
+        entries: lightlyViewed.take(12).toList(growable: false),
+      ),
+      _WebHomeSectionData(
+        title: 'Unread',
+        subtitle: 'PDFs you have not opened yet.',
+        icon: Icons.mark_email_unread_outlined,
+        entries: unread.take(12).toList(growable: false),
+      ),
+    ];
+  }
+
+  Future<void> _openPdfFromHome(WebRemoteEntry entry) async {
+    setState(() {
+      _selectedEntry = entry;
+    });
+    await _openPdfViewerPage(entry);
+  }
+
+  Widget _buildHomePane() {
+    if (_client == null) {
+      return _buildInfoCard(
+        'Home',
+        'Connect to the host API to load your PDF library overview.',
+        Colors.white70,
+      );
+    }
+
+    final entries = _homeEntries;
+    final unreadCount = entries.where((entry) => _viewCountForEntry(entry) == 0).length;
+    final viewedCount = entries.where((entry) => _viewCountForEntry(entry) > 0).length;
+    final recentCount = entries
+        .where(
+          (entry) => _addedAtForEntry(entry).isAfter(
+            DateTime.now().toLocal().subtract(const Duration(days: 7)),
+          ),
+        )
+        .length;
+    final sections = _buildHomeSections(entries);
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _refreshHomeEntries(force: true);
+        if (_searchController.text.trim().isEmpty) {
+          await _loadEntries();
+        }
+      },
+      child: ListView(
+        padding: EdgeInsets.all(MediaQuery.of(context).size.width < 720 ? 10 : 16),
+        children: <Widget>[
+          _WebHomeHeroCard(
+            totalCount: entries.length,
+            unreadCount: unreadCount,
+            viewedCount: viewedCount,
+            recentCount: recentCount,
+            isBusy: _homeLoading || _isConnecting || _actionBusy,
+            onBrowseAll: () {
+              setState(() {
+                _surface = _WebRemoteSurface.browse;
+              });
+              unawaited(_loadEntries());
+            },
+            onRefresh: () => _refreshHomeEntries(force: true),
+          ),
+          const SizedBox(height: 16),
+          if (_homeLoading && entries.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            )
+          else if (_homeErrorMessage != null && entries.isEmpty)
+            _buildInfoCard('Home Error', _homeErrorMessage!, Colors.red.shade200)
+          else if (entries.isEmpty)
+            _buildInfoCard(
+              'No PDFs Yet',
+              'The connected Library does not have any PDFs to show on Home.',
+              Colors.white70,
+            )
+          else
+            ...sections.map(
+              (section) => Padding(
+                padding: const EdgeInsets.only(bottom: 18),
+                child: _WebHomeSection(
+                  section: section,
+                  client: _client,
+                  activityFor: _activityForEntry,
+                  onOpen: _openPdfFromHome,
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1139,6 +1456,360 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     final local = value.toLocal();
     final two = (int number) => number.toString().padLeft(2, '0');
     return '${local.year}/${two(local.month)}/${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+  }
+}
+
+class _WebHomeSectionData {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final List<WebRemoteEntry> entries;
+
+  const _WebHomeSectionData({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.entries,
+  });
+}
+
+class _WebHomeHeroCard extends StatelessWidget {
+  final int totalCount;
+  final int unreadCount;
+  final int viewedCount;
+  final int recentCount;
+  final bool isBusy;
+  final VoidCallback onBrowseAll;
+  final Future<void> Function() onRefresh;
+
+  const _WebHomeHeroCard({
+    required this.totalCount,
+    required this.unreadCount,
+    required this.viewedCount,
+    required this.recentCount,
+    required this.isBusy,
+    required this.onBrowseAll,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: <Widget>[
+                const Text(
+                  'PDF Home',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                ),
+                if (isBusy)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Jump into recent, unread, and frequently opened PDFs from one place.',
+              style: TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: <Widget>[
+                _WebHomeMetricChip(
+                  label: 'All PDFs',
+                  value: '$totalCount',
+                  icon: Icons.picture_as_pdf_outlined,
+                ),
+                _WebHomeMetricChip(
+                  label: 'Unread',
+                  value: '$unreadCount',
+                  icon: Icons.mark_email_unread_outlined,
+                ),
+                _WebHomeMetricChip(
+                  label: 'Viewed',
+                  value: '$viewedCount',
+                  icon: Icons.visibility_outlined,
+                ),
+                _WebHomeMetricChip(
+                  label: 'Added 7d',
+                  value: '$recentCount',
+                  icon: Icons.schedule_outlined,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: <Widget>[
+                FilledButton.icon(
+                  onPressed: onBrowseAll,
+                  icon: const Icon(Icons.grid_view_rounded),
+                  label: const Text('Browse PDFs'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: isBusy ? null : () => onRefresh(),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Refresh Home'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WebHomeMetricChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _WebHomeMetricChip({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 140,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF141922),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(icon, size: 18, color: Colors.white70),
+          const SizedBox(height: 10),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 4),
+          Text(label, style: const TextStyle(color: Colors.white60)),
+        ],
+      ),
+    );
+  }
+}
+
+class _WebHomeSection extends StatelessWidget {
+  final _WebHomeSectionData section;
+  final WebRemoteApiClient? client;
+  final WebPdfActivityRecord? Function(WebRemoteEntry entry) activityFor;
+  final Future<void> Function(WebRemoteEntry entry) onOpen;
+
+  const _WebHomeSection({
+    required this.section,
+    required this.client,
+    required this.activityFor,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.of(context).size.width < 720;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Icon(section.icon, color: Colors.white70),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    section.title,
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    section.subtitle,
+                    style: const TextStyle(color: Colors.white60),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (section.entries.isEmpty)
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Text(
+                'No PDFs match this section yet.',
+                style: const TextStyle(color: Colors.white60),
+              ),
+            ),
+          )
+        else
+          SizedBox(
+            height: compact ? 308 : 332,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: section.entries.length,
+              separatorBuilder: (context, index) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                final entry = section.entries[index];
+                return _WebHomePdfCard(
+                  client: client,
+                  entry: entry,
+                  activity: activityFor(entry),
+                  compact: compact,
+                  onTap: () => onOpen(entry),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _WebHomePdfCard extends StatelessWidget {
+  final WebRemoteApiClient? client;
+  final WebRemoteEntry entry;
+  final WebPdfActivityRecord? activity;
+  final bool compact;
+  final Future<void> Function() onTap;
+
+  const _WebHomePdfCard({
+    required this.client,
+    required this.entry,
+    required this.activity,
+    required this.compact,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final addedAt = (activity?.addedAt ?? entry.modifiedAt)?.toLocal();
+    final lastViewedAt = activity?.lastViewedAt?.toLocal();
+    final viewCount = activity?.viewCount ?? 0;
+
+    return SizedBox(
+      width: compact ? 236 : 270,
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => onTap(),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Center(
+                  child: _RemoteThumbnail(
+                    client: client,
+                    entry: entry,
+                    width: compact ? 184 : 214,
+                    height: compact ? 150 : 170,
+                    borderRadius: 12,
+                    backgroundColor: const Color(0xFF151721),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  entry.displayName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  entry.folderRaw,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white60),
+                ),
+                const SizedBox(height: 10),
+                _WebHomeStatLine(
+                  label: 'Added',
+                  value: _formatBrowseDateTime(addedAt),
+                ),
+                _WebHomeStatLine(
+                  label: 'Viewed',
+                  value: '$viewCount',
+                ),
+                _WebHomeStatLine(
+                  label: 'Last',
+                  value: lastViewedAt == null ? 'Unread' : _formatBrowseDateTime(lastViewedAt),
+                ),
+                const Spacer(),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.icon(
+                    onPressed: () => onTap(),
+                    icon: const Icon(Icons.menu_book_rounded),
+                    label: const Text('Open Viewer'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WebHomeStatLine extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _WebHomeStatLine({
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: <Widget>[
+          SizedBox(
+            width: 52,
+            child: Text(
+              label,
+              style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white70),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
