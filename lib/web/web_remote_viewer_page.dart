@@ -15,9 +15,7 @@ import '../services/app_settings_service.dart';
 import 'web_remote_api_client.dart';
 
 enum _WebMediaFilter {
-  all('すべて'),
-  pdf('PDF'),
-  image('画像');
+  pdf('PDF');
 
   final String label;
   const _WebMediaFilter(this.label);
@@ -54,7 +52,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   bool _actionBusy = false;
   String? _statusMessage;
   String? _errorMessage;
-  _WebMediaFilter _filter = _WebMediaFilter.all;
+  _WebMediaFilter _filter = _WebMediaFilter.pdf;
 
   @override
   void initState() {
@@ -218,13 +216,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     try {
       final folders = await client.listFolders();
       final libraryRoot = _resolveLibraryRoot(folders);
-      final previousSelected = _selectedFolderRaw?.trim();
-      final selectedFolder =
-          previousSelected != null &&
-                  libraryRoot != null &&
-                  _isPathWithin(previousSelected, libraryRoot.raw)
-              ? previousSelected
-              : libraryRoot?.raw;
+      final selectedFolder = libraryRoot?.raw;
       if (!mounted) return;
       setState(() {
         _client = client;
@@ -280,19 +272,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     try {
       final rawQuery = _searchController.text.trim();
-      final fetched =
-          rawQuery.isEmpty
-              ? await client.listFolderChildren(folderRaw, limit: 300)
-              : await client.search(
-                WebSearchParser.parse(rawQuery),
-                folderRaw: folderRaw,
-                limit: 300,
-              );
+      final fetched = await _loadPdfEntries(
+        client,
+        folderRaw: folderRaw,
+        rawQuery: rawQuery,
+      );
 
       fetched.sort((left, right) {
-        if (left.isFolder != right.isFolder) {
-          return left.isFolder ? -1 : 1;
-        }
         final leftModified = left.modifiedAt?.millisecondsSinceEpoch ?? 0;
         final rightModified = right.modifiedAt?.millisecondsSinceEpoch ?? 0;
         final modifiedCompare = rightModified.compareTo(leftModified);
@@ -311,15 +297,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             .cast<WebRemoteEntry?>()
             .firstOrNull;
       }
-      nextSelected ??=
-          filtered.where((entry) => !entry.isFolder).cast<WebRemoteEntry?>().firstOrNull;
+      nextSelected ??= filtered.cast<WebRemoteEntry?>().firstOrNull;
 
       if (!mounted) return;
       setState(() {
         _entries = filtered;
         _selectedEntry = nextSelected;
         _statusMessage =
-            rawQuery.isEmpty ? 'フォルダを読み込みました' : '検索結果 ${filtered.length} 件';
+            rawQuery.isEmpty
+                ? 'PDF list: ${filtered.length} items'
+                : 'PDF search: ${filtered.length} items';
       });
     } catch (error) {
       if (!mounted) return;
@@ -337,15 +324,52 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
   }
 
-  List<WebRemoteEntry> _applyFilter(List<WebRemoteEntry> items) {
-    switch (_filter) {
-      case _WebMediaFilter.all:
-        return items;
-      case _WebMediaFilter.pdf:
-        return items.where((entry) => entry.isFolder || entry.isPdf).toList();
-      case _WebMediaFilter.image:
-        return items.where((entry) => entry.isFolder || entry.isImage).toList();
+  Future<List<WebRemoteEntry>> _loadPdfEntries(
+    WebRemoteApiClient client, {
+    required String folderRaw,
+    required String rawQuery,
+  }) async {
+    final query = _buildPdfOnlySearchQuery(rawQuery);
+    const pageSize = 1000;
+    final entries = <WebRemoteEntry>[];
+    var offset = 0;
+
+    while (true) {
+      final page = await client.search(
+        query,
+        folderRaw: folderRaw,
+        limit: pageSize,
+        offset: offset,
+      );
+      if (page.isEmpty) {
+        break;
+      }
+      entries.addAll(page.where((entry) => entry.isPdf));
+      if (page.length < pageSize) {
+        break;
+      }
+      offset += page.length;
     }
+
+    return entries;
+  }
+
+  WebSearchQuery _buildPdfOnlySearchQuery(String rawQuery) {
+    final parsed = WebSearchParser.parse(rawQuery);
+    return WebSearchQuery(
+      raw: parsed.raw,
+      q: parsed.q,
+      artist: parsed.artist,
+      series: parsed.series,
+      character: parsed.character,
+      mediaType: 'pdf',
+      name: parsed.name,
+      untagged: parsed.untagged,
+    );
+  }
+
+  List<WebRemoteEntry> _applyFilter(List<WebRemoteEntry> items) {
+    return items.where((entry) => entry.isPdf).toList();
   }
 
   p.Context _pathContext(String raw) {
@@ -893,6 +917,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     required String? currentFolderRaw,
     required String? parentFolder,
   }) {
+    final rootLabel = _currentFolderLabel(currentFolderRaw);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -903,7 +928,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         ),
         const SizedBox(height: 12),
         _ResponsiveBrowserHeader(
-          folderName: _currentFolderLabel(currentFolderRaw),
+          folderName: '$rootLabel / PDF',
           folderPath: currentFolderRaw,
           itemCount: _entries.length,
           searchController: _searchController,
@@ -1291,18 +1316,6 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
     final compact = mediaQuery.size.width < 720;
     final keyboardVisible = mediaQuery.viewInsets.bottom > 0;
     final title = folderName;
-    final filterChips = _WebMediaFilter.values
-        .map(
-          (entry) => Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              label: Text(_filterLabel(entry)),
-              selected: filter == entry,
-              onSelected: (_) => onFilterChanged(entry),
-            ),
-          ),
-        )
-        .toList(growable: false);
     final menuActions = <PopupMenuEntry<_BrowserHeaderMenuAction>>[
       if (onGoRoot != null)
         const PopupMenuItem<_BrowserHeaderMenuAction>(
@@ -1443,16 +1456,9 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                   folderPath!,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white60),
-                ),
-              ],
-              if (!keyboardVisible) ...<Widget>[
-                const SizedBox(height: 10),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: filterChips),
-                ),
-              ],
+                    style: const TextStyle(color: Colors.white60),
+                  ),
+                ],
             ],
           ),
         ),
@@ -1526,12 +1532,6 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                   style: const TextStyle(color: Colors.white60),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: filterChips,
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -1646,12 +1646,8 @@ String _formatBrowseBytes(int? bytes) {
 
 String _filterLabel(_WebMediaFilter filter) {
   switch (filter) {
-    case _WebMediaFilter.all:
-      return 'All';
     case _WebMediaFilter.pdf:
       return 'PDF';
-    case _WebMediaFilter.image:
-      return 'Image';
   }
 }
 
