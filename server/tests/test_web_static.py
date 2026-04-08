@@ -1,7 +1,7 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from server.web_static import mount_web_build
+from server.web_static import NO_CACHE_HEADER_VALUE, mount_web_build
 
 
 def _write_build(tmp_path):
@@ -26,6 +26,22 @@ def test_mount_web_build_serves_index_and_assets(tmp_path):
     assert "console.log" in asset_response.text
 
 
+def test_mount_web_build_marks_entry_files_as_no_cache(tmp_path):
+    _write_build(tmp_path)
+    app = FastAPI()
+    mount_web_build(app, tmp_path)
+
+    client = TestClient(app)
+
+    index_response = client.get("/")
+    assert index_response.headers["cache-control"] == NO_CACHE_HEADER_VALUE
+    assert index_response.headers["pragma"] == "no-cache"
+    assert index_response.headers["expires"] == "0"
+
+    main_response = client.get("/main.dart.js")
+    assert main_response.headers["cache-control"] == NO_CACHE_HEADER_VALUE
+
+
 def test_mount_web_build_falls_back_for_spa_routes(tmp_path):
     _write_build(tmp_path)
     app = FastAPI()
@@ -36,6 +52,7 @@ def test_mount_web_build_falls_back_for_spa_routes(tmp_path):
 
     assert response.status_code == 200
     assert "web app" in response.text
+    assert response.headers["cache-control"] == NO_CACHE_HEADER_VALUE
 
 
 def test_mount_web_build_keeps_api_like_paths_as_404(tmp_path):

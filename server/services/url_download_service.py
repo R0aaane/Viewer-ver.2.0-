@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import sys
 from collections import deque
 from dataclasses import dataclass, field
@@ -49,7 +50,9 @@ class UrlDownloadOptions:
     def collect_source_urls(self, source_url: str) -> list[str]:
         urls: list[str] = []
         seen: set[str] = set()
-        for chunk in source_url.replace(",", "\n").splitlines():
+        matched_urls = re.findall(r"https?://[^\s,]+", source_url or "", flags=re.IGNORECASE)
+        segments = matched_urls or re.split(r"[\s,]+", source_url or "")
+        for chunk in segments:
             trimmed = chunk.strip()
             if not trimmed or trimmed in seen:
                 continue

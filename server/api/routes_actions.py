@@ -745,7 +745,10 @@ def _collect_source_urls(primary_url: str, extra_urls: list[str]) -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
     for raw in [primary_url, *extra_urls]:
-        for chunk in str(raw or "").replace(",", "\n").splitlines():
+        value = str(raw or "")
+        matched_urls = re.findall(r"https?://[^\s,]+", value, flags=re.IGNORECASE)
+        segments = matched_urls or re.split(r"[\s,]+", value)
+        for chunk in segments:
             trimmed = chunk.strip()
             if not trimmed or trimmed in seen:
                 continue

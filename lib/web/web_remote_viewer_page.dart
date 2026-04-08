@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -884,6 +885,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
+        _PinnedBrowserSearchBar(
+          searchController: _searchController,
+          isLoading: _isLoading,
+          onSearch: _loadEntries,
+        ),
+        const SizedBox(height: 12),
         _ResponsiveBrowserHeader(
           folderName: _currentFolderLabel(currentFolderRaw),
           folderPath: currentFolderRaw,
@@ -919,6 +926,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             });
             _loadEntries();
           },
+          showSearchField: false,
         ),
         const SizedBox(height: 16),
         Expanded(child: _buildList(splitView)),
@@ -1226,6 +1234,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
   final VoidCallback? onRescan;
   final _WebMediaFilter filter;
   final ValueChanged<_WebMediaFilter> onFilterChanged;
+  final bool showSearchField;
 
   const _ResponsiveBrowserHeader({
     required this.folderName,
@@ -1243,6 +1252,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
     required this.onRescan,
     required this.filter,
     required this.onFilterChanged,
+    this.showSearchField = true,
   });
 
   @override
@@ -1338,22 +1348,24 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              TextField(
-                controller: searchController,
-                textInputAction: TextInputAction.search,
-                onSubmitted: (_) => onSearch(),
-                decoration: InputDecoration(
-                  isDense: true,
-                  labelText: 'Search',
-                  hintText: 'artist:"name"  type:pdf  #tag',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: IconButton(
-                    onPressed: isLoading ? null : onSearch,
-                    icon: const Icon(Icons.arrow_forward),
+              if (showSearchField) ...<Widget>[
+                TextField(
+                  controller: searchController,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => onSearch(),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    labelText: 'Search',
+                    hintText: 'artist:"name"  type:pdf  #tag',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: IconButton(
+                      onPressed: isLoading ? null : onSearch,
+                      icon: const Icon(Icons.arrow_forward),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
+                const SizedBox(height: 10),
+              ],
               Row(
                 children: <Widget>[
                   Expanded(
@@ -1422,28 +1434,30 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: TextField(
-                    controller: searchController,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => onSearch(),
-                    decoration: const InputDecoration(
-                      labelText: 'Search',
-                      hintText: 'artist:"name"  type:pdf  #tag  untagged',
-                      prefixIcon: Icon(Icons.search),
+            if (showSearchField) ...<Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextField(
+                      controller: searchController,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => onSearch(),
+                      decoration: const InputDecoration(
+                        labelText: 'Search',
+                        hintText: 'artist:"name"  type:pdf  #tag  untagged',
+                        prefixIcon: Icon(Icons.search),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                FilledButton(
-                  onPressed: isLoading ? null : onSearch,
-                  child: const Text('Search'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+                  const SizedBox(width: 12),
+                  FilledButton(
+                    onPressed: isLoading ? null : onSearch,
+                    child: const Text('Search'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -1509,6 +1523,60 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                 ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PinnedBrowserSearchBar extends StatelessWidget {
+  final TextEditingController searchController;
+  final bool isLoading;
+  final Future<void> Function() onSearch;
+
+  const _PinnedBrowserSearchBar({
+    required this.searchController,
+    required this.isLoading,
+    required this.onSearch,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.of(context).size.width < 720;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: EdgeInsets.all(compact ? 10 : 14),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: TextField(
+                controller: searchController,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => onSearch(),
+                decoration: InputDecoration(
+                  isDense: compact,
+                  labelText: 'Search',
+                  hintText: 'artist:"name"  type:pdf  #tag  untagged',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon:
+                      compact
+                          ? IconButton(
+                            onPressed: isLoading ? null : onSearch,
+                            icon: const Icon(Icons.arrow_forward),
+                          )
+                          : null,
+                ),
+              ),
+            ),
+            if (!compact) ...<Widget>[
+              const SizedBox(width: 12),
+              FilledButton(
+                onPressed: isLoading ? null : onSearch,
+                child: const Text('Search'),
+              ),
+            ],
           ],
         ),
       ),
@@ -3884,6 +3952,54 @@ class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
     return values;
   }
 
+  List<String> _collectSourceUrls(String raw) {
+    return const UrlImportOptions().collectSourceUrls(raw);
+  }
+
+  String _normalizeSourceUrlText(String raw) {
+    return _collectSourceUrls(raw).join(', ');
+  }
+
+  void _replaceSourceUrlText(String raw) {
+    final normalized = _normalizeSourceUrlText(raw);
+    _urlController.value = TextEditingValue(
+      text: normalized,
+      selection: TextSelection.collapsed(offset: normalized.length),
+    );
+  }
+
+  Future<void> _pasteSourceUrls() async {
+    try {
+      final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+      final pastedText = clipboardData?.text ?? '';
+      final incomingUrls = _collectSourceUrls(pastedText);
+      if (!mounted) {
+        return;
+      }
+      if (incomingUrls.isEmpty) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('No URL found in clipboard')),
+        );
+        return;
+      }
+      final mergedUrls = <String>[
+        ..._collectSourceUrls(_urlController.text),
+        ...incomingUrls,
+      ];
+      setState(() {
+        _validationMessage = null;
+      });
+      _replaceSourceUrlText(mergedUrls.join(', '));
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('Clipboard read failed')),
+      );
+    }
+  }
+
   String _cookieModeLabel(UrlImportCookieMode mode) {
     switch (mode) {
       case UrlImportCookieMode.auto:
@@ -3902,7 +4018,7 @@ class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
   }
 
   bool _validate({required bool showMessage}) {
-    final sourceUrl = _urlController.text.trim();
+    final sourceUrl = _normalizeSourceUrlText(_urlController.text);
     final options = _options;
     String? message;
 
@@ -3928,9 +4044,12 @@ class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
       return;
     }
 
+    final normalizedSourceUrl = _normalizeSourceUrlText(_urlController.text);
+    _replaceSourceUrlText(normalizedSourceUrl);
+
     Navigator.of(context).pop(
       _WebUrlImportRequest(
-        sourceUrl: _urlController.text.trim(),
+        sourceUrl: normalizedSourceUrl,
         options: _options,
         importMetadata: _importMetadata,
       ),
@@ -3939,6 +4058,7 @@ class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final detectedUrlCount = _collectSourceUrls(_urlController.text).length;
     return AlertDialog(
       title: const Text('ホストへ URL 取り込み'),
       content: ConstrainedBox(
@@ -3962,12 +4082,31 @@ class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
                 maxLines: 8,
                 onChanged: (_) => setState(() => _validationMessage = null),
                 decoration: const InputDecoration(
-                  labelText: 'URL 一覧',
+                  labelText: 'Source URLs',
                   alignLabelWithHint: true,
                   hintText:
-                      '1 行 1 件、またはカンマ区切りで複数 URL を入力\nhttps://hitomi.la/...\nhttps://kemono.su/...',
-                  helperText: 'favorites だけで実行する場合は空でも構いません',
+                      'https://hitomi.la/...\nhttps://kemono.su/...',
+                  helperText:
+                      'Paste multiple URLs with spaces, new lines, or commas. The dialog will normalize them into comma-separated URLs.',
                 ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  OutlinedButton.icon(
+                    onPressed: _pasteSourceUrls,
+                    icon: const Icon(Icons.content_paste_go_outlined),
+                    label: const Text('Paste'),
+                  ),
+                  if (detectedUrlCount > 0)
+                    Chip(
+                      avatar: const Icon(Icons.link, size: 18),
+                      label: Text('$detectedUrlCount URLs'),
+                    ),
+                ],
               ),
               const SizedBox(height: 20),
               Text(

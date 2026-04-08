@@ -227,7 +227,16 @@ class UrlImportOptions {
   List<String> collectSourceUrls(String sourceUrl) {
     final urls = <String>[];
     final seen = <String>{};
-    for (final segment in sourceUrl.split(RegExp(r'[\r\n,]+'))) {
+    final matchedUrls =
+        RegExp(
+          r'https?://[^\s,]+',
+          caseSensitive: false,
+        ).allMatches(sourceUrl).map((match) => match.group(0) ?? '');
+    final segments =
+        matchedUrls.isNotEmpty
+            ? matchedUrls
+            : sourceUrl.split(RegExp(r'[\s,]+'));
+    for (final segment in segments) {
       final trimmed = segment.trim();
       if (trimmed.isEmpty) continue;
       if (seen.add(trimmed)) {
