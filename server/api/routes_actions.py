@@ -1,10 +1,11 @@
-﻿import json
+import json
 import logging
 import os
 import posixpath
 import re
 import secrets
 import shutil
+import tempfile
 import unicodedata
 from pathlib import Path
 
@@ -253,12 +254,12 @@ async def upload_files(
         )
 
         try:
-            with open(destination, "wb") as handle:
-                while True:
-                    chunk = await upload.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    handle.write(chunk)
+            await _save_upload_file_atomic(
+                upload,
+                destination,
+                request_id=request_id,
+                index=index,
+            )
             saved_entries.append((os.path.normpath(destination), relative_path_hint, file_tags))
             imported_count += 1
             logger.info('[UPLOAD][SERVER][req:%s] save_success index=%s destination=%s', request_id, index, _log_scalar(destination))
@@ -849,6 +850,70 @@ def _utf8_hex_preview(value: str) -> str:
     return preview
 
 
+async def _save_upload_file_atomic(
+    upload: UploadFile,
+    destination: str,
+    *,
+    request_id: str,
+    index: int,
+) -> None:
+    destination_path = Path(destination)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            delete=False,
+            dir=str(destination_path.parent),
+            prefix=f".{destination_path.name}.upload-",
+            suffix=".part",
+        ) as handle:
+            temp_path = handle.name
+            logger.info(
+                '[UPLOAD][SERVER][req:%s] temp_save_start index=%s temp=%s destination=%s',
+                request_id,
+                index,
+                _log_scalar(temp_path),
+                _log_scalar(destination),
+            )
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        os.replace(temp_path, destination)
+        logger.info(
+            '[UPLOAD][SERVER][req:%s] temp_save_finish index=%s temp=%s destination=%s',
+            request_id,
+            index,
+            _log_scalar(temp_path),
+            _log_scalar(destination),
+        )
+    except Exception:
+        logger.exception(
+            '[UPLOAD][ERROR][req:%s] temp_save_failed index=%s temp=%s destination=%s',
+            request_id,
+            index,
+            _log_scalar(temp_path),
+            _log_scalar(destination),
+        )
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                logger.warning(
+                    '[UPLOAD][SERVER][req:%s] temp_cleanup_failed index=%s temp=%s',
+                    request_id,
+                    index,
+                    _log_scalar(temp_path),
+                    exc_info=True,
+                )
+        raise
+
 def _collect_media_paths(folder_path: str) -> set[str]:
     found: set[str] = set()
     for base, _, files in os.walk(folder_path):
@@ -1025,6 +1090,10 @@ def _remove_empty_dirs(folder_path: str) -> None:
                 os.rmdir(base)
         except OSError:
             continue
+
+
+
+
 
 
 

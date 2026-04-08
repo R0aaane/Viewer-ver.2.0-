@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
@@ -8,6 +10,7 @@ from server.services.auth_service import require_bearer_token
 
 
 router = APIRouter(tags=["media"], dependencies=[Depends(require_bearer_token)])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/media/{media_id}/meta", response_model=MediaMetaResponse)
@@ -15,9 +18,13 @@ router = APIRouter(tags=["media"], dependencies=[Depends(require_bearer_token)])
 def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
     meta = request.app.state.stream_service.get_media_meta(media_id)
     if meta["kind"] == "pdf":
-        meta["pageCount"] = request.app.state.thumbnail_service.get_pdf_page_count(
-            media_id
-        )
+        try:
+            meta["pageCount"] = request.app.state.thumbnail_service.get_pdf_page_count(
+                media_id
+            )
+        except Exception:
+            logger.exception("[media][meta_page_count_failed] media_id=%s", media_id)
+            meta["pageCount"] = None
     return MediaMetaResponse(**meta)
 
 
