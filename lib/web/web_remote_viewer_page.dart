@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -53,7 +52,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   bool _isConnecting = false;
   bool _isLoading = false;
   bool _actionBusy = false;
-  double _browserControlsHeight = 0;
   String? _statusMessage;
   String? _errorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.all;
@@ -884,130 +882,128 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     final parentFolder =
         _selectedFolderRaw == null ? null : _parentFolderWithinLibrary(_selectedFolderRaw!);
     final currentFolderRaw = _selectedFolderRaw ?? _libraryRoot?.raw;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 720;
-        final fallbackControlsHeight = compact ? 214.0 : 258.0;
-        final controlsHeight =
-            _browserControlsHeight > 0
-                ? _browserControlsHeight
-                : fallbackControlsHeight;
-
-        return ClipRect(
-          child: Stack(
-            children: <Widget>[
-              Positioned.fill(
-                top: controlsHeight,
-                child: _buildList(splitView),
-              ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: _MeasureSize(
-                  onChange: (size) {
-                    if (!mounted) {
-                      return;
-                    }
-                    final nextHeight = size.height;
-                    if ((_browserControlsHeight - nextHeight).abs() < 1) {
-                      return;
-                    }
-                    setState(() {
-                      _browserControlsHeight = nextHeight;
-                    });
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: _PinnedBrowserControls(
-                      folderName: _currentFolderLabel(currentFolderRaw),
-                      folderPath: currentFolderRaw,
-                      itemCount: _entries.length,
-                      searchController: _searchController,
-                      isLoading: _isLoading,
-                      actionsBusy: _actionBusy,
-                      onGoRoot:
-                          currentFolderRaw == null ||
-                                  _libraryRoot == null ||
-                                  _isSamePath(currentFolderRaw, _libraryRoot!.raw)
-                              ? null
-                              : () => _selectFolder(_libraryRoot!.raw),
-                      parentFolderAvailable: parentFolder != null,
-                      onSearch: _loadEntries,
-                      onGoParent:
-                          parentFolder == null ? null : () => _selectFolder(parentFolder),
-                      onImportUrl:
-                          _client == null || _selectedFolderRaw == null || _actionBusy
-                              ? null
-                              : _importUrlToCurrentFolder,
-                      onOrganizeFolder:
-                          _client == null || _selectedFolderRaw == null || _actionBusy
-                              ? null
-                              : _organizeCurrentFolder,
-                      onRescan:
-                          _client == null || _actionBusy
-                              ? null
-                              : _requestRescanCurrentFolder,
-                      filter: _filter,
-                      onFilterChanged: (filter) {
-                        setState(() {
-                          _filter = filter;
-                        });
-                        _loadEntries();
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+    return _buildList(
+      splitView,
+      currentFolderRaw: currentFolderRaw,
+      parentFolder: parentFolder,
     );
   }
 
-  Widget _buildList(bool splitView) {
+  Widget _buildBrowserControls({
+    required String? currentFolderRaw,
+    required String? parentFolder,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _PinnedBrowserSearchBar(
+          searchController: _searchController,
+          isLoading: _isLoading,
+          onSearch: _loadEntries,
+        ),
+        const SizedBox(height: 12),
+        _ResponsiveBrowserHeader(
+          folderName: _currentFolderLabel(currentFolderRaw),
+          folderPath: currentFolderRaw,
+          itemCount: _entries.length,
+          searchController: _searchController,
+          isLoading: _isLoading,
+          actionsBusy: _actionBusy,
+          onGoRoot:
+              currentFolderRaw == null ||
+                      _libraryRoot == null ||
+                      _isSamePath(currentFolderRaw, _libraryRoot!.raw)
+                  ? null
+                  : () => _selectFolder(_libraryRoot!.raw),
+          parentFolderAvailable: parentFolder != null,
+          onSearch: _loadEntries,
+          onGoParent: parentFolder == null ? null : () => _selectFolder(parentFolder),
+          onImportUrl:
+              _client == null || _selectedFolderRaw == null || _actionBusy
+                  ? null
+                  : _importUrlToCurrentFolder,
+          onOrganizeFolder:
+              _client == null || _selectedFolderRaw == null || _actionBusy
+                  ? null
+                  : _organizeCurrentFolder,
+          onRescan:
+              _client == null || _actionBusy
+                  ? null
+                  : _requestRescanCurrentFolder,
+          filter: _filter,
+          onFilterChanged: (filter) {
+            setState(() {
+              _filter = filter;
+            });
+            _loadEntries();
+          },
+          showSearchField: false,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildList(
+    bool splitView, {
+    required String? currentFolderRaw,
+    required String? parentFolder,
+  }) {
     final compact = MediaQuery.of(context).size.width < 720;
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: RefreshIndicator(
-        onRefresh: _loadEntries,
-        child:
-            _entries.isEmpty && !_isLoading
-                ? ListView(
-                  padding: const EdgeInsets.all(24),
-                  children: const <Widget>[
-                    Icon(Icons.travel_explore, size: 52, color: Colors.white30),
-                    SizedBox(height: 12),
-                    Text(
-                      'この条件では表示できる項目がありません。',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white70),
+    final listPadding = EdgeInsets.all(compact ? 10 : 16);
+    final controls = _buildBrowserControls(
+      currentFolderRaw: currentFolderRaw,
+      parentFolder: parentFolder,
+    );
+
+    return RefreshIndicator(
+      onRefresh: _loadEntries,
+      child:
+          _entries.isEmpty && !_isLoading
+              ? ListView(
+                padding: listPadding,
+                children: <Widget>[
+                  controls,
+                  const SizedBox(height: 12),
+                  const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Column(
+                        children: <Widget>[
+                          Icon(Icons.travel_explore, size: 52, color: Colors.white30),
+                          SizedBox(height: 12),
+                          Text(
+                            'No items found in this view.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
-                )
-                : ListView.separated(
-                  padding: EdgeInsets.all(compact ? 10 : 16),
-                  itemCount: _entries.length,
-                  separatorBuilder:
-                      (context, index) =>
-                          SizedBox(height: compact ? 10 : 12),
-                  itemBuilder: (context, index) {
-                    final entry = _entries[index];
-                    final selected = _selectedEntry?.stableId == entry.stableId;
-                    return _EntryCard(
-                      key: ValueKey<String>(entry.stableId),
-                      client: _client,
-                      entry: entry,
-                      selected: selected,
-                      onTap: () => _handleEntryTap(entry, splitView: splitView),
-                      folderName: _folderName,
-                      onApplyTagQuery: _applyTagQuery,
-                    );
-                  },
-                ),
-      ),
+                  ),
+                ],
+              )
+              : ListView.separated(
+                padding: listPadding,
+                itemCount: _entries.length + 1,
+                separatorBuilder:
+                    (context, index) => SizedBox(height: compact ? 10 : 12),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return controls;
+                  }
+                  final entry = _entries[index - 1];
+                  final selected = _selectedEntry?.stableId == entry.stableId;
+                  return _EntryCard(
+                    key: ValueKey<String>(entry.stableId),
+                    client: _client,
+                    entry: entry,
+                    selected: selected,
+                    onTap: () => _handleEntryTap(entry, splitView: splitView),
+                    folderName: _folderName,
+                    onApplyTagQuery: _applyTagQuery,
+                  );
+                },
+              ),
     );
   }
 
@@ -1566,89 +1562,6 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
   }
 }
 
-class _PinnedBrowserControls extends StatelessWidget {
-  final String folderName;
-  final String? folderPath;
-  final int itemCount;
-  final TextEditingController searchController;
-  final bool isLoading;
-  final bool actionsBusy;
-  final VoidCallback? onGoRoot;
-  final bool parentFolderAvailable;
-  final Future<void> Function() onSearch;
-  final VoidCallback? onGoParent;
-  final VoidCallback? onImportUrl;
-  final VoidCallback? onOrganizeFolder;
-  final VoidCallback? onRescan;
-  final _WebMediaFilter filter;
-  final ValueChanged<_WebMediaFilter> onFilterChanged;
-
-  const _PinnedBrowserControls({
-    required this.folderName,
-    required this.folderPath,
-    required this.itemCount,
-    required this.searchController,
-    required this.isLoading,
-    required this.actionsBusy,
-    required this.onGoRoot,
-    required this.parentFolderAvailable,
-    required this.onSearch,
-    required this.onGoParent,
-    required this.onImportUrl,
-    required this.onOrganizeFolder,
-    required this.onRescan,
-    required this.filter,
-    required this.onFilterChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[
-            Color(0xFF15171D),
-            Color(0xF615171D),
-            Color(0x0015171D),
-          ],
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          _PinnedBrowserSearchBar(
-            searchController: searchController,
-            isLoading: isLoading,
-            onSearch: onSearch,
-          ),
-          const SizedBox(height: 12),
-          _ResponsiveBrowserHeader(
-            folderName: folderName,
-            folderPath: folderPath,
-            itemCount: itemCount,
-            searchController: searchController,
-            isLoading: isLoading,
-            actionsBusy: actionsBusy,
-            onGoRoot: onGoRoot,
-            parentFolderAvailable: parentFolderAvailable,
-            onSearch: onSearch,
-            onGoParent: onGoParent,
-            onImportUrl: onImportUrl,
-            onOrganizeFolder: onOrganizeFolder,
-            onRescan: onRescan,
-            filter: filter,
-            onFilterChanged: onFilterChanged,
-            showSearchField: false,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _PinnedBrowserSearchBar extends StatelessWidget {
   final TextEditingController searchController;
   final bool isLoading;
@@ -1700,48 +1613,6 @@ class _PinnedBrowserSearchBar extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _MeasureSize extends SingleChildRenderObjectWidget {
-  final ValueChanged<Size> onChange;
-
-  const _MeasureSize({
-    required this.onChange,
-    required super.child,
-  });
-
-  @override
-  RenderObject createRenderObject(BuildContext context) {
-    return _MeasureSizeRenderObject(onChange);
-  }
-
-  @override
-  void updateRenderObject(
-    BuildContext context,
-    covariant _MeasureSizeRenderObject renderObject,
-  ) {
-    renderObject.onChange = onChange;
-  }
-}
-
-class _MeasureSizeRenderObject extends RenderProxyBox {
-  _MeasureSizeRenderObject(this.onChange);
-
-  ValueChanged<Size> onChange;
-  Size? _lastSize;
-
-  @override
-  void performLayout() {
-    super.performLayout();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final nextSize = child?.size;
-      if (nextSize == null || nextSize == _lastSize) {
-        return;
-      }
-      _lastSize = nextSize;
-      onChange(nextSize);
-    });
   }
 }
 
