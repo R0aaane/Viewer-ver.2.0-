@@ -57,6 +57,21 @@ class SqliteStore:
                 CREATE INDEX IF NOT EXISTS idx_media_is_deleted
                     ON media_records(is_deleted);
 
+                CREATE TABLE IF NOT EXISTS media_stats (
+                    media_id TEXT PRIMARY KEY,
+                    added_at TEXT NOT NULL,
+                    last_viewed_at TEXT,
+                    view_count INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (media_id) REFERENCES media_records(media_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_media_stats_added_at
+                    ON media_stats(added_at);
+                CREATE INDEX IF NOT EXISTS idx_media_stats_last_viewed_at
+                    ON media_stats(last_viewed_at);
+                CREATE INDEX IF NOT EXISTS idx_media_stats_view_count
+                    ON media_stats(view_count);
+
                 CREATE TABLE IF NOT EXISTS tag_master (
                     tag_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -194,6 +209,104 @@ class SqliteStore:
         with self._cursor() as cur:
             rows = cur.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
+
+    def ensure_media_stats(self, media_ids: list[str], *, added_at: str) -> None:
+        unique_ids = list(
+            dict.fromkeys(
+                str(media_id).strip()
+                for media_id in media_ids
+                if str(media_id).strip()
+            )
+        )
+        if not unique_ids:
+            return
+        with self._cursor() as cur:
+            cur.executemany(
+                """
+                INSERT OR IGNORE INTO media_stats (
+                    media_id,
+                    added_at,
+                    last_viewed_at,
+                    view_count
+                )
+                VALUES (?, ?, NULL, 0)
+                """,
+                [(media_id, added_at) for media_id in unique_ids],
+            )
+
+    def get_media_stats(self, media_id: str) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            row = cur.execute(
+                """
+                SELECT media_id, added_at, last_viewed_at, view_count
+                  FROM media_stats
+                 WHERE media_id = ?
+                """,
+                (media_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_media_stats(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
+        unique_ids = list(
+            dict.fromkeys(
+                str(media_id).strip()
+                for media_id in media_ids
+                if str(media_id).strip()
+            )
+        )
+        if not unique_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self._cursor() as cur:
+            rows = cur.execute(
+                f"""
+                SELECT media_id, added_at, last_viewed_at, view_count
+                  FROM media_stats
+                 WHERE media_id IN ({placeholders})
+                """,
+                unique_ids,
+            ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = dict(row)
+            media_id = str(item.pop("media_id"))
+            out[media_id] = item
+        return out
+
+    def increment_media_view(
+        self,
+        media_id: str,
+        *,
+        viewed_at: str,
+        added_at: str,
+    ) -> dict[str, Any]:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO media_stats (
+                    media_id,
+                    added_at,
+                    last_viewed_at,
+                    view_count
+                )
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    last_viewed_at = excluded.last_viewed_at,
+                    view_count = media_stats.view_count + 1
+                """,
+                (media_id, added_at, viewed_at),
+            )
+            row = cur.execute(
+                """
+                SELECT media_id, added_at, last_viewed_at, view_count
+                  FROM media_stats
+                 WHERE media_id = ?
+                """,
+                (media_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError(f"media_stats row not found after increment: {media_id}")
+        return dict(row)
 
     def mark_deleted_by_ids(self, media_ids: list[str], is_deleted: bool = True) -> None:
         if not media_ids:
@@ -403,8 +516,55 @@ class SqliteStore:
                     (new_media_id, row["tag_id"]),
                 )
 
+            stats_row = cur.execute(
+                """
+                SELECT added_at, last_viewed_at, view_count
+                  FROM media_stats
+                 WHERE media_id = ?
+                """,
+                (old_media_id,),
+            ).fetchone()
+            if stats_row is not None:
+                cur.execute(
+                    """
+                    INSERT INTO media_stats (
+                        media_id,
+                        added_at,
+                        last_viewed_at,
+                        view_count
+                    )
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(media_id) DO UPDATE SET
+                        added_at = CASE
+                            WHEN media_stats.added_at <= excluded.added_at THEN media_stats.added_at
+                            ELSE excluded.added_at
+                        END,
+                        last_viewed_at = CASE
+                            WHEN media_stats.last_viewed_at IS NULL THEN excluded.last_viewed_at
+                            WHEN excluded.last_viewed_at IS NULL THEN media_stats.last_viewed_at
+                            WHEN media_stats.last_viewed_at >= excluded.last_viewed_at THEN media_stats.last_viewed_at
+                            ELSE excluded.last_viewed_at
+                        END,
+                        view_count = CASE
+                            WHEN media_stats.view_count >= excluded.view_count THEN media_stats.view_count
+                            ELSE excluded.view_count
+                        END
+                    """,
+                    (
+                        new_media_id,
+                        stats_row["added_at"],
+                        stats_row["last_viewed_at"],
+                        stats_row["view_count"],
+                    ),
+                )
+                cur.execute(
+                    "DELETE FROM media_stats WHERE media_id = ?",
+                    (old_media_id,),
+                )
+
             cur.execute(
                 "DELETE FROM media_tag_links WHERE media_id = ?",
                 (old_media_id,),
             )
+
 

@@ -1,0 +1,92 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from server.repositories.sqlite_store import SqliteStore
+from server.services.metadata_store import MetadataStore, SearchQuery, build_media_id
+
+
+class MediaStatsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+
+        self.db_path = Path(self._temp_dir.name) / "metadata.db"
+        self.library_dir = Path(self._temp_dir.name) / "library"
+        self.library_dir.mkdir()
+
+        self.sqlite = SqliteStore(self.db_path)
+        self.addCleanup(self.sqlite.close)
+        self.sqlite.init_schema()
+        self.store = MetadataStore(self.sqlite)
+
+        self.pdf_media_id = self._insert_media("sample.pdf", kind="pdf", mime_type="application/pdf")
+        self.image_media_id = self._insert_media("sample.jpg", kind="image", mime_type="image/jpeg")
+
+    def _insert_media(self, file_name: str, *, kind: str, mime_type: str) -> str:
+        target = self.library_dir / file_name
+        target.write_bytes(b"test")
+        media_id = build_media_id(
+            kind=kind,
+            full_path=str(target),
+            folder_raw=str(self.library_dir),
+            display_name=file_name,
+            size_bytes=4,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": file_name,
+                "display_name": file_name,
+                "full_path": str(target),
+                "normalized_full_path": str(target).replace("/", "\\").casefold(),
+                "kind": kind,
+                "mime_type": mime_type,
+                "size_bytes": 4,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+        return media_id
+
+    def test_seed_missing_media_stats_initializes_existing_pdfs(self) -> None:
+        inserted = self.store.seed_missing_media_stats()
+
+        self.assertEqual(inserted, 1)
+
+        items, total = self.store.search_media(SearchQuery(media_type="pdf"))
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["mediaId"], self.pdf_media_id)
+        self.assertIsNotNone(items[0]["stats"])
+        self.assertEqual(items[0]["stats"]["viewCount"], 0)
+        self.assertIsNotNone(items[0]["stats"]["addedAt"])
+
+        image_stats = self.sqlite.get_media_stats(self.image_media_id)
+        self.assertIsNone(image_stats)
+
+    def test_record_media_view_updates_host_side_stats(self) -> None:
+        self.store.seed_missing_media_stats()
+
+        first = self.store.record_media_view(self.pdf_media_id)
+        second = self.store.record_media_view(self.pdf_media_id)
+
+        self.assertEqual(first["viewCount"], 1)
+        self.assertIsNotNone(first["lastViewedAt"])
+        self.assertEqual(second["viewCount"], 2)
+        self.assertIsNotNone(second["lastViewedAt"])
+
+
+    def test_record_media_view_rejects_non_pdf_media(self) -> None:
+        self.store.seed_missing_media_stats()
+
+        with self.assertRaises(Exception):
+            self.store.record_media_view(self.image_media_id)
+
+
+if __name__ == "__main__":
+    unittest.main()

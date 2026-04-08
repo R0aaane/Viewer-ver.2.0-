@@ -55,6 +55,10 @@ def _parse_epoch(raw: Any) -> int | None:
         return None
 
 
+def _utcnow_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
 def _fnv1a64_hex(source: str) -> str:
     value = 0xCBF29CE484222325
     prime = 0x100000001B3
@@ -215,6 +219,44 @@ class MetadataStore:
         if row is None:
             raise not_found("Media was not found")
         return self._row_to_media_dict(row)
+
+    def seed_missing_media_stats(self) -> int:
+        media_ids = [
+            str(row["media_id"])
+            for row in self._db.list_media_records(include_deleted=False)
+            if str(row.get("kind") or "") == "pdf"
+        ]
+        unique_ids = list(dict.fromkeys(media_ids))
+        if not unique_ids:
+            return 0
+        existing = self._db.list_media_stats(unique_ids)
+        self._db.ensure_media_stats(unique_ids, added_at=_utcnow_iso())
+        return max(0, len(unique_ids) - len(existing))
+
+    def get_media_stats(self, media_id: str) -> dict[str, Any]:
+        resolved_media_id = self.resolve_media_id(media_id)
+        stats_map = self._ensure_stats_for_media_ids([resolved_media_id])
+        stats = stats_map.get(resolved_media_id)
+        if stats is None:
+            raise not_found("Media stats were not found")
+        return stats
+
+    def record_media_view(self, media_id: str) -> dict[str, Any]:
+        media = self.get_media(media_id)
+        if media["kind"] != "pdf":
+            raise bad_request("Viewer stats are only available for PDF media")
+        resolved_media_id = str(media["mediaId"])
+        now = _utcnow_iso()
+        row = self._db.increment_media_view(
+            resolved_media_id,
+            viewed_at=now,
+            added_at=now,
+        )
+        return self._stats_row_to_dict(row) or {
+            "addedAt": _parse_datetime(now),
+            "lastViewedAt": _parse_datetime(now),
+            "viewCount": 1,
+        }
 
     def list_tag_master(
         self,
@@ -518,7 +560,7 @@ class MetadataStore:
 
         total = len(filtered)
         sliced = filtered[query.offset : query.offset + query.limit]
-        return sliced, total
+        return self._attach_stats_to_media_items(sliced), total
 
     def list_untagged(
         self,
@@ -533,7 +575,8 @@ class MetadataStore:
         tag_map = self._db.list_tag_links_for_media_ids([row["mediaId"] for row in media])
         untagged = [row for row in media if not tag_map.get(row["mediaId"])]
         total = len(untagged)
-        return untagged[offset : offset + limit], total
+        sliced = untagged[offset : offset + limit]
+        return self._attach_stats_to_media_items(sliced), total
 
     def list_folder_children(
         self,
@@ -952,6 +995,57 @@ class MetadataStore:
             "isDeleted": bool(row["is_deleted"]),
             "modifiedEpochMs": _parse_epoch(row.get("modified_epoch_ms")),
         }
+
+    def _stats_row_to_dict(self, row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        added_at = _parse_datetime(row.get("added_at"))
+        if added_at is None:
+            return None
+        return {
+            "addedAt": added_at,
+            "lastViewedAt": _parse_datetime(row.get("last_viewed_at")),
+            "viewCount": _parse_epoch(row.get("view_count")) or 0,
+        }
+
+    def _ensure_stats_for_media_ids(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
+        unique_ids = list(dict.fromkeys(str(media_id).strip() for media_id in media_ids if str(media_id).strip()))
+        if not unique_ids:
+            return {}
+        self._db.ensure_media_stats(unique_ids, added_at=_utcnow_iso())
+        raw_stats = self._db.list_media_stats(unique_ids)
+        return {
+            media_id: stats
+            for media_id, stats in (
+                (media_id, self._stats_row_to_dict(row))
+                for media_id, row in raw_stats.items()
+            )
+            if stats is not None
+        }
+
+    def _attach_stats_to_media_items(
+        self,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not items:
+            return items
+        stats_by_media_id = self._ensure_stats_for_media_ids(
+            [
+                str(item.get("mediaId") or "")
+                for item in items
+                if str(item.get("kind") or "") == "pdf"
+            ]
+        )
+        enriched: list[dict[str, Any]] = []
+        for item in items:
+            enriched_item = dict(item)
+            media_id = str(enriched_item.get("mediaId") or "").strip()
+            if media_id and str(enriched_item.get("kind") or "") == "pdf":
+                enriched_item["stats"] = stats_by_media_id.get(media_id)
+            else:
+                enriched_item["stats"] = None
+            enriched.append(enriched_item)
+        return enriched
 
 
 

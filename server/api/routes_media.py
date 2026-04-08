@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
-from server.models.dto import MediaMetaResponse
+from server.models.dto import MediaMetaResponse, MediaStatsDto
 from server.services.auth_service import require_bearer_token
 
 
@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 @router.get("/items/{media_id}", response_model=MediaMetaResponse)
 def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
     meta = request.app.state.stream_service.get_media_meta(media_id)
+    meta["stats"] = None
     if meta["kind"] == "pdf":
+        meta["stats"] = request.app.state.metadata_store.get_media_stats(media_id)
         try:
             meta["pageCount"] = request.app.state.thumbnail_service.get_pdf_page_count(
                 media_id
@@ -26,6 +28,13 @@ def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
             logger.exception("[media][meta_page_count_failed] media_id=%s", media_id)
             meta["pageCount"] = None
     return MediaMetaResponse(**meta)
+
+
+@router.post("/media/{media_id}/view", response_model=MediaStatsDto)
+@router.post("/items/{media_id}/view", response_model=MediaStatsDto)
+def record_media_view(request: Request, media_id: str) -> MediaStatsDto:
+    stats = request.app.state.metadata_store.record_media_view(media_id)
+    return MediaStatsDto(**stats)
 
 
 @router.get("/media/{media_id}/download")

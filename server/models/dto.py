@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
@@ -64,6 +64,12 @@ class MessageResponse(BaseModel):
     message: str
 
 
+class MediaStatsDto(BaseModel):
+    addedAt: datetime
+    lastViewedAt: datetime | None = None
+    viewCount: int = 0
+
+
 class MediaItemDto(BaseModel):
     mediaId: str
     displayName: str
@@ -74,6 +80,7 @@ class MediaItemDto(BaseModel):
     modifiedAt: datetime | None = None
     mimeType: str | None = None
     etag: str | None = None
+    stats: MediaStatsDto | None = None
 
 
 class SearchResponse(BaseModel):
@@ -215,5 +222,4 @@ class MediaMetaResponse(BaseModel):
     etag: str | None = None
     supportsRange: bool = True
     pageCount: int | None = None
-
-
+    stats: MediaStatsDto | None = None

@@ -42,13 +42,21 @@ class MediaIndexService:
 
     def index_files(self, paths: list[str]) -> int:
         indexed = 0
+        indexed_media_ids: list[str] = []
         for raw_path in paths:
             record = self._build_record_for_path(raw_path)
             if record is None:
                 continue
             stable_record = self._preserve_existing_media_identity(record)
             self._db.upsert_media_record(stable_record)
+            if str(stable_record.get("kind") or "") == "pdf":
+                indexed_media_ids.append(str(stable_record["media_id"]))
             indexed += 1
+        if indexed_media_ids:
+            self._db.ensure_media_stats(
+                indexed_media_ids,
+                added_at=datetime.now(tz=timezone.utc).isoformat(),
+            )
         return indexed
 
     def rescan_configured_roots(self, roots: list[str]) -> list[dict[str, int | str]]:
@@ -74,6 +82,7 @@ class MediaIndexService:
 
         found_paths: set[str] = set()
         scanned = 0
+        indexed_media_ids: list[str] = []
         try:
             for base, _, files in os.walk(target, onerror=lambda error: logger.warning('scan walk warning: %s (%s)', target, error)):
                 for file_name in files:
@@ -83,8 +92,16 @@ class MediaIndexService:
                         continue
                     stable_record = self._preserve_existing_media_identity(record)
                     self._db.upsert_media_record(stable_record)
+                    if str(stable_record.get('kind') or '') == 'pdf':
+                        indexed_media_ids.append(str(stable_record['media_id']))
                     found_paths.add(str(stable_record['normalized_full_path']))
                     scanned += 1
+
+            if indexed_media_ids:
+                self._db.ensure_media_stats(
+                    indexed_media_ids,
+                    added_at=datetime.now(tz=timezone.utc).isoformat(),
+                )
 
             existing = self._db.list_media_records(
                 folder_prefix=normalized_root,

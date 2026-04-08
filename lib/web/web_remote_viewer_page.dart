@@ -12,7 +12,6 @@ import '../models/metadata_settings.dart';
 import '../models/tag.dart';
 import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
-import '../services/web_pdf_activity_service.dart';
 import 'web_remote_api_client.dart';
 
 enum _WebMediaFilter {
@@ -63,9 +62,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   String? _homeErrorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.pdf;
   _WebRemoteSurface _surface = _WebRemoteSurface.home;
-  final WebPdfActivityService _activityService = WebPdfActivityService();
-  Map<String, WebPdfActivityRecord> _activityRecords =
-      const <String, WebPdfActivityRecord>{};
 
   @override
   void initState() {
@@ -197,7 +193,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
-        _activityRecords = const <String, WebPdfActivityRecord>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
@@ -216,7 +211,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
-        _activityRecords = const <String, WebPdfActivityRecord>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
@@ -263,7 +257,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
-        _activityRecords = const <String, WebPdfActivityRecord>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _errorMessage = error.toString();
@@ -316,18 +309,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             .firstOrNull;
       }
       nextSelected ??= filtered.cast<WebRemoteEntry?>().firstOrNull;
-      final activityRecords =
-          rawQuery.isEmpty
-              ? await _activityService.syncEntries(filtered)
-              : null;
-
       if (!mounted) return;
       setState(() {
         _entries = filtered;
         _selectedEntry = nextSelected;
-        if (activityRecords != null) {
+        if (rawQuery.isEmpty) {
           _homeEntries = filtered;
-          _activityRecords = activityRecords;
           _homeErrorMessage = null;
         }
         _statusMessage =
@@ -374,7 +361,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       }
       setState(() {
         _homeEntries = const <WebRemoteEntry>[];
-        _activityRecords = const <String, WebPdfActivityRecord>{};
         _homeErrorMessage = null;
       });
       return;
@@ -397,13 +383,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         rawQuery: '',
       );
       final sorted = _sortedPdfEntries(fetched);
-      final records = await _activityService.syncEntries(sorted);
       if (!mounted) {
         return;
       }
       setState(() {
         _homeEntries = sorted;
-        _activityRecords = records;
         _homeErrorMessage = null;
       });
     } catch (error) {
@@ -424,16 +408,48 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Future<void> _recordEntryView(WebRemoteEntry entry) async {
-    if (!entry.isPdf) {
+    final client = _client;
+    final mediaId = entry.mediaId?.trim();
+    if (!entry.isPdf || client == null || mediaId == null || mediaId.isEmpty) {
       return;
     }
-    final records = await _activityService.recordView(entry);
-    if (!mounted) {
-      return;
+    try {
+      final stats = await client.recordMediaView(mediaId);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _entries = _replaceEntryStats(_entries, entry.stableId, stats);
+        _homeEntries = _replaceEntryStats(_homeEntries, entry.stableId, stats);
+        if (_selectedEntry?.stableId == entry.stableId) {
+          _selectedEntry = _selectedEntry?.copyWith(stats: stats);
+        }
+      });
+    } catch (error, stackTrace) {
+      debugPrint('[WebRemoteViewerPage] Failed to record media view: $error');
+      debugPrintStack(
+        label: '[WebRemoteViewerPage] _recordEntryView',
+        stackTrace: stackTrace,
+      );
     }
-    setState(() {
-      _activityRecords = records;
-    });
+  }
+
+  List<WebRemoteEntry> _replaceEntryStats(
+    List<WebRemoteEntry> entries,
+    String stableId,
+    WebRemoteMediaStats stats,
+  ) {
+    if (entries.isEmpty) {
+      return entries;
+    }
+    return entries
+        .map(
+          (candidate) =>
+              candidate.stableId == stableId
+                  ? candidate.copyWith(stats: stats)
+                  : candidate,
+        )
+        .toList(growable: false);
   }
 
   Future<List<WebRemoteEntry>> _loadPdfEntries(
@@ -1061,20 +1077,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     );
   }
 
-  WebPdfActivityRecord? _activityForEntry(WebRemoteEntry entry) {
-    return _activityRecords[entry.stableId];
-  }
-
   DateTime _addedAtForEntry(WebRemoteEntry entry) {
-    return (_activityForEntry(entry)?.addedAt ?? entry.modifiedAt ?? DateTime.now()).toLocal();
+    return (entry.stats?.addedAt ?? entry.modifiedAt ?? DateTime.now()).toLocal();
   }
 
   int _viewCountForEntry(WebRemoteEntry entry) {
-    return _activityForEntry(entry)?.viewCount ?? 0;
+    return entry.stats?.viewCount ?? 0;
   }
 
   DateTime? _lastViewedAtForEntry(WebRemoteEntry entry) {
-    return _activityForEntry(entry)?.lastViewedAt?.toLocal();
+    return entry.stats?.lastViewedAt?.toLocal();
   }
 
   List<_WebHomeSectionData> _buildHomeSections(List<WebRemoteEntry> entries) {
@@ -1209,7 +1221,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 child: _WebHomeSection(
                   section: section,
                   client: _client,
-                  activityFor: _activityForEntry,
                   onOpen: _openPdfFromHome,
                 ),
               ),
@@ -1615,13 +1626,11 @@ class _WebHomeMetricChip extends StatelessWidget {
 class _WebHomeSection extends StatelessWidget {
   final _WebHomeSectionData section;
   final WebRemoteApiClient? client;
-  final WebPdfActivityRecord? Function(WebRemoteEntry entry) activityFor;
   final Future<void> Function(WebRemoteEntry entry) onOpen;
 
   const _WebHomeSection({
     required this.section,
     required this.client,
-    required this.activityFor,
     required this.onOpen,
   });
 
@@ -1677,7 +1686,6 @@ class _WebHomeSection extends StatelessWidget {
                 return _WebHomePdfCard(
                   client: client,
                   entry: entry,
-                  activity: activityFor(entry),
                   compact: compact,
                   onTap: () => onOpen(entry),
                 );
@@ -1692,23 +1700,21 @@ class _WebHomeSection extends StatelessWidget {
 class _WebHomePdfCard extends StatelessWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
-  final WebPdfActivityRecord? activity;
   final bool compact;
   final Future<void> Function() onTap;
 
   const _WebHomePdfCard({
     required this.client,
     required this.entry,
-    required this.activity,
     required this.compact,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final addedAt = (activity?.addedAt ?? entry.modifiedAt)?.toLocal();
-    final lastViewedAt = activity?.lastViewedAt?.toLocal();
-    final viewCount = activity?.viewCount ?? 0;
+    final addedAt = (entry.stats?.addedAt ?? entry.modifiedAt)?.toLocal();
+    final lastViewedAt = entry.stats?.lastViewedAt?.toLocal();
+    final viewCount = entry.stats?.viewCount ?? 0;
 
     return SizedBox(
       width: compact ? 236 : 270,
@@ -1778,6 +1784,7 @@ class _WebHomePdfCard extends StatelessWidget {
 }
 
 class _WebHomeStatLine extends StatelessWidget {
+
   final String label;
   final String value;
 
@@ -3481,9 +3488,7 @@ class _EntrySummaryData {
     final tagCandidates = <Tag>[];
     final seenTags = <String>{};
     for (final tag in tags) {
-      if (tag.category == TagCategory.artist ||
-          tag.category == TagCategory.series ||
-          tag.category == TagCategory.mediaType) {
+      if (tag.category == TagCategory.mediaType) {
         continue;
       }
       final label = tag.name.trim();
@@ -3565,13 +3570,29 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   void _refresh() {
-    _tagsFuture = widget.client.fetchItemTags(widget.entry.mediaId!);
-    _metaFuture = widget.client.fetchMediaMeta(widget.entry.mediaId!);
-    _imageFuture = widget.client.fetchImageDownload(widget.entry.mediaId!);
+    final mediaId = widget.entry.mediaId?.trim();
+    final missingMediaIdError = StateError(
+      'Missing mediaId for ${widget.entry.displayName}',
+    );
+    if (mediaId == null || mediaId.isEmpty) {
+      _tagsFuture = Future<List<Tag>>.value(const <Tag>[]);
+      _metaFuture = Future<WebRemoteMediaMeta>.error(missingMediaIdError);
+      _imageFuture = Future<Uint8List>.error(missingMediaIdError);
+      _pdfPageBytes = null;
+      _pdfPageError = missingMediaIdError.toString();
+      _pdfPageNo = 1;
+      _pdfTotalPages = null;
+      _loadingPdfPage = false;
+      return;
+    }
+    _tagsFuture = widget.client.fetchItemTags(mediaId);
+    _metaFuture = widget.client.fetchMediaMeta(mediaId);
+    _imageFuture = widget.client.fetchImageDownload(mediaId);
     _pdfPageBytes = null;
     _pdfPageError = null;
     _pdfPageNo = 1;
     _pdfTotalPages = null;
+    _loadingPdfPage = false;
     if (widget.entry.isPdf) {
       _loadPdfPageCount();
       _loadPdfPage(1);
@@ -3579,6 +3600,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   Future<void> _loadPdfPageCount() async {
+
     final mediaId = widget.entry.mediaId;
     if (mediaId == null || mediaId.isEmpty) return;
     final stableId = widget.entry.stableId;
@@ -3604,13 +3626,21 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   Future<void> _loadPdfPage(int pageNo) async {
+    final mediaId = widget.entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty) {
+      setState(() {
+        _pdfPageError = 'Missing mediaId for ${widget.entry.displayName}';
+        _loadingPdfPage = false;
+      });
+      return;
+    }
     setState(() {
       _loadingPdfPage = true;
       _pdfPageError = null;
     });
     try {
-      final bytes = await widget.client.fetchPdfPage(
-        widget.entry.mediaId!,
+      final bytes = await widget.client.fetchRenderedPdfPage(
+        mediaId,
         pageNo,
         width: 1600,
       );
@@ -3619,10 +3649,18 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
         _pdfPageNo = pageNo;
         _pdfPageBytes = bytes;
       });
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[WebMediaDetailView] Failed to load PDF page: mediaId=$mediaId page=$pageNo error=$error',
+      );
+      debugPrintStack(
+        label: '[WebMediaDetailView] _loadPdfPage',
+        stackTrace: stackTrace,
+      );
       if (!mounted) return;
       setState(() {
-        _pdfPageError = error.toString();
+        _pdfPageError =
+            'Failed to load page $pageNo for ${widget.entry.displayName}: $error';
       });
     } finally {
       if (mounted) {
@@ -3634,6 +3672,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   String _formatDateTime(DateTime? value) {
+
     if (value == null) return 'N/A';
     final local = value.toLocal();
     final two = (int number) => number.toString().padLeft(2, '0');
@@ -3764,9 +3803,11 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                         ),
                       FilledButton.icon(
                         onPressed:
-                            () => widget.client.openPdfInNewTab(
-                              widget.entry.mediaId!,
-                            ),
+                            widget.entry.mediaId == null
+                                ? null
+                                : () => widget.client.openPdfInNewTab(
+                                  widget.entry.mediaId!,
+                                ),
                         icon: const Icon(Icons.open_in_new),
                         label: const Text('別タブで開く'),
                       ),
@@ -4054,7 +4095,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       );
     }
     return _pageFutureCache.putIfAbsent(pageNo, () {
-      return widget.client.fetchPdfPage(mediaId, pageNo, width: 1600);
+      return widget.client.fetchRenderedPdfPage(mediaId, pageNo, width: 1600);
     });
   }
 

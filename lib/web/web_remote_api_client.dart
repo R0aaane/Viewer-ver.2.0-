@@ -178,6 +178,18 @@ class WebRemoteFolder {
   });
 }
 
+class WebRemoteMediaStats {
+  final DateTime addedAt;
+  final DateTime? lastViewedAt;
+  final int viewCount;
+
+  const WebRemoteMediaStats({
+    required this.addedAt,
+    required this.lastViewedAt,
+    required this.viewCount,
+  });
+}
+
 class WebRemoteEntry {
   final String entryId;
   final String displayName;
@@ -187,6 +199,7 @@ class WebRemoteEntry {
   final String? fullPath;
   final int? sizeBytes;
   final DateTime? modifiedAt;
+  final WebRemoteMediaStats? stats;
 
   const WebRemoteEntry({
     required this.entryId,
@@ -197,6 +210,7 @@ class WebRemoteEntry {
     required this.fullPath,
     required this.sizeBytes,
     required this.modifiedAt,
+    required this.stats,
   });
 
   bool get isFolder => kind == 'folder';
@@ -204,6 +218,30 @@ class WebRemoteEntry {
   bool get isImage => kind == 'image';
 
   String get stableId => mediaId ?? fullPath ?? entryId;
+
+  WebRemoteEntry copyWith({
+    String? entryId,
+    String? displayName,
+    String? folderRaw,
+    String? kind,
+    String? mediaId,
+    String? fullPath,
+    int? sizeBytes,
+    DateTime? modifiedAt,
+    WebRemoteMediaStats? stats,
+  }) {
+    return WebRemoteEntry(
+      entryId: entryId ?? this.entryId,
+      displayName: displayName ?? this.displayName,
+      folderRaw: folderRaw ?? this.folderRaw,
+      kind: kind ?? this.kind,
+      mediaId: mediaId ?? this.mediaId,
+      fullPath: fullPath ?? this.fullPath,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      modifiedAt: modifiedAt ?? this.modifiedAt,
+      stats: stats ?? this.stats,
+    );
+  }
 }
 
 class WebRemoteMediaMeta {
@@ -216,6 +254,7 @@ class WebRemoteMediaMeta {
   final String? etag;
   final bool supportsRange;
   final int? pageCount;
+  final WebRemoteMediaStats? stats;
 
   const WebRemoteMediaMeta({
     required this.mediaId,
@@ -227,10 +266,12 @@ class WebRemoteMediaMeta {
     required this.etag,
     required this.supportsRange,
     required this.pageCount,
+    required this.stats,
   });
 }
 
 class WebRemotePdfPageCountInfo {
+
   final int count;
   final bool isReliable;
 
@@ -821,9 +862,25 @@ class WebRemoteApiClient {
           etag: json['etag']?.toString(),
           supportsRange: json['supportsRange'] == true,
           pageCount: _asInt(json['pageCount']),
+          stats: _parseMediaStats(json['stats']),
         );
       },
     );
+  }
+
+  Future<WebRemoteMediaStats> recordMediaView(String mediaId) async {
+    final json = await _postJson(
+      '/media/${Uri.encodeComponent(mediaId)}/view',
+      const <String, dynamic>{},
+    );
+    final stats = json is Map<String, dynamic> ? _parseMediaStats(json) : null;
+    if (stats == null) {
+      throw const WebRemoteException('Invalid media stats response');
+    }
+    _mediaMetaCache.remove(mediaId);
+    _searchCache.clear();
+    _folderChildrenCache.clear();
+    return stats;
   }
 
   Future<Uint8List> fetchThumbnail(
@@ -853,6 +910,19 @@ class WebRemoteApiClient {
         if (width != null) 'width': '$width',
       },
     );
+  }
+
+
+  Future<Uint8List> fetchRenderedPdfPage(
+    String mediaId,
+    int pageNo, {
+    int? width,
+  }) async {
+    try {
+      return await fetchPdfPage(mediaId, pageNo, width: width);
+    } on WebRemoteException {
+      return fetchThumbnail(mediaId, width: width, page: pageNo);
+    }
   }
 
   Future<WebRemotePdfPageCountInfo> resolvePdfPageCountInfo(
@@ -1218,6 +1288,7 @@ class WebRemoteApiClient {
       fullPath: raw['fullPath']?.toString(),
       sizeBytes: _asInt(raw['sizeBytes']),
       modifiedAt: _parseDateTime(raw['modifiedAt']),
+      stats: _parseMediaStats(raw['stats']),
     );
   }
 
@@ -1225,6 +1296,22 @@ class WebRemoteApiClient {
     return Tag(
       name: raw['name']?.toString() ?? '',
       category: _parseTagCategory(raw['category']?.toString()),
+    );
+  }
+
+
+  WebRemoteMediaStats? _parseMediaStats(dynamic raw) {
+    if (raw is! Map) {
+      return null;
+    }
+    final addedAt = _parseDateTime(raw['addedAt']);
+    if (addedAt == null) {
+      return null;
+    }
+    return WebRemoteMediaStats(
+      addedAt: addedAt,
+      lastViewedAt: _parseDateTime(raw['lastViewedAt']),
+      viewCount: _asInt(raw['viewCount']) ?? 0,
     );
   }
 

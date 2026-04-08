@@ -55,6 +55,10 @@ async def lifespan(app: FastAPI):
     if settings.startup_rescan and settings.media_roots:
         index_service.rescan_configured_roots(settings.media_roots)
 
+    seeded_stats = metadata_store.seed_missing_media_stats()
+    if seeded_stats:
+        logger.info("Seeded media stats for %s PDF(s)", seeded_stats)
+
     try:
         yield
     finally:
