@@ -23,6 +23,43 @@ class LocalPathOperationService {
     style: Platform.isWindows ? p.Style.windows : p.Style.posix,
   );
 
+  static LocalPathOperationException _duplicateNameException(String targetPath) {
+    final targetName = p.basename(targetPath);
+    return LocalPathOperationException(
+      '同じ名前のファイルまたはフォルダが既に存在します: $targetName',
+    );
+  }
+
+  static LocalPathOperationException _operationException({
+    required String action,
+    required String targetPath,
+    required bool isDirectory,
+    Object? error,
+  }) {
+    final itemLabel = isDirectory ? 'フォルダ' : 'ファイル';
+    final targetName = p.basename(targetPath);
+
+    if (error is FileSystemException) {
+      final osMessage = error.osError?.message.trim() ?? '';
+      final fileSystemMessage = error.message.trim();
+      final details = <String>[
+        if (osMessage.isNotEmpty) osMessage,
+        if (fileSystemMessage.isNotEmpty && fileSystemMessage != osMessage)
+          fileSystemMessage,
+      ];
+      final suffix = details.isEmpty ? '' : ' (${details.join(' / ')})';
+      return LocalPathOperationException(
+        '$itemLabelの$actionに失敗しました: $targetName$suffix',
+      );
+    }
+
+    final reason = '$error'.trim();
+    final suffix = reason.isEmpty ? '' : ' ($reason)';
+    return LocalPathOperationException(
+      '$itemLabelの$actionに失敗しました: $targetName$suffix',
+    );
+  }
+
   static String normalize(String rawPath) {
     final normalized = _context.normalize(rawPath);
     return Platform.isWindows ? normalized.toLowerCase() : normalized;
@@ -48,7 +85,10 @@ class LocalPathOperationService {
       return LocalPathConflictResult.sameFile;
     }
 
-    final targetType = await FileSystemEntity.type(targetPath, followLinks: false);
+    final targetType = await FileSystemEntity.type(
+      targetPath,
+      followLinks: false,
+    );
     if (targetType != FileSystemEntityType.notFound) {
       return LocalPathConflictResult.duplicateName;
     }
@@ -71,10 +111,10 @@ class LocalPathOperationService {
       return false;
     }
     if (conflict == LocalPathConflictResult.duplicateName) {
-      debugPrint('[COPY] blocked duplicate-name source=$sourcePath target=$targetPath');
-      throw const LocalPathOperationException(
-        '同名のファイルまたはフォルダが既に存在します',
+      debugPrint(
+        '[COPY] blocked duplicate-name source=$sourcePath target=$targetPath',
       );
+      throw _duplicateNameException(targetPath);
     }
 
     try {
@@ -85,10 +125,24 @@ class LocalPathOperationService {
       }
       debugPrint('[$logPrefix] success old=$sourcePath new=$targetPath');
       return true;
+    } on FileSystemException catch (error, stackTrace) {
+      debugPrint('[$logPrefix] failed reason=$error old=$sourcePath new=$targetPath');
+      debugPrintStack(label: '[$logPrefix] stack', stackTrace: stackTrace);
+      throw _operationException(
+        action: '名前の変更',
+        targetPath: targetPath,
+        isDirectory: isDirectory,
+        error: error,
+      );
     } catch (error, stackTrace) {
       debugPrint('[$logPrefix] failed reason=$error old=$sourcePath new=$targetPath');
       debugPrintStack(label: '[$logPrefix] stack', stackTrace: stackTrace);
-      rethrow;
+      throw _operationException(
+        action: '名前の変更',
+        targetPath: targetPath,
+        isDirectory: isDirectory,
+        error: error,
+      );
     }
   }
 
@@ -107,10 +161,10 @@ class LocalPathOperationService {
       return false;
     }
     if (conflict == LocalPathConflictResult.duplicateName) {
-      debugPrint('[COPY] blocked duplicate-name source=$sourcePath target=$targetPath');
-      throw const LocalPathOperationException(
-        '同名のファイルまたはフォルダが既に存在します',
+      debugPrint(
+        '[COPY] blocked duplicate-name source=$sourcePath target=$targetPath',
       );
+      throw _duplicateNameException(targetPath);
     }
 
     final source = File(sourcePath);
@@ -119,7 +173,9 @@ class LocalPathOperationService {
       debugPrint('[$logPrefix] success old=$sourcePath new=$targetPath');
       return true;
     } on FileSystemException catch (error, stackTrace) {
-      debugPrint('[$logPrefix] rename fallback reason=$error old=$sourcePath new=$targetPath');
+      debugPrint(
+        '[$logPrefix] rename fallback reason=$error old=$sourcePath new=$targetPath',
+      );
       debugPrintStack(label: '[$logPrefix] stack', stackTrace: stackTrace);
       await source.copy(targetPath);
       await source.delete();
@@ -143,10 +199,10 @@ class LocalPathOperationService {
       return false;
     }
     if (conflict == LocalPathConflictResult.duplicateName && !overwrite) {
-      debugPrint('[COPY] blocked duplicate-name source=$sourcePath target=$targetPath');
-      throw const LocalPathOperationException(
-        '同名のファイルまたはフォルダが既に存在します',
+      debugPrint(
+        '[COPY] blocked duplicate-name source=$sourcePath target=$targetPath',
       );
+      throw _duplicateNameException(targetPath);
     }
 
     final targetFile = File(targetPath);

@@ -3587,7 +3587,9 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     }
     _tagsFuture = widget.client.fetchItemTags(mediaId);
     _metaFuture = widget.client.fetchMediaMeta(mediaId);
-    _imageFuture = widget.client.fetchImageDownload(mediaId);
+    _imageFuture = widget.entry.isPdf
+        ? Future<Uint8List>.value(Uint8List(0))
+        : widget.client.fetchImageDownload(mediaId);
     _pdfPageBytes = null;
     _pdfPageError = null;
     _pdfPageNo = 1;

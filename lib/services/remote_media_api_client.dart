@@ -81,6 +81,7 @@ class RemoteMediaMeta {
   final DateTime? modifiedAt;
   final String? etag;
   final bool supportsRange;
+  final int? pageCount;
 
   const RemoteMediaMeta({
     required this.mediaId,
@@ -91,6 +92,7 @@ class RemoteMediaMeta {
     required this.modifiedAt,
     required this.etag,
     required this.supportsRange,
+    required this.pageCount,
   });
 }
 
@@ -230,6 +232,7 @@ class RemoteMediaApiClient {
       modifiedAt: _parseDateTime(json['modifiedAt']?.toString()),
       etag: json['etag']?.toString(),
       supportsRange: json['supportsRange'] == true,
+      pageCount: _asInt(json['pageCount']),
     );
   }
 

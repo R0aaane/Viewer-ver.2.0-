@@ -86,6 +86,16 @@ def build_inferred_import_tags(
     if series_tag is not None:
         tags.append({"category": "series", "name": series_tag})
 
+    for character_tag in _clean_distinct_metadata_values(
+        _pick_tag_values(hitomi_metadata, "characters")
+    ):
+        tags.append({"category": "character", "name": character_tag})
+
+    for free_tag in _clean_distinct_metadata_values(
+        _pick_tag_values(hitomi_metadata, "tags")
+    ):
+        tags.append({"category": "free", "name": free_tag})
+
     for tag_name in sorted(media_type_tag_names):
         tags.append({"category": "mediaType", "name": tag_name})
     return tags
@@ -146,6 +156,23 @@ def _clean_artist_tag_candidates(segments: list[str]) -> list[str]:
     for segment in segments:
         cleaned = _clean_artist_tag_candidate(segment)
         if cleaned is None:
+            continue
+        lowered = cleaned.casefold()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        cleaned_values.append(cleaned)
+
+    return cleaned_values
+
+
+def _clean_distinct_metadata_values(values: list[str]) -> list[str]:
+    cleaned_values: list[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned:
             continue
         lowered = cleaned.casefold()
         if lowered in seen:
@@ -261,8 +288,16 @@ def filter_hitomi_pdf_auto_tags(
         lowered_name = name.casefold()
         is_artist = category == "artist"
         is_series = category == "series"
+        is_character = category == "character"
+        is_free = category == "free"
         is_hitomi_media_type = category == "mediaType" and lowered_name == "hitomi"
-        if not is_artist and not is_series and not is_hitomi_media_type:
+        if (
+            not is_artist
+            and not is_series
+            and not is_character
+            and not is_free
+            and not is_hitomi_media_type
+        ):
             continue
 
         if is_hitomi_media_type:

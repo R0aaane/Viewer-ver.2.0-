@@ -1,5 +1,7 @@
 ﻿import 'dart:typed_data';
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +12,7 @@ import '../repository/mediaRepository.dart';
 
 import '../database/tag_service.dart';
 import '../models/tag.dart';
+import '../services/item_name_service.dart';
 import 'rename_item_dialog.dart';
 
 enum ReaderFitMode { vertical, horizontal, contain }
@@ -82,6 +85,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   TagCategory _selectedCategory = TagCategory.free;
   final TextEditingController _tagCtrl = TextEditingController();
   bool _tagsLoading = false;
+  String? _loadedTagItemId;
+  bool _masterTagsInitialized = false;
+  int _detailLoadVersion = 0;
 
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
@@ -94,6 +100,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   MediaItem get _item => _items[_index];
   bool get _isPdf => _item.kind == MediaKind.pdf;
   bool get _canRenameCurrentItem => widget.repo.capabilities.canRename;
+  String get _displayTitle =>
+      ItemNameService.formatMediaTitle(_item.displayName, kind: _item.kind);
 
   void _popWithResult() {
     Navigator.of(context).pop(_favChanged || _tagsChanged || _itemChanged);
@@ -150,9 +158,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     _tab = TabController(length: 2, vsync: this);
 
     _tab.addListener(() {
-      if (!_tab.indexIsChanging) {
-        final v = _tab.index == 0;
-        if (v != _inReader) setState(() => _inReader = v);
+      if (_tab.indexIsChanging) return;
+      final inReader = _tab.index == 0;
+      if (inReader != _inReader) {
+        setState(() => _inReader = inReader);
+      }
+      if (!inReader) {
+        _ensureDeferredDetailData();
       }
     });
 
@@ -179,13 +191,21 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
     if (!mounted) return;
     setState(() {});
-    final lib = await widget.repo.getAppLibraryFolder();
-    _libraryRootRaw = lib.raw;
-    _canDeleteFromLibrary =
-        widget.repo.capabilities.canDelete && _isPdf;
-    await _loadFavoriteForCurrent();
     _reloadForCurrent();
+    unawaited(_loadLibraryContext());
   }
+
+  Future<void> _loadLibraryContext() async {
+    try {
+      final lib = await widget.repo.getAppLibraryFolder();
+      if (!mounted) return;
+      setState(() {
+        _libraryRootRaw = lib.raw;
+        _canDeleteFromLibrary = widget.repo.capabilities.canDelete && _isPdf;
+      });
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     _masterFilterCtrl.dispose();
@@ -207,12 +227,28 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     await prefs.setBool(_PrefsKeys.twoPage, v);
   }
 
-  Future<void> _loadFavoriteForCurrent() async {
+  bool _isCurrentLoad(int loadVersion, MediaItem item) {
+    return mounted && loadVersion == _detailLoadVersion && _item.id == item.id;
+  }
+
+  void _ensureDeferredDetailData() {
+    if (_loadedTagItemId != _item.id && !_tagsLoading) {
+      unawaited(_loadTagsForCurrent());
+    }
+    if (!_masterTagsInitialized && !_masterLoading) {
+      _masterTagsInitialized = true;
+      unawaited(_loadMasterTags());
+    }
+  }
+
+  Future<void> _loadFavoriteForCurrent({int? loadVersion}) async {
+    final item = _item;
+    final version = loadVersion ?? _detailLoadVersion;
     final prefs = await SharedPreferences.getInstance();
     final favList =
         prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
-    final fav = favList.contains(_item.id);
-    if (!mounted) return;
+    final fav = favList.contains(item.id);
+    if (!_isCurrentLoad(version, item)) return;
     setState(() => _isFavorite = fav);
   }
 
@@ -258,6 +294,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Future<void> _loadMasterTags({String? contains}) async {
+    _masterTagsInitialized = true;
     setState(() => _masterLoading = true);
     try {
       final list = await widget.tagService.listTagMasterByCategory(
@@ -272,17 +309,33 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
-  Future<void> _loadTagsForCurrent() async {
-    setState(() => _tagsLoading = true);
+  Future<void> _loadTagsForCurrent({bool force = false, int? loadVersion}) async {
+    final item = _item;
+    final version = loadVersion ?? _detailLoadVersion;
+    if (!force && _loadedTagItemId == item.id) {
+      return;
+    }
+
+    setState(() {
+      _tagsLoading = true;
+      if (_loadedTagItemId != item.id) {
+        _tags = const [];
+      }
+    });
     try {
       final list = await widget.tagService.listTagsForItem(
-        _item.id,
-        item: _item,
+        item.id,
+        item: item,
       );
-      if (!mounted) return;
-      setState(() => _tags = list);
+      if (!_isCurrentLoad(version, item)) return;
+      setState(() {
+        _tags = list;
+        _loadedTagItemId = item.id;
+      });
     } finally {
-      if (mounted) setState(() => _tagsLoading = false);
+      if (_isCurrentLoad(version, item)) {
+        setState(() => _tagsLoading = false);
+      }
     }
   }
 
@@ -290,7 +343,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     try {
       await widget.tagService.addTagToItem(_item, t.tag);
       _tagsChanged = true;
-      await _loadTagsForCurrent();
+      await _loadTagsForCurrent(force: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -319,7 +372,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
       _tagsChanged = true;
       _tagCtrl.clear();
-      await _loadTagsForCurrent();
+      await _loadTagsForCurrent(force: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -336,7 +389,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         item: _item,
       );
       _tagsChanged = true;
-      await _loadTagsForCurrent();
+      await _loadTagsForCurrent(force: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -389,31 +442,21 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     });
   }
 
-  Future<void> _reloadForCurrent() async {
-    final item = _item;
-
-    _readerFutureCache.clear();
-    _thumbFutureCache.clear();
-    if (mounted) {
-      setState(() {
-        _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
-        _syncReaderFutures(item);
-      });
-    }
-
-    await _loadFavoriteForCurrent();
-
+  Future<void> _loadPageCountForCurrent(
+    MediaItem item,
+    int loadVersion,
+  ) async {
     try {
       final total = await widget.repo.getPageCount(item);
-      if (!mounted) return;
+      if (!_isCurrentLoad(loadVersion, item)) return;
 
       setState(() {
-        _totalPages = total;
-        _page = _isPdf ? _page.clamp(1, _totalPages) : 1;
+        _totalPages = total < 1 ? 1 : total;
+        _page = _page.clamp(1, _totalPages);
         _syncReaderFutures(item);
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!_isCurrentLoad(loadVersion, item)) return;
       setState(() {
         _totalPages = 1;
         _page = 1;
@@ -423,8 +466,35 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         SnackBar(content: Text('ページ情報の取得に失敗しました: $error')),
       );
     }
-    await _loadTagsForCurrent();
-    await _loadMasterTags();
+  }
+
+  Future<void> _reloadForCurrent() async {
+    final item = _item;
+    final loadVersion = ++_detailLoadVersion;
+
+    _readerFutureCache.clear();
+    _thumbFutureCache.clear();
+    _loadedTagItemId = null;
+    if (mounted) {
+      setState(() {
+        _isFavorite = false;
+        _tags = const [];
+        _tagsLoading = false;
+        _canDeleteFromLibrary =
+            widget.repo.capabilities.canDelete && item.kind == MediaKind.pdf;
+        _totalPages = item.kind == MediaKind.pdf ? _totalPages : 1;
+        _page = item.kind == MediaKind.pdf ? _page.clamp(1, _totalPages) : 1;
+        _syncReaderFutures(item);
+      });
+    }
+
+    unawaited(_loadFavoriteForCurrent(loadVersion: loadVersion));
+    if (item.kind == MediaKind.pdf) {
+      unawaited(_loadPageCountForCurrent(item, loadVersion));
+    }
+    if (!_inReader) {
+      _ensureDeferredDetailData();
+    }
   }
 
   Widget _buildLoadError(
@@ -652,7 +722,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Widget _sidebarHeader() {
-    final title = _item.displayName;
+    final title = _displayTitle;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
       child: Column(
@@ -794,7 +864,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             children: [
               Expanded(
                 child: Text(
-                  _item.displayName,
+                  _displayTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1086,7 +1156,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     const SizedBox(width: 8),
                     Expanded(
                       child: SelectableText(
-                        item.displayName,
+                        ItemNameService.formatMediaTitle(
+                          item.displayName,
+                          kind: item.kind,
+                        ),
                         style: const TextStyle(color: Colors.white),
                       ),
                     ),

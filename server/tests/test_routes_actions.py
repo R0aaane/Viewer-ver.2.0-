@@ -730,7 +730,7 @@ class ActionsRoutesTest(unittest.TestCase):
                 os.makedirs(gallery_dir, exist_ok=True)
                 with open(os.path.join(gallery_dir, '001.jpg'), 'wb') as handle:
                     handle.write(b'jpg')
-                with open(os.path.join(artist_dir, '[20241105] [3114110] Sample Title.pdf'), 'wb') as handle:
+                with open(os.path.join(artist_dir, 'Sample Title.pdf'), 'wb') as handle:
                     handle.write(b'%PDF-1.4')
 
             downloader = _FakeUrlDownloadService(
@@ -739,9 +739,11 @@ class ActionsRoutesTest(unittest.TestCase):
                     skipped_count=0,
                     failed_count=0,
                     hitomi_metadata_by_relative_path={
-                        'hitomi/[12345] artistname/[20241105] [3114110] sample title.pdf': {
+                        'hitomi/[12345] artistname/sample title.pdf': {
                             'artists': ['ArtistName', 'CoArtist'],
                             'series': ['Original Series'],
+                            'characters': ['Heroine'],
+                            'tags': ['big breasts', 'school uniform'],
                         },
                     },
                 ),
@@ -769,7 +771,7 @@ class ActionsRoutesTest(unittest.TestCase):
             self.assertEqual(response.organizedCount, 0)
             self.assertEqual(response.rescannedCount, 1)
             self.assertEqual(index_service.scan_calls, [temp_dir])
-            self.assertTrue(os.path.exists(os.path.join(temp_dir, '[20241105] [3114110] Sample Title.pdf')))
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, 'Sample Title.pdf')))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, '[20241105] [3114110] Sample Title', '001.jpg')))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, 'hitomi')))
             self.assertEqual(
@@ -778,6 +780,9 @@ class ActionsRoutesTest(unittest.TestCase):
                     {'category': 'artist', 'name': 'ArtistName'},
                     {'category': 'artist', 'name': 'CoArtist'},
                     {'category': 'series', 'name': 'Original Series'},
+                    {'category': 'character', 'name': 'Heroine'},
+                    {'category': 'free', 'name': 'big breasts'},
+                    {'category': 'free', 'name': 'school uniform'},
                     {'category': 'mediaType', 'name': 'hitomi'},
                 ],
             )

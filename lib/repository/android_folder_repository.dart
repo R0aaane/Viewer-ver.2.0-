@@ -1118,16 +1118,18 @@ class AndroidFolderRepository implements MediaRepository {
       return ThumbPair(front: thumb, back: null);
     }
 
-    final doc = await _openPdf(item.id);
-    final pageCount = doc.pagesCount;
-    final mid = (pageCount / 2).ceil().clamp(1, pageCount);
-
-    final front = await _renderPage(item.id, doc, 1, maxWidth);
-    Uint8List? back;
-    if (pageCount >= 2) {
-      back = await _renderPage(item.id, doc, mid, maxWidth);
-    }
-    return ThumbPair(front: front, back: back);
+    return _lockOf(item.id).synchronized(() async {
+      PdfDocument? doc;
+      try {
+        doc = await _openPdfForThumbnail(item.id);
+        final front = await _renderPage(item.id, doc, 1, maxWidth);
+        return ThumbPair(front: front, back: null);
+      } finally {
+        if (doc != null) {
+          await doc.close();
+        }
+      }
+    });
   }
 
   Future<Uint8List> _readImageThumb(MediaItem item, int maxWidth) async {
@@ -1157,6 +1159,30 @@ class AndroidFolderRepository implements MediaRepository {
       return Uri.parse(rawId).toFilePath();
     }
     return rawId;
+  }
+
+  Future<PdfDocument> _openPdfForThumbnail(String documentUri) async {
+    if (documentUri.startsWith('content://')) {
+      return _docmanSync(() async {
+        final docFile = await DocumentFile.fromUri(documentUri);
+        if (docFile == null) {
+          throw Exception('DocumentFile.fromUri failed: $documentUri');
+        }
+
+        final cachedFile = await docFile.cache();
+        if (cachedFile == null) {
+          throw Exception('cache() failed: $documentUri');
+        }
+
+        return PdfDocument.openFile(cachedFile.path);
+      });
+    }
+
+    final file = File(documentUri);
+    if (!await file.exists()) {
+      throw Exception('PDF file not found: $documentUri');
+    }
+    return PdfDocument.openFile(documentUri);
   }
 
   Future<PdfDocument> _openPdf(String documentUri) {
@@ -1322,13 +1348,20 @@ class AndroidFolderRepository implements MediaRepository {
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
     final fixedName = ItemNameService.buildDisplayName(item, newDisplayName);
+    String formatRenameError(Object? error) {
+      final detail = error?.toString().trim() ?? '';
+      if (detail.isEmpty) {
+        return '名前の変更に失敗しました: $fixedName';
+      }
+      return '名前の変更に失敗しました: $fixedName ($detail)';
+    }
 
     if (!item.id.startsWith('content://')) {
       final newPath = '${item.folderRaw}${Platform.pathSeparator}$fixedName';
       if (item.kind == MediaKind.folder) {
         final dir = Directory(item.id);
         if (!await dir.exists()) {
-          throw Exception('Folder not found: ${item.id}');
+          throw Exception('名前を変更するフォルダが見つかりません: ${item.id}');
         }
         await LocalPathOperationService.renameItem(
           sourcePath: item.id,
@@ -1338,7 +1371,7 @@ class AndroidFolderRepository implements MediaRepository {
       } else {
         final file = File(item.id);
         if (!await file.exists()) {
-          throw Exception('File not found: ${item.id}');
+          throw Exception('名前を変更するファイルが見つかりません: ${item.id}');
         }
         await LocalPathOperationService.renameItem(
           sourcePath: item.id,
@@ -1398,24 +1431,46 @@ class AndroidFolderRepository implements MediaRepository {
 
       final d = src as dynamic;
       DocumentFile? moved;
+      Object? lastRenameError;
 
       try {
         final r = await d.moveTo(dir, newName: fixedName);
         if (r is DocumentFile) moved = r;
-      } catch (_) {}
+      } catch (error, stackTrace) {
+        lastRenameError = error;
+        debugPrint('[RENAME][SAF] moveTo(dir, newName) failed: $error');
+        debugPrintStack(
+          label: '[RENAME][SAF] moveTo(dir, newName)',
+          stackTrace: stackTrace,
+        );
+      }
 
       if (moved == null) {
         try {
           final r = await d.moveTo(dir, name: fixedName);
           if (r is DocumentFile) moved = r;
-        } catch (_) {}
+        } catch (error, stackTrace) {
+          lastRenameError = error;
+          debugPrint('[RENAME][SAF] moveTo(dir, name) failed: $error');
+          debugPrintStack(
+            label: '[RENAME][SAF] moveTo(dir, name)',
+            stackTrace: stackTrace,
+          );
+        }
       }
 
       if (moved == null) {
         try {
           final r = await d.moveTo(dir: dir, newName: fixedName);
           if (r is DocumentFile) moved = r;
-        } catch (_) {}
+        } catch (error, stackTrace) {
+          lastRenameError = error;
+          debugPrint('[RENAME][SAF] moveTo(dir:, newName) failed: $error');
+          debugPrintStack(
+            label: '[RENAME][SAF] moveTo(dir:, newName)',
+            stackTrace: stackTrace,
+          );
+        }
       }
 
       if (moved == null) {
@@ -1426,7 +1481,18 @@ class AndroidFolderRepository implements MediaRepository {
           } else if (r == true) {
             moved = await dir.find(fixedName);
           }
-        } catch (_) {}
+        } catch (error, stackTrace) {
+          lastRenameError = error;
+          debugPrint('[RENAME][SAF] renameTo failed: $error');
+          debugPrintStack(
+            label: '[RENAME][SAF] renameTo',
+            stackTrace: stackTrace,
+          );
+        }
+      }
+
+      if (moved == null && lastRenameError != null) {
+        throw Exception(formatRenameError(lastRenameError));
       }
 
       if (moved == null) {

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as im;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
@@ -35,6 +36,7 @@ class RemoteMediaRepository implements MediaRepository {
   static final p.Context _winPath = p.Context(style: p.Style.windows);
   static final p.Context _posixPath = p.Context(style: p.Style.posix);
   static const Duration _sourceReadTimeout = Duration(minutes: 2);
+  static const int _maxConcurrentPdfThumbFallbacks = 2;
 
   final RemoteMediaApiClient _client;
   final MediaRepository _localPickerRepository;
@@ -48,6 +50,8 @@ class RemoteMediaRepository implements MediaRepository {
       <String, Future<Uint8List>>{};
   final Map<String, Future<PdfDocument>> _pdfOpenInFlight =
       <String, Future<PdfDocument>>{};
+  final Queue<Completer<void>> _pdfThumbFallbackWaiters =
+      Queue<Completer<void>>();
   final LinkedHashMap<String, PdfDocument> _pdfCache =
       LinkedHashMap<String, PdfDocument>();
   final Map<String, Future<RemoteMediaMeta>> _metaInFlight =
@@ -56,6 +60,7 @@ class RemoteMediaRepository implements MediaRepository {
   final Map<String, String> _remoteMediaIdsByPath = <String, String>{};
 
   Directory? _cacheRoot;
+  int _activePdfThumbFallbacks = 0;
 
   RemoteMediaRepository({
     String baseUrl = '',
@@ -1154,12 +1159,106 @@ class RemoteMediaRepository implements MediaRepository {
     }
   }
 
+  Future<void> _persistThumbBytes(
+    File cacheFile,
+    Directory cacheDir,
+    Uint8List bytes,
+  ) async {
+    await cacheFile.parent.create(recursive: true);
+    await cacheFile.writeAsBytes(bytes, flush: false);
+    await _trimCacheDirectory(cacheDir, maxEntries: 320);
+  }
+
+  Future<void> _acquirePdfThumbFallbackSlot() async {
+    if (_activePdfThumbFallbacks < _maxConcurrentPdfThumbFallbacks) {
+      _activePdfThumbFallbacks++;
+      return;
+    }
+
+    final completer = Completer<void>();
+    _pdfThumbFallbackWaiters.addLast(completer);
+    await completer.future;
+  }
+
+  void _releasePdfThumbFallbackSlot() {
+    if (_pdfThumbFallbackWaiters.isNotEmpty) {
+      _pdfThumbFallbackWaiters.removeFirst().complete();
+      return;
+    }
+    if (_activePdfThumbFallbacks > 0) {
+      _activePdfThumbFallbacks--;
+    }
+  }
+
+  bool _looksMostlyBlankImage(Uint8List bytes) {
+    try {
+      final image = im.decodeImage(bytes);
+      if (image == null || image.width < 16 || image.height < 16) {
+        return false;
+      }
+
+      var luminanceSum = 0.0;
+      var samples = 0;
+      var darkest = 255.0;
+      for (var yStep = 1; yStep <= 6; yStep++) {
+        final y = ((image.height - 1) * (yStep / 7)).round();
+        for (var xStep = 1; xStep <= 4; xStep++) {
+          final x = ((image.width - 1) * (xStep / 5)).round();
+          final pixel = image.getPixel(x, y);
+          final luminance =
+              (pixel.r * 0.299) + (pixel.g * 0.587) + (pixel.b * 0.114);
+          luminanceSum += luminance;
+          if (luminance < darkest) {
+            darkest = luminance;
+          }
+          samples++;
+        }
+      }
+
+      if (samples == 0) {
+        return false;
+      }
+      final average = luminanceSum / samples;
+      return average >= 245 && darkest >= 232;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Uint8List> _renderRemotePdfThumbnailLocally(
+    MediaItem item, {
+    required int maxWidth,
+  }) async {
+    final doc = await _openCachedPdf(item);
+    final totalPages = doc.pagesCount < 1 ? 1 : doc.pagesCount;
+    final targetWidth = maxWidth.clamp(160, 480).toInt();
+    final candidatePages = <int>[
+      1,
+      if (totalPages >= 2) 2,
+      if (totalPages >= 3) (totalPages / 2).ceil(),
+    ].toSet().toList(growable: false);
+
+    Uint8List? fallback;
+    for (final pageNumber in candidatePages) {
+      final bytes = await _renderPdfPage(doc, pageNumber, targetWidth);
+      fallback ??= bytes;
+      if (!_looksMostlyBlankImage(bytes)) {
+        return bytes;
+      }
+    }
+
+    return fallback ?? _renderPdfPage(doc, 1, targetWidth);
+  }
+
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
-    final meta = await _metaForItem(item);
-    final mediaId = meta.mediaId;
+    if (await _isLocalExternalItem(item)) {
+      return _localPickerRepository.readThumbPair(item, maxWidth: maxWidth);
+    }
+    final mediaId = await _remoteMediaIdForItem(item);
     final cacheDir = await _ensureCacheSubdir('thumbs');
-    final cacheName = '${_cacheHash('$mediaId|${meta.etag}|$maxWidth')}.bin';
+    final cacheName =
+        '${_cacheHash('$mediaId|${item.modified?.millisecondsSinceEpoch ?? 0}|${item.sizeBytes ?? 0}|thumb-remote-v5|$maxWidth')}.bin';
     final cacheFile = File(p.join(cacheDir.path, cacheName));
 
     final cached = await cacheFile.exists();
@@ -1172,22 +1271,17 @@ class RemoteMediaRepository implements MediaRepository {
       return inFlight;
     }
 
-    final future = _client
-        .fetchThumbnail(mediaId, width: maxWidth)
-        .then((bytes) async {
-          await cacheFile.parent.create(recursive: true);
-          await cacheFile.writeAsBytes(bytes, flush: false);
-          await _trimCacheDirectory(cacheDir, maxEntries: 320);
-          _thumbInFlight.remove(cacheFile.path);
-          return ThumbPair(front: bytes, back: null);
-        })
-        .catchError((Object error) {
-          _thumbInFlight.remove(cacheFile.path);
-          throw error;
-        });
-
+    final future = (() async {
+      final remoteBytes = await _client.fetchThumbnail(mediaId, width: maxWidth);
+      await _persistThumbBytes(cacheFile, cacheDir, remoteBytes);
+      return ThumbPair(front: remoteBytes, back: null);
+    })();
     _thumbInFlight[cacheFile.path] = future;
-    return future;
+    try {
+      return await future;
+    } finally {
+      _thumbInFlight.remove(cacheFile.path);
+    }
   }
 
   @override
@@ -1274,6 +1368,9 @@ class RemoteMediaRepository implements MediaRepository {
     if (item.kind != MediaKind.pdf) {
       return 1;
     }
+    if (await _isLocalExternalItem(item)) {
+      return _localPickerRepository.getPageCount(item);
+    }
     final doc = await _openCachedPdf(item);
     return doc.pagesCount;
   }
@@ -1286,6 +1383,13 @@ class RemoteMediaRepository implements MediaRepository {
   }) async {
     if (item.kind != MediaKind.pdf) {
       return _readDisplayImageBytes(item, maxWidth: maxWidth);
+    }
+    if (await _isLocalExternalItem(item)) {
+      return _localPickerRepository.renderPageBytes(
+        item,
+        page,
+        maxWidth: maxWidth,
+      );
     }
     final doc = await _openCachedPdf(item);
     final total = doc.pagesCount;

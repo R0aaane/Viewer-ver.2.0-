@@ -156,6 +156,14 @@ class ImportTagRuleService {
     if (seriesTag != null) {
       out.add(Tag(name: seriesTag, category: TagCategory.series));
     }
+    final characterTags = _cleanDistinctMetadataValues(hitomiMetadata?.characters);
+    for (final characterTag in characterTags) {
+      out.add(Tag(name: characterTag, category: TagCategory.character));
+    }
+    final freeTags = _cleanDistinctMetadataValues(hitomiMetadata?.tags);
+    for (final freeTag in freeTags) {
+      out.add(Tag(name: freeTag, category: TagCategory.free));
+    }
     final sortedMediaTypeTags = mediaTypeTags.toList(growable: false)..sort();
     for (final name in sortedMediaTypeTags) {
       out.add(Tag(name: name, category: TagCategory.mediaType));
@@ -358,6 +366,25 @@ class ImportTagRuleService {
     for (final segment in segments) {
       final cleaned = _cleanArtistTagCandidate(segment);
       if (cleaned == null) {
+        continue;
+      }
+      if (seen.add(cleaned.toLowerCase())) {
+        out.add(cleaned);
+      }
+    }
+    return out;
+  }
+
+  static List<String> _cleanDistinctMetadataValues(List<String>? values) {
+    if (values == null || values.isEmpty) {
+      return const <String>[];
+    }
+
+    final out = <String>[];
+    final seen = <String>{};
+    for (final value in values) {
+      final cleaned = value.trim();
+      if (cleaned.isEmpty) {
         continue;
       }
       if (seen.add(cleaned.toLowerCase())) {

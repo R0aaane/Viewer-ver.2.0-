@@ -5,6 +5,7 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/tag.dart' as model;
 import '../repository/mediaRepository.dart';
+import '../services/item_name_service.dart';
 import 'detailImage.dart';
 import 'widgets/scene_ui.dart';
 
@@ -271,7 +272,10 @@ class _TagResultsPageState extends State<TagResultsPage> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  item.displayName,
+                                  ItemNameService.formatMediaTitle(
+                                    item.displayName,
+                                    kind: item.kind,
+                                  ),
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
                                   style: Theme.of(context).textTheme.titleMedium,

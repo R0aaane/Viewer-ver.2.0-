@@ -5,6 +5,7 @@ from server.vendor.kemono_dl.hitomi import (
     collect_hitomi_names,
     extract_hitomi_gallery_html_metadata,
     pick_hitomi_directory_name,
+    strip_hitomi_download_prefix,
 )
 
 
@@ -100,13 +101,19 @@ class HitomiHelpersTest(unittest.TestCase):
             'Sample Title',
         )
 
+    def test_strip_hitomi_download_prefix_removes_date_and_post_id(self) -> None:
+        self.assertEqual(
+            strip_hitomi_download_prefix('[20241105] [3114110] Sample Title'),
+            'Sample Title',
+        )
+
     def test_build_hitomi_pdf_path_matches_generated_pdf_location(self) -> None:
         self.assertEqual(
             build_hitomi_pdf_path(
                 r'C:\library\hitomi\Original Series [12345]',
                 r'C:\library\hitomi\Original Series [12345]\[20241105] [3114110] Sample Title\001.webp',
             ),
-            r'C:\library\hitomi\Original Series [12345]\[20241105] [3114110] Sample Title.pdf',
+            r'C:\library\hitomi\Original Series [12345]\Sample Title.pdf',
         )
 
 

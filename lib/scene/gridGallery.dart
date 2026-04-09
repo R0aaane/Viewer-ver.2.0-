@@ -15,6 +15,7 @@ import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
+import '../services/item_name_service.dart';
 import 'import_to_host_dialog.dart';
 import 'tag_assign_after_import.dart';
 
@@ -2064,6 +2065,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
+  Color _detailedBrowseAccentTextColor(BuildContext context, MediaItem item) {
+    final scheme = Theme.of(context).colorScheme;
+    switch (item.kind) {
+      case MediaKind.pdf:
+        return scheme.onPrimaryContainer;
+      case MediaKind.image:
+        return scheme.onTertiaryContainer;
+      case MediaKind.folder:
+        return scheme.onSecondaryContainer;
+    }
+  }
+
   Widget _buildDetailedBrowseThumb(MediaItem item) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(14),
@@ -2093,6 +2106,30 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         },
       ),
     );
+  }
+
+  String _detailedBrowseTileSubtitle(MediaItem item) {
+    final artist = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.artist,
+      maxValues: 1,
+      emptyLabel: '',
+    );
+    if (artist.isNotEmpty) {
+      return artist;
+    }
+
+    final series = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.series,
+      maxValues: 1,
+      emptyLabel: '',
+    );
+    if (series.isNotEmpty) {
+      return series;
+    }
+
+    return _folderLabelForItem(item);
   }
 
   Widget _buildDetailedBrowseMetaRow(
@@ -2180,7 +2217,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        item.displayName,
+                        _displayTitleForItem(item),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -2325,6 +2362,148 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  Widget _buildDetailedBrowseGridTile(MediaItem item) {
+    final theme = Theme.of(context);
+    final subtitle = _detailedBrowseTileSubtitle(item);
+    final folderLabel = _folderLabelForItem(item);
+    final updatedAt = _formatDetailedBrowseDate(
+      item.modified ?? _getUpdatedAt(item),
+    );
+    final isSelected = _selectedIds.contains(item.id);
+    final isFavorite = _favorites.contains(item.id);
+    final accent = _detailedBrowseAccentColor(context, item);
+    final accentText = _detailedBrowseAccentTextColor(context, item);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onLongPress: () {
+        if (!_selectMode) {
+          _enterSelectMode(item);
+        } else {
+          _toggleSelect(item);
+        }
+      },
+      onTap: () async {
+        if (_selectMode) {
+          _toggleSelect(item);
+          return;
+        }
+        await _openDetailFromHome(item);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: isSelected
+              ? Border.all(color: theme.colorScheme.primary, width: 2)
+              : null,
+          color: isSelected
+              ? theme.colorScheme.primary.withOpacity(0.04)
+              : Colors.transparent,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _buildDetailedBrowseThumb(item)),
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: item.kind == MediaKind.pdf
+                        ? const _PdfBadge()
+                        : const SizedBox.shrink(),
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: _FavButton(
+                      isFavorite: isFavorite,
+                      onPressed: () => _toggleFavorite(item),
+                    ),
+                  ),
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    bottom: 8,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: accent.withOpacity(0.88),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 5,
+                        ),
+                        child: Text(
+                          folderLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: accentText,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (isSelected)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.18),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        padding: const EdgeInsets.all(8),
+                        alignment: Alignment.topRight,
+                        child: const Icon(
+                          Icons.check_circle,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _displayTitleForItem(item),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                height: 1.2,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              updatedAt,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: accent.withOpacity(0.95),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildDetailedBrowseResultsBody() {
     Widget headerCard() {
       return Card(
@@ -2416,45 +2595,88 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: _handlePullToRefresh,
-      child: ListView.builder(
-        physics: _refreshScrollPhysics,
-        padding: const EdgeInsets.all(12),
-        itemCount:
-            _homeSearchErrorMessage != null ||
-                (!_homeSearching && _homeSearchResults.isEmpty)
-            ? 2
-            : _homeSearchResults.length + 1,
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return headerCard();
-          }
-          if (_homeSearchErrorMessage != null) {
-            return Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: _buildErrorBody(
-                title: '詳細ブラウズの読み込みに失敗しました',
-                message: _homeSearchErrorMessage!,
-                onAction: () => _runHomeSearch(includeAllWhenEmpty: true),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const crossAxisCount = 3;
+        final crossSpacing = constraints.maxWidth < 420 ? 8.0 : 12.0;
+        final mainSpacing = constraints.maxWidth < 420 ? 14.0 : 18.0;
+        final contentWidth = constraints.maxWidth <= 760
+            ? (constraints.maxWidth - 24).clamp(0.0, double.infinity).toDouble()
+            : 760.0;
+        final sidePadding = (constraints.maxWidth - contentWidth) / 2;
+        final tileWidth =
+            (contentWidth - (crossSpacing * (crossAxisCount - 1))) /
+            crossAxisCount;
+        final tileHeight = (tileWidth * (4 / 3)) + 84;
+
+        return RefreshIndicator(
+          onRefresh: _handlePullToRefresh,
+          child: CustomScrollView(
+            physics: _refreshScrollPhysics,
+            cacheExtent: 400,
+            slivers: [
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(sidePadding, 12, sidePadding, 12),
+                sliver: SliverToBoxAdapter(child: headerCard()),
               ),
-            );
-          }
-          if (!_homeSearching && _homeSearchResults.isEmpty) {
-            return Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: _buildEmptyBody(
-                title: '表示できる項目がありません',
-                message: _homeQuery.trim().isEmpty
-                    ? '登録フォルダ内に表示対象の PDF / 画像がありません。'
-                    : '別のキーワード、タグ、artist / series 指定を試してください。',
-              ),
-            );
-          }
-          final item = _homeSearchResults[index - 1];
-          return _buildDetailedBrowseCard(item);
-        },
-      ),
+              if (_homeSearchErrorMessage != null)
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    sidePadding,
+                    0,
+                    sidePadding,
+                    12,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: _buildErrorBody(
+                      title: '詳細ブラウズの読み込みに失敗しました',
+                      message: _homeSearchErrorMessage!,
+                      onAction: () => _runHomeSearch(includeAllWhenEmpty: true),
+                    ),
+                  ),
+                )
+              else if (!_homeSearching && _homeSearchResults.isEmpty)
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    sidePadding,
+                    0,
+                    sidePadding,
+                    12,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: _buildEmptyBody(
+                      title: '表示できる項目がありません',
+                      message: _homeQuery.trim().isEmpty
+                          ? '登録フォルダ内に表示対象の PDF / 画像がありません。'
+                          : '別のキーワード、タグ、artist / series 指定を試してください。',
+                    ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    sidePadding,
+                    0,
+                    sidePadding,
+                    12,
+                  ),
+                  sliver: SliverGrid(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      mainAxisSpacing: mainSpacing,
+                      crossAxisSpacing: crossSpacing,
+                      mainAxisExtent: tileHeight,
+                    ),
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final item = _homeSearchResults[index];
+                      return _buildDetailedBrowseGridTile(item);
+                    }, childCount: _homeSearchResults.length),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -2615,7 +2837,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        item.displayName,
+                                        _displayTitleForItem(item),
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                         style: Theme.of(
@@ -2760,7 +2982,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        item.displayName,
+                                        _displayTitleForItem(item),
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                         style: Theme.of(
@@ -2968,6 +3190,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return s.trim().isEmpty ? raw : s.trim();
   }
 
+  String _displayTitleForItem(MediaItem item) {
+    return ItemNameService.formatMediaTitle(
+      item.displayName,
+      kind: item.kind,
+    );
+  }
+
   String _folderLabel(String raw) {
     final a = _folderAliases[raw];
     final sanitized = a == null
@@ -3134,35 +3363,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Future<void> _openDetailFromHome(MediaItem item) async {
     final folderRaw = item.folderRaw;
 
-    if (!_foldersRaw.contains(folderRaw)) {
-      final next = List<String>.from(_foldersRaw)..add(folderRaw);
-      setState(() {
-        _foldersRaw = next;
-        _currentFolderRaw = folderRaw;
-      });
+    List<MediaItem> folderItems =
+        _folderItemsCache[folderRaw] ??
+        (_currentFolderRaw == folderRaw ? _items : const <MediaItem>[]);
 
-      await _persistFolders();
-    } else {
-      if (_currentFolderRaw != folderRaw) {
-        setState(() {
-          _currentFolderRaw = folderRaw;
-          _folder = FolderHandle(folderRaw);
-        });
-        await _persistFolders();
+    if (folderItems.isEmpty) {
+      try {
+        folderItems = await widget.repo.listMedia(FolderHandle(folderRaw));
+        _folderItemsCache[folderRaw] = folderItems;
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('フォルダの読み込みに失敗しました: $error')));
+        return;
       }
-    }
-
-    List<MediaItem> folderItems;
-    if (_folderItemsCache.containsKey(folderRaw)) {
-      folderItems = _folderItemsCache[folderRaw] ?? const <MediaItem>[];
-      setState(() {
-        _folder = FolderHandle(folderRaw);
-        _galleryLoadErrorMessage = null;
-      });
-    } else {
-      await _loadFolder(FolderHandle(folderRaw), saveAsLast: false);
-      folderItems = _items;
-      _folderItemsCache[folderRaw] = folderItems;
     }
 
     var idx = folderItems.indexWhere((entry) => entry.id == item.id);
@@ -3170,12 +3385,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       try {
         folderItems = await widget.repo.listMedia(FolderHandle(folderRaw));
         _folderItemsCache[folderRaw] = folderItems;
-        if (mounted) {
-          setState(() {
-            _folder = FolderHandle(folderRaw);
-            _galleryLoadErrorMessage = null;
-          });
-        }
         idx = folderItems.indexWhere((entry) => entry.id == item.id);
       } catch (error) {
         if (!mounted) return;
@@ -3208,6 +3417,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
 
     if (changed == true) {
+      _folderItemsCache.remove(folderRaw);
+      _folderItemsCacheRecursive.remove(folderRaw);
       await _refreshVisibleContent();
     }
   }
@@ -5826,10 +6037,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       final isArtist = tag.category == TagCategory.artist;
       final isSeries = tag.category == TagCategory.series;
+      final isCharacter = tag.category == TagCategory.character;
+      final isFree = tag.category == TagCategory.free;
       final isHitomiMediaType =
           tag.category == TagCategory.mediaType &&
           normalizedName.toLowerCase() == 'hitomi';
-      if (!isArtist && !isSeries && !isHitomiMediaType) {
+      if (!isArtist &&
+          !isSeries &&
+          !isCharacter &&
+          !isFree &&
+          !isHitomiMediaType) {
         continue;
       }
 
@@ -7218,6 +7435,13 @@ class _ThumbTile extends StatelessWidget {
     this.onDeleteItem,
   });
 
+  String get _displayTitle {
+    return ItemNameService.formatMediaTitle(
+      item.displayName,
+      kind: item.kind,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (item.kind == MediaKind.folder) {
@@ -7256,7 +7480,10 @@ class _ThumbTile extends StatelessWidget {
             left: 8,
             right: 8,
             bottom: 8,
-            child: _TitleChip(title: item.displayName, subtitle: subtitle),
+            child: _TitleChip(
+              title: _displayTitle,
+              subtitle: subtitle,
+            ),
           ),
           if (selected) _buildSelectionOverlay(),
         ],
@@ -7313,7 +7540,10 @@ class _ThumbTile extends StatelessWidget {
             left: 8,
             right: 8,
             bottom: 8,
-            child: _TitleChip(title: item.displayName, subtitle: subtitle),
+            child: _TitleChip(
+              title: _displayTitle,
+              subtitle: subtitle,
+            ),
           ),
           if (selected) _buildSelectionOverlay(),
         ],
@@ -7369,7 +7599,10 @@ class _ThumbTile extends StatelessWidget {
             left: 8,
             right: 8,
             bottom: 8,
-            child: _TitleChip(title: item.displayName, subtitle: subtitle),
+            child: _TitleChip(
+              title: _displayTitle,
+              subtitle: subtitle,
+            ),
           ),
           if (selected) _buildSelectionOverlay(),
         ],

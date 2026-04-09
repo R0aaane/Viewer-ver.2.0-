@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from server.services.pillow_plugins import ensure_pillow_plugins
+from server.vendor.kemono_dl.hitomi import strip_hitomi_download_prefix
 
 
 ensure_pillow_plugins()
@@ -223,8 +224,12 @@ def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
     if not image_paths:
         return False
 
-    pdf_path = gallery_dir.parent / f"{gallery_dir.name}.pdf"
+    legacy_pdf_path = gallery_dir.parent / f"{gallery_dir.name}.pdf"
+    cleaned_name = strip_hitomi_download_prefix(gallery_dir.name) or gallery_dir.name
+    pdf_path = gallery_dir.parent / f"{cleaned_name}.pdf"
     if not _should_refresh_pdf(pdf_path, image_paths):
+        if legacy_pdf_path != pdf_path and legacy_pdf_path.exists():
+            legacy_pdf_path.unlink()
         return False
 
     images: list[Image.Image] = []
@@ -245,6 +250,8 @@ def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
 
         first, rest = images[0], images[1:]
         first.save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=rest)
+        if legacy_pdf_path != pdf_path and legacy_pdf_path.exists():
+            legacy_pdf_path.unlink()
         return True
     finally:
         for image in images:

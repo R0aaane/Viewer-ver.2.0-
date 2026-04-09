@@ -941,24 +941,10 @@ class WebRemoteApiClient {
           );
         }
 
-        try {
-          await _ensurePdfJsReady();
-          final bytes = Uint8List.fromList(await fetchImageDownload(mediaId));
-          final document = await pdfjsGetDocumentFromData(bytes.buffer);
-          try {
-            return WebRemotePdfPageCountInfo(
-              count: document.numPages,
-              isReliable: true,
-            );
-          } finally {
-            document.destroy();
-          }
-        } catch (_) {
-          return WebRemotePdfPageCountInfo(
-            count: await _resolvePdfPageCountByPageProbe(mediaId),
-            isReliable: false,
-          );
-        }
+        return WebRemotePdfPageCountInfo(
+          count: await _resolvePdfPageCountByPageProbe(mediaId),
+          isReliable: false,
+        );
       },
     );
   }
@@ -1023,6 +1009,10 @@ class WebRemoteApiClient {
     return _getBytes('/media/${Uri.encodeComponent(mediaId)}/download');
   }
 
+  Uri buildMediaDownloadUri(String mediaId) {
+    return _buildUri('/media/${Uri.encodeComponent(mediaId)}/download');
+  }
+
   Future<String> createPdfObjectUrl(String mediaId) async {
     final bytes = await fetchImageDownload(mediaId);
     final blob = html.Blob(<Object>[bytes], 'application/pdf');
@@ -1034,6 +1024,12 @@ class WebRemoteApiClient {
   }
 
   Future<void> openPdfInNewTab(String mediaId) async {
+    final token = authToken?.trim();
+    if (token == null || token.isEmpty) {
+      html.window.open(buildMediaDownloadUri(mediaId).toString(), '_blank');
+      return;
+    }
+
     final popup = html.window.open('', '_blank');
     final objectUrl = await createPdfObjectUrl(mediaId);
     popup.location.href = objectUrl;

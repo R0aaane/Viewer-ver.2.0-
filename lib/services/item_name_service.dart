@@ -12,6 +12,13 @@ class ItemNameValidationException implements Exception {
 class ItemNameService {
   static final RegExp _invalidChars = RegExp(r'[\\/:*?"<>|]');
 
+  static String formatMediaTitle(String name, {required MediaKind kind}) {
+    if (kind == MediaKind.pdf) {
+      return name.replaceFirst(RegExp(r'\.pdf$', caseSensitive: false), '');
+    }
+    return name;
+  }
+
   static String editableBaseName(MediaItem item) {
     if (item.kind == MediaKind.folder) {
       return item.displayName;
@@ -40,7 +47,7 @@ class ItemNameService {
       return '新しい名前を入力してください';
     }
     if (rawName != rawName.trim()) {
-      return '先頭または末尾の空白は使えません';
+      return '先頭や末尾の空白は使えません';
     }
     if (rawName == '.' || rawName == '..') {
       return 'その名前は使用できません';

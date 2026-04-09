@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -158,8 +159,48 @@ class WindowsFolderRepository implements MediaRepository {
 
   // PDF 繧ｭ繝｣繝・す繝･・医・繝ｼ繧ｸ騾√ｊ鬮倬溷喧・・
   final Map<String, PdfDocument> _pdfCache = {};
+  Directory? _thumbDiskDir;
 
   bool _isUncPath(String path) => path.startsWith(r'\\');
+
+  Future<Directory> _ensureThumbDiskDir() async {
+    if (_thumbDiskDir != null) return _thumbDiskDir!;
+    final base = await getTemporaryDirectory();
+    final dir = Directory('${base.path}/thumbs_v2');
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    _thumbDiskDir = dir;
+    return dir;
+  }
+
+  String _fnv1a64Hex(String value) {
+    const int fnvOffset = 0xcbf29ce484222325;
+    const int fnvPrime = 0x100000001b3;
+
+    var hash = fnvOffset;
+    final bytes = utf8.encode(value);
+    for (final byte in bytes) {
+      hash ^= byte;
+      hash = (hash * fnvPrime) & 0xFFFFFFFFFFFFFFFF;
+    }
+    return hash.toRadixString(16).padLeft(16, '0');
+  }
+
+  Future<File> _thumbDiskFile(String cacheKey) async {
+    final dir = await _ensureThumbDiskDir();
+    return File('${dir.path}/${_fnv1a64Hex(cacheKey)}.bin');
+  }
+
+  String _thumbCacheKey(MediaItem item, int maxWidth) {
+    return [
+      item.id,
+      item.modified?.millisecondsSinceEpoch ?? 0,
+      item.sizeBytes ?? 0,
+      maxWidth,
+      'thumb-v2',
+    ].join('|');
+  }
 
   Future<T> _withFsRetry<T>(
     String path,
@@ -731,7 +772,7 @@ class WindowsFolderRepository implements MediaRepository {
 
   @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
-    final cacheKey = '${item.id}|$maxWidth';
+    final cacheKey = _thumbCacheKey(item, maxWidth);
 
     // LRU 繧ｭ繝｣繝・す繝･繧偵≠縺溘▲縺ｦ縺ｿ繧・
     final cached = _thumbCache.get(cacheKey);
@@ -742,14 +783,31 @@ class WindowsFolderRepository implements MediaRepository {
     if (inflight != null) return inflight;
 
     // 菴懈・・・n-flight 逋ｻ骭ｲ・・
-    final future = _buildThumbPair(item, maxWidth)
-        .then((pair) {
-          _thumbCache.put(cacheKey, pair);
-          return pair;
-        })
-        .whenComplete(() {
-          _thumbInFlight.remove(cacheKey);
-        });
+    final future = (() async {
+      try {
+        final diskFile = await _thumbDiskFile(cacheKey);
+        if (await diskFile.exists()) {
+          final bytes = await diskFile.readAsBytes();
+          if (bytes.isNotEmpty) {
+            final pair = ThumbPair(front: bytes, back: null);
+            _thumbCache.put(cacheKey, pair);
+            return pair;
+          }
+        }
+      } catch (_) {
+        // Fall through to fresh generation.
+      }
+
+      final pair = await _buildThumbPair(item, maxWidth);
+      _thumbCache.put(cacheKey, pair);
+      try {
+        final diskFile = await _thumbDiskFile(cacheKey);
+        await diskFile.writeAsBytes(pair.front, flush: false);
+      } catch (_) {}
+      return pair;
+    })().whenComplete(() {
+      _thumbInFlight.remove(cacheKey);
+    });
 
     _thumbInFlight[cacheKey] = future;
     return future;
@@ -761,28 +819,22 @@ class WindowsFolderRepository implements MediaRepository {
         item.id,
         () => File(item.id).readAsBytes(),
       );
-      if (_isAvifPath(item.id)) {
-        try {
-          final thumb = await _makeImageThumb(bytes, maxWidth);
-          return ThumbPair(front: thumb, back: null);
-        } catch (_) {
-          return ThumbPair(front: bytes, back: null);
-        }
+      try {
+        final thumb = await _makeImageThumb(bytes, maxWidth);
+        return ThumbPair(front: thumb, back: null);
+      } catch (_) {
+        return ThumbPair(front: bytes, back: null);
       }
-      return ThumbPair(front: bytes, back: null);
     }
 
     // PDF: 1繝壹・繧ｸ逶ｮ + 荳ｭ髢薙・繝ｼ繧ｸ・・oc繧ｭ繝｣繝・す繝･繧貞茜逕ｨ・・
-    final doc = await _openPdf(item.id);
-    final pageCount = doc.pagesCount;
-    final mid = (pageCount / 2).ceil().clamp(1, pageCount);
-
-    final front = await _renderPage(doc, 1, maxWidth);
-    Uint8List? back;
-    if (pageCount >= 2) {
-      back = await _renderPage(doc, mid, maxWidth);
+    final doc = await _withFsRetry(item.id, () => PdfDocument.openFile(item.id));
+    try {
+      final front = await _renderPage(doc, 1, maxWidth);
+      return ThumbPair(front: front, back: null);
+    } finally {
+      await doc.close();
     }
-    return ThumbPair(front: front, back: back);
   }
 
   // ---- PDF open with cache ----

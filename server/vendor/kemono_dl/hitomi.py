@@ -14,6 +14,7 @@ HITOMI_GALLERY_URL_RE = re.compile(
     r"(?:[^/?#]+-)?(\d+)(?:\.html)?(?:[?#].*)?$",
     re.IGNORECASE,
 )
+HITOMI_DOWNLOAD_PREFIX_RE = re.compile(r"^\[\d{8}\]\s+\[\d+\]\s*")
 
 
 def parse_hitomi_url(url: str):
@@ -33,6 +34,14 @@ def parse_hitomi_url(url: str):
 
 def build_hitomi_gallery_url(gallery_id: str):
     return f"{HITOMI_ROOT}/galleries/{gallery_id}.html"
+
+
+def strip_hitomi_download_prefix(name: str) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return raw
+    stripped = HITOMI_DOWNLOAD_PREFIX_RE.sub("", raw).strip()
+    return stripped or raw
 
 
 def extract_hitomi_gallery_info(payload: str):
@@ -224,14 +233,16 @@ def build_hitomi_pdf_path(post_path: str, attachment_file_path: str) -> str:
     normalized_gallery_dir = os.path.normpath(gallery_dir) if gallery_dir else ""
 
     if normalized_gallery_dir and normalized_gallery_dir != normalized_post_path:
+        pdf_name = strip_hitomi_download_prefix(os.path.basename(normalized_gallery_dir))
         return os.path.join(
             os.path.dirname(normalized_gallery_dir),
-            f"{os.path.basename(normalized_gallery_dir)}.pdf",
+            f"{pdf_name}.pdf",
         )
 
+    pdf_name = strip_hitomi_download_prefix(os.path.basename(normalized_post_path))
     return os.path.join(
         os.path.dirname(normalized_post_path),
-        f"{os.path.basename(normalized_post_path)}.pdf",
+        f"{pdf_name}.pdf",
     )
 
 
