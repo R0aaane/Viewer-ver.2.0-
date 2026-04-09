@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -214,6 +215,12 @@ def _should_refresh_pdf(pdf_path: Path, image_paths: list[Path]) -> bool:
     return newest_image_mtime > pdf_mtime
 
 
+def _cleanup_hitomi_gallery_dir(gallery_dir: Path) -> None:
+    if not gallery_dir.exists():
+        return
+    shutil.rmtree(gallery_dir, ignore_errors=True)
+
+
 def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
     image_paths = sorted(
         [
@@ -230,6 +237,7 @@ def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
     if not _should_refresh_pdf(pdf_path, image_paths):
         if legacy_pdf_path != pdf_path and legacy_pdf_path.exists():
             legacy_pdf_path.unlink()
+        _cleanup_hitomi_gallery_dir(gallery_dir)
         return False
 
     images: list[Image.Image] = []
@@ -252,6 +260,7 @@ def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
         first.save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=rest)
         if legacy_pdf_path != pdf_path and legacy_pdf_path.exists():
             legacy_pdf_path.unlink()
+        _cleanup_hitomi_gallery_dir(gallery_dir)
         return True
     finally:
         for image in images:
