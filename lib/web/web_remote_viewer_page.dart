@@ -1609,7 +1609,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                       crossAxisCount: columns,
                       mainAxisSpacing: compact ? 8 : 16,
                       crossAxisSpacing: compact ? 8 : 16,
-                      childAspectRatio: compact ? 0.50 : 0.62,
+                      childAspectRatio: compact ? 0.67 : 0.70,
                     ),
                     delegate: SliverChildBuilderDelegate((context, index) {
                       final entry = _entries[index];
@@ -1621,7 +1621,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                         entry: entry,
                         selected: selected,
                         onTap: () => _handleEntryTap(entry, splitView: splitView),
-                        folderName: _folderName,
                       );
                     }, childCount: _entries.length),
                   ),
@@ -2959,7 +2958,6 @@ class _EntryGridTileCard extends StatelessWidget {
   final WebRemoteEntry entry;
   final bool selected;
   final VoidCallback onTap;
-  final String Function(String raw) folderName;
 
   const _EntryGridTileCard({
     super.key,
@@ -2967,7 +2965,6 @@ class _EntryGridTileCard extends StatelessWidget {
     required this.entry,
     required this.selected,
     required this.onTap,
-    required this.folderName,
   });
 
   @override
@@ -2977,140 +2974,42 @@ class _EntryGridTileCard extends StatelessWidget {
         selected
             ? Color.lerp(accent, Colors.white, 0.22) ?? accent
             : Colors.white.withOpacity(0.10);
-    final backgroundColor =
-        selected ? const Color(0xFF1B2330) : const Color(0xFF151A22);
-    final titleColor = selected ? const Color(0xFFFDF8F5) : Colors.white;
-    final subtitleColor =
-        selected ? Colors.white.withOpacity(0.80) : Colors.white60;
-    final folderLabel = folderName(entry.folderRaw);
-    final updatedLabel = _formatBrowseDateTime(entry.modifiedAt);
+    final shadowColor = accent.withOpacity(selected ? 0.14 : 0.08);
+    final radius = BorderRadius.circular(18);
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: radius,
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: backgroundColor,
-            borderRadius: BorderRadius.circular(22),
+            color: const Color(0xFF0E141C),
+            borderRadius: radius,
             border: Border.all(color: borderColor, width: selected ? 1.8 : 1),
             boxShadow: <BoxShadow>[
               BoxShadow(
-                color: accent.withOpacity(selected ? 0.16 : 0.08),
-                blurRadius: selected ? 24 : 18,
-                offset: const Offset(0, 10),
+                color: shadowColor,
+                blurRadius: selected ? 20 : 14,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              AspectRatio(
-                aspectRatio: 0.74,
-                child: Stack(
-                  children: <Widget>[
-                    Positioned.fill(
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          return _RemoteThumbnail(
-                            client: client,
-                            entry: entry,
-                            width: constraints.maxWidth,
-                            height: constraints.maxHeight,
-                            borderRadius: 18,
-                            backgroundColor: const Color(0xFF0E141C),
-                          );
-                        },
-                      ),
-                    ),
-                    Positioned(
-                      left: 10,
-                      top: 10,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.66),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Icon(
-                              Icons.picture_as_pdf_outlined,
-                              size: 14,
-                              color: Colors.white,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              'PDF',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 10,
-                      right: 10,
-                      bottom: 10,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 7,
-                        ),
-                        decoration: BoxDecoration(
-                          color: accent.withOpacity(0.88),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          folderLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFF2E2323),
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _entryDisplayTitle(entry),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: titleColor,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  height: 1.2,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                updatedLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: subtitleColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(17),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return _RemoteThumbnail(
+                  client: client,
+                  entry: entry,
+                  width: constraints.maxWidth,
+                  height: constraints.maxHeight,
+                  borderRadius: 17,
+                  backgroundColor: const Color(0xFF0E141C),
+                );
+              },
+            ),
           ),
         ),
       ),
