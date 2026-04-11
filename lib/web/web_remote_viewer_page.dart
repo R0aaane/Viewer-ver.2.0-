@@ -593,13 +593,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   int _browserGridColumnCount(double width) {
-    if (width >= 620) {
-      return 3;
-    }
-    if (width >= 400) {
-      return 2;
-    }
-    return 1;
+    return 3;
   }
 
   String? _parentFolder(String raw) {
@@ -1613,9 +1607,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   sliver: SliverGrid(
                     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: columns,
-                      mainAxisSpacing: compact ? 12 : 16,
-                      crossAxisSpacing: compact ? 12 : 16,
-                      childAspectRatio: compact ? 0.60 : 0.62,
+                      mainAxisSpacing: compact ? 8 : 16,
+                      crossAxisSpacing: compact ? 8 : 16,
+                      childAspectRatio: compact ? 0.50 : 0.62,
                     ),
                     delegate: SliverChildBuilderDelegate((context, index) {
                       final entry = _entries[index];
