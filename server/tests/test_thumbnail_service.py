@@ -48,16 +48,17 @@ class ThumbnailServiceTest(unittest.TestCase):
                 "server.services.thumbnail_service.pdfium.PdfDocument",
                 side_effect=pdfium.PdfiumError("Data format error"),
             ):
-                payload, mime = service.build_thumbnail(
+                result = service.build_thumbnail(
                     "mid:broken.pdf",
                     width=240,
                     height=320,
                     page=1,
                 )
 
-        self.assertEqual(mime, "image/jpeg")
-        self.assertTrue(payload.startswith(b"\xff\xd8"))
-        self.assertGreater(len(payload), 0)
+        self.assertEqual(result.mime, "image/jpeg")
+        self.assertTrue(result.payload.startswith(b"\xff\xd8"))
+        self.assertGreater(len(result.payload), 0)
+        self.assertTrue(result.is_placeholder)
 
     def test_render_pdf_page_returns_placeholder_for_pdfium_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -72,15 +73,16 @@ class ThumbnailServiceTest(unittest.TestCase):
                 "server.services.thumbnail_service.pdfium.PdfDocument",
                 side_effect=pdfium.PdfiumError("Data format error"),
             ):
-                payload, mime = service.render_pdf_page(
+                result = service.render_pdf_page(
                     "mid:broken.pdf",
                     page_no=1,
                     width=800,
                 )
 
-        self.assertEqual(mime, "image/png")
-        self.assertTrue(payload.startswith(b"\x89PNG\r\n\x1a\n"))
-        self.assertGreater(len(payload), 0)
+        self.assertEqual(result.mime, "image/png")
+        self.assertTrue(result.payload.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertGreater(len(result.payload), 0)
+        self.assertTrue(result.is_placeholder)
 
     def test_get_pdf_page_count_returns_none_for_pdfium_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

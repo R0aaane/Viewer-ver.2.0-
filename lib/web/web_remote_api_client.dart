@@ -914,17 +914,63 @@ class WebRemoteApiClient {
     );
   }
 
+  List<int> _pdfRenderWidthCandidates(int? requestedWidth) {
+    final candidates = <int>[];
+
+    void addCandidate(int? value) {
+      final normalized = value ?? 0;
+      if (normalized < 128 || candidates.contains(normalized)) {
+        return;
+      }
+      candidates.add(normalized);
+    }
+
+    addCandidate(requestedWidth);
+    if (requestedWidth == null || requestedWidth > 1280) {
+      addCandidate(1280);
+    }
+    if (requestedWidth == null || requestedWidth > 960) {
+      addCandidate(960);
+    }
+    if (requestedWidth == null || requestedWidth > 720) {
+      addCandidate(720);
+    }
+    if (candidates.isEmpty) {
+      candidates.add(960);
+    }
+    return candidates;
+  }
 
   Future<Uint8List> fetchRenderedPdfPage(
     String mediaId,
     int pageNo, {
     int? width,
   }) async {
-    try {
-      return await fetchPdfPage(mediaId, pageNo, width: width);
-    } on WebRemoteException {
-      return fetchThumbnail(mediaId, width: width, page: pageNo);
+    final widthCandidates = _pdfRenderWidthCandidates(width);
+    WebRemoteException? lastError;
+
+    for (final candidateWidth in widthCandidates) {
+      try {
+        return await fetchPdfPage(mediaId, pageNo, width: candidateWidth);
+      } on WebRemoteException catch (error) {
+        lastError = error;
+      }
     }
+
+    for (final candidateWidth in widthCandidates) {
+      try {
+        return await fetchThumbnail(
+          mediaId,
+          width: candidateWidth,
+          page: pageNo,
+          refresh: true,
+        );
+      } on WebRemoteException catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError ?? const WebRemoteException('PDF ページ画像の取得に失敗しました');
   }
 
   Future<WebRemotePdfPageCountInfo> resolvePdfPageCountInfo(

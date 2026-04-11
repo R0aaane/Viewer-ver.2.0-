@@ -258,6 +258,7 @@ class ThumbnailService:
         self._log_pdf_probe(media_id, path, context="render_pdf_page")
 
         pdf: pdfium.PdfDocument | None = None
+        page: pdfium.PdfPage | None = None
         rendered = None
         try:
             pdf = pdfium.PdfDocument(path)
@@ -317,6 +318,17 @@ class ThumbnailService:
                         "[thumbnail][render_close_failed] media_id=%s path=%s",
                         media_id,
                         path,
+                        exc_info=True,
+                    )
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:
+                    logger.warning(
+                        "[thumbnail][page_close_failed] media_id=%s path=%s page=%s",
+                        media_id,
+                        path,
+                        page_no,
                         exc_info=True,
                     )
             self._close_pdf(pdf, media_id=media_id, path=path, context="render_pdf_page")

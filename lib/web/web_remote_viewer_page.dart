@@ -4857,9 +4857,23 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         StateError('PDF を表示するための mediaId がありません'),
       );
     }
-    return _pageFutureCache.putIfAbsent(pageNo, () {
-      return widget.client.fetchRenderedPdfPage(mediaId, pageNo, width: 1600);
+    final existing = _pageFutureCache[pageNo];
+    if (existing != null) {
+      return existing;
+    }
+
+    final future = widget.client.fetchRenderedPdfPage(
+      mediaId,
+      pageNo,
+      width: 1600,
+    );
+    _pageFutureCache[pageNo] = future;
+    future.catchError((_) {
+      if (identical(_pageFutureCache[pageNo], future)) {
+        _pageFutureCache.remove(pageNo);
+      }
     });
+    return future;
   }
 
   void _syncPageFutures() {
@@ -4899,7 +4913,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _loading = true;
     });
     try {
-      final bytes = await widget.client.fetchPdfPage(mediaId, page, width: 1600);
+      final bytes = await widget.client.fetchRenderedPdfPage(
+        mediaId,
+        page,
+        width: 1600,
+      );
       if (!mounted) {
         return false;
       }
