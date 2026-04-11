@@ -51,14 +51,21 @@ def get_thumbnail(
     width: int | None = None,
     height: int | None = None,
     page: int | None = None,
+    refresh: str | None = None,
 ) -> Response:
-    payload, mime = request.app.state.thumbnail_service.build_thumbnail(
+    result = request.app.state.thumbnail_service.build_thumbnail(
         media_id,
         width=width,
         height=height,
         page=page,
+        refresh=bool(refresh and refresh.strip()),
     )
-    return Response(content=payload, media_type=mime)
+    headers = {
+        "X-Thumbnail-Status": "placeholder" if result.is_placeholder else "ok",
+    }
+    if result.detail:
+        headers["X-Thumbnail-Detail"] = result.detail
+    return Response(content=result.payload, media_type=result.mime, headers=headers)
 
 
 @router.get("/media/{media_id}/page/{page_no}")
@@ -68,9 +75,14 @@ def render_pdf_page(
     page_no: int,
     width: int | None = None,
 ) -> Response:
-    payload, mime = request.app.state.thumbnail_service.render_pdf_page(
+    result = request.app.state.thumbnail_service.render_pdf_page(
         media_id,
         page_no=page_no,
         width=width,
     )
-    return Response(content=payload, media_type=mime)
+    headers = {
+        "X-Thumbnail-Status": "placeholder" if result.is_placeholder else "ok",
+    }
+    if result.detail:
+        headers["X-Thumbnail-Detail"] = result.detail
+    return Response(content=result.payload, media_type=result.mime, headers=headers)

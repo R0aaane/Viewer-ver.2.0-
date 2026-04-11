@@ -73,6 +73,7 @@ class WebRemoteViewerPage extends StatefulWidget {
 class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   static const String _browserDisplayModePrefsKey =
       'prefs.webRemoteBrowserDisplayMode';
+  static const int _threeUpPageSize = 30;
 
   late MetadataSettings _settings;
   late final TextEditingController _apiController;
@@ -96,6 +97,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   _WebMediaFilter _filter = _WebMediaFilter.pdf;
   _WebRemoteSurface _surface = _WebRemoteSurface.home;
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.list;
+  int _threeUpPage = 1;
 
   @override
   void initState() {
@@ -393,6 +395,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       setState(() {
         _entries = filtered;
         _selectedEntry = nextSelected;
+        _threeUpPage = 1;
         if (rawQuery.isEmpty) {
           _homeEntries = filtered;
           _homeErrorMessage = null;
@@ -594,6 +597,165 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   int _browserGridColumnCount(double width) {
     return 3;
+  }
+
+  int _threeUpTotalPages(int entryCount) {
+    if (entryCount <= 0) {
+      return 1;
+    }
+    return (entryCount + _threeUpPageSize - 1) ~/ _threeUpPageSize;
+  }
+
+  int _clampThreeUpPage(int totalPages) {
+    if (totalPages <= 1) {
+      return 1;
+    }
+    return _threeUpPage.clamp(1, totalPages);
+  }
+
+  List<WebRemoteEntry> _threeUpEntriesForPage(
+    List<WebRemoteEntry> entries,
+    int page,
+  ) {
+    if (entries.isEmpty) {
+      return const <WebRemoteEntry>[];
+    }
+    final start = (page - 1) * _threeUpPageSize;
+    if (start >= entries.length) {
+      return const <WebRemoteEntry>[];
+    }
+    final end = (start + _threeUpPageSize).clamp(0, entries.length);
+    return entries.sublist(start, end);
+  }
+
+  List<int?> _threeUpPagerItems(int currentPage, int totalPages) {
+    if (totalPages <= 7) {
+      return List<int?>.generate(totalPages, (index) => index + 1);
+    }
+
+    final anchors =
+        <int>{
+          1,
+          2,
+          currentPage - 1,
+          currentPage,
+          currentPage + 1,
+          totalPages - 1,
+          totalPages,
+        }.where((page) => page >= 1 && page <= totalPages).toList()
+          ..sort();
+
+    final out = <int?>[];
+    for (final page in anchors) {
+      if (out.isEmpty) {
+        out.add(page);
+        continue;
+      }
+      final previous = out.last;
+      if (previous != null) {
+        final gap = page - previous;
+        if (gap == 2) {
+          out.add(previous + 1);
+        } else if (gap > 2) {
+          out.add(null);
+        }
+      }
+      out.add(page);
+    }
+    return out;
+  }
+
+  Widget _buildThreeUpPager({
+    required int currentPage,
+    required int totalPages,
+  }) {
+    final compact = MediaQuery.of(context).size.width < 720;
+    final items = _threeUpPagerItems(currentPage, totalPages);
+
+    Widget pageButton(int page) {
+      final selected = page == currentPage;
+      final onPressed =
+          selected
+              ? null
+              : () {
+                  setState(() {
+                    _threeUpPage = page;
+                  });
+                };
+      if (selected) {
+        return FilledButton(
+          onPressed: onPressed,
+          style: FilledButton.styleFrom(
+            minimumSize: Size(compact ? 34 : 40, compact ? 34 : 40),
+            padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 12),
+          ),
+          child: Text('$page'),
+        );
+      }
+      return OutlinedButton(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          minimumSize: Size(compact ? 34 : 40, compact ? 34 : 40),
+          padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 12),
+        ),
+        child: Text('$page'),
+      );
+    }
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 12,
+          vertical: compact ? 10 : 12,
+        ),
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: compact ? 6 : 8,
+          runSpacing: compact ? 6 : 8,
+          children: <Widget>[
+            OutlinedButton.icon(
+              onPressed:
+                  currentPage > 1
+                      ? () {
+                          setState(() {
+                            _threeUpPage = currentPage - 1;
+                          });
+                        }
+                      : null,
+              icon: const Icon(Icons.chevron_left),
+              label: const Text('前'),
+            ),
+            for (final item in items)
+              item == null
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: Text(
+                        '...',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.72),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    )
+                  : pageButton(item),
+            OutlinedButton.icon(
+              onPressed:
+                  currentPage < totalPages
+                      ? () {
+                          setState(() {
+                            _threeUpPage = currentPage + 1;
+                          });
+                        }
+                      : null,
+              icon: const Icon(Icons.chevron_right),
+              label: const Text('次'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String? _parentFolder(String raw) {
@@ -1539,6 +1701,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       currentFolderRaw: currentFolderRaw,
       parentFolder: parentFolder,
     );
+    final totalPages = _threeUpTotalPages(_entries.length);
+    final currentPage = _clampThreeUpPage(totalPages);
+    final pageEntries = _threeUpEntriesForPage(_entries, currentPage);
 
     return RefreshIndicator(
       onRefresh: _loadEntries,
@@ -1558,6 +1723,21 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 padding: listPadding,
                 sliver: SliverToBoxAdapter(child: controls),
               ),
+              if (_entries.isNotEmpty && totalPages > 1)
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    listPadding.left,
+                    12,
+                    listPadding.right,
+                    0,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: _buildThreeUpPager(
+                      currentPage: currentPage,
+                      totalPages: totalPages,
+                    ),
+                  ),
+                ),
               if (_entries.isEmpty)
                 SliverPadding(
                   padding: EdgeInsets.fromLTRB(
@@ -1612,7 +1792,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                       childAspectRatio: compact ? 0.67 : 0.70,
                     ),
                     delegate: SliverChildBuilderDelegate((context, index) {
-                      final entry = _entries[index];
+                      final entry = pageEntries[index];
                       final selected =
                           _selectedEntry?.stableId == entry.stableId;
                       return _EntryGridTileCard(
@@ -1622,7 +1802,22 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                         selected: selected,
                         onTap: () => _handleEntryTap(entry, splitView: splitView),
                       );
-                    }, childCount: _entries.length),
+                    }, childCount: pageEntries.length),
+                  ),
+                ),
+              if (_entries.isNotEmpty && totalPages > 1)
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    listPadding.left,
+                    12,
+                    listPadding.right,
+                    listPadding.bottom,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: _buildThreeUpPager(
+                      currentPage: currentPage,
+                      totalPages: totalPages,
+                    ),
                   ),
                 ),
             ],
@@ -5662,6 +5857,8 @@ class _RemoteThumbnail extends StatefulWidget {
 
 class _RemoteThumbnailState extends State<_RemoteThumbnail> {
   Future<Uint8List>? _future;
+  int _retryCount = 0;
+  bool _retryScheduled = false;
 
   @override
   void initState() {
@@ -5673,12 +5870,16 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
   void didUpdateWidget(covariant _RemoteThumbnail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.entry.stableId != widget.entry.stableId ||
-        oldWidget.client != widget.client) {
+        oldWidget.client != widget.client ||
+        oldWidget.width != widget.width ||
+        oldWidget.height != widget.height) {
+      _retryCount = 0;
+      _retryScheduled = false;
       _refreshFuture();
     }
   }
 
-  void _refreshFuture() {
+  void _refreshFuture({bool refresh = false}) {
     final client = widget.client;
     if (client == null || widget.entry.isFolder || widget.entry.mediaId == null) {
       _future = null;
@@ -5689,7 +5890,29 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
       width: (widget.width * 1.8).round(),
       height: (widget.height * 1.8).round(),
       page: widget.entry.isPdf ? 1 : null,
+      refresh: refresh,
     );
+  }
+
+  void _scheduleRetry() {
+    if (_retryScheduled || _retryCount >= 1) {
+      return;
+    }
+    _retryScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _retryScheduled = false;
+        _retryCount += 1;
+        _refreshFuture(refresh: true);
+      });
+    });
   }
 
   Widget _shell(Widget child) {
@@ -5733,6 +5956,16 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
           );
         }
         if (snapshot.hasError) {
+          _scheduleRetry();
+          if (_retryScheduled) {
+            return _shell(
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
           return _shell(
             Icon(
               widget.entry.isPdf ? Icons.picture_as_pdf : Icons.image_not_supported_outlined,
@@ -5743,6 +5976,16 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
         }
         final bytes = snapshot.data;
         if (bytes == null || bytes.isEmpty) {
+          _scheduleRetry();
+          if (_retryScheduled) {
+            return _shell(
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
           return _shell(
             const Icon(Icons.image_not_supported_outlined, size: 40, color: Colors.white54),
           );

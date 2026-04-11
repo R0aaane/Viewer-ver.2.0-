@@ -888,6 +888,7 @@ class WebRemoteApiClient {
     int? width,
     int? height,
     int? page,
+    bool refresh = false,
   }) {
     return _getBytes(
       '/media/${Uri.encodeComponent(mediaId)}/thumb',
@@ -895,6 +896,7 @@ class WebRemoteApiClient {
         if (width != null) 'width': '$width',
         if (height != null) 'height': '$height',
         if (page != null) 'page': '$page',
+        if (refresh) 'refresh': '${DateTime.now().microsecondsSinceEpoch}',
       },
     );
   }
@@ -1194,6 +1196,15 @@ class WebRemoteApiClient {
           _extractErrorMessage(raw) ?? _messageForStatus(status),
           statusCode: status,
         );
+      }
+
+      final thumbnailStatus =
+          request.getResponseHeader('X-Thumbnail-Status')?.trim().toLowerCase();
+      if (thumbnailStatus == 'placeholder') {
+        final detail =
+            request.getResponseHeader('X-Thumbnail-Detail')?.trim() ??
+            'Thumbnail placeholder returned';
+        throw WebRemoteException(detail, statusCode: 503);
       }
 
       return bytes;

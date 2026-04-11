@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import pypdfium2 as pdfium
@@ -56,7 +57,8 @@ class ThumbnailService:
         width: int | None = None,
         height: int | None = None,
         page: int | None = None,
-    ) -> tuple[bytes, str]:
+        refresh: bool = False,
+    ) -> "ThumbnailBuildResult":
         record = self._metadata.get_media(media_id)
         self._log_media_resolution("build_thumbnail", media_id, record)
         if record["isDeleted"]:
@@ -71,12 +73,18 @@ class ThumbnailService:
         page_no = page or 1
 
         cache_key = _hash_key(
-            f"thumb|{media_id}|{record['etag']}|{target_width}|{target_height}|{page_no}"
+            f"thumb-v2|{media_id}|{record['etag']}|{target_width}|{target_height}|{page_no}"
         )
         cache_path = self._thumbs_dir / f"{cache_key}.jpg"
-        if cache_path.exists():
+        if refresh:
+            self._remove_cache_file(cache_path)
+        if not refresh and cache_path.exists():
             try:
-                return cache_path.read_bytes(), "image/jpeg"
+                return ThumbnailBuildResult(
+                    payload=cache_path.read_bytes(),
+                    mime="image/jpeg",
+                    is_placeholder=False,
+                )
             except OSError:
                 logger.exception(
                     "[thumbnail][cache_read_failed] media_id=%s cache_path=%s",
@@ -84,9 +92,11 @@ class ThumbnailService:
                     cache_path,
                 )
 
+        is_placeholder = False
+        detail: str | None = None
         try:
             if record["kind"] == "pdf":
-                image = self._render_pdf_page(
+                image, is_placeholder, detail = self._render_pdf_page(
                     media_id=media_id,
                     path=path,
                     page_no=page_no,
@@ -114,12 +124,22 @@ class ThumbnailService:
                 "THUMB ERROR",
                 detail=Path(path).suffix or str(record.get("kind") or "media"),
             )
+            is_placeholder = True
+            detail = "build_failed"
 
         with io.BytesIO() as output:
             image.save(output, format="JPEG", quality=85, optimize=True)
             data = output.getvalue()
-        self._write_bytes_atomic(cache_path, data)
-        return data, "image/jpeg"
+        if is_placeholder:
+            self._remove_cache_file(cache_path)
+        else:
+            self._write_bytes_atomic(cache_path, data)
+        return ThumbnailBuildResult(
+            payload=data,
+            mime="image/jpeg",
+            is_placeholder=is_placeholder,
+            detail=detail,
+        )
 
     def render_pdf_page(
         self,
@@ -127,7 +147,7 @@ class ThumbnailService:
         *,
         page_no: int,
         width: int | None = None,
-    ) -> tuple[bytes, str]:
+    ) -> "ThumbnailBuildResult":
         if page_no < 1:
             raise bad_request("pageNo must be greater than or equal to 1")
 
@@ -143,8 +163,10 @@ class ThumbnailService:
             raise not_found("PDF file was not found")
 
         target_width = max(128, width or 1600)
+        is_placeholder = False
+        detail: str | None = None
         try:
-            image = self._render_pdf_page(
+            image, is_placeholder, detail = self._render_pdf_page(
                 media_id=media_id,
                 path=path,
                 page_no=page_no,
@@ -167,10 +189,17 @@ class ThumbnailService:
                 "PDF ERROR",
                 detail=f"page {page_no}",
             )
+            is_placeholder = True
+            detail = f"page {page_no}"
 
         with io.BytesIO() as output:
             image.save(output, format="PNG")
-            return output.getvalue(), "image/png"
+            return ThumbnailBuildResult(
+                payload=output.getvalue(),
+                mime="image/png",
+                is_placeholder=is_placeholder,
+                detail=detail,
+            )
 
     def get_pdf_page_count(self, media_id: str) -> int | None:
         try:
@@ -225,7 +254,7 @@ class ThumbnailService:
         page_no: int,
         width: int,
         height_hint: int | None = None,
-    ) -> Image.Image:
+    ) -> tuple[Image.Image, bool, str | None]:
         self._log_pdf_probe(media_id, path, context="render_pdf_page")
 
         pdf: pdfium.PdfDocument | None = None
@@ -238,7 +267,7 @@ class ThumbnailService:
             page_width, _ = page.get_size()
             scale = max(width / max(float(page_width), 1.0), 0.2)
             rendered = page.render(scale=scale)
-            return rendered.to_pil().convert("RGB")
+            return rendered.to_pil().convert("RGB"), False, None
         except ApiError:
             raise
         except pdfium.PdfiumError:
@@ -249,11 +278,16 @@ class ThumbnailService:
                 page_no,
                 width,
             )
-            return self._build_placeholder_image(
-                width,
-                height_hint or self._default_pdf_height(width),
-                "PDF ERROR",
-                detail=Path(path).suffix or "invalid pdf",
+            detail = Path(path).suffix or "invalid pdf"
+            return (
+                self._build_placeholder_image(
+                    width,
+                    height_hint or self._default_pdf_height(width),
+                    "PDF ERROR",
+                    detail=detail,
+                ),
+                True,
+                detail,
             )
         except Exception:
             logger.exception(
@@ -263,11 +297,16 @@ class ThumbnailService:
                 page_no,
                 width,
             )
-            return self._build_placeholder_image(
-                width,
-                height_hint or self._default_pdf_height(width),
-                "PDF ERROR",
-                detail="unexpected",
+            detail = "unexpected"
+            return (
+                self._build_placeholder_image(
+                    width,
+                    height_hint or self._default_pdf_height(width),
+                    "PDF ERROR",
+                    detail=detail,
+                ),
+                True,
+                detail,
             )
         finally:
             if rendered is not None:
@@ -418,6 +457,17 @@ class ThumbnailService:
                         exc_info=True,
                     )
 
+    def _remove_cache_file(self, path: Path) -> None:
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            logger.warning(
+                "[thumbnail][cache_remove_failed] path=%s",
+                path,
+                exc_info=True,
+            )
+
     def _close_pdf(
         self,
         pdf: pdfium.PdfDocument | None,
@@ -438,3 +488,11 @@ class ThumbnailService:
                 path,
                 exc_info=True,
             )
+
+
+@dataclass(frozen=True)
+class ThumbnailBuildResult:
+    payload: bytes
+    mime: str
+    is_placeholder: bool = False
+    detail: str | None = None
