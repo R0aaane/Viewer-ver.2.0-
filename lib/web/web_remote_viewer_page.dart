@@ -30,13 +30,18 @@ enum _WebRemoteSurface {
 
 enum _WebBrowserDisplayMode {
   list(
-    label: 'List',
-    compactLabel: 'List',
+    label: 'リスト',
+    compactLabel: '一覧',
     icon: Icons.view_agenda_outlined,
   ),
-  tiles(
-    label: '3 Tiles',
-    compactLabel: '3-Up',
+  tile(
+    label: 'タイル',
+    compactLabel: '1枚',
+    icon: Icons.crop_portrait_rounded,
+  ),
+  threeUp(
+    label: '3列',
+    compactLabel: '3列',
     icon: Icons.grid_view_rounded,
   );
 
@@ -134,9 +139,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_browserDisplayModePrefsKey)?.trim();
+      final normalizedRaw = raw == 'tiles' ? 'tile' : raw;
       final restored =
           _WebBrowserDisplayMode.values
-              .where((mode) => mode.name == raw)
+              .where((mode) => mode.name == normalizedRaw)
               .cast<_WebBrowserDisplayMode?>()
               .firstOrNull ??
           _WebBrowserDisplayMode.list;
@@ -393,8 +399,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         }
         _statusMessage =
             rawQuery.isEmpty
-                ? 'PDF list: ${filtered.length} items'
-                : 'PDF search: ${filtered.length} items';
+                ? 'PDF 一覧: ${filtered.length}件'
+                : 'PDF 検索: ${filtered.length}件';
       });
     } catch (error) {
       if (!mounted) return;
@@ -1109,8 +1115,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   selected: _surface == _WebRemoteSurface.home,
                   selectedTileColor: const Color(0xFF1B2D47),
                   leading: const Icon(Icons.home_outlined),
-                  title: const Text('Home'),
-                  subtitle: const Text('Recently added / unread / popular'),
+                  title: const Text('ホーム'),
+                  subtitle: const Text('新着 / 未読 / よく見る作品'),
                   onTap: () {
                     setState(() {
                       _surface = _WebRemoteSurface.home;
@@ -1121,8 +1127,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   selected: _surface == _WebRemoteSurface.browse,
                   selectedTileColor: const Color(0xFF1B2D47),
                   leading: const Icon(Icons.picture_as_pdf_outlined),
-                  title: const Text('Browse PDFs'),
-                  subtitle: const Text('Search and inspect every PDF'),
+                  title: const Text('PDF一覧'),
+                  subtitle: const Text('PDF を検索して詳細を確認'),
                   onTap: () {
                     setState(() {
                       _surface = _WebRemoteSurface.browse;
@@ -1204,26 +1210,26 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     return <_WebHomeSectionData>[
       _WebHomeSectionData(
-        title: 'Recently Added',
-        subtitle: 'New PDFs picked up by the library.',
+        title: '新着',
+        subtitle: '最近ライブラリに追加された PDF です。',
         icon: Icons.schedule_outlined,
         entries: recentlyAdded.take(12).toList(growable: false),
       ),
       _WebHomeSectionData(
-        title: 'Frequently Viewed',
-        subtitle: 'PDFs you open the most.',
+        title: 'よく見る作品',
+        subtitle: '閲覧回数の多い PDF をまとめています。',
         icon: Icons.local_fire_department_outlined,
         entries: frequentlyViewed.take(12).toList(growable: false),
       ),
       _WebHomeSectionData(
-        title: 'Lightly Viewed',
-        subtitle: 'PDFs you opened only a little.',
+        title: '少しだけ見た作品',
+        subtitle: '少数回だけ開いた PDF です。',
         icon: Icons.visibility_outlined,
         entries: lightlyViewed.take(12).toList(growable: false),
       ),
       _WebHomeSectionData(
-        title: 'Unread',
-        subtitle: 'PDFs you have not opened yet.',
+        title: '未読',
+        subtitle: 'まだ開いていない PDF です。',
         icon: Icons.mark_email_unread_outlined,
         entries: unread.take(12).toList(growable: false),
       ),
@@ -1240,8 +1246,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Widget _buildHomePane() {
     if (_client == null) {
       return _buildInfoCard(
-        'Home',
-        'Connect to the host API to load your PDF library overview.',
+        'ホーム',
+        'ホスト API に接続すると PDF ライブラリの概要を表示できます。',
         Colors.white70,
       );
     }
@@ -1291,11 +1297,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               ),
             )
           else if (_homeErrorMessage != null && entries.isEmpty)
-            _buildInfoCard('Home Error', _homeErrorMessage!, Colors.red.shade200)
+            _buildInfoCard('ホームエラー', _homeErrorMessage!, Colors.red.shade200)
           else if (entries.isEmpty)
             _buildInfoCard(
-              'No PDFs Yet',
-              'The connected Library does not have any PDFs to show on Home.',
+              'PDF がありません',
+              '接続中のライブラリに、ホームへ表示できる PDF がまだありません。',
               Colors.white70,
             )
           else
@@ -1390,8 +1396,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     required String? currentFolderRaw,
     required String? parentFolder,
   }) {
-    if (_browserDisplayMode == _WebBrowserDisplayMode.tiles) {
-      return _buildTileGrid(
+    if (_browserDisplayMode == _WebBrowserDisplayMode.tile) {
+      return _buildSingleTileList(
+        splitView,
+        currentFolderRaw: currentFolderRaw,
+        parentFolder: parentFolder,
+      );
+    }
+
+    if (_browserDisplayMode == _WebBrowserDisplayMode.threeUp) {
+      return _buildThreeUpGrid(
         splitView,
         currentFolderRaw: currentFolderRaw,
         parentFolder: parentFolder,
@@ -1422,7 +1436,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                           Icon(Icons.travel_explore, size: 52, color: Colors.white30),
                           SizedBox(height: 12),
                           Text(
-                            'No items found in this view.',
+                            'この表示では項目が見つかりません。',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white70),
                           ),
@@ -1457,7 +1471,70 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     );
   }
 
-  Widget _buildTileGrid(
+  Widget _buildSingleTileList(
+    bool splitView, {
+    required String? currentFolderRaw,
+    required String? parentFolder,
+  }) {
+    final compact = MediaQuery.of(context).size.width < 720;
+    final listPadding = EdgeInsets.all(compact ? 10 : 16);
+    final controls = _buildBrowserControls(
+      currentFolderRaw: currentFolderRaw,
+      parentFolder: parentFolder,
+    );
+
+    return RefreshIndicator(
+      onRefresh: _loadEntries,
+      child:
+          _entries.isEmpty && !_isLoading
+              ? ListView(
+                padding: listPadding,
+                children: <Widget>[
+                  controls,
+                  const SizedBox(height: 12),
+                  const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Column(
+                        children: <Widget>[
+                          Icon(Icons.travel_explore, size: 52, color: Colors.white30),
+                          SizedBox(height: 12),
+                          Text(
+                            'この表示では項目が見つかりません。',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              )
+              : ListView.separated(
+                padding: listPadding,
+                itemCount: _entries.length + 1,
+                separatorBuilder:
+                    (context, index) => SizedBox(height: compact ? 10 : 14),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return controls;
+                  }
+                  final entry = _entries[index - 1];
+                  final selected = _selectedEntry?.stableId == entry.stableId;
+                  return _EntrySingleTileCard(
+                    key: ValueKey<String>('tile-${entry.stableId}'),
+                    client: _client,
+                    entry: entry,
+                    selected: selected,
+                    onTap: () => _handleEntryTap(entry, splitView: splitView),
+                    folderName: _folderName,
+                  );
+                },
+              ),
+    );
+  }
+
+  Widget _buildThreeUpGrid(
     bool splitView, {
     required String? currentFolderRaw,
     required String? parentFolder,
@@ -1515,7 +1592,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                                   ),
                                   SizedBox(height: 12),
                                   Text(
-                                    'No items found in this view.',
+                                    'この表示では項目が見つかりません。',
                                     textAlign: TextAlign.center,
                                     style: TextStyle(color: Colors.white70),
                                   ),
@@ -1665,7 +1742,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   String _formatDateTime(DateTime? value) {
-    if (value == null) return 'N/A';
+    if (value == null) return '未取得';
     final local = value.toLocal();
     final two = (int number) => number.toString().padLeft(2, '0');
     return '${local.year}/${two(local.month)}/${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
@@ -1720,7 +1797,7 @@ class _WebHomeHeroCard extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: <Widget>[
                 const Text(
-                  'PDF Home',
+                  'PDF ホーム',
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
                 ),
                 if (isBusy)
@@ -1733,7 +1810,7 @@ class _WebHomeHeroCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Jump into recent, unread, and frequently opened PDFs from one place.',
+              '新着、未読、よく見る PDF をここからまとめて確認できます。',
               style: TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 16),
@@ -1742,22 +1819,22 @@ class _WebHomeHeroCard extends StatelessWidget {
               runSpacing: 10,
               children: <Widget>[
                 _WebHomeMetricChip(
-                  label: 'All PDFs',
+                  label: '総PDF数',
                   value: '$totalCount',
                   icon: Icons.picture_as_pdf_outlined,
                 ),
                 _WebHomeMetricChip(
-                  label: 'Unread',
+                  label: '未読',
                   value: '$unreadCount',
                   icon: Icons.mark_email_unread_outlined,
                 ),
                 _WebHomeMetricChip(
-                  label: 'Viewed',
+                  label: '既読',
                   value: '$viewedCount',
                   icon: Icons.visibility_outlined,
                 ),
                 _WebHomeMetricChip(
-                  label: 'Added 7d',
+                  label: '7日以内',
                   value: '$recentCount',
                   icon: Icons.schedule_outlined,
                 ),
@@ -1771,12 +1848,12 @@ class _WebHomeHeroCard extends StatelessWidget {
                 FilledButton.icon(
                   onPressed: onBrowseAll,
                   icon: const Icon(Icons.grid_view_rounded),
-                  label: const Text('Browse PDFs'),
+                  label: const Text('PDF一覧へ'),
                 ),
                 OutlinedButton.icon(
                   onPressed: isBusy ? null : () => onRefresh(),
                   icon: const Icon(Icons.refresh),
-                  label: const Text('Refresh Home'),
+                  label: const Text('ホームを更新'),
                 ),
               ],
             ),
@@ -1871,7 +1948,7 @@ class _WebHomeSection extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: Text(
-                'No PDFs match this section yet.',
+                'このセクションに一致する PDF はまだありません。',
                 style: const TextStyle(color: Colors.white60),
               ),
             ),
@@ -1956,16 +2033,16 @@ class _WebHomePdfCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 _WebHomeStatLine(
-                  label: 'Added',
+                  label: '追加',
                   value: _formatBrowseDateTime(addedAt),
                 ),
                 _WebHomeStatLine(
-                  label: 'Viewed',
+                  label: '閲覧',
                   value: '$viewCount',
                 ),
                 _WebHomeStatLine(
-                  label: 'Last',
-                  value: lastViewedAt == null ? 'Unread' : _formatBrowseDateTime(lastViewedAt),
+                  label: '最終',
+                  value: lastViewedAt == null ? '未読' : _formatBrowseDateTime(lastViewedAt),
                 ),
                 const Spacer(),
                 Align(
@@ -1973,7 +2050,7 @@ class _WebHomePdfCard extends StatelessWidget {
                   child: FilledButton.icon(
                     onPressed: () => onTap(),
                     icon: const Icon(Icons.menu_book_rounded),
-                    label: const Text('Open Viewer'),
+                    label: const Text('開く'),
                   ),
                 ),
               ],
@@ -2203,7 +2280,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.home_outlined),
-            title: Text('Library Root'),
+            title: Text('ライブラリ直下'),
           ),
         ),
       if (parentFolderAvailable)
@@ -2212,7 +2289,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.arrow_upward),
-            title: Text('Up Folder'),
+            title: Text('親フォルダ'),
           ),
         ),
       if (onImportUrl != null)
@@ -2221,7 +2298,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.download_outlined),
-            title: Text('Import URL'),
+            title: Text('URL取込'),
           ),
         ),
       if (onOrganizeFolder != null)
@@ -2230,7 +2307,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.auto_fix_high_outlined),
-            title: Text('Organize'),
+            title: Text('整理'),
           ),
         ),
       if (onRescan != null)
@@ -2239,7 +2316,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.refresh),
-            title: Text('Rescan'),
+            title: Text('再スキャン'),
           ),
         ),
     ];
@@ -2279,8 +2356,8 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                   onSubmitted: (_) => onSearch(),
                   decoration: InputDecoration(
                     isDense: true,
-                    labelText: 'Search',
-                    hintText: 'artist:"name"  type:pdf  #tag',
+                    labelText: '検索',
+                    hintText: 'artist:"作家名"  type:pdf  #tag',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: IconButton(
                       onPressed: isLoading ? null : onSearch,
@@ -2361,8 +2438,8 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                       textInputAction: TextInputAction.search,
                       onSubmitted: (_) => onSearch(),
                       decoration: const InputDecoration(
-                        labelText: 'Search',
-                        hintText: 'artist:"name"  type:pdf  #tag  untagged',
+                        labelText: '検索',
+                        hintText: 'artist:"作家名"  type:pdf  #tag  untagged',
                         prefixIcon: Icon(Icons.search),
                       ),
                     ),
@@ -2370,7 +2447,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                   const SizedBox(width: 12),
                   FilledButton(
                     onPressed: isLoading ? null : onSearch,
-                    child: const Text('Search'),
+                    child: const Text('検索'),
                   ),
                 ],
               ),
@@ -2399,16 +2476,16 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: onGoRoot,
                     icon: const Icon(Icons.home_outlined),
-                    label: const Text('Library Root'),
+                    label: const Text('ライブラリ直下'),
                   ),
                 if (parentFolderAvailable)
                   OutlinedButton.icon(
                     onPressed: onGoParent,
                     icon: const Icon(Icons.arrow_upward),
-                    label: const Text('Up Folder'),
+                    label: const Text('親フォルダ'),
                   ),
                 Text(
-                  '$itemCount items',
+                  '$itemCount 件',
                   style: const TextStyle(color: Colors.white60),
                 ),
               ],
@@ -2421,17 +2498,17 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                 FilledButton.icon(
                   onPressed: actionsBusy ? null : onImportUrl,
                   icon: const Icon(Icons.download_outlined),
-                  label: const Text('Import URL'),
+                  label: const Text('URL取込'),
                 ),
                 OutlinedButton.icon(
                   onPressed: actionsBusy ? null : onOrganizeFolder,
                   icon: const Icon(Icons.auto_fix_high_outlined),
-                  label: const Text('Organize'),
+                  label: const Text('整理'),
                 ),
                 OutlinedButton.icon(
                   onPressed: actionsBusy ? null : onRescan,
                   icon: const Icon(Icons.refresh),
-                  label: const Text('Rescan'),
+                  label: const Text('再スキャン'),
                 ),
               ],
             ),
@@ -2469,8 +2546,8 @@ class _PinnedBrowserSearchBar extends StatelessWidget {
                 onSubmitted: (_) => onSearch(),
                 decoration: InputDecoration(
                   isDense: compact,
-                  labelText: 'Search',
-                  hintText: 'artist:"name"  type:pdf  #tag  untagged',
+                  labelText: '検索',
+                  hintText: 'artist:"作家名"  type:pdf  #tag  untagged',
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon:
                       compact
@@ -2486,7 +2563,7 @@ class _PinnedBrowserSearchBar extends StatelessWidget {
               const SizedBox(width: 12),
               FilledButton(
                 onPressed: isLoading ? null : onSearch,
-                child: const Text('Search'),
+                child: const Text('検索'),
               ),
             ],
           ],
@@ -2498,7 +2575,7 @@ class _PinnedBrowserSearchBar extends StatelessWidget {
 
 String _formatBrowseDateTime(DateTime? value) {
   if (value == null) {
-    return 'N/A';
+    return '未取得';
   }
   final local = value.toLocal();
   final two = (int number) => number.toString().padLeft(2, '0');
@@ -2508,7 +2585,7 @@ String _formatBrowseDateTime(DateTime? value) {
 
 String _formatBrowseBytes(int? bytes) {
   if (bytes == null) {
-    return 'N/A';
+    return '未取得';
   }
   if (bytes < 1024) {
     return '$bytes B';
@@ -2582,7 +2659,7 @@ class _BrowserDisplayModeCard extends StatelessWidget {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
             Text(
-              'View Mode',
+              '表示モード',
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -2717,6 +2794,166 @@ class _EntryCard extends StatelessWidget {
                       ),
                     ],
                   ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EntrySingleTileCard extends StatelessWidget {
+  final WebRemoteApiClient? client;
+  final WebRemoteEntry entry;
+  final bool selected;
+  final VoidCallback onTap;
+  final String Function(String raw) folderName;
+
+  const _EntrySingleTileCard({
+    super.key,
+    required this.client,
+    required this.entry,
+    required this.selected,
+    required this.onTap,
+    required this.folderName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.of(context).size.width < 720;
+    final accent = _entryAccentColor(entry);
+    final borderColor =
+        selected
+            ? Color.lerp(accent, Colors.white, 0.24) ?? accent
+            : Colors.white.withOpacity(0.10);
+    final backgroundColor =
+        selected ? const Color(0xFF192231) : const Color(0xFF131922);
+    final folderLabel = folderName(entry.folderRaw);
+    final updatedLabel = _formatBrowseDateTime(entry.modifiedAt);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: EdgeInsets.all(compact ? 12 : 16),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: borderColor, width: selected ? 1.8 : 1),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: accent.withOpacity(selected ? 0.16 : 0.08),
+                blurRadius: selected ? 24 : 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              _RemoteThumbnail(
+                client: client,
+                entry: entry,
+                width: compact ? 122 : 164,
+                height: compact ? 174 : 228,
+                borderRadius: 18,
+                backgroundColor: const Color(0xFF0E141C),
+              ),
+              SizedBox(width: compact ? 12 : 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: <Widget>[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: accent.withOpacity(0.88),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Icon(
+                                Icons.picture_as_pdf_outlined,
+                                size: 14,
+                                color: Color(0xFF2E2323),
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'PDF',
+                                style: TextStyle(
+                                  color: Color(0xFF2E2323),
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Colors.white12),
+                          ),
+                          child: Text(
+                            folderLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _entryDisplayTitle(entry),
+                      maxLines: compact ? 3 : 4,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: compact ? 18 : 22,
+                        fontWeight: FontWeight.w800,
+                        height: 1.18,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      updatedLabel,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'クリックで詳細表示・閲覧へ進みます',
+                      style: TextStyle(
+                        color: accent.withOpacity(0.90),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2922,7 +3159,7 @@ class _EntryHeader extends StatelessWidget {
                 size: 18,
               ),
               label: Text(
-                entry.isFolder ? 'Folder' : entry.isPdf ? 'PDF' : 'Image',
+                entry.isFolder ? 'フォルダ' : entry.isPdf ? 'PDF' : '画像',
               ),
             ),
             if (!entry.isFolder)
@@ -2944,7 +3181,7 @@ class _EntryMeta extends StatelessWidget {
 
   String _formatDateTime(DateTime? value) {
     if (value == null) {
-      return 'N/A';
+      return '未取得';
     }
     final local = value.toLocal();
     final two = (int number) => number.toString().padLeft(2, '0');
@@ -2954,7 +3191,7 @@ class _EntryMeta extends StatelessWidget {
 
   String _formatBytes(int? bytes) {
     if (bytes == null) {
-      return 'N/A';
+      return '未取得';
     }
     if (bytes < 1024) {
       return '$bytes B';
@@ -3270,7 +3507,7 @@ class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
                   Icon(Icons.folder_open, size: 14, color: Color(0xFF352324)),
                   SizedBox(width: 4),
                   Text(
-                    'Folder',
+                    'フォルダ',
                     style: TextStyle(
                       color: Color(0xFF352324),
                       fontWeight: FontWeight.w800,
@@ -3597,7 +3834,7 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
             borderRadius: BorderRadius.circular(14),
           ),
           child: const Text(
-            'Loading metadata...',
+            'メタデータを読み込み中...',
             style: TextStyle(
               color: Color(0xFF4F393A),
               fontWeight: FontWeight.w700,
@@ -3616,10 +3853,10 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
                   ? Icons.picture_as_pdf_outlined
                   : Icons.image_outlined,
               widget.entry.isFolder
-                  ? 'Folder'
+                  ? 'フォルダ'
                   : widget.entry.isPdf
                   ? 'PDF'
-                  : 'Image',
+                  : '画像',
             ),
             _badge(Icons.folder_open_outlined, folderLabel),
           ],
@@ -3640,7 +3877,7 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
             borderRadius: BorderRadius.circular(14),
           ),
           child: const Text(
-            'Failed to load metadata',
+            'メタデータの読み込みに失敗しました',
             style: TextStyle(
               color: Color(0xFF4F393A),
               fontWeight: FontWeight.w700,
@@ -3654,7 +3891,7 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
           children: <Widget>[
             _badge(
               widget.entry.isPdf ? Icons.picture_as_pdf_outlined : Icons.image_outlined,
-              widget.entry.isPdf ? 'PDF' : 'Image',
+              widget.entry.isPdf ? 'PDF' : '画像',
             ),
             _badge(Icons.folder_open_outlined, folderLabel),
           ],
@@ -3712,25 +3949,25 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
         Wrap(spacing: 8, runSpacing: 8, children: badges),
         const SizedBox(height: 14),
         if (data.isFolder) ...<Widget>[
-          _row('Location', data.location, maxLines: 2),
-          _row('Updated', data.updatedAt),
+          _row('場所', data.location, maxLines: 2),
+          _row('更新', data.updatedAt),
           const SizedBox(height: 8),
           const Text(
-            'Tap to open this folder',
+            'タップするとこのフォルダを開きます',
             style: TextStyle(
               color: Color(0xFF6E5959),
               fontWeight: FontWeight.w600,
             ),
           ),
         ] else ...<Widget>[
-          _row('Creator', data.artist),
-          _row('Series', data.series),
-          _row('Type', data.mediaType),
-          _row('Language', data.language),
-          _row('Saved In', data.location, maxLines: 2),
+          _row('作家', data.artist),
+          _row('シリーズ', data.series),
+          _row('種別', data.mediaType),
+          _row('言語', data.language),
+          _row('保存先', data.location, maxLines: 2),
           const SizedBox(height: 8),
           const Text(
-            'Tags',
+            'タグ',
             style: TextStyle(
               color: Color(0xFF5D4747),
               fontWeight: FontWeight.w800,
@@ -3740,7 +3977,7 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
           const SizedBox(height: 8),
           if (data.tags.isEmpty)
             const Text(
-              'No tags yet',
+              'タグはまだありません',
               style: TextStyle(
                 color: Color(0xFF6E5959),
                 fontWeight: FontWeight.w600,
@@ -3851,10 +4088,10 @@ class _EntrySummaryData {
     return _EntrySummaryData(
       isFolder: true,
       subtitle: 'Open folder',
-      artist: 'N/A',
-      series: 'N/A',
-      mediaType: 'Folder',
-      language: 'N/A',
+      artist: '未設定',
+      series: '未設定',
+      mediaType: 'フォルダ',
+      language: '未設定',
       location: location.isEmpty ? entry.folderRaw : location,
       updatedAt: _formatBrowseDateTime(entry.modifiedAt),
       sizeLabel: '-',
@@ -3885,7 +4122,7 @@ class _EntrySummaryData {
       return out;
     }
 
-    String joinOrFallback(List<String> values, {String fallback = 'N/A'}) {
+    String joinOrFallback(List<String> values, {String fallback = '未設定'}) {
       if (values.isEmpty) {
         return fallback;
       }
@@ -3904,18 +4141,18 @@ class _EntrySummaryData {
       }
 
       if (hasLanguage(const <String>['japanese'])) {
-        return 'Japanese';
+        return '日本語';
       }
       if (hasLanguage(const <String>['english'])) {
-        return 'English';
+        return '英語';
       }
       if (hasLanguage(const <String>['chinese'])) {
-        return 'Chinese';
+        return '中国語';
       }
       if (hasLanguage(const <String>['korean'])) {
-        return 'Korean';
+        return '韓国語';
       }
-      return 'N/A';
+      return '未設定';
     }
 
     final artists = valuesFor(TagCategory.artist);
@@ -3951,7 +4188,7 @@ class _EntrySummaryData {
       series: joinOrFallback(seriesValues),
       mediaType:
           mediaTypeValues.firstOrNull ??
-          (entry.isPdf ? 'PDF' : entry.isImage ? 'Image' : 'Media'),
+          (entry.isPdf ? 'PDF' : entry.isImage ? '画像' : 'メディア'),
       language: resolveLanguage(tags),
       location: entry.folderRaw,
       updatedAt: _formatBrowseDateTime(meta.modifiedAt ?? entry.modifiedAt),
@@ -4111,14 +4348,14 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
 
   String _formatDateTime(DateTime? value) {
 
-    if (value == null) return 'N/A';
+    if (value == null) return '未取得';
     final local = value.toLocal();
     final two = (int number) => number.toString().padLeft(2, '0');
     return '${local.year}/${two(local.month)}/${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
   }
 
   String _formatBytes(int? bytes) {
-    if (bytes == null) return 'N/A';
+    if (bytes == null) return '未取得';
     if (bytes < 1024) return '$bytes B';
     const units = <String>['KB', 'MB', 'GB', 'TB'];
     var value = bytes.toDouble();
@@ -4193,7 +4430,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                         : Icons.image_outlined,
                     size: 18,
                   ),
-                  label: Text(widget.entry.isPdf ? 'PDF' : 'Image'),
+                  label: Text(widget.entry.isPdf ? 'PDF' : '画像'),
                 ),
                 Chip(
                   avatar: const Icon(Icons.folder_open, size: 18),
@@ -4347,7 +4584,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                     _detailRow('種別', widget.entry.isPdf ? 'PDF' : '画像'),
                     _detailRow('更新', _formatDateTime(meta?.modifiedAt ?? widget.entry.modifiedAt)),
                     _detailRow('サイズ', _formatBytes(meta?.sizeBytes ?? widget.entry.sizeBytes)),
-                    _detailRow('MIME', meta?.mimeType ?? 'N/A'),
+                    _detailRow('MIME', meta?.mimeType ?? '未取得'),
                   ],
                 );
               },
