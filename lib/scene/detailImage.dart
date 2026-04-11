@@ -1128,259 +1128,231 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     return Padding(
       padding: const EdgeInsets.all(12),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // 荳九↓陦ｨ遉ｺ縺吶ｋ繧ｰ繝ｪ繝・ラ縺ｮ鬮倥＆縲∫判髱｢35・・⊇縺ｩ繧貞盾辣ｧ
-          final gridHeight = (constraints.maxHeight * 0.35).clamp(180.0, 420.0);
-
-          return SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _infoRow('種別', item.kind == MediaKind.pdf ? 'PDF' : '画像'),
-                const SizedBox(height: 8),
-                if (_isPdf) _infoRow('ページ', '$_totalPages'),
-                const SizedBox(height: 8),
-                _infoRow('フォルダ', _basename(item.folderRaw)),
-                const SizedBox(height: 8),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(
-                      width: 64,
-                      child: Text(
-                        '名前',
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: SelectableText(
-                        ItemNameService.formatMediaTitle(
-                          item.displayName,
-                          kind: item.kind,
-                        ),
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ),
-                    if (_canRenameCurrentItem)
-                      IconButton(
-                        tooltip: '名前を変更',
-                        icon: const Icon(Icons.edit, color: Colors.white),
-                        onPressed: _renameCurrentItem,
-                      ),
-                  ],
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: _buildDetailHeader(item)),
+          if (_isPdf) ...[
+            const SliverToBoxAdapter(child: SizedBox(height: 12)),
+            _buildPdfThumbGrid(item),
+          ] else
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Text(
+                  '画像はサムネイル一覧がありません',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
                 ),
-
-                // Tags・医ち繧ｰ・・
-                const SizedBox(height: 10),
-                LayoutBuilder(
-                  builder: (context, c) {
-                    final narrow = c.maxWidth < 520;
-
-                    final categoryField = DropdownButtonHideUnderline(
-                      child: DropdownButton<TagCategory>(
-                        value: _selectedCategory,
-                        isDense: true,
-                        items: const [
-                          DropdownMenuItem(
-                            value: TagCategory.artist,
-                            child: Text('作家'),
-                          ),
-                          DropdownMenuItem(
-                            value: TagCategory.series,
-                            child: Text('シリーズ'),
-                          ),
-                          DropdownMenuItem(
-                            value: TagCategory.mediaType,
-                            child: Text('メディア種別'),
-                          ),
-                          DropdownMenuItem(
-                            value: TagCategory.character,
-                            child: Text('キャラ'),
-                          ),
-                          DropdownMenuItem(
-                            value: TagCategory.free,
-                            child: Text('自由'),
-                          ),
-                        ],
-                        onChanged: (v) async {
-                          if (v == null) return;
-                          setState(() => _selectedCategory = v);
-                          await _loadMasterTags(); // 笘・呵｣懊ｒ繧ｫ繝・ざ繝ｪ縺斐→縺ｫ譖ｴ譁ｰ
-                        },
-                      ),
-                    );
-
-                    final inputField = TextField(
-                      controller: _tagCtrl,
-                      decoration: const InputDecoration(
-                        hintText: 'タグ名を入力 / 空白は不可',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                      onSubmitted: (_) => _addTagFromUi(),
-                    );
-
-                    final addButton = FilledButton.icon(
-                      onPressed: _addTagFromUi,
-                      icon: const Icon(Icons.add),
-                      label: const Text('追加'),
-                    );
-
-                    if (!narrow) {
-                      return Row(
-                        children: [
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 180),
-                            child: categoryField,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(child: inputField),
-                          const SizedBox(width: 8),
-                          addButton,
-                        ],
-                      );
-                    }
-
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        categoryField,
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(child: inputField),
-                            const SizedBox(width: 8),
-                            addButton,
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-
-                const SizedBox(height: 10),
-
-                if (_tagsLoading)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8),
-                    child: LinearProgressIndicator(),
-                  ),
-
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final t in _tags)
-                      InputChip(
-                        label: Text(
-                          '#${t.tag.name}',
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        backgroundColor: _uiChip,
-                        deleteIconColor: Colors.white70,
-                        onDeleted: () => _removeTagFromUi(t),
-                      ),
-                  ],
-                ),
-
-                // --- Tags (繧ｫ繝・ざ繝ｪ蛟呵｣・ ---
-                const SizedBox(height: 14),
-
-                Row(
-                  children: [
-                    const Text('タグ候補（このカテゴリ）'),
-                    const SizedBox(width: 8),
-                    if (_masterLoading)
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: '再読み込み',
-                      onPressed: () =>
-                          _loadMasterTags(contains: _masterFilterCtrl.text),
-                      icon: const Icon(Icons.refresh),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 8),
-
-                SizedBox(
-                  height: 44,
-                  child: TextField(
-                    controller: _masterFilterCtrl,
-                    decoration: InputDecoration(
-                      prefixIcon: const Icon(Icons.search),
-                      hintText: '候補を絞り込み（部分一致）',
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                      suffixIcon: (_masterFilterCtrl.text.trim().isEmpty)
-                          ? null
-                          : IconButton(
-                              tooltip: 'クリア',
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                _masterFilterCtrl.clear();
-                                _loadMasterTags();
-                                setState(() {});
-                              },
-                            ),
-                    ),
-                    onChanged: (v) {
-                      _loadMasterTags(contains: v);
-                      setState(() {});
-                    },
-                  ),
-                ),
-
-                const SizedBox(height: 10),
-
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 180),
-                  child: SingleChildScrollView(
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final t in _masterTags)
-                          ActionChip(
-                            label: Text('#${t.tag.name}'),
-                            onPressed: () => _addExistingMasterTag(t),
-                          ),
-                        if (_masterTags.isEmpty && !_masterLoading)
-                          const Text('タグ候補がありません。追加するとここに表示されます。'),
-                      ],
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                // --- PDF繧偵せ繧ｯ繝ｭ繝ｼ繝ｫ蜀・↓蝗ｺ螳夐ｫ倥＆縺ｧ蜈･繧後ｋ ---
-                if (_isPdf)
-                  SizedBox(height: gridHeight, child: _buildPdfThumbGrid(item))
-                else
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Center(
-                      child: Text(
-                        '画像はサムネイル一覧がありません',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
-          );
-        },
+        ],
       ),
+    );
+  }
+
+  Widget _buildDetailHeader(MediaItem item) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _infoRow('種別', item.kind == MediaKind.pdf ? 'PDF' : '画像'),
+        const SizedBox(height: 8),
+        if (_isPdf) _infoRow('ページ', '$_totalPages'),
+        const SizedBox(height: 8),
+        _infoRow('フォルダ', _basename(item.folderRaw)),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(
+              width: 64,
+              child: Text('名前', style: TextStyle(color: Colors.white70)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SelectableText(
+                ItemNameService.formatMediaTitle(
+                  item.displayName,
+                  kind: item.kind,
+                ),
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+            if (_canRenameCurrentItem)
+              IconButton(
+                tooltip: '名前を変更',
+                icon: const Icon(Icons.edit, color: Colors.white),
+                onPressed: _renameCurrentItem,
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (context, c) {
+            final narrow = c.maxWidth < 520;
+
+            final categoryField = DropdownButtonHideUnderline(
+              child: DropdownButton<TagCategory>(
+                value: _selectedCategory,
+                isDense: true,
+                items: const [
+                  DropdownMenuItem(value: TagCategory.artist, child: Text('作家')),
+                  DropdownMenuItem(value: TagCategory.series, child: Text('シリーズ')),
+                  DropdownMenuItem(
+                    value: TagCategory.mediaType,
+                    child: Text('メディア種別'),
+                  ),
+                  DropdownMenuItem(
+                    value: TagCategory.character,
+                    child: Text('キャラ'),
+                  ),
+                  DropdownMenuItem(value: TagCategory.free, child: Text('自由')),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  setState(() => _selectedCategory = v);
+                  await _loadMasterTags();
+                },
+              ),
+            );
+
+            final inputField = TextField(
+              controller: _tagCtrl,
+              decoration: const InputDecoration(
+                hintText: 'タグ名を入力 / 空白は不可',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _addTagFromUi(),
+            );
+
+            final addButton = FilledButton.icon(
+              onPressed: _addTagFromUi,
+              icon: const Icon(Icons.add),
+              label: const Text('追加'),
+            );
+
+            if (!narrow) {
+              return Row(
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 180),
+                    child: categoryField,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: inputField),
+                  const SizedBox(width: 8),
+                  addButton,
+                ],
+              );
+            }
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                categoryField,
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: inputField),
+                    const SizedBox(width: 8),
+                    addButton,
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 10),
+        if (_tagsLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: LinearProgressIndicator(),
+          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final t in _tags)
+              InputChip(
+                label: Text(
+                  '#${t.tag.name}',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                backgroundColor: _uiChip,
+                deleteIconColor: Colors.white70,
+                onDeleted: () => _removeTagFromUi(t),
+              ),
+            if (_tags.isEmpty && !_tagsLoading)
+              const Text(
+                'タグはまだありません。',
+                style: TextStyle(color: Colors.white70),
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            const Text('タグ候補（このカテゴリ）'),
+            const SizedBox(width: 8),
+            if (_masterLoading)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            const Spacer(),
+            IconButton(
+              tooltip: '再読み込み',
+              onPressed: () => _loadMasterTags(contains: _masterFilterCtrl.text),
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 44,
+          child: TextField(
+            controller: _masterFilterCtrl,
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search),
+              hintText: '候補を絞り込み（部分一致）',
+              border: const OutlineInputBorder(),
+              isDense: true,
+              suffixIcon: (_masterFilterCtrl.text.trim().isEmpty)
+                  ? null
+                  : IconButton(
+                      tooltip: 'クリア',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _masterFilterCtrl.clear();
+                        _loadMasterTags();
+                        setState(() {});
+                      },
+                    ),
+            ),
+            onChanged: (v) {
+              _loadMasterTags(contains: v);
+              setState(() {});
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final t in _masterTags)
+              ActionChip(
+                label: Text('#${t.tag.name}'),
+                onPressed: () => _addExistingMasterTag(t),
+              ),
+            if (_masterTags.isEmpty && !_masterLoading)
+              const Text('タグ候補がありません。追加するとここに表示されます。'),
+          ],
+        ),
+      ],
     );
   }
 
@@ -1499,15 +1471,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Widget _buildPdfThumbGrid(MediaItem item) {
     final total = _totalPages;
 
-    return GridView.builder(
+    return SliverGrid(
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 220,
         mainAxisSpacing: 10,
         crossAxisSpacing: 10,
         childAspectRatio: 0.75,
       ),
-      itemCount: total,
-      itemBuilder: (context, i) {
+      delegate: SliverChildBuilderDelegate((context, i) {
         final page = i + 1;
 
         return InkWell(
@@ -1553,7 +1524,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             ),
           ),
         );
-      },
+      }, childCount: total),
     );
   }
 

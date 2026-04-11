@@ -8,10 +8,12 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 import '../models/tag.dart';
 import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
+import '../services/item_name_service.dart';
 import 'web_remote_api_client.dart';
 
 enum _WebMediaFilter {
@@ -24,6 +26,29 @@ enum _WebMediaFilter {
 enum _WebRemoteSurface {
   home,
   browse,
+}
+
+enum _WebBrowserDisplayMode {
+  list(
+    label: 'List',
+    compactLabel: 'List',
+    icon: Icons.view_agenda_outlined,
+  ),
+  tiles(
+    label: '3 Tiles',
+    compactLabel: '3-Up',
+    icon: Icons.grid_view_rounded,
+  );
+
+  final String label;
+  final String compactLabel;
+  final IconData icon;
+
+  const _WebBrowserDisplayMode({
+    required this.label,
+    required this.compactLabel,
+    required this.icon,
+  });
 }
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -41,6 +66,9 @@ class WebRemoteViewerPage extends StatefulWidget {
 }
 
 class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
+  static const String _browserDisplayModePrefsKey =
+      'prefs.webRemoteBrowserDisplayMode';
+
   late MetadataSettings _settings;
   late final TextEditingController _apiController;
   late final TextEditingController _tokenController;
@@ -62,6 +90,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   String? _homeErrorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.pdf;
   _WebRemoteSurface _surface = _WebRemoteSurface.home;
+  _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.list;
 
   @override
   void initState() {
@@ -70,6 +99,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     _apiController = TextEditingController(text: _settings.clientApiBaseUrl);
     _tokenController = TextEditingController(text: _settings.authToken ?? '');
     _searchController = TextEditingController();
+    unawaited(_restoreBrowserDisplayMode());
     if (_settings.clientApiBaseUrl.trim().isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _saveAndConnect(showSuccessMessage: false);
@@ -98,6 +128,50 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       authToken: tokenFromUri ?? settings.authToken,
       clearAuthToken: tokenFromUri != null && tokenFromUri.isEmpty,
     );
+  }
+
+  Future<void> _restoreBrowserDisplayMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_browserDisplayModePrefsKey)?.trim();
+      final restored =
+          _WebBrowserDisplayMode.values
+              .where((mode) => mode.name == raw)
+              .cast<_WebBrowserDisplayMode?>()
+              .firstOrNull ??
+          _WebBrowserDisplayMode.list;
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _browserDisplayMode = restored;
+      });
+    } catch (error) {
+      debugPrint(
+        '[WebRemoteViewerPage] Failed to restore browser display mode: $error',
+      );
+    }
+  }
+
+  Future<void> _persistBrowserDisplayMode(_WebBrowserDisplayMode mode) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_browserDisplayModePrefsKey, mode.name);
+    } catch (error) {
+      debugPrint(
+        '[WebRemoteViewerPage] Failed to persist browser display mode: $error',
+      );
+    }
+  }
+
+  void _setBrowserDisplayMode(_WebBrowserDisplayMode mode) {
+    if (_browserDisplayMode == mode) {
+      return;
+    }
+    setState(() {
+      _browserDisplayMode = mode;
+    });
+    unawaited(_persistBrowserDisplayMode(mode));
   }
 
   String _resolveInitialApiBaseUrl(
@@ -512,6 +586,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return name.isEmpty ? raw : name;
   }
 
+  int _browserGridColumnCount(double width) {
+    if (width >= 620) {
+      return 3;
+    }
+    if (width >= 400) {
+      return 2;
+    }
+    return 1;
+  }
+
   String? _parentFolder(String raw) {
     final context = _pathContext(raw);
     final parent = context.dirname(raw);
@@ -660,7 +744,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       MaterialPageRoute<void>(
         builder:
             (pageContext) => Scaffold(
-              appBar: AppBar(title: Text(entry.displayName)),
+              appBar: AppBar(title: Text(_entryDisplayTitle(entry))),
               body: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -1292,6 +1376,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           },
           showSearchField: false,
         ),
+        const SizedBox(height: 12),
+        _BrowserDisplayModeCard(
+          mode: _browserDisplayMode,
+          onChanged: _setBrowserDisplayMode,
+        ),
       ],
     );
   }
@@ -1301,6 +1390,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     required String? currentFolderRaw,
     required String? parentFolder,
   }) {
+    if (_browserDisplayMode == _WebBrowserDisplayMode.tiles) {
+      return _buildTileGrid(
+        splitView,
+        currentFolderRaw: currentFolderRaw,
+        parentFolder: parentFolder,
+      );
+    }
+
     final compact = MediaQuery.of(context).size.width < 720;
     final listPadding = EdgeInsets.all(compact ? 10 : 16);
     final controls = _buildBrowserControls(
@@ -1357,6 +1454,111 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   );
                 },
               ),
+    );
+  }
+
+  Widget _buildTileGrid(
+    bool splitView, {
+    required String? currentFolderRaw,
+    required String? parentFolder,
+  }) {
+    final compact = MediaQuery.of(context).size.width < 720;
+    final listPadding = EdgeInsets.all(compact ? 10 : 16);
+    final controls = _buildBrowserControls(
+      currentFolderRaw: currentFolderRaw,
+      parentFolder: parentFolder,
+    );
+
+    return RefreshIndicator(
+      onRefresh: _loadEntries,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final contentWidth =
+              (constraints.maxWidth - listPadding.horizontal).clamp(
+                0.0,
+                double.infinity,
+              );
+          final columns = _browserGridColumnCount(contentWidth.toDouble());
+
+          return CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: <Widget>[
+              SliverPadding(
+                padding: listPadding,
+                sliver: SliverToBoxAdapter(child: controls),
+              ),
+              if (_entries.isEmpty)
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    listPadding.left,
+                    12,
+                    listPadding.right,
+                    listPadding.bottom,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: _isLoading
+                        ? const Card(
+                            child: Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Center(child: CircularProgressIndicator()),
+                            ),
+                          )
+                        : const Card(
+                            child: Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Column(
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.travel_explore,
+                                    size: 52,
+                                    color: Colors.white30,
+                                  ),
+                                  SizedBox(height: 12),
+                                  Text(
+                                    'No items found in this view.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: Colors.white70),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    listPadding.left,
+                    12,
+                    listPadding.right,
+                    listPadding.bottom,
+                  ),
+                  sliver: SliverGrid(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      mainAxisSpacing: compact ? 12 : 16,
+                      crossAxisSpacing: compact ? 12 : 16,
+                      childAspectRatio: compact ? 0.60 : 0.62,
+                    ),
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final entry = _entries[index];
+                      final selected =
+                          _selectedEntry?.stableId == entry.stableId;
+                      return _EntryGridTileCard(
+                        key: ValueKey<String>('grid-${entry.stableId}'),
+                        client: _client,
+                        entry: entry,
+                        selected: selected,
+                        onTap: () => _handleEntryTap(entry, splitView: splitView),
+                        folderName: _folderName,
+                      );
+                    }, childCount: _entries.length),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -1740,7 +1942,7 @@ class _WebHomePdfCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  entry.displayName,
+                  _entryDisplayTitle(entry),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
@@ -2329,6 +2531,20 @@ String _filterLabel(_WebMediaFilter filter) {
   }
 }
 
+MediaKind _entryMediaKind(WebRemoteEntry entry) {
+  if (entry.isFolder) {
+    return MediaKind.folder;
+  }
+  return entry.isPdf ? MediaKind.pdf : MediaKind.image;
+}
+
+String _entryDisplayTitle(WebRemoteEntry entry) {
+  return ItemNameService.formatMediaTitle(
+    entry.displayName,
+    kind: _entryMediaKind(entry),
+  );
+}
+
 Color _entryAccentColor(WebRemoteEntry entry) {
   if (entry.isFolder) {
     return const Color(0xFF94A7BD);
@@ -2342,6 +2558,62 @@ Color _entryAccentColor(WebRemoteEntry entry) {
   ];
   final index = (entry.stableId.hashCode & 0x7fffffff) % palette.length;
   return palette[index];
+}
+
+class _BrowserDisplayModeCard extends StatelessWidget {
+  final _WebBrowserDisplayMode mode;
+  final ValueChanged<_WebBrowserDisplayMode> onChanged;
+
+  const _BrowserDisplayModeCard({
+    required this.mode,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.of(context).size.width < 720;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: EdgeInsets.all(compact ? 12 : 14),
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            Text(
+              'View Mode',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            SegmentedButton<_WebBrowserDisplayMode>(
+              showSelectedIcon: false,
+              segments:
+                  _WebBrowserDisplayMode.values
+                      .map(
+                        (candidate) => ButtonSegment<_WebBrowserDisplayMode>(
+                          value: candidate,
+                          icon: Icon(candidate.icon),
+                          label: Text(
+                            compact ? candidate.compactLabel : candidate.label,
+                          ),
+                        ),
+                      )
+                      .toList(growable: false),
+              selected: <_WebBrowserDisplayMode>{mode},
+              onSelectionChanged: (selection) {
+                final next = selection.firstOrNull;
+                if (next != null) {
+                  onChanged(next);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _EntryCard extends StatelessWidget {
@@ -2451,6 +2723,170 @@ class _EntryCard extends StatelessWidget {
   }
 }
 
+class _EntryGridTileCard extends StatelessWidget {
+  final WebRemoteApiClient? client;
+  final WebRemoteEntry entry;
+  final bool selected;
+  final VoidCallback onTap;
+  final String Function(String raw) folderName;
+
+  const _EntryGridTileCard({
+    super.key,
+    required this.client,
+    required this.entry,
+    required this.selected,
+    required this.onTap,
+    required this.folderName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _entryAccentColor(entry);
+    final borderColor =
+        selected
+            ? Color.lerp(accent, Colors.white, 0.22) ?? accent
+            : Colors.white.withOpacity(0.10);
+    final backgroundColor =
+        selected ? const Color(0xFF1B2330) : const Color(0xFF151A22);
+    final titleColor = selected ? const Color(0xFFFDF8F5) : Colors.white;
+    final subtitleColor =
+        selected ? Colors.white.withOpacity(0.80) : Colors.white60;
+    final folderLabel = folderName(entry.folderRaw);
+    final updatedLabel = _formatBrowseDateTime(entry.modifiedAt);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: borderColor, width: selected ? 1.8 : 1),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: accent.withOpacity(selected ? 0.16 : 0.08),
+                blurRadius: selected ? 24 : 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              AspectRatio(
+                aspectRatio: 0.74,
+                child: Stack(
+                  children: <Widget>[
+                    Positioned.fill(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return _RemoteThumbnail(
+                            client: client,
+                            entry: entry,
+                            width: constraints.maxWidth,
+                            height: constraints.maxHeight,
+                            borderRadius: 18,
+                            backgroundColor: const Color(0xFF0E141C),
+                          );
+                        },
+                      ),
+                    ),
+                    Positioned(
+                      left: 10,
+                      top: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.66),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(
+                              Icons.picture_as_pdf_outlined,
+                              size: 14,
+                              color: Colors.white,
+                            ),
+                            SizedBox(width: 4),
+                            Text(
+                              'PDF',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      bottom: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 7,
+                        ),
+                        decoration: BoxDecoration(
+                          color: accent.withOpacity(0.88),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          folderLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF2E2323),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _entryDisplayTitle(entry),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: titleColor,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  height: 1.2,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                updatedLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: subtitleColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _EntryHeader extends StatelessWidget {
   final WebRemoteEntry entry;
   final String Function(String raw) folderName;
@@ -2466,7 +2902,7 @@ class _EntryHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Text(
-          entry.displayName,
+          _entryDisplayTitle(entry),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
@@ -2617,7 +3053,7 @@ class _EntryTitleBand extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
       ),
       child: Text(
-        entry.displayName,
+        _entryDisplayTitle(entry),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
@@ -3502,7 +3938,7 @@ class _EntrySummaryData {
     final subtitle =
         artists.firstOrNull ??
         seriesValues.firstOrNull ??
-        (entry.folderRaw.trim().isEmpty ? entry.displayName : entry.folderRaw);
+        (entry.folderRaw.trim().isEmpty ? _entryDisplayTitle(entry) : entry.folderRaw);
     final pageInfo =
         entry.isPdf && meta.pageCount != null && meta.pageCount! > 0
             ? '${meta.pageCount} pages'
@@ -3742,7 +4178,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
         child: ListView(
           children: <Widget>[
             Text(
-              widget.entry.displayName,
+              _entryDisplayTitle(widget.entry),
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
@@ -4527,7 +4963,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             ],
             Expanded(
               child: Text(
-                widget.entry.displayName,
+                _entryDisplayTitle(widget.entry),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
