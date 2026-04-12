@@ -1393,8 +1393,10 @@ class RemoteMediaRepository implements MediaRepository {
     }
     final doc = await _openCachedPdf(item);
     final total = doc.pagesCount;
-    final current = page.clamp(1, total);
-    return _renderPdfPage(doc, current, maxWidth);
+    if (page < 1 || page > total) {
+      throw RangeError.range(page, 1, total, 'page');
+    }
+    return _renderPdfPage(doc, page, maxWidth);
   }
 
   @override

@@ -482,8 +482,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         _tagsLoading = false;
         _canDeleteFromLibrary =
             widget.repo.capabilities.canDelete && item.kind == MediaKind.pdf;
-        _totalPages = item.kind == MediaKind.pdf ? _totalPages : 1;
-        _page = item.kind == MediaKind.pdf ? _page.clamp(1, _totalPages) : 1;
+        _totalPages = 1;
+        _page = 1;
         _syncReaderFutures(item);
       });
     }

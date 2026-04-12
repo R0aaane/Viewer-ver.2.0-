@@ -1057,8 +1057,10 @@ class AndroidFolderRepository implements MediaRepository {
     }
     final doc = await _openPdf(item.id);
     final total = doc.pagesCount;
-    final p = page.clamp(1, total);
-    return _renderPage(item.id, doc, p, maxWidth);
+    if (page < 1 || page > total) {
+      throw RangeError.range(page, 1, total, 'page');
+    }
+    return _renderPage(item.id, doc, page, maxWidth);
   }
 
   @override

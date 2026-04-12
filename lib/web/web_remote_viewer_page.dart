@@ -4415,6 +4415,14 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
       });
       return;
     }
+    final totalPages = _pdfTotalPages;
+    if (totalPages != null && pageNo > totalPages) {
+      setState(() {
+        _pdfPageError = 'Page $pageNo is out of range for ${widget.entry.displayName}';
+        _loadingPdfPage = false;
+      });
+      return;
+    }
     setState(() {
       _loadingPdfPage = true;
       _pdfPageError = null;
@@ -4939,6 +4947,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         StateError('PDF を表示するための mediaId がありません'),
       );
     }
+    if (_pageCountReliable && pageNo > _totalPages) {
+      return Future<Uint8List>.error(
+        RangeError.range(pageNo, 1, _totalPages, 'pageNo'),
+      );
+    }
     final cachedBytes = _pageBytesCache[pageNo];
     if (cachedBytes != null) {
       return Future<Uint8List>.value(cachedBytes);
@@ -4989,6 +5002,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
   Future<bool> _tryOpenPage(int page) async {
     if (page < 1) {
+      return false;
+    }
+    if (_pageCountReliable && page > _totalPages) {
       return false;
     }
     if (page <= _totalPages) {

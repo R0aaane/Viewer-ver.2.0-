@@ -765,9 +765,11 @@ class WindowsFolderRepository implements MediaRepository {
 
     final doc = await _openPdf(item.id);
     final total = doc.pagesCount;
-    final p = page.clamp(1, total);
+    if (page < 1 || page > total) {
+      throw RangeError.range(page, 1, total, 'page');
+    }
 
-    return _renderPage(doc, p, maxWidth);
+    return _renderPage(doc, page, maxWidth);
   }
 
   @override
