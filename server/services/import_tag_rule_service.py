@@ -3,10 +3,12 @@
 _IMPORT_SITE_TAGS = {
     "hitomi": "hitomi",
     "kemono": "kemono",
+    "ddd-smart": "ddd-smart",
 }
 
 _IMPORT_SERVICE_SEGMENTS = {
     "hitomi",
+    "ddd-smart",
     "kemono",
     "coomer",
     "patreon",
@@ -77,9 +79,11 @@ def build_inferred_import_tags(
     for artist_tag in artist_tags:
         tags.append({"category": "artist", "name": artist_tag})
 
-    is_hitomi_context = "hitomi" in media_type_tag_names
+    allows_metadata_series = (
+        "hitomi" in media_type_tag_names or "ddd-smart" in media_type_tag_names
+    )
     series_tag = _infer_series_tag_from_parts(
-        is_hitomi_context=is_hitomi_context,
+        allows_metadata_series=allows_metadata_series,
         hitomi_metadata=hitomi_metadata,
         artist_tags=artist_tags,
     )
@@ -203,11 +207,11 @@ def _clean_artist_tag_candidate(segment: str | None) -> str | None:
 
 def _infer_series_tag_from_parts(
     *,
-    is_hitomi_context: bool,
+    allows_metadata_series: bool,
     hitomi_metadata: dict[str, object] | None,
     artist_tags: list[str],
 ) -> str | None:
-    if not is_hitomi_context:
+    if not allows_metadata_series:
         return None
 
     return _clean_series_tag_candidate(
@@ -277,7 +281,7 @@ def filter_hitomi_pdf_auto_tags(
 ) -> list[dict[str, str]]:
     filtered: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    has_hitomi_media_type = False
+    has_supported_media_type = False
 
     for tag in tags:
         category = str(tag.get("category") or "").strip()
@@ -290,18 +294,20 @@ def filter_hitomi_pdf_auto_tags(
         is_series = category == "series"
         is_character = category == "character"
         is_free = category == "free"
-        is_hitomi_media_type = category == "mediaType" and lowered_name == "hitomi"
+        is_supported_media_type = (
+            category == "mediaType" and lowered_name in {"hitomi", "ddd-smart"}
+        )
         if (
             not is_artist
             and not is_series
             and not is_character
             and not is_free
-            and not is_hitomi_media_type
+            and not is_supported_media_type
         ):
             continue
 
-        if is_hitomi_media_type:
-            has_hitomi_media_type = True
+        if is_supported_media_type:
+            has_supported_media_type = True
 
         key = (category, lowered_name)
         if key in seen:
@@ -309,8 +315,36 @@ def filter_hitomi_pdf_auto_tags(
         seen.add(key)
         filtered.append({"category": category, "name": name})
 
-    if not has_hitomi_media_type:
+    if not has_supported_media_type:
         return []
+    return filtered
+
+
+def filter_supported_url_import_image_tags(
+    tags: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    filtered: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for tag in tags:
+        category = str(tag.get("category") or "").strip()
+        name = str(tag.get("name") or "").strip()
+        if not category or not name:
+            continue
+
+        lowered_name = name.casefold()
+        is_supported_media_type = (
+            category == "mediaType" and lowered_name in {"hitomi", "ddd-smart"}
+        )
+        if not is_supported_media_type:
+            continue
+
+        key = (category, lowered_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered.append({"category": category, "name": name})
+
     return filtered
 
 

@@ -35,15 +35,24 @@ class LocalUrlDownloadResult {
 class _PreparedUrlImportSources {
   final List<String> launcherUrls;
   final List<String> directUrls;
+  final Map<String, HitomiGalleryMetadata> metadataByDirectUrl;
 
   const _PreparedUrlImportSources({
     this.launcherUrls = const <String>[],
     this.directUrls = const <String>[],
+    this.metadataByDirectUrl = const <String, HitomiGalleryMetadata>{},
   });
 
   bool get hasLauncherUrls => launcherUrls.isNotEmpty;
   bool get hasDirectUrls => directUrls.isNotEmpty;
   bool get isEmpty => launcherUrls.isEmpty && directUrls.isEmpty;
+}
+
+class _ResolvedDirectUrl {
+  final String url;
+  final HitomiGalleryMetadata? metadata;
+
+  const _ResolvedDirectUrl({required this.url, this.metadata});
 }
 
 class UrlImportDownloaderService {
@@ -86,6 +95,9 @@ class UrlImportDownloaderService {
     final launcherOptions = _copyOptionsWithoutUrlListFile(effectiveOptions);
     final directOptions = _copyOptionsForDirectDownload(effectiveOptions);
     final pendingDirectUrls = <String>[...prepared.directUrls];
+    final directMetadataByUrl = <String, HitomiGalleryMetadata>{
+      ...prepared.metadataByDirectUrl,
+    };
     final results = <LocalUrlDownloadResult>[];
     UrlImportDownloaderException? lastLauncherMissingError;
 
@@ -98,6 +110,7 @@ class UrlImportDownloaderService {
         urls: pendingDirectUrls,
         destinationFolder: destinationFolder,
         options: directOptions,
+        metadataByUrl: directMetadataByUrl,
         onProgress: _withProgressOffset(
           onProgress,
           completedOffset: completedOffset,
@@ -170,14 +183,19 @@ class UrlImportDownloaderService {
   ) async {
     final launcherUrls = <String>[];
     final directUrls = <String>[];
+    final metadataByDirectUrl = <String, HitomiGalleryMetadata>{};
     final launcherSeen = <String>{};
     final directSeen = <String>{};
 
     for (final rawUrl in await _collectInputUrls(sourceUrl, options)) {
       final resolvedDirectUrl = await _resolveSpecialDirectUrl(rawUrl);
       if (resolvedDirectUrl != null) {
-        if (directSeen.add(resolvedDirectUrl)) {
-          directUrls.add(resolvedDirectUrl);
+        if (directSeen.add(resolvedDirectUrl.url)) {
+          directUrls.add(resolvedDirectUrl.url);
+        }
+        if (resolvedDirectUrl.metadata != null) {
+          metadataByDirectUrl[resolvedDirectUrl.url] =
+              resolvedDirectUrl.metadata!;
         }
         continue;
       }
@@ -194,6 +212,7 @@ class UrlImportDownloaderService {
     return _PreparedUrlImportSources(
       launcherUrls: launcherUrls,
       directUrls: directUrls,
+      metadataByDirectUrl: metadataByDirectUrl,
     );
   }
 
@@ -227,8 +246,8 @@ class UrlImportDownloaderService {
     var importedCount = 0;
     var skippedCount = 0;
     var failedCount = 0;
-    var sawEvent = false;
     final hitomiMetadataByRelativePath = <String, HitomiGalleryMetadata>{};
+    var sawEvent = false;
 
     void appendLog(String line) {
       logLines.add(line);
@@ -326,6 +345,9 @@ class UrlImportDownloaderService {
 
     final prepared = await _prepareImportSources(sourceUrl, options);
     final urls = <String>[...prepared.directUrls, ...prepared.launcherUrls];
+    final metadataByUrl = <String, HitomiGalleryMetadata>{
+      ...prepared.metadataByDirectUrl,
+    };
     if (urls.isEmpty) {
       throw const UrlImportDownloaderException('直接ダウンロードできる URL が見つかりませんでした');
     }
@@ -340,6 +362,7 @@ class UrlImportDownloaderService {
     var importedCount = 0;
     var skippedCount = 0;
     var failedCount = 0;
+    final hitomiMetadataByRelativePath = <String, HitomiGalleryMetadata>{};
 
     void appendLog(String line) {
       logLines.add(line);
@@ -364,7 +387,8 @@ class UrlImportDownloaderService {
             totalBytes: urls.length,
             completedFiles: importedCount + skippedCount + failedCount,
             totalFiles: urls.length,
-            currentFileName: rawUrl, /*
+            currentFileName: rawUrl,
+            /*
             statusLabel: 'URL からダウンロードしています',
             */
             statusLabel: 'Downloading URL',
@@ -400,11 +424,13 @@ class UrlImportDownloaderService {
         }
 
         String fileName;
+        final importMetadata = metadataByUrl[rawUrl];
         try {
           fileName = _buildDownloadFileName(
             uri,
             response,
             sequence: importedCount + skippedCount + failedCount + 1,
+            metadata: importMetadata,
           );
         } on UrlImportDownloaderException catch (error) {
           failedCount++;
@@ -415,6 +441,12 @@ class UrlImportDownloaderService {
 
         final targetPath = p.join(destinationDir.path, fileName);
         final targetFile = File(targetPath);
+        final relativeKey = HitomiGalleryMetadata.normalizeRelativePathKey(
+          fileName,
+        );
+        if (relativeKey != null && importMetadata != null) {
+          hitomiMetadataByRelativePath[relativeKey] = importMetadata;
+        }
         if (await targetFile.exists() && !options.overwriteExistingFiles) {
           skippedCount++;
           appendLog('[skip] exists: $fileName');
@@ -450,7 +482,8 @@ class UrlImportDownloaderService {
             totalBytes: urls.length,
             completedFiles: completed,
             totalFiles: urls.length,
-            currentFileName: fileName, /*
+            currentFileName: fileName,
+            /*
             statusLabel: 'URL ダウンロードを処理しています',
             */
             statusLabel: 'Saved URL file',
@@ -466,6 +499,7 @@ class UrlImportDownloaderService {
       skippedCount: skippedCount,
       failedCount: failedCount,
       logLines: logLines,
+      hitomiMetadataByRelativePath: hitomiMetadataByRelativePath,
     );
   }
 
@@ -473,6 +507,8 @@ class UrlImportDownloaderService {
     required List<String> urls,
     required String destinationFolder,
     required UrlImportOptions options,
+    Map<String, HitomiGalleryMetadata> metadataByUrl =
+        const <String, HitomiGalleryMetadata>{},
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     if (options.hasFavoriteTargets) {
@@ -500,6 +536,7 @@ class UrlImportDownloaderService {
     var importedCount = 0;
     var skippedCount = 0;
     var failedCount = 0;
+    final hitomiMetadataByRelativePath = <String, HitomiGalleryMetadata>{};
 
     void appendLog(String line) {
       logLines.add(line);
@@ -524,7 +561,8 @@ class UrlImportDownloaderService {
             totalBytes: urls.length,
             completedFiles: importedCount + skippedCount + failedCount,
             totalFiles: urls.length,
-            currentFileName: rawUrl, /*
+            currentFileName: rawUrl,
+            /*
             statusLabel: 'URL 縺九ｉ繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨＠縺ｦ縺・∪縺・,
             */
             statusLabel: 'Downloading URL',
@@ -560,11 +598,13 @@ class UrlImportDownloaderService {
         }
 
         String fileName;
+        final importMetadata = metadataByUrl[rawUrl];
         try {
           fileName = _buildDownloadFileName(
             uri,
             response,
             sequence: importedCount + skippedCount + failedCount + 1,
+            metadata: importMetadata,
           );
         } on UrlImportDownloaderException catch (error) {
           failedCount++;
@@ -575,6 +615,12 @@ class UrlImportDownloaderService {
 
         final targetPath = p.join(destinationDir.path, fileName);
         final targetFile = File(targetPath);
+        final relativeKey = HitomiGalleryMetadata.normalizeRelativePathKey(
+          fileName,
+        );
+        if (relativeKey != null && importMetadata != null) {
+          hitomiMetadataByRelativePath[relativeKey] = importMetadata;
+        }
         if (await targetFile.exists() && !options.overwriteExistingFiles) {
           skippedCount++;
           appendLog('[skip] exists: $fileName');
@@ -610,7 +656,8 @@ class UrlImportDownloaderService {
             totalBytes: urls.length,
             completedFiles: completed,
             totalFiles: urls.length,
-            currentFileName: fileName, /*
+            currentFileName: fileName,
+            /*
             statusLabel: 'URL 繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨ｒ蜃ｦ逅・＠縺ｦ縺・∪縺・,
             */
             statusLabel: 'Saved URL file',
@@ -626,6 +673,7 @@ class UrlImportDownloaderService {
       skippedCount: skippedCount,
       failedCount: failedCount,
       logLines: logLines,
+      hitomiMetadataByRelativePath: hitomiMetadataByRelativePath,
     );
   }
 
@@ -667,7 +715,7 @@ class UrlImportDownloaderService {
     return urls;
   }
 
-  Future<String?> _resolveSpecialDirectUrl(String rawUrl) async {
+  Future<_ResolvedDirectUrl?> _resolveSpecialDirectUrl(String rawUrl) async {
     final uri = Uri.tryParse(rawUrl.trim());
     if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
       return null;
@@ -675,7 +723,7 @@ class UrlImportDownloaderService {
 
     final host = uri.host.toLowerCase();
     if (host == _dddSmartCdnHost && uri.path.toLowerCase().endsWith('.pdf')) {
-      return uri.toString();
+      return _ResolvedDirectUrl(url: uri.toString());
     }
     if (host != _dddSmartHost) {
       return null;
@@ -688,35 +736,38 @@ class UrlImportDownloaderService {
       return _resolveDddSmartPdfUrlFromShowPage(uri);
     }
     if (fileName.startsWith('dl-')) {
-      return _resolveDddSmartPdfUrlFromDownloadPage(uri);
+      final resolvedUrl = await _resolveDddSmartPdfUrlFromDownloadPage(uri);
+      return _ResolvedDirectUrl(url: resolvedUrl);
     }
 
     return null;
   }
 
-  Future<String> _resolveDddSmartPdfUrlFromShowPage(Uri showPageUri) async {
-    final html = await _downloadHtml(showPageUri); /*
-    final dlHref = _extractAnchorHrefByLabel(html, 'DLページ');
-    */
-    final dlHref = _extractAnchorHrefByLabel(
-      html,
-      'DL\u30da\u30fc\u30b8',
-    );
+  Future<_ResolvedDirectUrl> _resolveDddSmartPdfUrlFromShowPage(
+    Uri showPageUri,
+  ) async {
+    final html = await _downloadHtml(showPageUri);
+    final dlHref =
+        _extractAnchorHrefByLabel(html, 'DL\u30da\u30fc\u30b8') ??
+        _extractFirstDddSmartDownloadPageHref(html);
     if (dlHref == null) {
       throw UrlImportDownloaderException(
-        'ddd-smart DL繝壹・繧ｸ縺後ｦ九▽縺九ｊ縺ｾ縺帙ｓ: $showPageUri',
+        'ddd-smart DL page link was not found: $showPageUri',
       );
     }
-    return _resolveDddSmartPdfUrlFromDownloadPage(showPageUri.resolve(dlHref));
+    final resolvedUrl = await _resolveDddSmartPdfUrlFromDownloadPage(
+      showPageUri.resolve(dlHref),
+    );
+    return _ResolvedDirectUrl(
+      url: resolvedUrl,
+      metadata: _extractDddSmartMetadataFromShowPage(html, showPageUri),
+    );
   }
 
   Future<String> _resolveDddSmartPdfUrlFromDownloadPage(
     Uri downloadPageUri,
   ) async {
     final html = await _downloadHtml(downloadPageUri);
-    /* final pdfHref =
-        _extractAnchorHrefByLabel(html, 'PDFダウンロード') ??
-        _extractFirstPdfHref(html); */
     final pdfHref =
         _extractAnchorHrefByLabel(
           html,
@@ -725,10 +776,251 @@ class UrlImportDownloaderService {
         _extractFirstPdfHref(html);
     if (pdfHref == null) {
       throw UrlImportDownloaderException(
-        'ddd-smart PDF繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨′隕九▽縺九ｊ縺ｾ縺帙ｓ: $downloadPageUri',
+        'ddd-smart PDF link was not found: $downloadPageUri',
       );
     }
     return downloadPageUri.resolve(pdfHref).toString();
+  }
+
+  HitomiGalleryMetadata _extractDddSmartMetadataFromShowPage(
+    String html,
+    Uri showPageUri,
+  ) {
+    final scopedHtml = _extractDddSmartMetadataScope(html);
+    final title = _extractDddSmartTitle(scopedHtml);
+    final circles = _extractDddSmartKeywordsFromSection(
+      scopedHtml,
+      sectionLabels: const <String>['\u30b5\u30fc\u30af\u30eb'],
+      expectedType: '3',
+    );
+    return HitomiGalleryMetadata(
+      artists: circles,
+      groups: circles,
+      series: _extractDddSmartKeywordsFromSection(
+        scopedHtml,
+        sectionLabels: const <String>['\u539f\u4f5c'],
+        expectedType: '1',
+      ),
+      characters: _extractDddSmartKeywordsFromSection(
+        scopedHtml,
+        sectionLabels: const <String>['\u30ad\u30e3\u30e9\u30af\u30bf\u30fc'],
+        expectedType: '2',
+      ),
+      tags: _extractDddSmartKeywordsFromSection(
+        scopedHtml,
+        sectionLabels: const <String>['\u30bf\u30b0'],
+        expectedType: '4',
+      ),
+      title: title,
+      japaneseTitle: title,
+      mediaType: 'ddd-smart',
+      sourceUrl: showPageUri.toString(),
+      readerUrl: showPageUri.toString(),
+    );
+  }
+
+  String _extractDddSmartMetadataScope(String html) {
+    const markers = <String>[
+      'DL\u30da\u30fc\u30b8',
+      '\u4e00\u89a7\u8aad\u307f',
+      'PDF\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
+    ];
+    for (final marker in markers) {
+      final index = html.indexOf(marker);
+      if (index < 0) {
+        continue;
+      }
+      final start = index > 20000 ? index - 20000 : 0;
+      final end = index + 20000 < html.length ? index + 20000 : html.length;
+      return html.substring(start, end);
+    }
+    return html;
+  }
+
+  String? _extractDddSmartTitle(String html) {
+    final patterns = <RegExp>[
+      RegExp(r'<h1\b[^>]*>(.*?)</h1>', caseSensitive: false, dotAll: true),
+      RegExp(
+        r'''<h2\b[^>]*class\s*=\s*(?:"[^"]*\bcard-panel\b[^"]*"|'[^']*\bcard-panel\b[^']*')[^>]*>(.*?)</h2>''',
+        caseSensitive: false,
+        dotAll: true,
+      ),
+      RegExp(
+        r'''<div\b[^>]*class\s*=\s*(?:"[^"]*\bcard-panel\b[^"]*"|'[^']*\bcard-panel\b[^']*')[^>]*>(.*?)</div>''',
+        caseSensitive: false,
+        dotAll: true,
+      ),
+      RegExp(r'<title>(.*?)</title>', caseSensitive: false, dotAll: true),
+    ];
+    for (final pattern in patterns) {
+      for (final match in pattern.allMatches(html)) {
+        final text = _normalizeHtmlText(match.group(1) ?? '');
+        if (_looksLikeDddSmartTitle(text)) {
+          return text;
+        }
+      }
+    }
+    return null;
+  }
+
+  bool _looksLikeDddSmartTitle(String text) {
+    final normalized = text.trim();
+    if (normalized.isEmpty || normalized.length < 4) {
+      return false;
+    }
+
+    const blockedExact = <String>{
+      '\u539f\u4f5c',
+      '\u30ad\u30e3\u30e9',
+      '\u30ad\u30e3\u30e9\u30af\u30bf\u30fc',
+      '\u30b5\u30fc\u30af\u30eb',
+      '\u30bf\u30b0',
+      '\u66f4\u65b0\u65e5',
+      '\u767a\u884c\u65e5',
+      '\u30aa\u30b9\u30b9\u30e1\u5ea6',
+      '\u4e00\u89a7\u8aad\u307f',
+      'DL\u30da\u30fc\u30b8',
+      'PDF\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9',
+    };
+    if (blockedExact.contains(normalized)) {
+      return false;
+    }
+
+    return !normalized.contains('\u540c\u4eba\u3059\u307e\u30fc\u3068') &&
+        !normalized.contains('ddd-smart') &&
+        !normalized.contains('\u304b\u3089\u63a2\u3059') &&
+        !normalized.contains('\u4e00\u89a7') &&
+        !normalized.contains('\u30e9\u30f3\u30ad\u30f3\u30b0');
+  }
+
+  List<String> _extractDddSmartKeywordsFromSection(
+    String html, {
+    required List<String> sectionLabels,
+    required String expectedType,
+  }) {
+    final sectionHtml = _extractDddSmartSectionHtml(
+      html,
+      sectionLabels: sectionLabels,
+    );
+    if (sectionHtml == null) {
+      return const <String>[];
+    }
+    return _extractDddSmartKeywordsByType(
+      sectionHtml,
+      expectedType: expectedType,
+    );
+  }
+
+  String? _extractDddSmartSectionHtml(
+    String html, {
+    required List<String> sectionLabels,
+  }) {
+    var start = -1;
+    for (final label in sectionLabels) {
+      final index = html.indexOf(label);
+      if (index >= 0 && (start < 0 || index < start)) {
+        start = index;
+      }
+    }
+    if (start < 0) {
+      return null;
+    }
+
+    const boundaryLabels = <String>[
+      '\u539f\u4f5c',
+      '\u30ad\u30e3\u30e9',
+      '\u30ad\u30e3\u30e9\u30af\u30bf\u30fc',
+      '\u30b5\u30fc\u30af\u30eb',
+      '\u30bf\u30b0',
+      '\u66f4\u65b0\u65e5',
+      '\u767a\u884c\u65e5',
+      '\u30aa\u30b9\u30b9\u30e1\u5ea6',
+      '\u4e00\u89a7\u8aad\u307f',
+      'DL\u30da\u30fc\u30b8',
+    ];
+    var end = html.length;
+    for (final label in boundaryLabels) {
+      if (sectionLabels.contains(label)) {
+        continue;
+      }
+      final index = html.indexOf(label, start + 1);
+      if (index >= 0 && index < end) {
+        end = index;
+      }
+    }
+
+    final maxEnd = start + 4000;
+    if (end > maxEnd) {
+      end = maxEnd < html.length ? maxEnd : html.length;
+    }
+    if (end <= start) {
+      return null;
+    }
+    return html.substring(start, end);
+  }
+
+  List<String> _extractDddSmartKeywordsByType(
+    String html, {
+    required String expectedType,
+  }) {
+    final out = <String>[];
+    final seen = <String>{};
+    final anchorPattern = RegExp(
+      r"""<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>(.*?)</a>""",
+      caseSensitive: false,
+      dotAll: true,
+    );
+    for (final match in anchorPattern.allMatches(html)) {
+      final href = _decodeHtmlEntities(
+        (match.group(1) ?? match.group(2) ?? match.group(3) ?? '').trim(),
+      );
+      final keyword = _extractDddSmartKeywordFromHref(
+        href,
+        expectedType: expectedType,
+      );
+      if (keyword == null) {
+        continue;
+      }
+      final lowered = keyword.toLowerCase();
+      if (seen.add(lowered)) {
+        out.add(keyword);
+      }
+    }
+    return out;
+  }
+
+  String? _extractDddSmartKeywordFromHref(
+    String href, {
+    required String expectedType,
+  }) {
+    if (href.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(href);
+    if (uri == null || uri.path.isEmpty) {
+      return null;
+    }
+    final type = uri.queryParameters['type']?.trim();
+    final keyword = uri.queryParameters['keyword']?.trim();
+    if (type != expectedType || keyword == null || keyword.isEmpty) {
+      return null;
+    }
+    return keyword;
+  }
+
+  String? _extractFirstDddSmartDownloadPageHref(String html) {
+    final dlHrefPattern = RegExp(
+      r'''href\s*=\s*(?:"([^"]*\/dl-[^"]+)"|'([^']*\/dl-[^']+)'|([^\s>]*\/dl-[^\s>]+))''',
+      caseSensitive: false,
+      dotAll: true,
+    );
+    final match = dlHrefPattern.firstMatch(html);
+    final href = (match?.group(1) ?? match?.group(2) ?? match?.group(3) ?? '')
+        .trim();
+    if (href.isEmpty) {
+      return null;
+    }
+    return _decodeHtmlEntities(href);
   }
 
   Future<String> _downloadHtml(Uri uri) async {
@@ -804,35 +1096,34 @@ class UrlImportDownloaderService {
   }
 
   String _decodeHtmlEntities(String input) {
-    return input.replaceAllMapped(
-      RegExp(r'&(#x?[0-9a-fA-F]+|[a-zA-Z]+);'),
-      (match) {
-        final token = (match.group(1) ?? '').toLowerCase();
-        switch (token) {
-          case 'amp':
-            return '&';
-          case 'lt':
-            return '<';
-          case 'gt':
-            return '>';
-          case 'quot':
-            return '"';
-          case 'apos':
-            return "'";
-          case 'nbsp':
-            return ' ';
-        }
-        if (token.startsWith('#x')) {
-          final value = int.tryParse(token.substring(2), radix: 16);
-          return value == null ? match.group(0)! : String.fromCharCode(value);
-        }
-        if (token.startsWith('#')) {
-          final value = int.tryParse(token.substring(1));
-          return value == null ? match.group(0)! : String.fromCharCode(value);
-        }
-        return match.group(0)!;
-      },
-    );
+    return input.replaceAllMapped(RegExp(r'&(#x?[0-9a-fA-F]+|[a-zA-Z]+);'), (
+      match,
+    ) {
+      final token = (match.group(1) ?? '').toLowerCase();
+      switch (token) {
+        case 'amp':
+          return '&';
+        case 'lt':
+          return '<';
+        case 'gt':
+          return '>';
+        case 'quot':
+          return '"';
+        case 'apos':
+          return "'";
+        case 'nbsp':
+          return ' ';
+      }
+      if (token.startsWith('#x')) {
+        final value = int.tryParse(token.substring(2), radix: 16);
+        return value == null ? match.group(0)! : String.fromCharCode(value);
+      }
+      if (token.startsWith('#')) {
+        final value = int.tryParse(token.substring(1));
+        return value == null ? match.group(0)! : String.fromCharCode(value);
+      }
+      return match.group(0)!;
+    });
   }
 
   bool _supportsLauncherUrl(String rawUrl) {
@@ -972,6 +1263,7 @@ class UrlImportDownloaderService {
     Uri uri,
     HttpClientResponse response, {
     required int sequence,
+    HitomiGalleryMetadata? metadata,
   }) {
     final disposition = response.headers.value(_contentDispositionHeader);
     final fromDisposition = _decodeContentDispositionFileName(disposition);
@@ -984,9 +1276,26 @@ class UrlImportDownloaderService {
     );
 
     var fileName = _sanitizeFileName(preferred);
-    if (fileName == null) {
-      fileName = 'download_$sequence${inferredExtension ?? ''}';
+    final preferredExtension = MediaFileTypes.extensionOf(
+      fileName ?? preferred,
+    );
+    final titleFallbackExtension = preferredExtension.isNotEmpty
+        ? preferredExtension
+        : inferredExtension;
+    if (_shouldReplaceGenericDownloadFileName(fileName)) {
+      fileName =
+          _buildTitleBasedFileName(
+            metadata,
+            preferredExtension: titleFallbackExtension,
+          ) ??
+          fileName;
     }
+    fileName ??=
+        _buildTitleBasedFileName(
+          metadata,
+          preferredExtension: inferredExtension,
+        ) ??
+        'download_$sequence${inferredExtension ?? ''}';
 
     final currentExtension = MediaFileTypes.extensionOf(fileName);
     if (currentExtension.isEmpty && inferredExtension != null) {
@@ -1002,6 +1311,39 @@ class UrlImportDownloaderService {
       throw UrlImportDownloaderException('対応していないメディア URL です');
     }
     return fileName;
+  }
+
+  bool _shouldReplaceGenericDownloadFileName(String? fileName) {
+    if (fileName == null) {
+      return false;
+    }
+    final baseName = p.basenameWithoutExtension(fileName).trim().toLowerCase();
+    return baseName == 'all';
+  }
+
+  String? _buildTitleBasedFileName(
+    HitomiGalleryMetadata? metadata, {
+    String? preferredExtension,
+  }) {
+    if (metadata == null) {
+      return null;
+    }
+    final title =
+        _trimmedOrNull(metadata.japaneseTitle) ??
+        _trimmedOrNull(metadata.title) ??
+        _trimmedOrNull(metadata.englishTitle);
+    final sanitizedTitle = _sanitizeFileName(title ?? '');
+    if (sanitizedTitle == null) {
+      return null;
+    }
+    if (MediaFileTypes.extensionOf(sanitizedTitle).isNotEmpty) {
+      return sanitizedTitle;
+    }
+    final extension = (preferredExtension ?? '').trim();
+    if (extension.isEmpty) {
+      return sanitizedTitle;
+    }
+    return '$sanitizedTitle$extension';
   }
 
   String? _sanitizeFileName(String raw) {

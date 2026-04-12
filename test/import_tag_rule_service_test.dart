@@ -86,5 +86,62 @@ void main() {
         isTrue,
       );
     });
+
+    test('uses ddd-smart metadata for imported pdf auto tags', () {
+      final inferred = ImportTagRuleService.inferForImportedItem(
+        itemPath: r'C:\library\imports\sample.pdf',
+        rootFolderRaw: r'C:\library',
+        displayName: 'sample.pdf',
+        sourceUrls: const <String>[
+          'https://ddd-smart.net/doujinshi3/show-m.php?g=20260411&dir=0058&page=0',
+        ],
+        hitomiMetadata: const HitomiGalleryMetadata(
+          artists: <String>['CircleName'],
+          groups: <String>['CircleName'],
+          series: <String>['Original Series'],
+          characters: <String>['Heroine', 'Mage'],
+          tags: <String>['TwinTail', 'BigBreasts'],
+          mediaType: 'ddd-smart',
+        ),
+      );
+
+      expect(
+        inferred.tags
+            .where((tag) => tag.category == TagCategory.artist)
+            .map((tag) => tag.name)
+            .toSet(),
+        <String>{'CircleName'},
+      );
+      expect(
+        inferred.tags.any(
+          (tag) =>
+              tag.category == TagCategory.series &&
+              tag.name == 'Original Series',
+        ),
+        isTrue,
+      );
+      expect(
+        inferred.tags
+            .where((tag) => tag.category == TagCategory.character)
+            .map((tag) => tag.name)
+            .toSet(),
+        <String>{'Heroine', 'Mage'},
+      );
+      expect(
+        inferred.tags
+            .where((tag) => tag.category == TagCategory.free)
+            .map((tag) => tag.name)
+            .toSet(),
+        <String>{'TwinTail', 'BigBreasts'},
+      );
+      expect(
+        inferred.tags.any(
+          (tag) =>
+              tag.category == TagCategory.mediaType &&
+              tag.name == 'ddd-smart',
+        ),
+        isTrue,
+      );
+    });
   });
 }

@@ -5162,7 +5162,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         if (item.kind == MediaKind.folder || beforeItemIds.contains(item.id)) {
           continue;
         }
-        if (item.kind != MediaKind.pdf) {
+        if (item.kind != MediaKind.pdf && item.kind != MediaKind.image) {
           continue;
         }
 
@@ -5179,16 +5179,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             sourceUrls: sourceUrls,
             hitomiMetadata: hitomiMetadata,
           );
-          final hitomiPdfTags = _filterHitomiPdfAutoTags(inferred.tags);
-          if (hitomiPdfTags.isEmpty) {
+          final autoImportTags = _filterUrlImportAutoTagsForItem(
+            item.kind,
+            inferred.tags,
+          );
+          if (autoImportTags.isEmpty) {
             continue;
           }
 
-          await widget.tagService.addTagsToItem(item, hitomiPdfTags);
+          await widget.tagService.addTagsToItem(item, autoImportTags);
           taggedCount++;
           debugPrint(
             '[url-import] inferred tags for ${item.displayName}: '
-            '${hitomiPdfTags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')} '
+            '${autoImportTags.map((tag) => '${tag.category.name}:${tag.name}').join(', ')} '
             '(relative=${inferred.relativePathHint})',
           );
         } catch (error) {
@@ -6010,7 +6013,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         final isArtist = tag.category == TagCategory.artist;
         final isImportSourceMediaType =
             tag.category == TagCategory.mediaType &&
-            tag.name.toLowerCase() == 'hitomi';
+            _isImportPdfAutoTagMediaType(tag.name);
         if (!isArtist && !isImportSourceMediaType) {
           continue;
         }
@@ -6024,10 +6027,41 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return out;
   }
 
+  List<Tag> _filterUrlImportAutoTagsForItem(
+    MediaKind kind,
+    Iterable<Tag> tags,
+  ) {
+    if (kind == MediaKind.pdf) {
+      return _filterHitomiPdfAutoTags(tags);
+    }
+
+    final out = <Tag>[];
+    final seen = <String>{};
+    for (final tag in tags) {
+      final normalizedName = tag.name.trim();
+      if (normalizedName.isEmpty) {
+        continue;
+      }
+      final isSupportedMediaType =
+          tag.category == TagCategory.mediaType &&
+          _isImportPdfAutoTagMediaType(normalizedName);
+      if (!isSupportedMediaType) {
+        continue;
+      }
+
+      final key = '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
+      if (!seen.add(key)) {
+        continue;
+      }
+      out.add(Tag(name: normalizedName, category: tag.category));
+    }
+    return out;
+  }
+
   List<Tag> _filterHitomiPdfAutoTags(Iterable<Tag> tags) {
     final out = <Tag>[];
     final seen = <String>{};
-    var hasHitomiMediaType = false;
+    var hasSupportedMediaType = false;
 
     for (final tag in tags) {
       final normalizedName = tag.name.trim();
@@ -6039,19 +6073,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       final isSeries = tag.category == TagCategory.series;
       final isCharacter = tag.category == TagCategory.character;
       final isFree = tag.category == TagCategory.free;
-      final isHitomiMediaType =
+      final isSupportedMediaType =
           tag.category == TagCategory.mediaType &&
-          normalizedName.toLowerCase() == 'hitomi';
+          _isImportPdfAutoTagMediaType(normalizedName);
       if (!isArtist &&
           !isSeries &&
           !isCharacter &&
           !isFree &&
-          !isHitomiMediaType) {
+          !isSupportedMediaType) {
         continue;
       }
 
-      if (isHitomiMediaType) {
-        hasHitomiMediaType = true;
+      if (isSupportedMediaType) {
+        hasSupportedMediaType = true;
       }
 
       final key = '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
@@ -6061,10 +6095,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       out.add(Tag(name: normalizedName, category: tag.category));
     }
 
-    if (!hasHitomiMediaType) {
+    if (!hasSupportedMediaType) {
       return const <Tag>[];
     }
     return out;
+  }
+
+  bool _isImportPdfAutoTagMediaType(String name) {
+    final normalized = name.trim().toLowerCase();
+    return normalized == 'hitomi' || normalized == 'ddd-smart';
   }
 
   Future<MediaItem?> _buildGeneratedPdfItem(PdfExportResult created) async {

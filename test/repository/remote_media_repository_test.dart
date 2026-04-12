@@ -386,6 +386,69 @@ void main() {
           );
       },
     );
+
+    test(
+      'attaches ddd-smart media type to fallback-uploaded images',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient()
+          ..downloadUrlError = const RemoteMediaException(
+            "[stderr] ModuleNotFoundError: No module named 'requests'",
+          );
+        final localRepository = _RecordingLocalUrlImportRepository();
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: localRepository,
+        );
+
+        final result = await repository.importFromUrlIntoFolder(
+          const FolderHandle(r'C:\Users\Host\Documents\library'),
+          'https://ddd-smart.net/doujinshi3/show-m.php?g=20260411&dir=0058&page=0',
+        );
+
+        expect(result.importedCount, 1);
+        expect(apiClient.lastUploadFiles, hasLength(1));
+        expect(apiClient.lastUploadFiles.single.fileName, 'downloaded.jpg');
+        expect(
+          apiClient.lastUploadFiles.single.tags
+              .map((tag) => '${tag.category.name}:${tag.name}')
+              .toSet(),
+          contains('mediaType:ddd-smart'),
+        );
+      },
+    );
+
+    test(
+      'prefers client staging for ddd-smart urls even when host downloader is available',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient();
+        final localRepository = _RecordingLocalUrlImportRepository();
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: localRepository,
+        );
+
+        final result = await repository.importFromUrlIntoFolder(
+          const FolderHandle(r'C:\Users\Host\Documents\library'),
+          'https://ddd-smart.net/doujinshi3/show-m.php?g=20260411&dir=005&page=0',
+        );
+
+        expect(result.importedCount, 1);
+        expect(apiClient.lastDownloadUrlFolderRaw, isNull);
+        expect(
+          localRepository.lastImportedUrl,
+          'https://ddd-smart.net/doujinshi3/show-m.php?g=20260411&dir=005&page=0',
+        );
+        expect(apiClient.lastUploadFiles, hasLength(1));
+        expect(
+          apiClient.lastUploadFiles.single.tags
+              .map((tag) => '${tag.category.name}:${tag.name}')
+              .toSet(),
+          contains('mediaType:ddd-smart'),
+        );
+      },
+    );
   });
   group('RemoteMediaRepository.importItemsIntoFolder', () {
     test('forwards import metadata to the upload api', () async {
@@ -648,6 +711,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
       modifiedAt: DateTime.utc(2026, 3, 1),
       etag: 'etag',
       supportsRange: true,
+      pageCount: null,
     );
   }
 

@@ -50,6 +50,15 @@ class WebUrlImportSheet extends StatefulWidget {
 }
 
 class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
+  static const List<UrlImportCookieMode> _supportedCookieModes =
+      <UrlImportCookieMode>[
+        UrlImportCookieMode.auto,
+        UrlImportCookieMode.none,
+        UrlImportCookieMode.projectKemono,
+        UrlImportCookieMode.projectCoomer,
+        UrlImportCookieMode.projectCombined,
+      ];
+
   late final TextEditingController _urlController;
   final TextEditingController _favoriteUsersController =
       TextEditingController();
@@ -73,6 +82,11 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   UrlImportCookieMode _cookieMode = UrlImportCookieMode.auto;
   _ClipboardUrlCandidate? _clipboardCandidate;
 
+  UrlImportCookieMode get _effectiveCookieMode =>
+      _supportedCookieModes.contains(_cookieMode)
+      ? _cookieMode
+      : UrlImportCookieMode.auto;
+
   @override
   void initState() {
     super.initState();
@@ -89,7 +103,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   }
 
   UrlImportOptions get _options => UrlImportOptions(
-    cookieMode: _cookieMode,
+    cookieMode: _effectiveCookieMode,
     favoriteSites: <String>[
       if (_siteKemono) 'kemono',
       if (_siteCoomer) 'coomer',
@@ -295,7 +309,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   }
 
   String _detailsSummary() {
-    final parts = <String>[_cookieModeLabel(_cookieMode)];
+    final parts = <String>[_cookieModeLabel(_effectiveCookieMode)];
     if (_favoritePosts) {
       parts.add('favorite posts');
     }
@@ -574,19 +588,13 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<UrlImportCookieMode>(
-          value: _cookieMode,
+          value: _effectiveCookieMode,
           decoration: _fieldDecoration(
             context: context,
             labelText: 'Cookie モード',
           ),
           items:
-              const <UrlImportCookieMode>[
-                    UrlImportCookieMode.auto,
-                    UrlImportCookieMode.none,
-                    UrlImportCookieMode.projectKemono,
-                    UrlImportCookieMode.projectCoomer,
-                    UrlImportCookieMode.projectCombined,
-                  ]
+              _supportedCookieModes
                   .map(
                     (mode) => DropdownMenuItem<UrlImportCookieMode>(
                       value: mode,

@@ -826,6 +826,19 @@ class RemoteMediaRepository implements MediaRepository {
     }
 
     final resolvedFolder = await _resolveUrlImportFolder(folder);
+    if (_shouldPreferClientUrlImport(trimmedUrl, effectiveOptions)) {
+      debugPrint(
+        '[URL-IMPORT][REMOTE] preferring client staging for supported direct URL '
+        'folder=${resolvedFolder.raw} url=$trimmedUrl',
+      );
+      return _importFromUrlViaClientStaging(
+        resolvedFolder,
+        trimmedUrl,
+        importMetadata: importMetadata,
+        options: effectiveOptions,
+        onProgress: onProgress,
+      );
+    }
     try {
       return await _client.downloadUrl(
         folderRaw: resolvedFolder.raw,
@@ -882,6 +895,23 @@ class RemoteMediaRepository implements MediaRepository {
       return getAppLibraryFolder();
     }
     return folder;
+  }
+
+  bool _shouldPreferClientUrlImport(
+    String sourceUrl,
+    UrlImportOptions options,
+  ) {
+    for (final url in options.collectSourceUrls(sourceUrl)) {
+      final uri = Uri.tryParse(url.trim());
+      if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+        continue;
+      }
+      final host = uri.host.toLowerCase();
+      if (host == 'ddd-smart.net' || host == 'cdn.ddd-smart.net') {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool _shouldFallbackToClientUrlImport(RemoteMediaException error) {
@@ -984,18 +1014,20 @@ class RemoteMediaRepository implements MediaRepository {
             relativePath,
             hitomiMetadataByRelativePath: hitomiMetadataByRelativePath,
           );
-          final inferredTags = item.kind == MediaKind.pdf
-              ? ImportTagRuleService.inferForImportedItem(
-                  itemPath: item.id,
-                  rootFolderRaw: stagingRoot,
-                  displayName: item.displayName,
-                  sourceUrls: sourceUrls,
-                  hitomiMetadata: hitomiMetadata,
-                ).tags
-              : const <Tag>[];
+          final inferredTags = ImportTagRuleService.inferForImportedItem(
+            itemPath: item.id,
+            rootFolderRaw: stagingRoot,
+            displayName: item.displayName,
+            sourceUrls: sourceUrls,
+            hitomiMetadata: hitomiMetadata,
+          ).tags;
+          final autoImportTags = _filterUrlImportAutoTagsForItem(
+            item.kind,
+            inferredTags,
+          );
           final mergedTags = _mergeUploadTags(
             item.tags,
-            inferredTags,
+            autoImportTags,
             const <Tag>[],
             const <Tag>[],
           );
@@ -1010,6 +1042,55 @@ class RemoteMediaRepository implements MediaRepository {
           );
         })
         .toList(growable: false);
+  }
+
+  List<Tag> _filterUrlImportAutoTagsForItem(
+    MediaKind kind,
+    Iterable<Tag> tags,
+  ) {
+    final out = <Tag>[];
+    final seen = <String>{};
+    var hasSupportedMediaType = false;
+
+    for (final tag in tags) {
+      final normalizedName = tag.name.trim();
+      if (normalizedName.isEmpty) {
+        continue;
+      }
+
+      final isSupportedMediaType =
+          tag.category == TagCategory.mediaType &&
+          _isSupportedUrlImportMediaType(normalizedName);
+      final isAllowedForPdf =
+          kind == MediaKind.pdf &&
+          (tag.category == TagCategory.artist ||
+              tag.category == TagCategory.series ||
+              tag.category == TagCategory.character ||
+              tag.category == TagCategory.free);
+      if (!isSupportedMediaType && !isAllowedForPdf) {
+        continue;
+      }
+
+      if (isSupportedMediaType) {
+        hasSupportedMediaType = true;
+      }
+
+      final key = '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
+      if (!seen.add(key)) {
+        continue;
+      }
+      out.add(Tag(name: normalizedName, category: tag.category));
+    }
+
+    if (!hasSupportedMediaType) {
+      return const <Tag>[];
+    }
+    return out;
+  }
+
+  bool _isSupportedUrlImportMediaType(String name) {
+    final normalized = name.trim().toLowerCase();
+    return normalized == 'hitomi' || normalized == 'ddd-smart';
   }
 
   HitomiGalleryMetadata? _lookupHitomiMetadataForRelativePath(

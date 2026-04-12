@@ -20,10 +20,12 @@ class ImportTagRuleService {
   static const Map<String, String> _siteTags = <String, String>{
     'hitomi': 'hitomi',
     'kemono': 'kemono',
+    'ddd-smart': 'ddd-smart',
   };
 
   static const Set<String> _serviceSegments = <String>{
     'hitomi',
+    'ddd-smart',
     'kemono',
     'coomer',
     'patreon',
@@ -147,9 +149,11 @@ class ImportTagRuleService {
         mediaTypeTags.add(entry.value);
       }
     }
-    final isHitomiContext = mediaTypeTags.contains('hitomi');
+    final allowsMetadataSeries =
+        mediaTypeTags.contains('hitomi') ||
+        mediaTypeTags.contains('ddd-smart');
     final seriesTag = _inferSeriesTagFromParts(
-      isHitomiContext: isHitomiContext,
+      allowsMetadataSeries: allowsMetadataSeries,
       hitomiMetadata: hitomiMetadata,
       artistTags: artistTags,
     );
@@ -342,11 +346,11 @@ class ImportTagRuleService {
   }
 
   static String? _inferSeriesTagFromParts({
-    required bool isHitomiContext,
+    required bool allowsMetadataSeries,
     HitomiGalleryMetadata? hitomiMetadata,
     List<String> artistTags = const <String>[],
   }) {
-    if (!isHitomiContext) {
+    if (!allowsMetadataSeries) {
       return null;
     }
 

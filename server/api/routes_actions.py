@@ -24,7 +24,11 @@ from server.models.dto import (
     RescanRequest,
 )
 from server.services.auth_service import require_bearer_token
-from server.services.import_tag_rule_service import build_inferred_import_tags, filter_hitomi_pdf_auto_tags
+from server.services.import_tag_rule_service import (
+    build_inferred_import_tags,
+    filter_hitomi_pdf_auto_tags,
+    filter_supported_url_import_image_tags,
+)
 from server.services.url_download_service import UrlDownloadError, UrlDownloadOptions
 
 
@@ -487,13 +491,16 @@ async def download_url(
                 relative_path_hint,
                 download_result.hitomi_metadata_by_relative_path,
             )
+            inferred_candidates = build_inferred_import_tags(
+                relative_path=relative_path_hint,
+                source_urls=source_urls,
+                hitomi_metadata=hitomi_metadata,
+            )
             if normalized_extension(saved_path) == ".pdf":
-                inferred_tags = filter_hitomi_pdf_auto_tags(
-                    build_inferred_import_tags(
-                        relative_path=relative_path_hint,
-                        source_urls=source_urls,
-                        hitomi_metadata=hitomi_metadata,
-                    )
+                inferred_tags = filter_hitomi_pdf_auto_tags(inferred_candidates)
+            else:
+                inferred_tags = filter_supported_url_import_image_tags(
+                    inferred_candidates
                 )
             merged_tags = _merge_import_tags(common_tags, inferred_tags)
             if merged_tags:
