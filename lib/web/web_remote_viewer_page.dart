@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,6 +14,7 @@ import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
 import 'web_remote_api_client.dart';
+import 'web_url_import_sheet.dart';
 
 enum _WebMediaFilter {
   pdf('PDF');
@@ -23,27 +23,12 @@ enum _WebMediaFilter {
   const _WebMediaFilter(this.label);
 }
 
-enum _WebRemoteSurface {
-  home,
-  browse,
-}
+enum _WebRemoteSurface { home, browse }
 
 enum _WebBrowserDisplayMode {
-  list(
-    label: 'リスト',
-    compactLabel: '一覧',
-    icon: Icons.view_agenda_outlined,
-  ),
-  tile(
-    label: 'タイル',
-    compactLabel: '1枚',
-    icon: Icons.crop_portrait_rounded,
-  ),
-  threeUp(
-    label: '3列',
-    compactLabel: '3列',
-    icon: Icons.grid_view_rounded,
-  );
+  list(label: 'リスト', compactLabel: '一覧', icon: Icons.view_agenda_outlined),
+  tile(label: 'タイル', compactLabel: '1枚', icon: Icons.crop_portrait_rounded),
+  threeUp(label: '3列', compactLabel: '3列', icon: Icons.grid_view_rounded);
 
   final String label;
   final String compactLabel;
@@ -317,10 +302,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (!mounted) return;
       setState(() {
         _client = client;
-        _folders =
-            libraryRoot == null
-                ? const <WebRemoteFolder>[]
-                : <WebRemoteFolder>[libraryRoot];
+        _folders = libraryRoot == null
+            ? const <WebRemoteFolder>[]
+            : <WebRemoteFolder>[libraryRoot];
         _libraryRoot = libraryRoot;
         _selectedFolderRaw = selectedFolder;
         _surface = _WebRemoteSurface.home;
@@ -375,14 +359,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       final rawQuery = _searchController.text.trim();
       final fetched =
           rawQuery.isEmpty && reuseHomeOnEmptyQuery && _homeEntries.isNotEmpty
-              ? _sortedPdfEntries(_homeEntries)
-              : _sortedPdfEntries(
-                await _loadPdfEntries(
-                  client,
-                  folderRaw: folderRaw,
-                  rawQuery: rawQuery,
-                ),
-              );
+          ? _sortedPdfEntries(_homeEntries)
+          : _sortedPdfEntries(
+              await _loadPdfEntries(
+                client,
+                folderRaw: folderRaw,
+                rawQuery: rawQuery,
+              ),
+            );
       final filtered = _applyFilter(fetched);
       WebRemoteEntry? nextSelected = _selectedEntry;
       if (nextSelected != null) {
@@ -402,10 +386,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           _homeEntries = filtered;
           _homeErrorMessage = null;
         }
-        _statusMessage =
-            rawQuery.isEmpty
-                ? 'PDF 一覧: ${filtered.length}件'
-                : 'PDF 検索: ${filtered.length}件';
+        _statusMessage = rawQuery.isEmpty
+            ? 'PDF 一覧: ${filtered.length}件'
+            : 'PDF 検索: ${filtered.length}件';
       });
     } catch (error) {
       if (!mounted) return;
@@ -432,7 +415,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (modifiedCompare != 0) {
         return modifiedCompare;
       }
-      return left.displayName.toLowerCase().compareTo(right.displayName.toLowerCase());
+      return left.displayName.toLowerCase().compareTo(
+        right.displayName.toLowerCase(),
+      );
     });
     return sorted;
   }
@@ -529,10 +514,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
     return entries
         .map(
-          (candidate) =>
-              candidate.stableId == stableId
-                  ? candidate.copyWith(stats: stats)
-                  : candidate,
+          (candidate) => candidate.stableId == stableId
+              ? candidate.copyWith(stats: stats)
+              : candidate,
         )
         .toList(growable: false);
   }
@@ -635,17 +619,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return List<int?>.generate(totalPages, (index) => index + 1);
     }
 
-    final anchors =
-        <int>{
-          1,
-          2,
-          currentPage - 1,
-          currentPage,
-          currentPage + 1,
-          totalPages - 1,
-          totalPages,
-        }.where((page) => page >= 1 && page <= totalPages).toList()
-          ..sort();
+    final anchors = <int>{
+      1,
+      2,
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+      totalPages - 1,
+      totalPages,
+    }.where((page) => page >= 1 && page <= totalPages).toList()..sort();
 
     final out = <int?>[];
     for (final page in anchors) {
@@ -676,14 +658,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     Widget pageButton(int page) {
       final selected = page == currentPage;
-      final onPressed =
-          selected
-              ? null
-              : () {
-                  setState(() {
-                    _threeUpPage = page;
-                  });
-                };
+      final onPressed = selected
+          ? null
+          : () {
+              setState(() {
+                _threeUpPage = page;
+              });
+            };
       if (selected) {
         return FilledButton(
           onPressed: onPressed,
@@ -718,14 +699,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           runSpacing: compact ? 6 : 8,
           children: <Widget>[
             OutlinedButton.icon(
-              onPressed:
-                  currentPage > 1
-                      ? () {
-                          setState(() {
-                            _threeUpPage = currentPage - 1;
-                          });
-                        }
-                      : null,
+              onPressed: currentPage > 1
+                  ? () {
+                      setState(() {
+                        _threeUpPage = currentPage - 1;
+                      });
+                    }
+                  : null,
               icon: const Icon(Icons.chevron_left),
               label: const Text('前'),
             ),
@@ -743,14 +723,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                     )
                   : pageButton(item),
             OutlinedButton.icon(
-              onPressed:
-                  currentPage < totalPages
-                      ? () {
-                          setState(() {
-                            _threeUpPage = currentPage + 1;
-                          });
-                        }
-                      : null,
+              onPressed: currentPage < totalPages
+                  ? () {
+                      setState(() {
+                        _threeUpPage = currentPage + 1;
+                      });
+                    }
+                  : null,
               icon: const Icon(Icons.chevron_right),
               label: const Text('次'),
             ),
@@ -848,8 +827,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
     final separator =
         rootRaw.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(rootRaw)
-            ? '\\'
-            : '/';
+        ? '\\'
+        : '/';
     return normalizedRaw.startsWith('$normalizedRoot$separator');
   }
 
@@ -875,9 +854,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     final libraryRoot = _libraryRoot;
     final trimmed = folderRaw?.trim();
     if (libraryRoot == null) {
-      return trimmed == null || trimmed.isEmpty ? 'Library' : _folderName(trimmed);
+      return trimmed == null || trimmed.isEmpty
+          ? 'Library'
+          : _folderName(trimmed);
     }
-    if (trimmed == null || trimmed.isEmpty || _isSamePath(trimmed, libraryRoot.raw)) {
+    if (trimmed == null ||
+        trimmed.isEmpty ||
+        _isSamePath(trimmed, libraryRoot.raw)) {
       return libraryRoot.displayName.trim().isEmpty
           ? _folderName(libraryRoot.raw)
           : libraryRoot.displayName.trim();
@@ -891,10 +874,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         .split(RegExp(r'[\\/]'))
         .where((part) => part.trim().isNotEmpty)
         .toList(growable: false);
-    final rootLabel =
-        libraryRoot.displayName.trim().isEmpty
-            ? _folderName(libraryRoot.raw)
-            : libraryRoot.displayName.trim();
+    final rootLabel = libraryRoot.displayName.trim().isEmpty
+        ? _folderName(libraryRoot.raw)
+        : libraryRoot.displayName.trim();
     if (parts.isEmpty) {
       return rootLabel;
     }
@@ -922,30 +904,28 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     if (!mounted || client == null) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder:
-            (pageContext) => Scaffold(
-              appBar: AppBar(title: Text(_entryDisplayTitle(entry))),
-              body: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: WebMediaDetailView(
-                    client: client,
-                    entry: entry,
-                    onApplyTagQuery: (query) async {
-                      _searchController.text = query;
-                      await _loadEntries();
-                      if (pageContext.mounted) {
-                        Navigator.of(pageContext).pop();
-                      }
-                    },
-                    onOpenPdfViewerPage:
-                        allowOpenPdfViewer && entry.isPdf
-                            ? () => _openPdfViewerPage(entry)
-                            : null,
-                  ),
-                ),
+        builder: (pageContext) => Scaffold(
+          appBar: AppBar(title: Text(_entryDisplayTitle(entry))),
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: WebMediaDetailView(
+                client: client,
+                entry: entry,
+                onApplyTagQuery: (query) async {
+                  _searchController.text = query;
+                  await _loadEntries();
+                  if (pageContext.mounted) {
+                    Navigator.of(pageContext).pop();
+                  }
+                },
+                onOpenPdfViewerPage: allowOpenPdfViewer && entry.isPdf
+                    ? () => _openPdfViewerPage(entry)
+                    : null,
               ),
             ),
+          ),
+        ),
       ),
     );
   }
@@ -956,18 +936,19 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     await _recordEntryView(entry);
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder:
-            (_) => WebPdfViewerPage(
-              client: client,
-              entry: entry,
-              onOpenDetail:
-                  () => _openDetailPage(entry, allowOpenPdfViewer: false),
-            ),
+        builder: (_) => WebPdfViewerPage(
+          client: client,
+          entry: entry,
+          onOpenDetail: () => _openDetailPage(entry, allowOpenPdfViewer: false),
+        ),
       ),
     );
   }
 
-  Future<void> _handleEntryTap(WebRemoteEntry entry, {required bool splitView}) async {
+  Future<void> _handleEntryTap(
+    WebRemoteEntry entry, {
+    required bool splitView,
+  }) async {
     if (entry.isFolder) {
       await _selectFolder(entry.fullPath ?? entry.entryId);
       return;
@@ -1032,7 +1013,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
-    final request = await _WebUrlImportDialog.show(
+    final request = await WebUrlImportSheet.show(
       context,
       folderName: _folderName(folderRaw),
     );
@@ -1069,9 +1050,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     setState(() {
       _statusMessage = message;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _organizeCurrentFolder() async {
@@ -1085,9 +1066,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('現在フォルダを整理'),
-          content: Text(
-            'ホストに整理を依頼します。\n\n$folderRaw',
-          ),
+          content: Text('ホストに整理を依頼します。\n\n$folderRaw'),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -1125,9 +1104,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     setState(() {
       _statusMessage = message;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _requestRescanCurrentFolder() async {
@@ -1158,9 +1137,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     setState(() {
       _statusMessage = message;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -1177,33 +1156,30 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           compactScreen ? 10 : 16,
           keyboardVisible ? 10 : 16,
         );
-        final mainContent =
-            _surface == _WebRemoteSurface.home
-                ? _buildHomePane()
-                : splitView
-                ? Row(
-                  children: <Widget>[
-                    Expanded(flex: 6, child: _buildBrowserPane(splitView)),
-                    const SizedBox(width: 16),
-                    SizedBox(width: 420, child: _buildDetailPane()),
-                  ],
-                )
-                : _buildBrowserPane(splitView);
+        final mainContent = _surface == _WebRemoteSurface.home
+            ? _buildHomePane()
+            : splitView
+            ? Row(
+                children: <Widget>[
+                  Expanded(flex: 6, child: _buildBrowserPane(splitView)),
+                  const SizedBox(width: 16),
+                  SizedBox(width: 420, child: _buildDetailPane()),
+                ],
+              )
+            : _buildBrowserPane(splitView);
 
         return Scaffold(
           resizeToAvoidBottomInset: true,
           appBar: AppBar(
             title: const Text('Web メディアビューア'),
-            leading:
-                showSidebar
-                    ? null
-                    : Builder(
-                      builder:
-                          (context) => IconButton(
-                            icon: const Icon(Icons.menu),
-                            onPressed: () => Scaffold.of(context).openDrawer(),
-                          ),
+            leading: showSidebar
+                ? null
+                : Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.menu),
+                      onPressed: () => Scaffold.of(context).openDrawer(),
                     ),
+                  ),
             actions: <Widget>[
               if (_isConnecting || _isLoading || _actionBusy)
                 const Padding(
@@ -1225,10 +1201,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 if (showSidebar) SizedBox(width: 320, child: _buildSidebar()),
                 if (showSidebar) const VerticalDivider(width: 1),
                 Expanded(
-                  child: Padding(
-                    padding: contentPadding,
-                    child: mainContent,
-                  ),
+                  child: Padding(padding: contentPadding, child: mainContent),
                 ),
               ],
             ),
@@ -1244,7 +1217,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[
-          const Text('Web 接続', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text(
+            'Web 接続',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 12),
           TextField(
             controller: _apiController,
@@ -1277,9 +1253,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             _errorMessage == null ? Colors.white70 : Colors.red.shade200,
           ),
           const SizedBox(height: 16),
-          const Text('フォルダ', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text(
+            'フォルダ',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
-          const Text('Navigation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text(
+            'Navigation',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
           Card(
             margin: EdgeInsets.zero,
@@ -1313,10 +1295,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Library', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text(
+            'Library',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 8),
           if (_folders.isEmpty)
-            const Text('接続後に閲覧可能なフォルダを表示します。', style: TextStyle(color: Colors.white60)),
+            const Text(
+              '接続後に閲覧可能なフォルダを表示します。',
+              style: TextStyle(color: Colors.white60),
+            ),
           for (final folder in _folders)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
@@ -1327,10 +1315,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 selectedTileColor: const Color(0xFF1B2D47),
                 leading: const Icon(Icons.folder_outlined),
                 title: Text(folder.displayName),
-                subtitle:
-                    folder.lastScannedAt == null
-                        ? Text(folder.raw, maxLines: 1, overflow: TextOverflow.ellipsis)
-                        : Text('最終更新 ${_formatDateTime(folder.lastScannedAt)}'),
+                subtitle: folder.lastScannedAt == null
+                    ? Text(
+                        folder.raw,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Text('最終更新 ${_formatDateTime(folder.lastScannedAt)}'),
                 onTap: () => _selectFolder(folder.raw),
               ),
             ),
@@ -1344,7 +1335,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   DateTime _addedAtForEntry(WebRemoteEntry entry) {
-    return (entry.stats?.addedAt ?? entry.modifiedAt ?? DateTime.now()).toLocal();
+    return (entry.stats?.addedAt ?? entry.modifiedAt ?? DateTime.now())
+        .toLocal();
   }
 
   int _viewCountForEntry(WebRemoteEntry entry) {
@@ -1357,32 +1349,53 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   List<_WebHomeSectionData> _buildHomeSections(List<WebRemoteEntry> entries) {
     final recentlyAdded = entries.toList(growable: false)
-      ..sort((left, right) => _addedAtForEntry(right).compareTo(_addedAtForEntry(left)));
-    final viewed = entries.where((entry) => _viewCountForEntry(entry) > 0).toList(growable: false);
+      ..sort(
+        (left, right) =>
+            _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
+      );
+    final viewed = entries
+        .where((entry) => _viewCountForEntry(entry) > 0)
+        .toList(growable: false);
     final frequentlyViewed = viewed.toList(growable: false)
       ..sort((left, right) {
-        final countCompare = _viewCountForEntry(right).compareTo(_viewCountForEntry(left));
+        final countCompare = _viewCountForEntry(
+          right,
+        ).compareTo(_viewCountForEntry(left));
         if (countCompare != 0) {
           return countCompare;
         }
-        final rightViewed = _lastViewedAtForEntry(right) ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final leftViewed = _lastViewedAtForEntry(left) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final rightViewed =
+            _lastViewedAtForEntry(right) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final leftViewed =
+            _lastViewedAtForEntry(left) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
         return rightViewed.compareTo(leftViewed);
       });
     final lightlyViewed = viewed.toList(growable: false)
       ..sort((left, right) {
-        final countCompare = _viewCountForEntry(left).compareTo(_viewCountForEntry(right));
+        final countCompare = _viewCountForEntry(
+          left,
+        ).compareTo(_viewCountForEntry(right));
         if (countCompare != 0) {
           return countCompare;
         }
-        final leftViewed = _lastViewedAtForEntry(left) ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final rightViewed = _lastViewedAtForEntry(right) ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final leftViewed =
+            _lastViewedAtForEntry(left) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final rightViewed =
+            _lastViewedAtForEntry(right) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
         return leftViewed.compareTo(rightViewed);
       });
-    final unread = entries
-        .where((entry) => _viewCountForEntry(entry) == 0)
-        .toList(growable: false)
-      ..sort((left, right) => _addedAtForEntry(right).compareTo(_addedAtForEntry(left)));
+    final unread =
+        entries
+            .where((entry) => _viewCountForEntry(entry) == 0)
+            .toList(growable: false)
+          ..sort(
+            (left, right) =>
+                _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
+          );
 
     return <_WebHomeSectionData>[
       _WebHomeSectionData(
@@ -1429,13 +1442,17 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
 
     final entries = _homeEntries;
-    final unreadCount = entries.where((entry) => _viewCountForEntry(entry) == 0).length;
-    final viewedCount = entries.where((entry) => _viewCountForEntry(entry) > 0).length;
+    final unreadCount = entries
+        .where((entry) => _viewCountForEntry(entry) == 0)
+        .length;
+    final viewedCount = entries
+        .where((entry) => _viewCountForEntry(entry) > 0)
+        .length;
     final recentCount = entries
         .where(
-          (entry) => _addedAtForEntry(entry).isAfter(
-            DateTime.now().toLocal().subtract(const Duration(days: 7)),
-          ),
+          (entry) => _addedAtForEntry(
+            entry,
+          ).isAfter(DateTime.now().toLocal().subtract(const Duration(days: 7))),
         )
         .length;
     final sections = _buildHomeSections(entries);
@@ -1448,7 +1465,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         }
       },
       child: ListView(
-        padding: EdgeInsets.all(MediaQuery.of(context).size.width < 720 ? 10 : 16),
+        padding: EdgeInsets.all(
+          MediaQuery.of(context).size.width < 720 ? 10 : 16,
+        ),
         children: <Widget>[
           _WebHomeHeroCard(
             totalCount: entries.length,
@@ -1497,8 +1516,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Widget _buildBrowserPane(bool splitView) {
-    final parentFolder =
-        _selectedFolderRaw == null ? null : _parentFolderWithinLibrary(_selectedFolderRaw!);
+    final parentFolder = _selectedFolderRaw == null
+        ? null
+        : _parentFolderWithinLibrary(_selectedFolderRaw!);
     final currentFolderRaw = _selectedFolderRaw ?? _libraryRoot?.raw;
     return _buildList(
       splitView,
@@ -1530,25 +1550,26 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           actionsBusy: _actionBusy,
           onGoRoot:
               currentFolderRaw == null ||
-                      _libraryRoot == null ||
-                      _isSamePath(currentFolderRaw, _libraryRoot!.raw)
-                  ? null
-                  : () => _selectFolder(_libraryRoot!.raw),
+                  _libraryRoot == null ||
+                  _isSamePath(currentFolderRaw, _libraryRoot!.raw)
+              ? null
+              : () => _selectFolder(_libraryRoot!.raw),
           parentFolderAvailable: parentFolder != null,
           onSearch: _loadEntries,
-          onGoParent: parentFolder == null ? null : () => _selectFolder(parentFolder),
+          onGoParent: parentFolder == null
+              ? null
+              : () => _selectFolder(parentFolder),
           onImportUrl:
               _client == null || _selectedFolderRaw == null || _actionBusy
-                  ? null
-                  : _importUrlToCurrentFolder,
+              ? null
+              : _importUrlToCurrentFolder,
           onOrganizeFolder:
               _client == null || _selectedFolderRaw == null || _actionBusy
-                  ? null
-                  : _organizeCurrentFolder,
-          onRescan:
-              _client == null || _actionBusy
-                  ? null
-                  : _requestRescanCurrentFolder,
+              ? null
+              : _organizeCurrentFolder,
+          onRescan: _client == null || _actionBusy
+              ? null
+              : _requestRescanCurrentFolder,
           filter: _filter,
           onFilterChanged: (filter) {
             setState(() {
@@ -1597,53 +1618,56 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     return RefreshIndicator(
       onRefresh: _loadEntries,
-      child:
-          _entries.isEmpty && !_isLoading
-              ? ListView(
-                padding: listPadding,
-                children: <Widget>[
-                  controls,
-                  const SizedBox(height: 12),
-                  const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Column(
-                        children: <Widget>[
-                          Icon(Icons.travel_explore, size: 52, color: Colors.white30),
-                          SizedBox(height: 12),
-                          Text(
-                            'この表示では項目が見つかりません。',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
-                      ),
+      child: _entries.isEmpty && !_isLoading
+          ? ListView(
+              padding: listPadding,
+              children: <Widget>[
+                controls,
+                const SizedBox(height: 12),
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Column(
+                      children: <Widget>[
+                        Icon(
+                          Icons.travel_explore,
+                          size: 52,
+                          color: Colors.white30,
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          'この表示では項目が見つかりません。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              )
-              : ListView.separated(
-                padding: listPadding,
-                itemCount: _entries.length + 1,
-                separatorBuilder:
-                    (context, index) => SizedBox(height: compact ? 10 : 12),
-                itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return controls;
-                  }
-                  final entry = _entries[index - 1];
-                  final selected = _selectedEntry?.stableId == entry.stableId;
-                  return _EntryCard(
-                    key: ValueKey<String>(entry.stableId),
-                    client: _client,
-                    entry: entry,
-                    selected: selected,
-                    onTap: () => _handleEntryTap(entry, splitView: splitView),
-                    folderName: _folderName,
-                    onApplyTagQuery: _applyTagQuery,
-                  );
-                },
-              ),
+                ),
+              ],
+            )
+          : ListView.separated(
+              padding: listPadding,
+              itemCount: _entries.length + 1,
+              separatorBuilder: (context, index) =>
+                  SizedBox(height: compact ? 10 : 12),
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return controls;
+                }
+                final entry = _entries[index - 1];
+                final selected = _selectedEntry?.stableId == entry.stableId;
+                return _EntryCard(
+                  key: ValueKey<String>(entry.stableId),
+                  client: _client,
+                  entry: entry,
+                  selected: selected,
+                  onTap: () => _handleEntryTap(entry, splitView: splitView),
+                  folderName: _folderName,
+                  onApplyTagQuery: _applyTagQuery,
+                );
+              },
+            ),
     );
   }
 
@@ -1661,52 +1685,55 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     return RefreshIndicator(
       onRefresh: _loadEntries,
-      child:
-          _entries.isEmpty && !_isLoading
-              ? ListView(
-                padding: listPadding,
-                children: <Widget>[
-                  controls,
-                  const SizedBox(height: 12),
-                  const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Column(
-                        children: <Widget>[
-                          Icon(Icons.travel_explore, size: 52, color: Colors.white30),
-                          SizedBox(height: 12),
-                          Text(
-                            'この表示では項目が見つかりません。',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
-                      ),
+      child: _entries.isEmpty && !_isLoading
+          ? ListView(
+              padding: listPadding,
+              children: <Widget>[
+                controls,
+                const SizedBox(height: 12),
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Column(
+                      children: <Widget>[
+                        Icon(
+                          Icons.travel_explore,
+                          size: 52,
+                          color: Colors.white30,
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          'この表示では項目が見つかりません。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              )
-              : ListView.separated(
-                padding: listPadding,
-                itemCount: _entries.length + 1,
-                separatorBuilder:
-                    (context, index) => SizedBox(height: compact ? 10 : 14),
-                itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return controls;
-                  }
-                  final entry = _entries[index - 1];
-                  final selected = _selectedEntry?.stableId == entry.stableId;
-                  return _EntrySingleTileCard(
-                    key: ValueKey<String>('tile-${entry.stableId}'),
-                    client: _client,
-                    entry: entry,
-                    selected: selected,
-                    onTap: () => _handleEntryTap(entry, splitView: splitView),
-                    folderName: _folderName,
-                  );
-                },
-              ),
+                ),
+              ],
+            )
+          : ListView.separated(
+              padding: listPadding,
+              itemCount: _entries.length + 1,
+              separatorBuilder: (context, index) =>
+                  SizedBox(height: compact ? 10 : 14),
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return controls;
+                }
+                final entry = _entries[index - 1];
+                final selected = _selectedEntry?.stableId == entry.stableId;
+                return _EntrySingleTileCard(
+                  key: ValueKey<String>('tile-${entry.stableId}'),
+                  client: _client,
+                  entry: entry,
+                  selected: selected,
+                  onTap: () => _handleEntryTap(entry, splitView: splitView),
+                  folderName: _folderName,
+                );
+              },
+            ),
     );
   }
 
@@ -1729,11 +1756,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       onRefresh: _loadEntries,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final contentWidth =
-              (constraints.maxWidth - listPadding.horizontal).clamp(
-                0.0,
-                double.infinity,
-              );
+          final contentWidth = (constraints.maxWidth - listPadding.horizontal)
+              .clamp(0.0, double.infinity);
           final columns = _browserGridColumnCount(contentWidth.toDouble());
 
           return CustomScrollView(
@@ -1820,7 +1844,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                         client: _client,
                         entry: entry,
                         selected: selected,
-                        onTap: () => _handleEntryTap(entry, splitView: splitView),
+                        onTap: () =>
+                            _handleEntryTap(entry, splitView: splitView),
                       );
                     }, childCount: pageEntries.length),
                   ),
@@ -1874,8 +1899,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       client: _client!,
       entry: _selectedEntry!,
       onApplyTagQuery: _applyTagQuery,
-      onOpenPdfViewerPage:
-          _selectedEntry!.isPdf ? () => _openPdfViewerPage(_selectedEntry!) : null,
+      onOpenPdfViewerPage: _selectedEntry!.isPdf
+          ? () => _openPdfViewerPage(_selectedEntry!)
+          : null,
     );
   }
 
@@ -1886,7 +1912,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 10),
             Text(message, style: TextStyle(color: color)),
           ],
@@ -1943,7 +1972,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             const SizedBox(height: 10),
             bullet('ローカル Library の直接追加、フォルダ選択、端末ファイルの一括読み込みには未対応です'),
             bullet('Host API の構築やローカル DB の保守は引き続きネイティブ側の役割です'),
-            bullet('URL 取り込みはホストへ依頼できますが、ブラウザ端末のローカル cookie / URL 一覧ファイル参照には未対応です'),
+            bullet(
+              'URL 取り込みはホストへ依頼できますが、ブラウザ端末のローカル cookie / URL 一覧ファイル参照には未対応です',
+            ),
             bullet('PDF は Web 側でのページ描画に依存するため、新しいタブ表示と詳細表示で挙動差が出る場合があります'),
             bullet('HTTPS の Web ページから HTTP API へはブラウザ制約で接続できません'),
           ],
@@ -1957,12 +1988,17 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            const Text('Web 未対応機能', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const Text(
+              'Web 未対応機能',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 10),
             bullet('ローカル Library の直接参照、フォルダ追加、ホスト取込み'),
             bullet('Host API サーバーの起動 / 停止、ローカル DB の編集'),
             bullet('ファイル名変更、削除、タグ編集、URL 取込みなどの書き込み操作'),
-            bullet('ネイティブ版と同等の PDF ビューア全機能。Web ではページ画像プレビュー、同じタブ内の PDF 表示ページ、別タブ表示を提供'),
+            bullet(
+              'ネイティブ版と同等の PDF ビューア全機能。Web ではページ画像プレビュー、同じタブ内の PDF 表示ページ、別タブ表示を提供',
+            ),
             bullet('HTTPS の Web ページから HTTP API へはブラウザ制限で接続できません'),
           ],
         ),
@@ -2158,7 +2194,10 @@ class _WebHomeSection extends StatelessWidget {
                 children: <Widget>[
                   Text(
                     section.title,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -2251,7 +2290,10 @@ class _WebHomePdfCard extends StatelessWidget {
                   _entryDisplayTitle(entry),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -2265,13 +2307,12 @@ class _WebHomePdfCard extends StatelessWidget {
                   label: '追加',
                   value: _formatBrowseDateTime(addedAt),
                 ),
-                _WebHomeStatLine(
-                  label: '閲覧',
-                  value: '$viewCount',
-                ),
+                _WebHomeStatLine(label: '閲覧', value: '$viewCount'),
                 _WebHomeStatLine(
                   label: '最終',
-                  value: lastViewedAt == null ? '未読' : _formatBrowseDateTime(lastViewedAt),
+                  value: lastViewedAt == null
+                      ? '未読'
+                      : _formatBrowseDateTime(lastViewedAt),
                 ),
                 const Spacer(),
                 Align(
@@ -2292,14 +2333,10 @@ class _WebHomePdfCard extends StatelessWidget {
 }
 
 class _WebHomeStatLine extends StatelessWidget {
-
   final String label;
   final String value;
 
-  const _WebHomeStatLine({
-    required this.label,
-    required this.value,
-  });
+  const _WebHomeStatLine({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
@@ -2311,7 +2348,10 @@ class _WebHomeStatLine extends StatelessWidget {
             width: 52,
             child: Text(
               label,
-              style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                color: Colors.white54,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           Expanded(
@@ -2382,7 +2422,10 @@ class _BrowserHeader extends StatelessWidget {
                     icon: const Icon(Icons.arrow_upward),
                     label: const Text('一つ上へ'),
                   ),
-                Text('$itemCount 件', style: const TextStyle(color: Colors.white60)),
+                Text(
+                  '$itemCount 件',
+                  style: const TextStyle(color: Colors.white60),
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -2411,16 +2454,15 @@ class _BrowserHeader extends StatelessWidget {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children:
-                  _WebMediaFilter.values
-                      .map(
-                        (entry) => ChoiceChip(
-                          label: Text(entry.label),
-                          selected: filter == entry,
-                          onSelected: (_) => onFilterChanged(entry),
-                        ),
-                      )
-                      .toList(growable: false),
+              children: _WebMediaFilter.values
+                  .map(
+                    (entry) => ChoiceChip(
+                      label: Text(entry.label),
+                      selected: filter == entry,
+                      onSelected: (_) => onFilterChanged(entry),
+                    ),
+                  )
+                  .toList(growable: false),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -2451,13 +2493,7 @@ class _BrowserHeader extends StatelessWidget {
   }
 }
 
-enum _BrowserHeaderMenuAction {
-  goRoot,
-  goParent,
-  importUrl,
-  organize,
-  rescan,
-}
+enum _BrowserHeaderMenuAction { goRoot, goParent, importUrl, organize, rescan }
 
 class _ResponsiveBrowserHeader extends StatelessWidget {
   final String folderName;
@@ -2636,15 +2672,16 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                     ),
                 ],
               ),
-              if (folderPath != null && folderPath!.trim().isNotEmpty) ...<Widget>[
+              if (folderPath != null &&
+                  folderPath!.trim().isNotEmpty) ...<Widget>[
                 const SizedBox(height: 6),
                 Text(
                   folderPath!,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white60),
-                  ),
-                ],
+                  style: const TextStyle(color: Colors.white60),
+                ),
+              ],
             ],
           ),
         ),
@@ -2695,10 +2732,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                     avatar: const Icon(Icons.route_outlined, size: 18),
                     label: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 360),
-                      child: Text(
-                        folderPath!,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      child: Text(folderPath!, overflow: TextOverflow.ellipsis),
                     ),
                   ),
                 if (onGoRoot != null)
@@ -2778,13 +2812,12 @@ class _PinnedBrowserSearchBar extends StatelessWidget {
                   labelText: '検索',
                   hintText: 'artist:"作家名"  type:pdf  #tag  untagged',
                   prefixIcon: const Icon(Icons.search),
-                  suffixIcon:
-                      compact
-                          ? IconButton(
-                            onPressed: isLoading ? null : onSearch,
-                            icon: const Icon(Icons.arrow_forward),
-                          )
-                          : null,
+                  suffixIcon: compact
+                      ? IconButton(
+                          onPressed: isLoading ? null : onSearch,
+                          icon: const Icon(Icons.arrow_forward),
+                        )
+                      : null,
                 ),
               ),
             ),
@@ -2870,10 +2903,7 @@ class _BrowserDisplayModeCard extends StatelessWidget {
   final _WebBrowserDisplayMode mode;
   final ValueChanged<_WebBrowserDisplayMode> onChanged;
 
-  const _BrowserDisplayModeCard({
-    required this.mode,
-    required this.onChanged,
-  });
+  const _BrowserDisplayModeCard({required this.mode, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -2889,24 +2919,23 @@ class _BrowserDisplayModeCard extends StatelessWidget {
           children: <Widget>[
             Text(
               '表示モード',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             SegmentedButton<_WebBrowserDisplayMode>(
               showSelectedIcon: false,
-              segments:
-                  _WebBrowserDisplayMode.values
-                      .map(
-                        (candidate) => ButtonSegment<_WebBrowserDisplayMode>(
-                          value: candidate,
-                          icon: Icon(candidate.icon),
-                          label: Text(
-                            compact ? candidate.compactLabel : candidate.label,
-                          ),
-                        ),
-                      )
-                      .toList(growable: false),
+              segments: _WebBrowserDisplayMode.values
+                  .map(
+                    (candidate) => ButtonSegment<_WebBrowserDisplayMode>(
+                      value: candidate,
+                      icon: Icon(candidate.icon),
+                      label: Text(
+                        compact ? candidate.compactLabel : candidate.label,
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
               selected: <_WebBrowserDisplayMode>{mode},
               onSelectionChanged: (selection) {
                 final next = selection.firstOrNull;
@@ -2963,10 +2992,12 @@ class _EntryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 920;
     final accent = _entryAccentColor(entry);
-    final borderColor =
-        selected ? Color.lerp(accent, const Color(0xFF4B2B33), 0.30)! : accent.withOpacity(0.58);
-    final backgroundColor =
-        selected ? const Color(0xFFFDF7F4) : const Color(0xFFF7F0EC);
+    final borderColor = selected
+        ? Color.lerp(accent, const Color(0xFF4B2B33), 0.30)!
+        : accent.withOpacity(0.58);
+    final backgroundColor = selected
+        ? const Color(0xFFFDF7F4)
+        : const Color(0xFFF7F0EC);
 
     final preview = _EntryThumbnailStack(
       client: client,
@@ -2977,11 +3008,7 @@ class _EntryCard extends StatelessWidget {
     final details = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _EntryTitleBand(
-          entry: entry,
-          accent: accent,
-          selected: selected,
-        ),
+        _EntryTitleBand(entry: entry, accent: accent, selected: selected),
         const SizedBox(height: 8),
         _EntryMetadataSummary(
           client: client,
@@ -3013,35 +3040,33 @@ class _EntryCard extends StatelessWidget {
               ),
             ],
           ),
-          child:
-              compact
-                  ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: preview,
+          child: compact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Align(alignment: Alignment.centerLeft, child: preview),
+                    const SizedBox(height: 16),
+                    details,
+                  ],
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    preview,
+                    const SizedBox(width: 22),
+                    Expanded(child: details),
+                    const SizedBox(width: 12),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Icon(
+                        entry.isFolder
+                            ? Icons.arrow_forward
+                            : Icons.chevron_right,
+                        color: const Color(0xFF6E5354),
                       ),
-                      const SizedBox(height: 16),
-                      details,
-                    ],
-                  )
-                  : Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      preview,
-                      const SizedBox(width: 22),
-                      Expanded(child: details),
-                      const SizedBox(width: 12),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Icon(
-                          entry.isFolder ? Icons.arrow_forward : Icons.chevron_right,
-                          color: const Color(0xFF6E5354),
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
+                ),
         ),
       ),
     );
@@ -3068,12 +3093,12 @@ class _EntrySingleTileCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final compact = MediaQuery.of(context).size.width < 720;
     final accent = _entryAccentColor(entry);
-    final borderColor =
-        selected
-            ? Color.lerp(accent, Colors.white, 0.24) ?? accent
-            : Colors.white.withOpacity(0.10);
-    final backgroundColor =
-        selected ? const Color(0xFF192231) : const Color(0xFF131922);
+    final borderColor = selected
+        ? Color.lerp(accent, Colors.white, 0.24) ?? accent
+        : Colors.white.withOpacity(0.10);
+    final backgroundColor = selected
+        ? const Color(0xFF192231)
+        : const Color(0xFF131922);
     final folderLabel = folderName(entry.folderRaw);
     final updatedLabel = _formatBrowseDateTime(entry.modifiedAt);
 
@@ -3225,10 +3250,9 @@ class _EntryGridTileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = _entryAccentColor(entry);
-    final borderColor =
-        selected
-            ? Color.lerp(accent, Colors.white, 0.22) ?? accent
-            : Colors.white.withOpacity(0.10);
+    final borderColor = selected
+        ? Color.lerp(accent, Colors.white, 0.22) ?? accent
+        : Colors.white.withOpacity(0.10);
     final shadowColor = accent.withOpacity(selected ? 0.14 : 0.08);
     final radius = BorderRadius.circular(18);
 
@@ -3276,10 +3300,7 @@ class _EntryHeader extends StatelessWidget {
   final WebRemoteEntry entry;
   final String Function(String raw) folderName;
 
-  const _EntryHeader({
-    required this.entry,
-    required this.folderName,
-  });
+  const _EntryHeader({required this.entry, required this.folderName});
 
   @override
   Widget build(BuildContext context) {
@@ -3307,7 +3328,11 @@ class _EntryHeader extends StatelessWidget {
                 size: 18,
               ),
               label: Text(
-                entry.isFolder ? 'フォルダ' : entry.isPdf ? 'PDF' : '画像',
+                entry.isFolder
+                    ? 'フォルダ'
+                    : entry.isPdf
+                    ? 'PDF'
+                    : '画像',
               ),
             ),
             if (!entry.isFolder)
@@ -3468,10 +3493,26 @@ class _EntryThumbnailStack extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final veryCompact = MediaQuery.of(context).size.width < 560;
-    final width = veryCompact ? 172.0 : compact ? 206.0 : 250.0;
-    final height = veryCompact ? 196.0 : compact ? 230.0 : 280.0;
-    final thumbWidth = veryCompact ? 110.0 : compact ? 134.0 : 164.0;
-    final thumbHeight = veryCompact ? 150.0 : compact ? 188.0 : 228.0;
+    final width = veryCompact
+        ? 172.0
+        : compact
+        ? 206.0
+        : 250.0;
+    final height = veryCompact
+        ? 196.0
+        : compact
+        ? 230.0
+        : 280.0;
+    final thumbWidth = veryCompact
+        ? 110.0
+        : compact
+        ? 134.0
+        : 164.0;
+    final thumbHeight = veryCompact
+        ? 150.0
+        : compact
+        ? 188.0
+        : 228.0;
 
     if (entry.isFolder) {
       return _FolderPreviewPanel(
@@ -3620,9 +3661,9 @@ class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
       if (modifiedCompare != 0) {
         return modifiedCompare;
       }
-      return left.displayName
-          .toLowerCase()
-          .compareTo(right.displayName.toLowerCase());
+      return left.displayName.toLowerCase().compareTo(
+        right.displayName.toLowerCase(),
+      );
     });
     return mediaEntries.take(3).toList(growable: false);
   }
@@ -3680,10 +3721,7 @@ class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
       alignment: Alignment.center,
       child:
           child ??
-          const Icon(
-            Icons.insert_drive_file_outlined,
-            color: Colors.white38,
-          ),
+          const Icon(Icons.insert_drive_file_outlined, color: Colors.white38),
     );
   }
 
@@ -3697,10 +3735,14 @@ class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
         builder: (context, constraints) {
           final gap = constraints.maxWidth < 190 ? 6.0 : 8.0;
           final mainWidth = constraints.maxWidth * 0.58;
-          final sideWidth = (constraints.maxWidth - mainWidth - gap)
-              .clamp(0.0, constraints.maxWidth);
-          final sideHeight = ((constraints.maxHeight - gap) / 2)
-              .clamp(0.0, constraints.maxHeight);
+          final sideWidth = (constraints.maxWidth - mainWidth - gap).clamp(
+            0.0,
+            constraints.maxWidth,
+          );
+          final sideHeight = ((constraints.maxHeight - gap) / 2).clamp(
+            0.0,
+            constraints.maxHeight,
+          );
 
           return Row(
             children: <Widget>[
@@ -3720,7 +3762,9 @@ class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
                   children: <Widget>[
                     if (second != null)
                       _RemoteThumbnail(
-                        key: ValueKey<String>('folder-side-a-${second.stableId}'),
+                        key: ValueKey<String>(
+                          'folder-side-a-${second.stableId}',
+                        ),
                         client: widget.client,
                         entry: second,
                         width: sideWidth,
@@ -3737,7 +3781,9 @@ class _FolderPreviewPanelState extends State<_FolderPreviewPanel> {
                     SizedBox(height: gap),
                     if (third != null)
                       _RemoteThumbnail(
-                        key: ValueKey<String>('folder-side-b-${third.stableId}'),
+                        key: ValueKey<String>(
+                          'folder-side-b-${third.stableId}',
+                        ),
                         client: widget.client,
                         entry: third,
                         width: sideWidth,
@@ -4038,7 +4084,9 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
           runSpacing: 8,
           children: <Widget>[
             _badge(
-              widget.entry.isPdf ? Icons.picture_as_pdf_outlined : Icons.image_outlined,
+              widget.entry.isPdf
+                  ? Icons.picture_as_pdf_outlined
+                  : Icons.image_outlined,
               widget.entry.isPdf ? 'PDF' : '画像',
             ),
             _badge(Icons.folder_open_outlined, folderLabel),
@@ -4049,7 +4097,10 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
           error.toString(),
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: Colors.red.shade400, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            color: Colors.red.shade400,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ],
     );
@@ -4139,7 +4190,10 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
                 for (final tag in data.tags) _tag(tag),
                 if (data.extraTagCount > 0)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFF908E95),
                       borderRadius: BorderRadius.circular(8),
@@ -4323,11 +4377,13 @@ class _EntrySummaryData {
     final subtitle =
         artists.firstOrNull ??
         seriesValues.firstOrNull ??
-        (entry.folderRaw.trim().isEmpty ? _entryDisplayTitle(entry) : entry.folderRaw);
+        (entry.folderRaw.trim().isEmpty
+            ? _entryDisplayTitle(entry)
+            : entry.folderRaw);
     final pageInfo =
         entry.isPdf && meta.pageCount != null && meta.pageCount! > 0
-            ? '${meta.pageCount} pages'
-            : null;
+        ? '${meta.pageCount} pages'
+        : null;
 
     return _EntrySummaryData(
       isFolder: false,
@@ -4336,7 +4392,11 @@ class _EntrySummaryData {
       series: joinOrFallback(seriesValues),
       mediaType:
           mediaTypeValues.firstOrNull ??
-          (entry.isPdf ? 'PDF' : entry.isImage ? '画像' : 'メディア'),
+          (entry.isPdf
+              ? 'PDF'
+              : entry.isImage
+              ? '画像'
+              : 'メディア'),
       language: resolveLanguage(tags),
       location: entry.folderRaw,
       updatedAt: _formatBrowseDateTime(meta.modifiedAt ?? entry.modifiedAt),
@@ -4443,7 +4503,6 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   Future<void> _loadPdfPageCount() async {
-
     final mediaId = widget.entry.mediaId?.trim();
     if (mediaId == null || mediaId.isEmpty) return;
     final stableId = widget.entry.stableId;
@@ -4455,10 +4514,9 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
       );
       if (!mounted || widget.entry.stableId != stableId) return;
       setState(() {
-        _pdfTotalPages =
-            pageCountInfo.isReliable || pageCountInfo.count > 1
-                ? pageCountInfo.count
-                : null;
+        _pdfTotalPages = pageCountInfo.isReliable || pageCountInfo.count > 1
+            ? pageCountInfo.count
+            : null;
         if (_pdfTotalPages != null) {
           _pdfPageNo = _pdfPageNo.clamp(1, _pdfTotalPages!);
         }
@@ -4482,7 +4540,8 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     final totalPages = _pdfTotalPages;
     if (totalPages != null && pageNo > totalPages) {
       setState(() {
-        _pdfPageError = 'Page $pageNo is out of range for ${widget.entry.displayName}';
+        _pdfPageError =
+            'Page $pageNo is out of range for ${widget.entry.displayName}';
         _loadingPdfPage = false;
       });
       return;
@@ -4537,7 +4596,6 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   String _formatDateTime(DateTime? value) {
-
     if (value == null) return '未取得';
     final local = value.toLocal();
     final two = (int number) => number.toString().padLeft(2, '0');
@@ -4583,10 +4641,15 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
             width: 56,
             child: Text(
               label,
-              style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                color: Colors.white60,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
-          Expanded(child: Text(value, style: const TextStyle(color: Colors.white70))),
+          Expanded(
+            child: Text(value, style: const TextStyle(color: Colors.white70)),
+          ),
         ],
       ),
     );
@@ -4639,18 +4702,16 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: <Widget>[
                       OutlinedButton.icon(
-                        onPressed:
-                            canOpenPreviousPdfPage
-                                ? () => _loadPdfPage(_pdfPageNo - 1)
-                                : null,
+                        onPressed: canOpenPreviousPdfPage
+                            ? () => _loadPdfPage(_pdfPageNo - 1)
+                            : null,
                         icon: const Icon(Icons.chevron_left),
                         label: const Text('前へ'),
                       ),
                       OutlinedButton.icon(
-                        onPressed:
-                            canOpenNextPdfPage
-                                ? () => _loadPdfPage(_pdfPageNo + 1)
-                                : null,
+                        onPressed: canOpenNextPdfPage
+                            ? () => _loadPdfPage(_pdfPageNo + 1)
+                            : null,
                         icon: const Icon(Icons.chevron_right),
                         label: const Text('次へ'),
                       ),
@@ -4667,12 +4728,11 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                           label: const Text('PDF 表示ページ'),
                         ),
                       FilledButton.icon(
-                        onPressed:
-                            widget.entry.mediaId == null
-                                ? null
-                                : () => widget.client.openPdfInNewTab(
-                                  widget.entry.mediaId!,
-                                ),
+                        onPressed: widget.entry.mediaId == null
+                            ? null
+                            : () => widget.client.openPdfInNewTab(
+                                widget.entry.mediaId!,
+                              ),
                         icon: const Icon(Icons.open_in_new),
                         label: const Text('別タブで開く'),
                       ),
@@ -4687,28 +4747,27 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(color: Colors.white12),
                     ),
-                    child:
-                        _loadingPdfPage && _pdfPageBytes == null
-                            ? const SizedBox(
-                              height: 360,
-                              child: Center(child: CircularProgressIndicator()),
-                            )
-                            : _pdfPageImageProvider != null
-                            ? InteractiveViewer(
-                              minScale: 0.7,
-                              maxScale: 4,
-                              child: Image(
-                                image: _pdfPageImageProvider!,
-                                gaplessPlayback: true,
-                                fit: BoxFit.contain,
-                              ),
-                            )
-                            : Center(
-                              child: Text(
-                                _pdfPageError ?? 'PDF プレビューを読み込めませんでした',
-                                style: TextStyle(color: Colors.red.shade200),
-                              ),
+                    child: _loadingPdfPage && _pdfPageBytes == null
+                        ? const SizedBox(
+                            height: 360,
+                            child: Center(child: CircularProgressIndicator()),
+                          )
+                        : _pdfPageImageProvider != null
+                        ? InteractiveViewer(
+                            minScale: 0.7,
+                            maxScale: 4,
+                            child: Image(
+                              image: _pdfPageImageProvider!,
+                              gaplessPlayback: true,
+                              fit: BoxFit.contain,
                             ),
+                          )
+                        : Center(
+                            child: Text(
+                              _pdfPageError ?? 'PDF プレビューを読み込めませんでした',
+                              style: TextStyle(color: Colors.red.shade200),
+                            ),
+                          ),
                   ),
                 ],
               )
@@ -4743,7 +4802,10 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                     return const SizedBox(
                       height: 240,
                       child: Center(
-                        child: Text('画像データがありません', style: TextStyle(color: Colors.white60)),
+                        child: Text(
+                          '画像データがありません',
+                          style: TextStyle(color: Colors.white60),
+                        ),
                       ),
                     );
                   }
@@ -4758,7 +4820,11 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                     child: InteractiveViewer(
                       minScale: 0.7,
                       maxScale: 5,
-                      child: Image.memory(bytes, gaplessPlayback: true, fit: BoxFit.contain),
+                      child: Image.memory(
+                        bytes,
+                        gaplessPlayback: true,
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   );
                 },
@@ -4772,15 +4838,26 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     _detailRow('種別', widget.entry.isPdf ? 'PDF' : '画像'),
-                    _detailRow('更新', _formatDateTime(meta?.modifiedAt ?? widget.entry.modifiedAt)),
-                    _detailRow('サイズ', _formatBytes(meta?.sizeBytes ?? widget.entry.sizeBytes)),
+                    _detailRow(
+                      '更新',
+                      _formatDateTime(
+                        meta?.modifiedAt ?? widget.entry.modifiedAt,
+                      ),
+                    ),
+                    _detailRow(
+                      'サイズ',
+                      _formatBytes(meta?.sizeBytes ?? widget.entry.sizeBytes),
+                    ),
                     _detailRow('MIME', meta?.mimeType ?? '未取得'),
                   ],
                 );
               },
             ),
             const SizedBox(height: 16),
-            const Text('タグ', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const Text(
+              'タグ',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 10),
             FutureBuilder<List<Tag>>(
               future: _tagsFuture,
@@ -4796,22 +4873,24 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                 }
                 final tags = snapshot.data ?? const <Tag>[];
                 if (tags.isEmpty) {
-                  return const Text('タグはまだ付いていません。', style: TextStyle(color: Colors.white60));
+                  return const Text(
+                    'タグはまだ付いていません。',
+                    style: TextStyle(color: Colors.white60),
+                  );
                 }
                 return Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children:
-                      tags
-                          .map(
-                            (tag) => ActionChip(
-                              label: Text(_tagLabel(tag)),
-                              onPressed: () => widget.onApplyTagQuery(
-                                WebSearchParser.formatTagQuery(tag),
-                              ),
-                            ),
-                          )
-                          .toList(growable: false),
+                  children: tags
+                      .map(
+                        (tag) => ActionChip(
+                          label: Text(_tagLabel(tag)),
+                          onPressed: () => widget.onApplyTagQuery(
+                            WebSearchParser.formatTagQuery(tag),
+                          ),
+                        ),
+                      )
+                      .toList(growable: false),
                 );
               },
             ),
@@ -4908,12 +4987,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _clearViewerPageCaches() {
-    final pages =
-        <int>{
-          ..._pageFutureCache.keys,
-          ..._pageBytesCache.keys,
-          ..._pageImageProviders.keys,
-        }.toList(growable: false);
+    final pages = <int>{
+      ..._pageFutureCache.keys,
+      ..._pageBytesCache.keys,
+      ..._pageImageProviders.keys,
+    }.toList(growable: false);
     for (final pageNumber in pages) {
       _pageFutureCache.remove(pageNumber);
       _pageBytesCache.remove(pageNumber);
@@ -4933,12 +5011,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       keepPages.add(_page + 2);
     }
 
-    final cachedPages =
-        <int>{
-          ..._pageFutureCache.keys,
-          ..._pageBytesCache.keys,
-          ..._pageImageProviders.keys,
-        }.toList(growable: false);
+    final cachedPages = <int>{
+      ..._pageFutureCache.keys,
+      ..._pageBytesCache.keys,
+      ..._pageImageProviders.keys,
+    }.toList(growable: false);
     for (final pageNumber in cachedPages) {
       if (keepPages.contains(pageNumber)) {
         continue;
@@ -4950,7 +5027,10 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   MemoryImage _pageImageProviderFor(int pageNumber, Uint8List bytes) {
-    return _pageImageProviders.putIfAbsent(pageNumber, () => MemoryImage(bytes));
+    return _pageImageProviders.putIfAbsent(
+      pageNumber,
+      () => MemoryImage(bytes),
+    );
   }
 
   bool _isCurrentViewerRequest({
@@ -4998,7 +5078,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       final twoPageFuture = SharedPreferences.getInstance()
           .then((prefs) => prefs.getBool(_twoPagePrefsKey))
           .catchError((Object error, StackTrace stackTrace) {
-            debugPrint('[WebPdfViewerPage] Failed to load reader prefs: $error');
+            debugPrint(
+              '[WebPdfViewerPage] Failed to load reader prefs: $error',
+            );
             debugPrintStack(
               label: '[WebPdfViewerPage] _loadViewer',
               stackTrace: stackTrace,
@@ -5058,9 +5140,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     final stableId = _activeViewerStableId ?? widget.entry.stableId;
     final generation = _viewerGeneration;
     if (mediaId == null || mediaId.isEmpty) {
-      return Future<Uint8List>.error(
-        StateError('PDF を表示するための mediaId がありません'),
-      );
+      return Future<Uint8List>.error(StateError('PDF を表示するための mediaId がありません'));
     }
     if (_pageCountReliable && pageNo > _totalPages) {
       return Future<Uint8List>.error(
@@ -5076,22 +5156,20 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       return existing;
     }
 
-    final future = widget.client.fetchRenderedPdfPage(
-      mediaId,
-      pageNo,
-      width: _pdfViewerRenderWidth,
-    ).then((bytes) {
-      if (_isCurrentViewerRequest(
-        generation: generation,
-        mediaId: mediaId,
-        stableId: stableId,
-      )) {
-        _pageFutureCache.remove(pageNo);
-        _pageBytesCache[pageNo] = bytes;
-        _pageImageProviderFor(pageNo, bytes);
-      }
-      return bytes;
-    });
+    final future = widget.client
+        .fetchRenderedPdfPage(mediaId, pageNo, width: _pdfViewerRenderWidth)
+        .then((bytes) {
+          if (_isCurrentViewerRequest(
+            generation: generation,
+            mediaId: mediaId,
+            stableId: stableId,
+          )) {
+            _pageFutureCache.remove(pageNo);
+            _pageBytesCache[pageNo] = bytes;
+            _pageImageProviderFor(pageNo, bytes);
+          }
+          return bytes;
+        });
     _pageFutureCache[pageNo] = future;
     future.catchError((_) {
       if (_isCurrentViewerRequest(
@@ -5421,7 +5499,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   Widget _buildPageSelector({required bool compact}) {
-    final totalPagesText = _pageCountReliable ? '$_totalPages' : '$_totalPages+';
+    final totalPagesText = _pageCountReliable
+        ? '$_totalPages'
+        : '$_totalPages+';
     final pageText = '$_page / $totalPagesText';
     final selectedPage = _page <= _totalPages ? _page : _totalPages;
 
@@ -5465,8 +5545,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             color: Colors.white,
             fontWeight: FontWeight.w700,
           ),
-          selectedItemBuilder:
-              (context) => List<Widget>.generate(_totalPages, (index) {
+          selectedItemBuilder: (context) =>
+              List<Widget>.generate(_totalPages, (index) {
                 final pageNumber = index + 1;
                 return Align(
                   alignment: Alignment.centerLeft,
@@ -5486,15 +5566,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
               child: Text('ページ $pageNumber'),
             );
           }),
-          onChanged:
-              _loading
-                  ? null
-                  : (value) {
-                      if (value == null || value == _page) {
-                        return;
-                      }
-                      _setCurrentPage(value);
-                    },
+          onChanged: _loading
+              ? null
+              : (value) {
+                  if (value == null || value == _page) {
+                    return;
+                  }
+                  _setCurrentPage(value);
+                },
         ),
       ),
     );
@@ -5536,7 +5615,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     final canNext =
         !_loading &&
         (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _totalPages);
-    final canReturn = Navigator.of(context).canPop() || widget.onOpenDetail != null;
+    final canReturn =
+        Navigator.of(context).canPop() || widget.onOpenDetail != null;
 
     return Material(
       color: Colors.black,
@@ -5593,10 +5673,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             Expanded(
               child: ColoredBox(
                 color: const Color(0xFF0E1117),
-                child: SafeArea(
-                  top: false,
-                  child: _buildViewerBody(),
-                ),
+                child: SafeArea(top: false, child: _buildViewerBody()),
               ),
             ),
           ],
@@ -5682,489 +5759,6 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 }
 
-class _WebUrlImportRequest {
-  final String sourceUrl;
-  final UrlImportOptions options;
-  final ImportMetadata importMetadata;
-
-  const _WebUrlImportRequest({
-    required this.sourceUrl,
-    required this.options,
-    required this.importMetadata,
-  });
-
-  bool get hasAnySource => options.hasAnySource(sourceUrl);
-}
-
-class _WebUrlImportDialog extends StatefulWidget {
-  final String folderName;
-
-  const _WebUrlImportDialog({
-    required this.folderName,
-  });
-
-  static Future<_WebUrlImportRequest?> show(
-    BuildContext context, {
-    required String folderName,
-  }) {
-    return showDialog<_WebUrlImportRequest>(
-      context: context,
-      builder: (_) => _WebUrlImportDialog(folderName: folderName),
-    );
-  }
-
-  @override
-  State<_WebUrlImportDialog> createState() => _WebUrlImportDialogState();
-}
-
-class _WebUrlImportDialogState extends State<_WebUrlImportDialog> {
-  final TextEditingController _urlController = TextEditingController();
-  final TextEditingController _favoriteUsersController =
-      TextEditingController();
-  final TextEditingController _parallelDownloadsController =
-      TextEditingController(text: '6');
-
-  bool _siteKemono = true;
-  bool _siteCoomer = false;
-  bool _favoritePosts = false;
-  bool _includeInlineImages = false;
-  bool _includePostContent = false;
-  bool _includeComments = false;
-  bool _saveJson = false;
-  bool _overwriteExistingFiles = false;
-  bool _verbose = false;
-  bool _convertHitomiToPdf = true;
-  bool _organizeAfterImport = false;
-  UrlImportMediaType _mediaType = UrlImportMediaType.all;
-  UrlImportCookieMode _cookieMode = UrlImportCookieMode.auto;
-  String? _validationMessage;
-
-  @override
-  void dispose() {
-    _urlController.dispose();
-    _favoriteUsersController.dispose();
-    _parallelDownloadsController.dispose();
-    super.dispose();
-  }
-
-  UrlImportOptions get _options => UrlImportOptions(
-    cookieMode: _cookieMode,
-    favoriteSites: <String>[
-      if (_siteKemono) 'kemono',
-      if (_siteCoomer) 'coomer',
-    ],
-    favoritePosts: _favoritePosts,
-    favoriteUserServices: _splitCommaSeparated(_favoriteUsersController.text),
-    mediaType: _mediaType,
-    parallelDownloads:
-        int.tryParse(_parallelDownloadsController.text.trim()) ?? 6,
-    includeInlineImages: _includeInlineImages,
-    includePostContent: _includePostContent,
-    includeComments: _includeComments,
-    saveJson: _saveJson,
-    overwriteExistingFiles: _overwriteExistingFiles,
-    verbose: _verbose,
-    convertHitomiToPdf: _convertHitomiToPdf,
-  );
-
-  ImportMetadata get _importMetadata => ImportMetadata(
-    organizeAfterImport: _organizeAfterImport,
-  );
-
-  List<String> _splitCommaSeparated(String raw) {
-    final values = <String>[];
-    final seen = <String>{};
-    for (final chunk in raw.split(',')) {
-      final trimmed = chunk.trim();
-      if (trimmed.isEmpty) {
-        continue;
-      }
-      final normalized = trimmed.toLowerCase();
-      if (seen.add(normalized)) {
-        values.add(trimmed);
-      }
-    }
-    return values;
-  }
-
-  List<String> _collectSourceUrls(String raw) {
-    return const UrlImportOptions().collectSourceUrls(raw);
-  }
-
-  String _normalizeSourceUrlText(String raw) {
-    return _collectSourceUrls(raw).join(', ');
-  }
-
-  void _replaceSourceUrlText(String raw) {
-    final normalized = _normalizeSourceUrlText(raw);
-    _urlController.value = TextEditingValue(
-      text: normalized,
-      selection: TextSelection.collapsed(offset: normalized.length),
-    );
-  }
-
-  Future<void> _pasteSourceUrls() async {
-    try {
-      final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
-      final pastedText = clipboardData?.text ?? '';
-      final incomingUrls = _collectSourceUrls(pastedText);
-      if (!mounted) {
-        return;
-      }
-      if (incomingUrls.isEmpty) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          const SnackBar(content: Text('No URL found in clipboard')),
-        );
-        return;
-      }
-      final mergedUrls = <String>[
-        ..._collectSourceUrls(_urlController.text),
-        ...incomingUrls,
-      ];
-      setState(() {
-        _validationMessage = null;
-      });
-      _replaceSourceUrlText(mergedUrls.join(', '));
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('Clipboard read failed')),
-      );
-    }
-  }
-
-  String _cookieModeLabel(UrlImportCookieMode mode) {
-    switch (mode) {
-      case UrlImportCookieMode.auto:
-        return '自動';
-      case UrlImportCookieMode.none:
-        return '使わない';
-      case UrlImportCookieMode.projectKemono:
-        return 'Host Kemono Cookie';
-      case UrlImportCookieMode.projectCoomer:
-        return 'Host Coomer Cookie';
-      case UrlImportCookieMode.projectCombined:
-        return 'Host Combined Cookie';
-      case UrlImportCookieMode.customFile:
-        return 'カスタム';
-    }
-  }
-
-  bool _validate({required bool showMessage}) {
-    final sourceUrl = _normalizeSourceUrlText(_urlController.text);
-    final options = _options;
-    String? message;
-
-    if (!options.hasAnySource(sourceUrl)) {
-      message = 'URL または favorites 条件を入力してください。';
-    } else if (options.hasFavoriteTargets && !options.hasCookieSelection) {
-      message = 'favorites を使う場合は Cookie を選択してください。';
-    } else if (options.hasFavoriteTargets &&
-        options.normalizedFavoriteSites.isEmpty) {
-      message = 'favorites を使う場合は対象サイトを選択してください。';
-    }
-
-    if (showMessage) {
-      setState(() {
-        _validationMessage = message;
-      });
-    }
-    return message == null;
-  }
-
-  void _submit() {
-    if (!_validate(showMessage: true)) {
-      return;
-    }
-
-    final normalizedSourceUrl = _normalizeSourceUrlText(_urlController.text);
-    _replaceSourceUrlText(normalizedSourceUrl);
-
-    Navigator.of(context).pop(
-      _WebUrlImportRequest(
-        sourceUrl: normalizedSourceUrl,
-        options: _options,
-        importMetadata: _importMetadata,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final detectedUrlCount = _collectSourceUrls(_urlController.text).length;
-    return AlertDialog(
-      title: const Text('ホストへ URL 取り込み'),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 760),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Text('保存先: ${widget.folderName}'),
-              const SizedBox(height: 8),
-              const Text(
-                'Hitomi / Kemono / Coomer の URL や favorites 条件をホストへ送って実行します。',
-                style: TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _urlController,
-                autofocus: true,
-                minLines: 4,
-                maxLines: 8,
-                onChanged: (_) => setState(() => _validationMessage = null),
-                decoration: const InputDecoration(
-                  labelText: 'Source URLs',
-                  alignLabelWithHint: true,
-                  hintText:
-                      'https://hitomi.la/...\nhttps://kemono.su/...',
-                  helperText:
-                      'Paste multiple URLs with spaces, new lines, or commas. The dialog will normalize them into comma-separated URLs.',
-                ),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: <Widget>[
-                  OutlinedButton.icon(
-                    onPressed: _pasteSourceUrls,
-                    icon: const Icon(Icons.content_paste_go_outlined),
-                    label: const Text('Paste'),
-                  ),
-                  if (detectedUrlCount > 0)
-                    Chip(
-                      avatar: const Icon(Icons.link, size: 18),
-                      label: Text('$detectedUrlCount URLs'),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'Cookie と favorites',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<UrlImportCookieMode>(
-                value: _cookieMode,
-                decoration: const InputDecoration(labelText: 'Cookie の使い方'),
-                items: const <UrlImportCookieMode>[
-                  UrlImportCookieMode.auto,
-                  UrlImportCookieMode.none,
-                  UrlImportCookieMode.projectKemono,
-                  UrlImportCookieMode.projectCoomer,
-                  UrlImportCookieMode.projectCombined,
-                ]
-                    .map(
-                      (mode) => DropdownMenuItem(
-                        value: mode,
-                        child: Text(_cookieModeLabel(mode)),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
-                  setState(() {
-                    _cookieMode = value;
-                    _validationMessage = null;
-                  });
-                },
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Web からはホスト側の project cookie を使います。ブラウザ端末のローカル cookie.txt は指定できません。',
-                style: TextStyle(color: Colors.white60),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: <Widget>[
-                  FilterChip(
-                    label: const Text('Kemono'),
-                    selected: _siteKemono,
-                    onSelected: (selected) {
-                      setState(() {
-                        _siteKemono = selected;
-                        _validationMessage = null;
-                      });
-                    },
-                  ),
-                  FilterChip(
-                    label: const Text('Coomer'),
-                    selected: _siteCoomer,
-                    onSelected: (selected) {
-                      setState(() {
-                        _siteCoomer = selected;
-                        _validationMessage = null;
-                      });
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              CheckboxListTile(
-                value: _favoritePosts,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                title: const Text('favorite posts を取り込む'),
-                onChanged: (value) {
-                  setState(() {
-                    _favoritePosts = value ?? false;
-                    _validationMessage = null;
-                  });
-                },
-              ),
-              TextField(
-                controller: _favoriteUsersController,
-                onChanged: (_) => setState(() => _validationMessage = null),
-                decoration: const InputDecoration(
-                  labelText: 'favorite users サービス',
-                  hintText: 'all / patreon,fanbox / onlyfans',
-                  helperText: '空欄なら favorite users は使いません',
-                ),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'ダウンロード設定',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<UrlImportMediaType>(
-                value: _mediaType,
-                decoration: const InputDecoration(labelText: 'メディア種別'),
-                items: const <DropdownMenuItem<UrlImportMediaType>>[
-                  DropdownMenuItem(
-                    value: UrlImportMediaType.all,
-                    child: Text('すべて'),
-                  ),
-                  DropdownMenuItem(
-                    value: UrlImportMediaType.images,
-                    child: Text('画像のみ'),
-                  ),
-                  DropdownMenuItem(
-                    value: UrlImportMediaType.videos,
-                    child: Text('動画のみ'),
-                  ),
-                  DropdownMenuItem(
-                    value: UrlImportMediaType.imagesVideos,
-                    child: Text('画像と動画'),
-                  ),
-                ],
-                onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
-                  setState(() {
-                    _mediaType = value;
-                  });
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _parallelDownloadsController,
-                keyboardType: TextInputType.number,
-                onChanged: (_) => setState(() => _validationMessage = null),
-                decoration: const InputDecoration(
-                  labelText: '並列ダウンロード数',
-                  helperText: '既定は 6 です',
-                ),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: <Widget>[
-                  FilterChip(
-                    label: const Text('Hitomi を PDF 化'),
-                    selected: _convertHitomiToPdf,
-                    onSelected: (selected) => setState(() {
-                      _convertHitomiToPdf = selected;
-                    }),
-                  ),
-                  FilterChip(
-                    label: const Text('取り込み後に整理'),
-                    selected: _organizeAfterImport,
-                    onSelected: (selected) => setState(() {
-                      _organizeAfterImport = selected;
-                    }),
-                  ),
-                  FilterChip(
-                    label: const Text('inline 画像'),
-                    selected: _includeInlineImages,
-                    onSelected: (selected) => setState(() {
-                      _includeInlineImages = selected;
-                    }),
-                  ),
-                  FilterChip(
-                    label: const Text('本文保存'),
-                    selected: _includePostContent,
-                    onSelected: (selected) => setState(() {
-                      _includePostContent = selected;
-                    }),
-                  ),
-                  FilterChip(
-                    label: const Text('コメント保存'),
-                    selected: _includeComments,
-                    onSelected: (selected) => setState(() {
-                      _includeComments = selected;
-                    }),
-                  ),
-                  FilterChip(
-                    label: const Text('JSON 保存'),
-                    selected: _saveJson,
-                    onSelected: (selected) => setState(() {
-                      _saveJson = selected;
-                    }),
-                  ),
-                  FilterChip(
-                    label: const Text('上書き'),
-                    selected: _overwriteExistingFiles,
-                    onSelected: (selected) => setState(() {
-                      _overwriteExistingFiles = selected;
-                    }),
-                  ),
-                  FilterChip(
-                    label: const Text('詳細ログ'),
-                    selected: _verbose,
-                    onSelected: (selected) => setState(() {
-                      _verbose = selected;
-                    }),
-                  ),
-                ],
-              ),
-              if (_validationMessage != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Text(
-                  _validationMessage!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('キャンセル'),
-        ),
-        FilledButton.icon(
-          onPressed: _validate(showMessage: false) ? _submit : null,
-          icon: const Icon(Icons.download_outlined),
-          label: const Text('ホストで実行'),
-        ),
-      ],
-    );
-  }
-}
-
 class _RemoteThumbnail extends StatefulWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
@@ -6213,7 +5807,9 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
 
   void _refreshFuture({bool refresh = false}) {
     final client = widget.client;
-    if (client == null || widget.entry.isFolder || widget.entry.mediaId == null) {
+    if (client == null ||
+        widget.entry.isFolder ||
+        widget.entry.mediaId == null) {
       _future = null;
       return;
     }
@@ -6271,7 +5867,11 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
 
     if (_future == null) {
       return _shell(
-        const Icon(Icons.broken_image_outlined, size: 40, color: Colors.white54),
+        const Icon(
+          Icons.broken_image_outlined,
+          size: 40,
+          color: Colors.white54,
+        ),
       );
     }
 
@@ -6300,7 +5900,9 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
           }
           return _shell(
             Icon(
-              widget.entry.isPdf ? Icons.picture_as_pdf : Icons.image_not_supported_outlined,
+              widget.entry.isPdf
+                  ? Icons.picture_as_pdf
+                  : Icons.image_not_supported_outlined,
               size: 40,
               color: Colors.white54,
             ),
@@ -6319,7 +5921,11 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
             );
           }
           return _shell(
-            const Icon(Icons.image_not_supported_outlined, size: 40, color: Colors.white54),
+            const Icon(
+              Icons.image_not_supported_outlined,
+              size: 40,
+              color: Colors.white54,
+            ),
           );
         }
         return ClipRRect(
