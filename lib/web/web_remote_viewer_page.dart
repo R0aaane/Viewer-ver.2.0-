@@ -56,6 +56,8 @@ enum _WebBrowserDisplayMode {
   });
 }
 
+const String _webViewerVersion = '2026.04.12.1';
+
 class WebRemoteViewerPage extends StatefulWidget {
   final MetadataSettings initialSettings;
   final AppSettingsService settingsService;
@@ -74,7 +76,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   static const String _browserDisplayModePrefsKey =
       'prefs.webRemoteBrowserDisplayMode';
   static const int _threeUpPageSize = 30;
-  static const String _webViewerVersion = '2026.04.12.1';
 
   late MetadataSettings _settings;
   late final TextEditingController _apiController;
@@ -1889,6 +1890,25 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             const SizedBox(height: 10),
             Text(message, style: TextStyle(color: color)),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWebViewerVersionCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(
+        'Web ビューアー版: $_webViewerVersion',
+        style: const TextStyle(
+          color: Colors.white70,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
