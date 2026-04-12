@@ -4378,6 +4378,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   int _pdfPageNo = 1;
   int? _pdfTotalPages;
   bool _loadingPdfPage = false;
+  int _pdfPageRequestSerial = 0;
 
   @override
   void initState() {
@@ -4412,6 +4413,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     final missingMediaIdError = StateError(
       'Missing mediaId for ${widget.entry.displayName}',
     );
+    _pdfPageRequestSerial += 1;
     _clearPdfPreviewImage();
     if (mediaId == null || mediaId.isEmpty) {
       _tagsFuture = Future<List<Tag>>.value(const <Tag>[]);
@@ -4442,7 +4444,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
 
   Future<void> _loadPdfPageCount() async {
 
-    final mediaId = widget.entry.mediaId;
+    final mediaId = widget.entry.mediaId?.trim();
     if (mediaId == null || mediaId.isEmpty) return;
     final stableId = widget.entry.stableId;
     try {
@@ -4467,6 +4469,8 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   Future<void> _loadPdfPage(int pageNo) async {
+    final stableId = widget.entry.stableId;
+    final requestSerial = ++_pdfPageRequestSerial;
     final mediaId = widget.entry.mediaId?.trim();
     if (mediaId == null || mediaId.isEmpty) {
       setState(() {
@@ -4493,7 +4497,11 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
         pageNo,
         width: _pdfPreviewRenderWidth,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          widget.entry.stableId != stableId ||
+          _pdfPageRequestSerial != requestSerial) {
+        return;
+      }
       _clearPdfPreviewImage();
       setState(() {
         _pdfPageNo = pageNo;
@@ -4508,13 +4516,19 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
         label: '[WebMediaDetailView] _loadPdfPage',
         stackTrace: stackTrace,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          widget.entry.stableId != stableId ||
+          _pdfPageRequestSerial != requestSerial) {
+        return;
+      }
       setState(() {
         _pdfPageError =
             'Failed to load page $pageNo for ${widget.entry.displayName}: $error';
       });
     } finally {
-      if (mounted) {
+      if (mounted &&
+          widget.entry.stableId == stableId &&
+          _pdfPageRequestSerial == requestSerial) {
         setState(() {
           _loadingPdfPage = false;
         });
@@ -4851,6 +4865,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       <int, Future<Uint8List>>{};
   final Map<int, Uint8List> _pageBytesCache = <int, Uint8List>{};
   final Map<int, MemoryImage> _pageImageProviders = <int, MemoryImage>{};
+  int _viewerGeneration = 0;
+  String? _activeViewerMediaId;
+  String? _activeViewerStableId;
   Future<Uint8List>? _leftFuture;
   Future<Uint8List>? _rightFuture;
 
@@ -4876,6 +4893,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
   @override
   void dispose() {
+    _viewerGeneration += 1;
+    _activeViewerMediaId = null;
+    _activeViewerStableId = null;
     _clearViewerPageCaches();
     super.dispose();
   }
@@ -4933,8 +4953,21 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     return _pageImageProviders.putIfAbsent(pageNumber, () => MemoryImage(bytes));
   }
 
+  bool _isCurrentViewerRequest({
+    required int generation,
+    required String mediaId,
+    required String stableId,
+  }) {
+    return mounted &&
+        _viewerGeneration == generation &&
+        _activeViewerMediaId == mediaId &&
+        _activeViewerStableId == stableId &&
+        widget.entry.stableId == stableId &&
+        widget.entry.mediaId?.trim() == mediaId;
+  }
+
   Future<void> _loadViewer() async {
-    final mediaId = widget.entry.mediaId;
+    final mediaId = widget.entry.mediaId?.trim();
     if (mediaId == null || mediaId.isEmpty) {
       setState(() {
         _loadError = StateError('PDF を表示するための mediaId がありません');
@@ -4945,6 +4978,10 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       return;
     }
 
+    final stableId = widget.entry.stableId;
+    final generation = ++_viewerGeneration;
+    _activeViewerMediaId = mediaId;
+    _activeViewerStableId = stableId;
     _clearViewerPageCaches();
     setState(() {
       _loading = true;
@@ -4974,7 +5011,13 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         pageCountHint: meta.pageCount,
       );
       final twoPage = await twoPageFuture;
-      if (!mounted) return;
+      if (!_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
+        return;
+      }
       setState(() {
         _twoPage = twoPage ?? _twoPage;
         _totalPages = pageCountInfo.count.clamp(1, 1 << 30);
@@ -4983,7 +5026,13 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         _syncPageFutures();
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
+        return;
+      }
       if (_leftFuture == null) {
         setState(() {
           _loadError = error;
@@ -4992,7 +5041,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         });
       }
     } finally {
-      if (mounted) {
+      if (_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
         setState(() {
           _loading = false;
         });
@@ -5001,7 +5054,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   Future<Uint8List> _loadPageBytes(int pageNo) {
-    final mediaId = widget.entry.mediaId;
+    final mediaId = _activeViewerMediaId ?? widget.entry.mediaId?.trim();
+    final stableId = _activeViewerStableId ?? widget.entry.stableId;
+    final generation = _viewerGeneration;
     if (mediaId == null || mediaId.isEmpty) {
       return Future<Uint8List>.error(
         StateError('PDF を表示するための mediaId がありません'),
@@ -5026,18 +5081,30 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       pageNo,
       width: _pdfViewerRenderWidth,
     ).then((bytes) {
-      _pageFutureCache.remove(pageNo);
-      _pageBytesCache[pageNo] = bytes;
-      _pageImageProviderFor(pageNo, bytes);
+      if (_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
+        _pageFutureCache.remove(pageNo);
+        _pageBytesCache[pageNo] = bytes;
+        _pageImageProviderFor(pageNo, bytes);
+      }
       return bytes;
     });
     _pageFutureCache[pageNo] = future;
     future.catchError((_) {
-      if (identical(_pageFutureCache[pageNo], future)) {
-        _pageFutureCache.remove(pageNo);
+      if (_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
+        if (identical(_pageFutureCache[pageNo], future)) {
+          _pageFutureCache.remove(pageNo);
+        }
+        _pageBytesCache.remove(pageNo);
+        _evictPageImageProvider(pageNo);
       }
-      _pageBytesCache.remove(pageNo);
-      _evictPageImageProvider(pageNo);
     });
     return future;
   }
@@ -5074,10 +5141,12 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     if (_pageCountReliable || _loading) {
       return false;
     }
-    final mediaId = widget.entry.mediaId;
+    final mediaId = widget.entry.mediaId?.trim();
     if (mediaId == null || mediaId.isEmpty) {
       return false;
     }
+    final stableId = widget.entry.stableId;
+    final generation = _viewerGeneration;
 
     setState(() {
       _loading = true;
@@ -5088,7 +5157,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         page,
         width: _pdfViewerRenderWidth,
       );
-      if (!mounted) {
+      if (!_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
         return false;
       }
       setState(() {
@@ -5101,7 +5174,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       });
       return true;
     } catch (_) {
-      if (!mounted) {
+      if (!_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
         return false;
       }
       setState(() {
@@ -5115,7 +5192,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       });
       return false;
     } finally {
-      if (mounted) {
+      if (_isCurrentViewerRequest(
+        generation: generation,
+        mediaId: mediaId,
+        stableId: stableId,
+      )) {
         setState(() {
           _loading = false;
         });
@@ -5215,6 +5296,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     }
 
     return FutureBuilder<Uint8List>(
+      key: ValueKey<String>(
+        'pdf:${widget.entry.stableId}:$pageNumber:${identityHashCode(future)}',
+      ),
       future: future,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
