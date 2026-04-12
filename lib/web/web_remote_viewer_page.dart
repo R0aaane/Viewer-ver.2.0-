@@ -74,6 +74,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   static const String _browserDisplayModePrefsKey =
       'prefs.webRemoteBrowserDisplayMode';
   static const int _threeUpPageSize = 30;
+  static const String _webViewerVersion = '2026.04.12.1';
 
   late MetadataSettings _settings;
   late final TextEditingController _apiController;
@@ -752,6 +753,22 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               icon: const Icon(Icons.chevron_right),
               label: const Text('次'),
             ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Text(
+                'Web ビューアー版: $_webViewerVersion',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1318,6 +1335,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             ),
           const SizedBox(height: 16),
           _buildUnsupportedFeaturesCard(),
+          const SizedBox(height: 10),
+          _buildWebViewerVersionCard(),
         ],
       ),
     );
@@ -1845,6 +1864,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           ),
           const SizedBox(height: 16),
           _buildUnsupportedFeaturesCard(),
+          const SizedBox(height: 10),
+          _buildWebViewerVersionCard(),
         ],
       );
     }
@@ -2875,6 +2896,25 @@ class _BrowserDisplayModeCard extends StatelessWidget {
               },
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWebViewerVersionCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(
+        'Web ビューアー版: $_webViewerVersion',
+        style: const TextStyle(
+          color: Colors.white70,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -5276,13 +5316,91 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     );
   }
 
+  Widget _buildPageSelector({required bool compact}) {
+    final totalPagesText = _pageCountReliable ? '$_totalPages' : '$_totalPages+';
+    final pageText = '$_page / $totalPagesText';
+    final selectedPage = _page <= _totalPages ? _page : _totalPages;
+
+    if (!_pageCountReliable || _totalPages <= 1) {
+      return Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 12 : 14,
+          vertical: compact ? 8 : 10,
+        ),
+        decoration: BoxDecoration(
+          color: Colors.white12,
+          borderRadius: BorderRadius.circular(compact ? 14 : 999),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Text(
+          pageText,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10),
+      decoration: BoxDecoration(
+        color: Colors.white12,
+        borderRadius: BorderRadius.circular(compact ? 14 : 999),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<int>(
+          value: selectedPage,
+          isDense: true,
+          menuMaxHeight: compact ? 320 : 420,
+          dropdownColor: const Color(0xFF182131),
+          borderRadius: BorderRadius.circular(14),
+          iconEnabledColor: Colors.white70,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+          selectedItemBuilder:
+              (context) => List<Widget>.generate(_totalPages, (index) {
+                final pageNumber = index + 1;
+                return Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: compact ? 4 : 6,
+                      vertical: compact ? 6 : 8,
+                    ),
+                    child: Text('$pageNumber / $_totalPages'),
+                  ),
+                );
+              }),
+          items: List<DropdownMenuItem<int>>.generate(_totalPages, (index) {
+            final pageNumber = index + 1;
+            return DropdownMenuItem<int>(
+              value: pageNumber,
+              child: Text('ページ $pageNumber'),
+            );
+          }),
+          onChanged:
+              _loading
+                  ? null
+                  : (value) {
+                      if (value == null || value == _page) {
+                        return;
+                      }
+                      _setCurrentPage(value);
+                    },
+        ),
+      ),
+    );
+  }
+
   Widget _buildToolbar() {
     final canPrev = _page > 1;
     final canNext =
         !_loading &&
         (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _totalPages);
-    final totalPagesText = _pageCountReliable ? '$_totalPages' : '$_totalPages+';
-    final pageText = '$_page/$totalPagesText';
 
     return Wrap(
       spacing: 8,
@@ -5294,17 +5412,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
           icon: const Icon(Icons.chevron_left),
           label: const Text('前'),
         ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.white12,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: Colors.white10),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Text(pageText),
-          ),
-        ),
+        _buildPageSelector(compact: false),
         OutlinedButton.icon(
           onPressed: canNext ? _next : null,
           icon: const Icon(Icons.chevron_right),
@@ -5324,8 +5432,6 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     final canNext =
         !_loading &&
         (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _totalPages);
-    final totalPagesText = _pageCountReliable ? '$_totalPages' : '$_totalPages+';
-    final pageText = '$_page / $totalPagesText';
     final canReturn = Navigator.of(context).canPop() || widget.onOpenDetail != null;
 
     return Material(
@@ -5363,19 +5469,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
               const Spacer(),
               Container(
                 margin: const EdgeInsets.only(right: 12),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white12,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: Text(
-                  pageText,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                child: _buildPageSelector(compact: true),
               ),
             ],
           ),
