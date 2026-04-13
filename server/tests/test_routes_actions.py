@@ -36,6 +36,7 @@ class _RecordingMetadataStore:
         self.rename_calls: list[dict[str, object | None]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.organize_calls: list[dict[str, object | None]] = []
+        self.backfill_calls = 0
 
     def apply_rename(
         self,
@@ -83,6 +84,10 @@ class _RecordingMetadataStore:
         if self.organize_error is not None:
             raise self.organize_error
         return dict(self.organize_result)
+
+    def backfill_configured_tag_aliases(self) -> dict[str, int]:
+        self.backfill_calls += 1
+        return {'removedAliasCount': 0, 'migratedLinkCount': 0}
 
 
 class _RecordingIndexService:
@@ -345,9 +350,10 @@ class ActionsRoutesTest(unittest.TestCase):
 
         response = request_rescan(request)
 
-        self.assertEqual(response.message, 'Rescan completed: 3 items')
+        self.assertEqual(response.message, 'Rescan completed: 3 items (tag aliases updated: 0)')
         self.assertEqual(index_service.rescan_calls, [[r'C:\library', r'D:\books']])
         self.assertEqual(index_service.scan_calls, [r'C:\library', r'D:\books'])
+        self.assertEqual(store.backfill_calls, 1)
 
     def test_request_rescan_propagates_bad_request(self) -> None:
         store = _RecordingMetadataStore()

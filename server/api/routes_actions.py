@@ -52,14 +52,26 @@ def request_rescan(
         if target:
             logger.info("[rescan] request target=%s", target)
             scanned = index_service.scan_folder(target)
+            backfill = request.app.state.metadata_store.backfill_configured_tag_aliases()
             logger.info("[rescan] completed target=%s scanned=%s", target, scanned)
-            return MessageResponse(message=f"Rescan completed: {scanned} items")
+            return MessageResponse(
+                message=(
+                    f"Rescan completed: {scanned} items "
+                    f"(tag aliases updated: {backfill['removedAliasCount']})"
+                )
+            )
 
         logger.info("[rescan] request configured_roots=%s", settings.media_roots)
         results = index_service.rescan_configured_roots(settings.media_roots)
+        backfill = request.app.state.metadata_store.backfill_configured_tag_aliases()
         total = sum(int(entry["count"]) for entry in results)
         logger.info("[rescan] completed configured_roots total=%s details=%s", total, results)
-        return MessageResponse(message=f"Rescan completed: {total} items")
+        return MessageResponse(
+            message=(
+                f"Rescan completed: {total} items "
+                f"(tag aliases updated: {backfill['removedAliasCount']})"
+            )
+        )
     except ApiError:
         raise
     except Exception as error:

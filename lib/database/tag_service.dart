@@ -14,6 +14,7 @@ import '../services/app_settings_service.dart';
 import '../services/import_source_normalizer.dart';
 import '../services/media_id_resolver.dart';
 import '../services/remote_tag_api_client.dart';
+import '../services/tag_alias_service.dart';
 import 'app_db.dart';
 import 'local_tag_store.dart';
 
@@ -27,6 +28,7 @@ class TagService {
   MetadataSettings _settings = const MetadataSettings();
   RemoteTagApiClient? _remoteClient;
   Future<void>? _initializeFuture;
+  TagAliasService _tagAliasService = TagAliasService.empty();
 
   final Map<String, MediaItem> _knownItems = <String, MediaItem>{};
   final Map<int, String> _remoteTagIdLookup = <int, String>{};
@@ -48,8 +50,12 @@ class TagService {
   }
 
   Future<void> _initializeInternal() async {
+    _tagAliasService = await TagAliasService.loadDefault();
     _settings = await _settingsService.loadMetadataSettings();
     _remoteClient = _buildRemoteClient(_settings);
+    if (!isRemoteMode) {
+      await _backfillLocalTagAliases();
+    }
   }
 
   Future<void> reloadSettings() async {
@@ -126,19 +132,23 @@ class TagService {
   Future<void> addTagToItem(MediaItem item, Tag tag) async {
     await initialize();
     rememberItem(item);
+    final canonicalTag = _canonicalizeTag(tag);
+    if (canonicalTag.name.trim().isEmpty) {
+      return;
+    }
 
     if (isRemoteMode) {
       final identity = await _idResolver.resolve(item);
       await _requireApiClient().addTagToItem(
         identity.stableId,
-        tag,
+        canonicalTag,
         identity: identity,
       );
       _remoteTagCache.remove(identity.stableId);
       return;
     }
 
-    await _localStore.addTagToItem(item, tag);
+    await _localStore.addTagToItem(item, canonicalTag);
     await _replaceHostMirrorTagsForItem(item);
   }
 
@@ -173,6 +183,10 @@ class TagService {
   Future<void> addTagToItems(List<MediaItem> items, Tag tag) async {
     await initialize();
     rememberItems(items);
+    final canonicalTag = _canonicalizeTag(tag);
+    if (canonicalTag.name.trim().isEmpty) {
+      return;
+    }
 
     if (isRemoteMode) {
       final targets = items
@@ -186,7 +200,7 @@ class TagService {
         final identity = await _idResolver.resolve(item);
         await _requireApiClient().addTagToItem(
           identity.stableId,
-          tag,
+          canonicalTag,
           identity: identity,
         );
         _remoteTagCache.remove(identity.stableId);
@@ -194,7 +208,7 @@ class TagService {
       return;
     }
 
-    await _localStore.addTagToItems(items, tag);
+    await _localStore.addTagToItems(items, canonicalTag);
     for (final item in items.where((entry) => entry.kind != MediaKind.folder)) {
       await _replaceHostMirrorTagsForItem(item);
     }
@@ -204,15 +218,16 @@ class TagService {
     final out = <Tag>[];
     final seen = <String>{};
     for (final tag in tags) {
-      final name = tag.name.trim();
+      final canonical = _canonicalizeTag(tag);
+      final name = canonical.name.trim();
       if (name.isEmpty) {
         continue;
       }
-      final key = '${tag.category.name}\u0000${name.toLowerCase()}';
+      final key = '${canonical.category.name}\u0000${name.toLowerCase()}';
       if (!seen.add(key)) {
         continue;
       }
-      out.add(Tag(name: name, category: tag.category));
+      out.add(Tag(name: name, category: canonical.category));
     }
     return out;
   }
@@ -344,23 +359,42 @@ class TagService {
         return items
             .where(
               (item) => (details[item.id] ?? const <TagWithId>[]).any(
-                (tag) =>
-                    tag.tag.category == category &&
-                    (partial
-                        ? tag.tag.name.toLowerCase().contains(name.toLowerCase())
-                        : tag.tag.name == name),
+                (tag) => tag.tag.category == category &&
+                    _matchesTagQuery(
+                      category,
+                      candidateName: tag.tag.name,
+                      query: name,
+                      partial: partial,
+                    ),
               ),
             )
             .map((item) => item.id)
             .toList(growable: false);
       }
 
-      return _localStore.findItemIdsByTag(
-        folderRaw: folderRaw,
-        category: category,
-        name: name,
-        partial: partial,
-      );
+      final items = await _localStore.listStoredMediaItems();
+      final filteredItems = items
+          .where(
+            (item) =>
+                item.kind != MediaKind.folder &&
+                (folderRaw.isEmpty || item.folderRaw == folderRaw),
+          )
+          .toList(growable: false);
+      final details = await getDetailedTagsByItems(filteredItems);
+      return filteredItems
+          .where(
+            (item) => (details[item.id] ?? const <TagWithId>[]).any(
+              (tag) => tag.tag.category == category &&
+                  _matchesTagQuery(
+                    category,
+                    candidateName: tag.tag.name,
+                    query: name,
+                    partial: partial,
+                  ),
+            ),
+          )
+          .map((item) => item.id)
+          .toList(growable: false);
     }
 
     final items = (candidates ?? const <MediaItem>[])
@@ -390,11 +424,13 @@ class TagService {
     return items
         .where(
           (item) => (details[item.id] ?? const <TagWithId>[]).any(
-            (tag) =>
-                tag.tag.category == category &&
-                (partial
-                    ? tag.tag.name.toLowerCase().contains(name.toLowerCase())
-                    : tag.tag.name == name),
+            (tag) => tag.tag.category == category &&
+                _matchesTagQuery(
+                  category,
+                  candidateName: tag.tag.name,
+                  query: name,
+                  partial: partial,
+                ),
           ),
         )
         .map((item) => item.id)
@@ -600,14 +636,19 @@ class TagService {
   }
 
   Future<String?> _findRemoteMasterTagId(Tag tag) async {
+    final canonicalTag = _canonicalizeTag(tag);
     try {
       final matches = await _requireApiClient().fetchMasterTags(
-        tag.category,
-        contains: tag.name,
+        canonicalTag.category,
+        contains: canonicalTag.name,
         limit: 500,
       );
       for (final entry in matches) {
-        if (entry.tag.category == tag.category && entry.tag.name == tag.name) {
+        if (entry.tag.category != canonicalTag.category) {
+          continue;
+        }
+        final entryCanonical = _canonicalizeTag(entry.tag);
+        if (entryCanonical.name == canonicalTag.name) {
           return entry.rawId;
         }
       }
@@ -636,6 +677,25 @@ class TagService {
           contains: contains,
           limit: limit,
         );
+      }
+      final trimmedContains = contains?.trim();
+      if (trimmedContains != null &&
+          trimmedContains.isNotEmpty &&
+          _tagAliasService.supportsCategory(category)) {
+        final localTags = await _localStore.listTagMasterByCategory(
+          category,
+          limit: 5000,
+        );
+        return localTags
+            .where(
+              (entry) => _tagAliasService.matchesContains(
+                category,
+                entry.tag.name,
+                trimmedContains,
+              ),
+            )
+            .take(limit)
+            .toList(growable: false);
       }
       return _localStore.listTagMasterByCategory(
         category,
@@ -699,7 +759,7 @@ class TagService {
   }) async {
     await initialize();
     if (!isRemoteMode) {
-      final items = await _localStore.findMediaItemsByTagGlobal(
+      final items = await _findLocalMediaItemsByTag(
         category: category,
         name: name,
         partial: partial,
@@ -720,7 +780,7 @@ class TagService {
     await initialize();
 
     if (!isRemoteMode) {
-      final items = await _localStore.findMediaItemsByTagGlobal(
+      final items = await _findLocalMediaItemsByTag(
         category: category,
         name: name,
         partial: partial,
@@ -740,6 +800,32 @@ class TagService {
     return allItems.where((item) => matched.contains(item.id)).toList(
       growable: false,
     );
+  }
+
+  Future<List<MediaItem>> _findLocalMediaItemsByTag({
+    required TagCategory category,
+    required String name,
+    required bool partial,
+  }) async {
+    final out = <MediaItem>[];
+    final seen = <String>{};
+    for (final query in _searchTermsForCategory(
+      category,
+      name,
+      partial: partial,
+    )) {
+      final items = await _localStore.findMediaItemsByTagGlobal(
+        category: category,
+        name: query,
+        partial: partial,
+      );
+      for (final item in items) {
+        if (seen.add(item.id)) {
+          out.add(item);
+        }
+      }
+    }
+    return out;
   }
 
   Future<Map<String, String>> organizeAppLibrary({
@@ -954,19 +1040,19 @@ class TagService {
       );
       final missing = <Tag>[];
       for (final entry in remoteTags) {
-        final normalizedName = entry.tag.name.trim();
+        final canonicalTag = _canonicalizeTag(entry.tag);
+        final normalizedName = canonicalTag.name.trim();
         if (normalizedName.isEmpty) {
           continue;
         }
-        final tag = Tag(name: normalizedName, category: entry.tag.category);
-        final key = _tagLookupKey(tag);
+        final key = _tagLookupKey(canonicalTag);
         if (key == null ||
             excludedTagKeys.contains(key) ||
             knownKeys.contains(key)) {
           continue;
         }
         knownKeys.add(key);
-        missing.add(tag);
+        missing.add(canonicalTag);
       }
 
       for (final tag in missing) {
@@ -1259,27 +1345,140 @@ class TagService {
     }();
   }
 
+  Tag _canonicalizeTag(Tag tag) {
+    return _tagAliasService.canonicalizeTag(tag);
+  }
+
+  List<String> _searchTermsForCategory(
+    TagCategory category,
+    String rawQuery, {
+    required bool partial,
+  }) {
+    final queries = _tagAliasService.equivalentNames(
+      category,
+      rawQuery,
+      partial: partial,
+    );
+    if (queries.isNotEmpty) {
+      return queries;
+    }
+    final trimmed = rawQuery.trim();
+    return trimmed.isEmpty ? const <String>[] : <String>[trimmed];
+  }
+
+  bool _matchesTagQuery(
+    TagCategory category, {
+    required String candidateName,
+    required String query,
+    bool partial = false,
+  }) {
+    return _tagAliasService.matchesTagName(
+      category,
+      candidateName,
+      query,
+      partial: partial,
+    );
+  }
+
+  Future<void> _backfillLocalTagAliases() async {
+    if (!_tagAliasService.isConfigured) {
+      return;
+    }
+
+    final touchedItems = <String, MediaItem>{};
+    var migratedTagCount = 0;
+    var removedAliasCount = 0;
+
+    for (final category in const <TagCategory>[
+      TagCategory.series,
+      TagCategory.character,
+    ]) {
+      if (!_tagAliasService.supportsCategory(category)) {
+        continue;
+      }
+
+      final masters = await _localStore.listTagMasterByCategory(
+        category,
+        limit: 5000,
+      );
+      for (final master in masters) {
+        final currentName = master.tag.name.trim();
+        final canonicalName = _tagAliasService.canonicalizeName(
+          category,
+          currentName,
+        );
+        if (currentName.isEmpty ||
+            canonicalName.isEmpty ||
+            currentName == canonicalName) {
+          continue;
+        }
+
+        final items = await _localStore.findMediaItemsByTagGlobal(
+          category: category,
+          name: currentName,
+        );
+        for (final item in items) {
+          await _localStore.addTagToItem(
+            item,
+            Tag(name: canonicalName, category: category),
+          );
+          touchedItems[item.id] = item;
+          migratedTagCount += 1;
+        }
+        await _localStore.deleteTagMaster(master.tagId);
+        removedAliasCount += 1;
+      }
+    }
+
+    if (removedAliasCount == 0) {
+      return;
+    }
+
+    debugPrint(
+      '[tag-alias] local backfill completed '
+      'removedAliases=$removedAliasCount migratedTags=$migratedTagCount '
+      'touchedItems=${touchedItems.length}',
+    );
+
+    if (_hostMirrorClient != null) {
+      for (final item in touchedItems.values) {
+        try {
+          await _replaceHostMirrorTagsForItem(item);
+        } catch (error, stackTrace) {
+          debugPrint('[tag-alias] host mirror sync failed item=${item.id} error=$error');
+          debugPrintStack(
+            label: '[tag-alias] host mirror sync',
+            stackTrace: stackTrace,
+          );
+        }
+      }
+    }
+  }
+
   bool _matchesArtistSeries(
     List<TagWithId> tags, {
     String? artist,
     String? series,
   }) {
-    final lowerArtist = artist?.toLowerCase();
-    final lowerSeries = series?.toLowerCase();
-
     final hasArtist =
-        lowerArtist == null ||
+        artist == null ||
         tags.any(
-          (tag) =>
-              tag.tag.category == TagCategory.artist &&
-              tag.tag.name.toLowerCase() == lowerArtist,
+          (tag) => tag.tag.category == TagCategory.artist &&
+              _matchesTagQuery(
+                TagCategory.artist,
+                candidateName: tag.tag.name,
+                query: artist,
+              ),
         );
     final hasSeries =
-        lowerSeries == null ||
+        series == null ||
         tags.any(
-          (tag) =>
-              tag.tag.category == TagCategory.series &&
-              tag.tag.name.toLowerCase() == lowerSeries,
+          (tag) => tag.tag.category == TagCategory.series &&
+              _matchesTagQuery(
+                TagCategory.series,
+                candidateName: tag.tag.name,
+                query: series,
+              ),
         );
 
     return hasArtist && hasSeries;
@@ -1326,18 +1525,16 @@ class TagService {
     for (final itemId in _localItemLookupKeys(item.id)) {
       final current = await _localStore.listTagsForItem(itemId);
       for (final entry in current) {
-        final normalizedName = entry.tag.name.trim();
+        final canonical = _canonicalizeTag(entry.tag);
+        final normalizedName = canonical.name.trim();
         if (normalizedName.isEmpty) {
           continue;
         }
         final key =
-            '${entry.tag.category.name}\u0000${normalizedName.toLowerCase()}';
+            '${canonical.category.name}\u0000${normalizedName.toLowerCase()}';
         merged.putIfAbsent(
           key,
-          () => Tag(
-            name: normalizedName,
-            category: entry.tag.category,
-          ),
+          () => Tag(name: normalizedName, category: canonical.category),
         );
       }
     }

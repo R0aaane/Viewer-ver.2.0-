@@ -439,6 +439,19 @@ class SqliteStore:
             result = cur.execute("DELETE FROM tag_master WHERE tag_id = ?", (tag_id,))
         return int(result.rowcount or 0)
 
+    def list_media_ids_for_tag(self, tag_id: str) -> list[str]:
+        with self._cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT media_id
+                  FROM media_tag_links
+                 WHERE tag_id = ?
+              ORDER BY media_id COLLATE NOCASE
+                """,
+                (tag_id,),
+            ).fetchall()
+        return [str(row["media_id"]) for row in rows]
+
     def list_tags_for_media(self, media_id: str) -> list[dict[str, Any]]:
         with self._cursor() as cur:
             rows = cur.execute(

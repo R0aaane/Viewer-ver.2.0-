@@ -12,6 +12,7 @@ from typing import Any
 
 from server.core.errors import bad_request, not_found
 from server.repositories.sqlite_store import SqliteStore
+from server.services.tag_alias_service import TagAliasService
 
 
 logger = logging.getLogger(__name__)
@@ -200,8 +201,14 @@ class SearchQuery:
 
 
 class MetadataStore:
-    def __init__(self, sqlite_store: SqliteStore) -> None:
+    def __init__(
+        self,
+        sqlite_store: SqliteStore,
+        *,
+        tag_alias_service: TagAliasService | None = None,
+    ) -> None:
         self._db = sqlite_store
+        self._tag_aliases = tag_alias_service or TagAliasService()
 
     def list_indexed_folders(self) -> list[dict[str, Any]]:
         rows = self._db.list_indexed_folders()
@@ -267,12 +274,16 @@ class MetadataStore:
     ) -> list[dict[str, Any]]:
         rows = self._db.list_tag_master()
         filtered: list[dict[str, Any]] = []
-        contains_norm = _normalize_name(contains) if contains else None
+        contains_value = str(contains or "").strip()
 
         for row in rows:
             if category and row["category"] != category:
                 continue
-            if contains_norm and contains_norm not in row["normalized_name"]:
+            if contains_value and not self._tag_aliases.matches_contains(
+                str(row["category"]),
+                str(row["name"]),
+                contains_value,
+            ):
                 continue
             filtered.append(
                 {
@@ -291,6 +302,44 @@ class MetadataStore:
         if existing is None:
             raise not_found("Tag was not found")
         return self._db.delete_tag_master(tag_id)
+
+    def backfill_configured_tag_aliases(self) -> dict[str, int]:
+        if not self._tag_aliases.is_configured:
+            return {"removedAliasCount": 0, "migratedLinkCount": 0}
+
+        removed_alias_count = 0
+        migrated_link_count = 0
+        for row in self._db.list_tag_master():
+            category = str(row.get("category") or "").strip()
+            current_name = str(row.get("name") or "").strip()
+            canonical_name = self._tag_aliases.canonicalize_name(category, current_name)
+            if not category or not current_name or not canonical_name:
+                continue
+            if canonical_name == current_name:
+                continue
+
+            canonical_tag_id = self.ensure_exact_tag_id(
+                category=category,
+                raw_name=canonical_name,
+                request_id="tag-alias-backfill",
+            )
+            if canonical_tag_id is None:
+                continue
+
+            alias_tag_id = str(row["tag_id"])
+            if canonical_tag_id == alias_tag_id:
+                continue
+
+            media_ids = self._db.list_media_ids_for_tag(alias_tag_id)
+            for media_id in media_ids:
+                self._db.add_media_tag_link(media_id, canonical_tag_id)
+            migrated_link_count += len(media_ids)
+            removed_alias_count += self._db.delete_tag_master(alias_tag_id)
+
+        return {
+            "removedAliasCount": removed_alias_count,
+            "migratedLinkCount": migrated_link_count,
+        }
 
     def resolve_media_record(
         self,
@@ -360,21 +409,24 @@ class MetadataStore:
         resolved_request_id = _log_request_id(request_id)
         normalized_category = str(category or "").strip()
         raw_value = str(raw_name or "")
-        name = raw_value.strip()
+        incoming_name = raw_value.strip()
+        name = self._tag_aliases.canonicalize_name(normalized_category, incoming_name)
         normalized_name = _normalize_name(name) if name else ""
         logger.info(
-            '[TAG][RESOLVE][req:%s] category=%s rawName=%s normalizedName=%s lookup=exact',
+            '[TAG][RESOLVE][req:%s] category=%s rawName=%s canonicalName=%s normalizedName=%s lookup=exact',
             resolved_request_id,
             _log_value(normalized_category),
             _log_value(raw_value),
+            _log_value(name),
             _log_value(normalized_name),
         )
         if not normalized_category or not name or not normalized_name:
             logger.info(
-                '[TAG][RESOLVE][req:%s] category=%s rawName=%s normalizedName=%s found=false skipped=true reason=empty',
+                '[TAG][RESOLVE][req:%s] category=%s rawName=%s canonicalName=%s normalizedName=%s found=false skipped=true reason=empty',
                 resolved_request_id,
                 _log_value(normalized_category),
                 _log_value(raw_value),
+                _log_value(name),
                 _log_value(normalized_name),
             )
             return None
@@ -940,15 +992,25 @@ class MetadataStore:
         query: SearchQuery,
     ) -> bool:
         def tag_matches(category: str, needle: str) -> bool:
-            needle_norm = _normalize_name(needle)
+            needle_norms = [
+                _normalize_name(value)
+                for value in self._tag_aliases.equivalent_names(
+                    category,
+                    needle,
+                    partial=query.partial,
+                )
+            ]
+            needle_norms = [value for value in needle_norms if value]
+            if not needle_norms:
+                return False
             for tag in tags:
                 if tag["category"] != category:
                     continue
                 value = tag["normalized_name"]
                 if query.partial:
-                    if needle_norm in value:
+                    if any(needle_norm in value for needle_norm in needle_norms):
                         return True
-                elif needle_norm == value:
+                elif value in needle_norms:
                     return True
             return False
 
@@ -974,9 +1036,19 @@ class MetadataStore:
                 return False
 
         if query.q:
-            q_norm = _normalize_name(query.q)
-            if q_norm not in name_norm:
-                if not any(q_norm in tag["normalized_name"] for tag in tags):
+            q_norms = [
+                _normalize_name(value)
+                for value in self._tag_aliases.equivalent_names_across_categories(
+                    query.q,
+                    partial=True,
+                )
+            ]
+            q_norms = [value for value in q_norms if value]
+            if not any(q_norm in name_norm for q_norm in q_norms):
+                if not any(
+                    any(q_norm in tag["normalized_name"] for q_norm in q_norms)
+                    for tag in tags
+                ):
                     return False
 
         return True

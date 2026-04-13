@@ -19,6 +19,7 @@ from server.repositories.sqlite_store import SqliteStore
 from server.services.media_index_service import MediaIndexService
 from server.services.media_stream_service import MediaStreamService
 from server.services.metadata_store import MetadataStore
+from server.services.tag_alias_service import TagAliasService
 from server.services.thumbnail_service import ThumbnailService
 from server.services.url_download_service import UrlDownloadService
 from server.web_static import mount_web_build
@@ -38,7 +39,10 @@ async def lifespan(app: FastAPI):
     sqlite_store = SqliteStore(settings.sqlite_path)
     sqlite_store.init_schema()
 
-    metadata_store = MetadataStore(sqlite_store)
+    tag_alias_service = TagAliasService.load_default(
+        project_root / "assets" / "config" / "tag_aliases.json"
+    )
+    metadata_store = MetadataStore(sqlite_store, tag_alias_service=tag_alias_service)
     index_service = MediaIndexService(sqlite_store)
     stream_service = MediaStreamService(metadata_store, settings)
     thumbnail_service = ThumbnailService(metadata_store, settings.thumbs_dir)
@@ -58,6 +62,14 @@ async def lifespan(app: FastAPI):
     seeded_stats = metadata_store.seed_missing_media_stats()
     if seeded_stats:
         logger.info("Seeded media stats for %s PDF(s)", seeded_stats)
+
+    backfill_result = metadata_store.backfill_configured_tag_aliases()
+    if backfill_result["removedAliasCount"] or backfill_result["migratedLinkCount"]:
+        logger.info(
+            "Tag alias backfill completed removedAliases=%s migratedLinks=%s",
+            backfill_result["removedAliasCount"],
+            backfill_result["migratedLinkCount"],
+        )
 
     try:
         yield

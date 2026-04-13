@@ -1,0 +1,32 @@
+{
+  "__comment": "Use Japanese canonical names. Add romaji, English, abbreviations, and related spellings as aliases.",
+  "__example_series": {
+    "東方Project": ["Touhou Project", "Touhou", "東方"]
+  },
+  "__example_character": {
+    "博麗霊夢": ["Hakurei Reimu", "Reimu Hakurei", "霊夢"]
+  },
+  "series": {
+    "オリジナル": ["original", "Original"],
+    "ブルーアーカイブ": ["blue archive", "Blue Archive", "ブルアカ"],
+    "葬送のフリーレン": [
+      "Sousou no Frieren",
+      "Frieren: Beyond Journey's End",
+      "Frieren"
+    ]
+  },
+  "character": {
+    "フリーレン": ["Frieren"],
+    "フェルン": ["Fern"],
+    "天童アリス": [
+      "Tendou Alice",
+      "Tendo Alice",
+      "Alice Tendou",
+      "Alice Tendo"
+    ],
+    "生塩ノア": ["Ushio Noa", "Noa Ushio"],
+    "砂狼シロコ": ["Sunaookami Shiroko", "Shiroko Sunaookami"],
+    "空崎ヒナ": ["Sorasaki Hina", "Hina Sorasaki"],
+    "聖園ミカ": ["Misono Mika", "Mika Misono"]
+  }
+}
