@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 ThemeData buildAppTheme() {
   final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xFF6AA6FF),
+    seedColor: const Color(0xFFF2B7C8),
     brightness: Brightness.dark,
   );
 
@@ -10,7 +10,7 @@ ThemeData buildAppTheme() {
     useMaterial3: true,
     colorScheme: scheme,
     brightness: Brightness.dark,
-    scaffoldBackgroundColor: const Color(0xFF0B0B0C),
+    scaffoldBackgroundColor: const Color(0xFF100B0E),
   );
 
   return base.copyWith(
@@ -29,7 +29,7 @@ ThemeData buildAppTheme() {
       elevation: 0,
       margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
-      color: const Color(0xFF141418),
+      color: const Color(0xFF191317),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -62,7 +62,7 @@ ThemeData buildAppTheme() {
     inputDecorationTheme: InputDecorationTheme(
       isDense: true,
       filled: true,
-      fillColor: const Color(0xFF141418),
+      fillColor: const Color(0xFF191317),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
@@ -81,7 +81,7 @@ ThemeData buildAppTheme() {
       inputDecorationTheme: InputDecorationTheme(
         isDense: true,
         filled: true,
-        fillColor: const Color(0xFF141418),
+        fillColor: const Color(0xFF191317),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: Colors.white12),
@@ -89,7 +89,7 @@ ThemeData buildAppTheme() {
       ),
     ),
     dialogTheme: DialogThemeData(
-      backgroundColor: const Color(0xFF16171C),
+      backgroundColor: const Color(0xFF1D161A),
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
