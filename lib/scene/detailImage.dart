@@ -1,4 +1,4 @@
-﻿import 'dart:typed_data';
+import 'dart:typed_data';
 
 import 'dart:async';
 
@@ -12,6 +12,7 @@ import '../repository/mediaRepository.dart';
 
 import '../database/tag_service.dart';
 import '../models/tag.dart';
+import '../services/home_activity_store.dart';
 import '../services/item_name_service.dart';
 import 'rename_item_dialog.dart';
 
@@ -19,12 +20,29 @@ enum ReaderFitMode { vertical, horizontal, contain }
 
 enum _DetailMenuAction { delete }
 
+enum _TagSuggestionTab { recommended, recent, all }
+
+enum _TagLayoutMode { chips, list }
+
+class _TagSuggestionEntry {
+  final Tag tag;
+  final int usageCount;
+  final bool isRecent;
+
+  const _TagSuggestionEntry({
+    required this.tag,
+    required this.usageCount,
+    required this.isRecent,
+  });
+}
+
 class _PrefsKeys {
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
   static const String fitMode = 'prefs.readerFitMode';
   static const String twoPage = 'prefs.readerTwoPage';
 
   static const String favorites = 'prefs.favorites';
+  static const String detailRecentTags = 'prefs.detailRecentTags.v1';
 }
 
 class ImageDetailPage extends StatefulWidget {
@@ -48,13 +66,16 @@ class ImageDetailPage extends StatefulWidget {
 }
 
 class _ImageDetailPageState extends State<ImageDetailPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   FolderHandle? _folder;
 
   late List<MediaItem> _items;
   late int _index;
 
   late final TabController _tab;
+  late final TabController _candidateTabController;
+  late final Map<_TagSuggestionTab, ScrollController>
+  _candidateScrollControllers;
 
   int _page = 1;
   int _totalPages = 1;
@@ -70,6 +91,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   // tag・医ち繧ｰ・・
   List<TagWithId> _tags = const [];
   bool _tagsChanged = false;
+  bool _tagEditMode = false;
+  _TagLayoutMode _tagLayoutMode = _TagLayoutMode.chips;
+  final TextEditingController _assignedFilterCtrl = TextEditingController();
+  final Map<String, bool> _tagGroupExpanded = <String, bool>{};
+  final Map<String, int> _candidateVisibleCounts = <String, int>{};
 
   //縲繝輔か繝ｫ繝繧・ヵ繧｡繧､繝ｫ繧貞炎髯､
   String? _libraryRootRaw;
@@ -78,9 +104,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   String _normPath(String p) => p.replaceAll('/', '\\').toLowerCase();
 
   // 蛟呵｣徼ag縺ｮ繧ｭ繝｣繝・す繝･
-  List<TagWithId> _masterTags = const [];
+  Map<TagCategory, List<TagWithId>> _masterTagsByCategory =
+      <TagCategory, List<TagWithId>>{};
   bool _masterLoading = false;
   final TextEditingController _masterFilterCtrl = TextEditingController();
+  Timer? _masterFilterDebounce;
+  Timer? _activityPersistDebounce;
+  int? _pendingInitialPdfPage;
 
   TagCategory _selectedCategory = TagCategory.free;
   final TextEditingController _tagCtrl = TextEditingController();
@@ -88,6 +118,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   String? _loadedTagItemId;
   bool _masterTagsInitialized = false;
   int _detailLoadVersion = 0;
+  bool _recentTagsLoaded = false;
+  List<Tag> _recentTags = const <Tag>[];
+  bool _tagUsageLoading = false;
+  String? _tagUsageScopeRaw;
+  Map<String, int> _tagUsageCounts = <String, int>{};
 
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
@@ -154,8 +189,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     _items = widget.items;
     _index = widget.initialIndex;
     _page = widget.initialPdfPage ?? 1;
+    _pendingInitialPdfPage = widget.initialPdfPage;
 
     _tab = TabController(length: 2, vsync: this);
+    _candidateTabController = TabController(
+      length: _TagSuggestionTab.values.length,
+      vsync: this,
+    );
+    _candidateScrollControllers = <_TagSuggestionTab, ScrollController>{
+      for (final tab in _TagSuggestionTab.values) tab: ScrollController(),
+    };
 
     _tab.addListener(() {
       if (_tab.indexIsChanging) return;
@@ -208,8 +251,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   @override
   void dispose() {
+    _activityPersistDebounce?.cancel();
+    _masterFilterDebounce?.cancel();
+    unawaited(_persistCurrentActivity());
+    _assignedFilterCtrl.dispose();
     _masterFilterCtrl.dispose();
     _tagCtrl.dispose();
+    for (final controller in _candidateScrollControllers.values) {
+      controller.dispose();
+    }
+    _candidateTabController.dispose();
     _tab.dispose();
     if (_fullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -227,6 +278,17 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     await prefs.setBool(_PrefsKeys.twoPage, v);
   }
 
+  Future<void> _setTwoPageMode(bool value) async {
+    if (_twoPage == value) {
+      return;
+    }
+    setState(() {
+      _twoPage = value;
+      _syncReaderFutures(_item);
+    });
+    await _saveTwoPage(value);
+  }
+
   bool _isCurrentLoad(int loadVersion, MediaItem item) {
     return mounted && loadVersion == _detailLoadVersion && _item.id == item.id;
   }
@@ -238,6 +300,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (!_masterTagsInitialized && !_masterLoading) {
       _masterTagsInitialized = true;
       unawaited(_loadMasterTags());
+    }
+    if (!_recentTagsLoaded) {
+      _recentTagsLoaded = true;
+      unawaited(_loadRecentTags());
+    }
+    if (_tagUsageScopeRaw != _item.folderRaw && !_tagUsageLoading) {
+      unawaited(_loadTagUsageCountsForCurrentFolder());
     }
   }
 
@@ -297,19 +366,192 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     _masterTagsInitialized = true;
     setState(() => _masterLoading = true);
     try {
-      final list = await widget.tagService.listTagMasterByCategory(
-        _selectedCategory,
-        contains: contains,
-        limit: 300,
-      );
+      final futures = TagCategory.values.map((category) async {
+        final list = await widget.tagService.listTagMasterByCategory(
+          category,
+          contains: contains,
+          limit: 400,
+        );
+        return MapEntry(category, _sortTagWithIdList(list));
+      });
+      final loaded = await Future.wait(futures);
       if (!mounted) return;
-      setState(() => _masterTags = list);
+      setState(() {
+        _masterTagsByCategory = <TagCategory, List<TagWithId>>{
+          for (final entry in loaded) entry.key: entry.value,
+        };
+      });
     } finally {
       if (mounted) setState(() => _masterLoading = false);
     }
   }
 
-  Future<void> _loadTagsForCurrent({bool force = false, int? loadVersion}) async {
+  void _scheduleMasterTagReload(String rawQuery) {
+    _masterFilterDebounce?.cancel();
+    _masterFilterDebounce = Timer(const Duration(milliseconds: 240), () {
+      final query = rawQuery.trim();
+      unawaited(_loadMasterTags(contains: query.isEmpty ? null : query));
+    });
+  }
+
+  Future<void> _loadRecentTags() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawEntries =
+        prefs.getStringList(_PrefsKeys.detailRecentTags) ?? const <String>[];
+    final decoded = <Tag>[];
+    final seen = <String>{};
+    for (final raw in rawEntries) {
+      final tag = _deserializeRecentTag(raw);
+      if (tag == null) {
+        continue;
+      }
+      final key = _tagLookupKey(tag);
+      if (key == null || !seen.add(key)) {
+        continue;
+      }
+      decoded.add(tag);
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _recentTags = decoded;
+    });
+  }
+
+  String _serializeRecentTag(Tag tag) =>
+      '${tag.category.name}\u0001${tag.name}';
+
+  Tag? _deserializeRecentTag(String raw) {
+    final separatorIndex = raw.indexOf('\u0001');
+    if (separatorIndex <= 0 || separatorIndex >= raw.length - 1) {
+      return null;
+    }
+    final categoryRaw = raw.substring(0, separatorIndex);
+    final name = raw.substring(separatorIndex + 1).trim();
+    if (name.isEmpty) {
+      return null;
+    }
+    TagCategory? category;
+    for (final candidate in TagCategory.values) {
+      if (candidate.name == categoryRaw) {
+        category = candidate;
+        break;
+      }
+    }
+    if (category == null) {
+      return null;
+    }
+    return Tag(name: name, category: category);
+  }
+
+  Future<void> _recordRecentTag(Tag tag) async {
+    final key = _tagLookupKey(tag);
+    if (key == null) {
+      return;
+    }
+
+    final next = <Tag>[tag];
+    for (final existing in _recentTags) {
+      final existingKey = _tagLookupKey(existing);
+      if (existingKey == null || existingKey == key) {
+        continue;
+      }
+      next.add(existing);
+      if (next.length >= 30) {
+        break;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _recentTags = next;
+      });
+    } else {
+      _recentTags = next;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _PrefsKeys.detailRecentTags,
+      next.map(_serializeRecentTag).toList(growable: false),
+    );
+  }
+
+  Future<void> _loadTagUsageCountsForCurrentFolder() async {
+    final scopeRaw = _item.folderRaw;
+    _tagUsageScopeRaw = scopeRaw;
+    if (mounted) {
+      setState(() => _tagUsageLoading = true);
+    } else {
+      _tagUsageLoading = true;
+    }
+
+    try {
+      final loaded = await widget.repo.listMediaRecursiveFiles(
+        FolderHandle(scopeRaw),
+      );
+      final items = loaded
+          .where((entry) => entry.kind != MediaKind.folder)
+          .toList(growable: false);
+      if (items.isEmpty) {
+        if (!mounted || _tagUsageScopeRaw != scopeRaw) {
+          return;
+        }
+        setState(() {
+          _tagUsageCounts = <String, int>{};
+        });
+        return;
+      }
+
+      widget.tagService.rememberItems(items);
+      final details = await widget.tagService.getDetailedTagsByItems(items);
+      final counts = <String, int>{};
+      for (final tags in details.values) {
+        final seenInItem = <String>{};
+        for (final entry in tags) {
+          final key = _tagLookupKey(entry.tag);
+          if (key == null || !seenInItem.add(key)) {
+            continue;
+          }
+          counts[key] = (counts[key] ?? 0) + 1;
+        }
+      }
+
+      if (!mounted || _tagUsageScopeRaw != scopeRaw) {
+        return;
+      }
+      setState(() {
+        _tagUsageCounts = counts;
+      });
+    } catch (_) {
+      if (!mounted || _tagUsageScopeRaw != scopeRaw) {
+        return;
+      }
+      setState(() {
+        _tagUsageCounts = <String, int>{};
+      });
+    } finally {
+      if (mounted && _tagUsageScopeRaw == scopeRaw) {
+        setState(() => _tagUsageLoading = false);
+      } else if (_tagUsageScopeRaw == scopeRaw) {
+        _tagUsageLoading = false;
+      }
+    }
+  }
+
+  String? _tagLookupKey(Tag tag) {
+    final normalizedName = tag.name.trim();
+    if (normalizedName.isEmpty) {
+      return null;
+    }
+    return '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
+  }
+
+  Future<void> _loadTagsForCurrent({
+    bool force = false,
+    int? loadVersion,
+  }) async {
     final item = _item;
     final version = loadVersion ?? _detailLoadVersion;
     if (!force && _loadedTagItemId == item.id) {
@@ -323,10 +565,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       }
     });
     try {
-      final list = await widget.tagService.listTagsForItem(
-        item.id,
-        item: item,
-      );
+      final list = await widget.tagService.listTagsForItem(item.id, item: item);
       if (!_isCurrentLoad(version, item)) return;
       setState(() {
         _tags = list;
@@ -339,10 +578,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
-  Future<void> _addExistingMasterTag(TagWithId t) async {
+  Future<void> _addSuggestedTag(Tag tag) async {
     try {
-      await widget.tagService.addTagToItem(_item, t.tag);
+      await widget.tagService.addTagToItem(_item, tag);
       _tagsChanged = true;
+      await _recordRecentTag(tag);
       await _loadTagsForCurrent(force: true);
     } catch (e) {
       if (!mounted) return;
@@ -357,9 +597,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final name = _normalizeTag(raw);
     if (name == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('タグ名が無効です（空白を含めずに入力してください）')),
       );
       return;
@@ -371,8 +609,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       await widget.tagService.addTagToItem(_item, tag);
 
       _tagsChanged = true;
+      await _recordRecentTag(tag);
       _tagCtrl.clear();
       await _loadTagsForCurrent(force: true);
+      unawaited(
+        _loadMasterTags(
+          contains: _masterFilterCtrl.text.trim().isEmpty
+              ? null
+              : _masterFilterCtrl.text.trim(),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -383,11 +629,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   Future<void> _removeTagFromUi(TagWithId t) async {
     try {
-      await widget.tagService.removeTagFromItem(
-        _item.id,
-        t.tagId,
-        item: _item,
-      );
+      await widget.tagService.removeTagFromItem(_item.id, t.tagId, item: _item);
       _tagsChanged = true;
       await _loadTagsForCurrent(force: true);
     } catch (e) {
@@ -396,6 +638,320 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         context,
       ).showSnackBar(SnackBar(content: Text('タグ削除に失敗しました: $e')));
     }
+  }
+
+  List<TagCategory> get _orderedTagCategories => const <TagCategory>[
+    TagCategory.artist,
+    TagCategory.series,
+    TagCategory.character,
+    TagCategory.mediaType,
+    TagCategory.free,
+  ];
+
+  int _categoryOrder(TagCategory category) {
+    return _orderedTagCategories.indexOf(category);
+  }
+
+  String _categoryLabel(TagCategory category) {
+    switch (category) {
+      case TagCategory.artist:
+        return 'artist';
+      case TagCategory.series:
+        return 'series';
+      case TagCategory.mediaType:
+        return 'source';
+      case TagCategory.character:
+        return 'character';
+      case TagCategory.free:
+        return 'free';
+    }
+  }
+
+  String _categoryLongLabel(TagCategory category) {
+    switch (category) {
+      case TagCategory.artist:
+        return 'artist';
+      case TagCategory.series:
+        return 'series';
+      case TagCategory.mediaType:
+        return 'source / media';
+      case TagCategory.character:
+        return 'character';
+      case TagCategory.free:
+        return 'free';
+    }
+  }
+
+  IconData _categoryIcon(TagCategory category) {
+    switch (category) {
+      case TagCategory.artist:
+        return Icons.palette_outlined;
+      case TagCategory.series:
+        return Icons.collections_bookmark_outlined;
+      case TagCategory.mediaType:
+        return Icons.public_outlined;
+      case TagCategory.character:
+        return Icons.face_retouching_natural_outlined;
+      case TagCategory.free:
+        return Icons.sell_outlined;
+    }
+  }
+
+  Color _categoryColor(TagCategory category) {
+    switch (category) {
+      case TagCategory.artist:
+        return const Color(0xFFE0A15A);
+      case TagCategory.series:
+        return const Color(0xFF53B889);
+      case TagCategory.mediaType:
+        return const Color(0xFF4CA3D9);
+      case TagCategory.character:
+        return const Color(0xFF6D8CFF);
+      case TagCategory.free:
+        return const Color(0xFFC987A6);
+    }
+  }
+
+  List<TagWithId> _sortTagWithIdList(Iterable<TagWithId> source) {
+    final sorted = source.toList(growable: true);
+    sorted.sort((left, right) {
+      final categoryCompare = _categoryOrder(
+        left.tag.category,
+      ).compareTo(_categoryOrder(right.tag.category));
+      if (categoryCompare != 0) {
+        return categoryCompare;
+      }
+      return left.tag.name.toLowerCase().compareTo(
+        right.tag.name.toLowerCase(),
+      );
+    });
+    return sorted;
+  }
+
+  List<TagWithId> _filteredAssignedTags() {
+    final query = _assignedFilterCtrl.text.trim().toLowerCase();
+    final filtered = _tags.where((entry) {
+      if (query.isEmpty) {
+        return true;
+      }
+      return entry.tag.name.toLowerCase().contains(query) ||
+          _categoryLabel(entry.tag.category).contains(query);
+    });
+    return _sortTagWithIdList(filtered);
+  }
+
+  Map<TagCategory, List<TagWithId>> _groupAssignedTags() {
+    final grouped = <TagCategory, List<TagWithId>>{};
+    for (final entry in _filteredAssignedTags()) {
+      grouped.putIfAbsent(entry.tag.category, () => <TagWithId>[]).add(entry);
+    }
+    return grouped;
+  }
+
+  int _tagUsageCount(Tag tag) {
+    final key = _tagLookupKey(tag);
+    if (key == null) {
+      return 0;
+    }
+    return _tagUsageCounts[key] ?? 0;
+  }
+
+  bool _matchesMasterFilter(Tag tag) {
+    final query = _masterFilterCtrl.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return true;
+    }
+    return tag.name.toLowerCase().contains(query) ||
+        _categoryLabel(tag.category).contains(query);
+  }
+
+  int _tagNameMatchRank(Tag tag) {
+    final query = _masterFilterCtrl.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return 2;
+    }
+    final name = tag.name.toLowerCase();
+    if (name == query) {
+      return 0;
+    }
+    if (name.startsWith(query)) {
+      return 1;
+    }
+    return 2;
+  }
+
+  List<_TagSuggestionEntry> _buildSuggestionEntries(_TagSuggestionTab tab) {
+    final assignedKeys = _tags
+        .map((entry) => _tagLookupKey(entry.tag))
+        .whereType<String>()
+        .toSet();
+    final recentOrder = <String, int>{};
+    for (var index = 0; index < _recentTags.length; index++) {
+      final key = _tagLookupKey(_recentTags[index]);
+      if (key != null && !recentOrder.containsKey(key)) {
+        recentOrder[key] = index;
+      }
+    }
+
+    final deduped = <String, _TagSuggestionEntry>{};
+
+    void addTag(Tag tag) {
+      if (!_matchesMasterFilter(tag)) {
+        return;
+      }
+      final key = _tagLookupKey(tag);
+      if (key == null || assignedKeys.contains(key)) {
+        return;
+      }
+      final candidate = _TagSuggestionEntry(
+        tag: tag,
+        usageCount: _tagUsageCount(tag),
+        isRecent: recentOrder.containsKey(key),
+      );
+      final existing = deduped[key];
+      if (existing == null ||
+          existing.usageCount < candidate.usageCount ||
+          (!existing.isRecent && candidate.isRecent)) {
+        deduped[key] = candidate;
+      }
+    }
+
+    for (final category in _orderedTagCategories) {
+      final entries = _masterTagsByCategory[category] ?? const <TagWithId>[];
+      for (final entry in entries) {
+        addTag(entry.tag);
+      }
+    }
+    for (final tag in _recentTags) {
+      addTag(tag);
+    }
+
+    final allEntries = deduped.values.toList(growable: true);
+    final assignedCategories = _tags.map((entry) => entry.tag.category).toSet();
+
+    List<_TagSuggestionEntry> filtered;
+    switch (tab) {
+      case _TagSuggestionTab.recent:
+        filtered = allEntries
+            .where((entry) => entry.isRecent)
+            .toList(growable: true);
+        break;
+      case _TagSuggestionTab.all:
+        filtered = allEntries;
+        break;
+      case _TagSuggestionTab.recommended:
+        filtered = allEntries
+            .where((entry) {
+              return entry.isRecent ||
+                  entry.usageCount > 0 ||
+                  entry.tag.category == _selectedCategory ||
+                  assignedCategories.contains(entry.tag.category);
+            })
+            .toList(growable: true);
+        if (filtered.isEmpty) {
+          filtered = allEntries;
+        }
+        break;
+    }
+
+    filtered.sort((left, right) {
+      final categoryCompare = _categoryOrder(
+        left.tag.category,
+      ).compareTo(_categoryOrder(right.tag.category));
+      if (categoryCompare != 0) {
+        return categoryCompare;
+      }
+
+      final matchCompare = _tagNameMatchRank(
+        left.tag,
+      ).compareTo(_tagNameMatchRank(right.tag));
+      if (matchCompare != 0) {
+        return matchCompare;
+      }
+
+      if (tab == _TagSuggestionTab.recent) {
+        final leftRecent = recentOrder[_tagLookupKey(left.tag)] ?? 999999;
+        final rightRecent = recentOrder[_tagLookupKey(right.tag)] ?? 999999;
+        final recentCompare = leftRecent.compareTo(rightRecent);
+        if (recentCompare != 0) {
+          return recentCompare;
+        }
+      } else {
+        final leftSelected = left.tag.category == _selectedCategory ? 1 : 0;
+        final rightSelected = right.tag.category == _selectedCategory ? 1 : 0;
+        final selectedCompare = rightSelected.compareTo(leftSelected);
+        if (selectedCompare != 0 && tab == _TagSuggestionTab.recommended) {
+          return selectedCompare;
+        }
+
+        final leftAssigned = assignedCategories.contains(left.tag.category)
+            ? 1
+            : 0;
+        final rightAssigned = assignedCategories.contains(right.tag.category)
+            ? 1
+            : 0;
+        final assignedCompare = rightAssigned.compareTo(leftAssigned);
+        if (assignedCompare != 0 && tab == _TagSuggestionTab.recommended) {
+          return assignedCompare;
+        }
+
+        final recentCompare = (right.isRecent ? 1 : 0).compareTo(
+          left.isRecent ? 1 : 0,
+        );
+        if (recentCompare != 0 && tab == _TagSuggestionTab.recommended) {
+          return recentCompare;
+        }
+
+        final usageCompare = right.usageCount.compareTo(left.usageCount);
+        if (usageCompare != 0) {
+          return usageCompare;
+        }
+      }
+
+      return left.tag.name.toLowerCase().compareTo(
+        right.tag.name.toLowerCase(),
+      );
+    });
+    return filtered;
+  }
+
+  Map<TagCategory, List<_TagSuggestionEntry>> _groupSuggestionEntries(
+    _TagSuggestionTab tab,
+  ) {
+    final grouped = <TagCategory, List<_TagSuggestionEntry>>{};
+    for (final entry in _buildSuggestionEntries(tab)) {
+      grouped
+          .putIfAbsent(entry.tag.category, () => <_TagSuggestionEntry>[])
+          .add(entry);
+    }
+    return grouped;
+  }
+
+  bool _isGroupExpanded(String key, {required bool defaultValue}) {
+    return _tagGroupExpanded[key] ?? defaultValue;
+  }
+
+  void _toggleGroupExpanded(String key, {required bool defaultValue}) {
+    setState(() {
+      _tagGroupExpanded[key] = !(_tagGroupExpanded[key] ?? defaultValue);
+    });
+  }
+
+  int _visibleCandidateCount(
+    _TagSuggestionTab tab,
+    TagCategory category,
+    int total,
+  ) {
+    final key = '${tab.name}:${category.name}';
+    final count = _candidateVisibleCounts[key] ?? 12;
+    return count > total ? total : count;
+  }
+
+  void _showMoreCandidates(_TagSuggestionTab tab, TagCategory category) {
+    final key = '${tab.name}:${category.name}';
+    setState(() {
+      _candidateVisibleCounts[key] = (_candidateVisibleCounts[key] ?? 12) + 12;
+    });
   }
 
   BoxFit get _boxFit {
@@ -440,12 +996,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       _page = page.clamp(1, _totalPages);
       _syncReaderFutures(_item);
     });
+    _schedulePersistCurrentActivity();
   }
 
-  Future<void> _loadPageCountForCurrent(
-    MediaItem item,
-    int loadVersion,
-  ) async {
+  Future<void> _loadPageCountForCurrent(MediaItem item, int loadVersion) async {
     try {
       final total = await widget.repo.getPageCount(item);
       if (!_isCurrentLoad(loadVersion, item)) return;
@@ -455,6 +1009,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         _page = _page.clamp(1, _totalPages);
         _syncReaderFutures(item);
       });
+      _schedulePersistCurrentActivity();
     } catch (error) {
       if (!_isCurrentLoad(loadVersion, item)) return;
       setState(() {
@@ -462,9 +1017,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         _page = 1;
         _syncReaderFutures(item);
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ページ情報の取得に失敗しました: $error')),
-      );
+      _schedulePersistCurrentActivity();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ページ情報の取得に失敗しました: $error')));
     }
   }
 
@@ -476,19 +1032,27 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     _thumbFutureCache.clear();
     _loadedTagItemId = null;
     if (mounted) {
+      final initialPage = item.kind == MediaKind.pdf
+          ? (_pendingInitialPdfPage ?? 1)
+          : 1;
+      _pendingInitialPdfPage = null;
       setState(() {
         _isFavorite = false;
         _tags = const [];
         _tagsLoading = false;
+        if (_tagUsageScopeRaw != item.folderRaw) {
+          _tagUsageCounts = <String, int>{};
+        }
         _canDeleteFromLibrary =
             widget.repo.capabilities.canDelete && item.kind == MediaKind.pdf;
         _totalPages = 1;
-        _page = 1;
+        _page = initialPage < 1 ? 1 : initialPage;
         _syncReaderFutures(item);
       });
     }
 
     unawaited(_loadFavoriteForCurrent(loadVersion: loadVersion));
+    _schedulePersistCurrentActivity();
     if (item.kind == MediaKind.pdf) {
       unawaited(_loadPageCountForCurrent(item, loadVersion));
     }
@@ -497,10 +1061,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
-  Widget _buildLoadError(
-    String message, {
-    required VoidCallback onRetry,
-  }) {
+  Widget _buildLoadError(String message, {required VoidCallback onRetry}) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -543,6 +1104,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           _index++;
           _page = 1;
         });
+        _pendingInitialPdfPage = 1;
         _reloadForCurrent();
       }
     }
@@ -561,6 +1123,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           _index--;
           _page = 1;
         });
+        _pendingInitialPdfPage = 1;
         _reloadForCurrent();
       }
     }
@@ -581,8 +1144,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         metadataWarning = 'メタデータの更新に失敗しました: $e';
       }
       final prefs = await SharedPreferences.getInstance();
-      final favorites = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
-          .toSet();
+      final favorites =
+          (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+              .toSet();
       if (favorites.remove(item.id)) {
         favorites.add(updated.id);
         await prefs.setStringList(
@@ -612,6 +1176,27 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         context,
       ).showSnackBar(SnackBar(content: Text('名前の変更に失敗しました: $e')));
     }
+  }
+
+  void _schedulePersistCurrentActivity() {
+    _activityPersistDebounce?.cancel();
+    _activityPersistDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () => unawaited(_persistCurrentActivity()),
+    );
+  }
+
+  Future<void> _persistCurrentActivity() async {
+    final item = _item;
+    final page = item.kind == MediaKind.pdf ? _page : null;
+    final totalPages = item.kind == MediaKind.pdf ? _totalPages : null;
+    final prefs = await SharedPreferences.getInstance();
+    await HomeActivityStore.recordView(
+      prefs,
+      item: item,
+      lastPage: page,
+      totalPages: totalPages,
+    );
   }
 
   Future<void> _toggleFullscreen() async {
@@ -678,9 +1263,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (!mounted) return;
 
     if (!deleted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('削除に失敗しました')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('削除に失敗しました')));
       return;
     }
 
@@ -696,7 +1281,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final fav = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
         .toSet();
     fav.remove(item.id);
-    await prefs.setStringList(_PrefsKeys.favorites, fav.toList(growable: false));
+    await prefs.setStringList(
+      _PrefsKeys.favorites,
+      fav.toList(growable: false),
+    );
 
     if (metadataWarning != null && mounted) {
       ScaffoldMessenger.of(
@@ -708,7 +1296,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (!mounted) return;
     Navigator.pop(context, true);
   }
-
 
   Widget _withSidebar(BuildContext context, Widget body) {
     if (!_isWideLayout(context)) return body;
@@ -730,8 +1317,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         children: [
           Text('詳細メニュー', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 4),
-          Text(title, maxLines: 2, overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ],
       ),
     );
@@ -742,10 +1333,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
       child: Text(
         text,
-        style: Theme.of(context)
-            .textTheme
-            .labelLarge
-            ?.copyWith(color: Theme.of(context).colorScheme.primary),
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: Theme.of(context).colorScheme.primary,
+        ),
       ),
     );
   }
@@ -754,85 +1344,82 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     return ListView(
       padding: EdgeInsets.zero,
       children: [
-            _sidebarHeader(),
-            _sidebarSectionLabel('表示設定'),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: '表示フィット',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<ReaderFitMode>(
-                    value: _fitMode,
-                    isDense: true,
-                    items: const [
-                      DropdownMenuItem(
-                        value: ReaderFitMode.vertical,
-                        child: Text('縦フィット'),
-                      ),
-                      DropdownMenuItem(
-                        value: ReaderFitMode.horizontal,
-                        child: Text('横フィット'),
-                      ),
-                      DropdownMenuItem(
-                        value: ReaderFitMode.contain,
-                        child: Text('全体表示 (Contain)'),
-                      ),
-                    ],
-                    onChanged: (v) async {
-                      if (v == null) return;
-                      setState(() => _fitMode = v);
-                      await _saveFitMode(v);
-                    },
+        _sidebarHeader(),
+        _sidebarSectionLabel('表示設定'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: InputDecorator(
+            decoration: const InputDecoration(
+              labelText: '表示フィット',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<ReaderFitMode>(
+                value: _fitMode,
+                isDense: true,
+                items: const [
+                  DropdownMenuItem(
+                    value: ReaderFitMode.vertical,
+                    child: Text('縦フィット'),
                   ),
-                ),
+                  DropdownMenuItem(
+                    value: ReaderFitMode.horizontal,
+                    child: Text('横フィット'),
+                  ),
+                  DropdownMenuItem(
+                    value: ReaderFitMode.contain,
+                    child: Text('全体表示 (Contain)'),
+                  ),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  setState(() => _fitMode = v);
+                  await _saveFitMode(v);
+                },
               ),
             ),
-            SwitchListTile(
-              title: const Text('見開き表示 (ON/OFF)'),
-              value: _twoPage,
-              onChanged: (v) async {
-                setState(() => _twoPage = v);
-                await _saveTwoPage(v);
-                _reloadForCurrent();
-              },
-            ),
-            const Divider(),
-            _sidebarSectionLabel('フォルダ'),
-            ListTile(
-              title: Text(_folder?.raw ?? '\u672a\u9078\u629e'),
-              subtitle: Text(!widget.repo.capabilities.canPickFolder
-                  ? '\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f\u73fe\u5728\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u8868\u793a\u4e2d'
-                  : '\u8868\u793a\u3059\u308b\u30d5\u30a9\u30eb\u30c0\u306b\u5207\u308a\u66ff\u3048'),
-              trailing: const Icon(Icons.folder_open),
-              onTap: !widget.repo.capabilities.canPickFolder
-                  ? null
-                  : () async {
-                      _closeSidebar();
-                      final folder = await widget.repo.pickFolder();
-                      if (folder == null) return;
-                      final items = await widget.repo.listMedia(folder);
-                      if (!mounted) return;
-                      await _saveLastFolder(folder);
-                      setState(() {
-                        _folder = folder;
-                        _items = items;
-                        _index = 0;
-                        _page = 1;
-                      });
-                      _reloadForCurrent();
-                    },
-            ),
-          ],
+          ),
+        ),
+        SwitchListTile(
+          title: const Text('見開き表示 (ON/OFF)'),
+          value: _twoPage,
+          onChanged: (v) async => _setTwoPageMode(v),
+        ),
+        const Divider(),
+        _sidebarSectionLabel('フォルダ'),
+        ListTile(
+          title: Text(_folder?.raw ?? '\u672a\u9078\u629e'),
+          subtitle: Text(
+            !widget.repo.capabilities.canPickFolder
+                ? '\u30ea\u30e2\u30fc\u30c8\u30e2\u30fc\u30c9\u3067\u306f\u73fe\u5728\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u8868\u793a\u4e2d'
+                : '\u8868\u793a\u3059\u308b\u30d5\u30a9\u30eb\u30c0\u306b\u5207\u308a\u66ff\u3048',
+          ),
+          trailing: const Icon(Icons.folder_open),
+          onTap: !widget.repo.capabilities.canPickFolder
+              ? null
+              : () async {
+                  _closeSidebar();
+                  final folder = await widget.repo.pickFolder();
+                  if (folder == null) return;
+                  final items = await widget.repo.listMedia(folder);
+                  if (!mounted) return;
+                  await _saveLastFolder(folder);
+                  setState(() {
+                    _folder = folder;
+                    _items = items;
+                    _index = 0;
+                    _page = 1;
+                  });
+                  _reloadForCurrent();
+                },
+        ),
+      ],
     );
   }
 
-  Drawer _buildSidebar() => Drawer(
-        child: SafeArea(child: _buildSidebarListView()),
-      );
+  Drawer _buildSidebar() =>
+      Drawer(child: SafeArea(child: _buildSidebarListView()));
 
   Widget _buildSidebarPanel() {
     final scheme = Theme.of(context).colorScheme;
@@ -841,8 +1428,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       child: SafeArea(child: _buildSidebarListView()),
     );
   }
-
-
 
   @override
   Widget build(BuildContext context) {
@@ -918,23 +1503,23 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               ),
             ),
             if (_canDeleteFromLibrary)
-            PopupMenuButton<_DetailMenuAction>(
-              tooltip: 'メニュー',
-              onSelected: (a) {
-                if (a == _DetailMenuAction.delete) {
-                  _deleteCurrentItemWithWarning();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: _DetailMenuAction.delete,
-                  child: ListTile(
-                    leading: Icon(Icons.delete_outline),
-                    title: Text('PDF を削除'),
+              PopupMenuButton<_DetailMenuAction>(
+                tooltip: 'メニュー',
+                onSelected: (a) {
+                  if (a == _DetailMenuAction.delete) {
+                    _deleteCurrentItemWithWarning();
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: _DetailMenuAction.delete,
+                    child: ListTile(
+                      leading: Icon(Icons.delete_outline),
+                      title: Text('PDF を削除'),
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
           ],
           bottom: TabBar(
             controller: _tab,
@@ -945,50 +1530,53 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ),
         ),
 
-        body: _withSidebar(context, Shortcuts(
-          shortcuts: const <ShortcutActivator, Intent>{
-            SingleActivator(LogicalKeyboardKey.arrowLeft): _PrevIntent(),
-            SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
-            SingleActivator(LogicalKeyboardKey.escape): _EscapeIntent(),
-          },
-          child: Actions(
-            actions: <Type, Action<Intent>>{
-              _PrevIntent: CallbackAction<_PrevIntent>(
-                onInvoke: (intent) {
-                  // 髢ｲ隕ｧ逕ｨ繧ｿ繝悶・縺ｨ縺阪□縺代・繝ｼ繧ｸ繧堤ｧｻ蜍・
-                  if (_tab.index == 0) _prev();
-                  return null;
-                },
-              ),
-              _NextIntent: CallbackAction<_NextIntent>(
-                onInvoke: (intent) {
-                  if (_tab.index == 0) _next();
-                  return null;
-                },
-              ),
-              _EscapeIntent: CallbackAction<_EscapeIntent>(
-                onInvoke: (intent) {
-                  if (_fullscreen) {
-                    _toggleFullscreen();
-                  } else {
-                    _popWithResult(); // Grid繝壹・繧ｸ縺ｸ謌ｻ繧・
-                  }
-                  return null;
-                },
-              ),
+        body: _withSidebar(
+          context,
+          Shortcuts(
+            shortcuts: const <ShortcutActivator, Intent>{
+              SingleActivator(LogicalKeyboardKey.arrowLeft): _PrevIntent(),
+              SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
+              SingleActivator(LogicalKeyboardKey.escape): _EscapeIntent(),
             },
-            child: Focus(
-              autofocus: true,
-              child: AnimatedBuilder(
-                animation: _tab,
-                builder: (context, _) {
-                  if (_tab.index == 0) return _buildReader();
-                  return _buildDetail();
-                },
+            child: Actions(
+              actions: <Type, Action<Intent>>{
+                _PrevIntent: CallbackAction<_PrevIntent>(
+                  onInvoke: (intent) {
+                    // 髢ｲ隕ｧ逕ｨ繧ｿ繝悶・縺ｨ縺阪□縺代・繝ｼ繧ｸ繧堤ｧｻ蜍・
+                    if (_tab.index == 0) _prev();
+                    return null;
+                  },
+                ),
+                _NextIntent: CallbackAction<_NextIntent>(
+                  onInvoke: (intent) {
+                    if (_tab.index == 0) _next();
+                    return null;
+                  },
+                ),
+                _EscapeIntent: CallbackAction<_EscapeIntent>(
+                  onInvoke: (intent) {
+                    if (_fullscreen) {
+                      _toggleFullscreen();
+                    } else {
+                      _popWithResult(); // Grid繝壹・繧ｸ縺ｸ謌ｻ繧・
+                    }
+                    return null;
+                  },
+                ),
+              },
+              child: Focus(
+                autofocus: true,
+                child: AnimatedBuilder(
+                  animation: _tab,
+                  builder: (context, _) {
+                    if (_tab.index == 0) return _buildReader();
+                    return _buildDetail();
+                  },
+                ),
               ),
             ),
           ),
-        )),
+        ),
       ),
     );
   }
@@ -1152,6 +1740,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Widget _buildDetailHeader(MediaItem item) {
+    return _buildModernDetailHeader(item);
+    // ignore: dead_code
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -1197,8 +1787,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                 value: _selectedCategory,
                 isDense: true,
                 items: const [
-                  DropdownMenuItem(value: TagCategory.artist, child: Text('作家')),
-                  DropdownMenuItem(value: TagCategory.series, child: Text('シリーズ')),
+                  DropdownMenuItem(
+                    value: TagCategory.artist,
+                    child: Text('作家'),
+                  ),
+                  DropdownMenuItem(
+                    value: TagCategory.series,
+                    child: Text('シリーズ'),
+                  ),
                   DropdownMenuItem(
                     value: TagCategory.mediaType,
                     child: Text('メディア種別'),
@@ -1305,7 +1901,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             const Spacer(),
             IconButton(
               tooltip: '再読み込み',
-              onPressed: () => _loadMasterTags(contains: _masterFilterCtrl.text),
+              onPressed: () =>
+                  _loadMasterTags(contains: _masterFilterCtrl.text),
               icon: const Icon(Icons.refresh),
             ),
           ],
@@ -1353,6 +1950,762 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ],
         ),
       ],
+    );
+  }
+
+  List<TagWithId> get _masterTags =>
+      _masterTagsByCategory[_selectedCategory] ?? const <TagWithId>[];
+
+  Future<void> _addExistingMasterTag(TagWithId tag) {
+    return _addSuggestedTag(tag.tag);
+  }
+
+  Widget _buildModernDetailHeader(MediaItem item) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildCompactMetadataCard(item),
+        const SizedBox(height: 12),
+        _buildAssignedTagsSection(),
+        const SizedBox(height: 12),
+        _buildCandidateTagsSection(),
+      ],
+    );
+  }
+
+  Widget _buildCompactMetadataCard(MediaItem item) {
+    final title = ItemNameService.formatMediaTitle(
+      item.displayName,
+      kind: item.kind,
+    );
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: SelectableText(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (_canRenameCurrentItem)
+                IconButton(
+                  tooltip: '名前を変更',
+                  icon: const Icon(Icons.edit, color: Colors.white),
+                  onPressed: _renameCurrentItem,
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildMetaPill(
+                icon: item.kind == MediaKind.pdf
+                    ? Icons.picture_as_pdf_outlined
+                    : Icons.image_outlined,
+                label: item.kind == MediaKind.pdf ? 'PDF' : '画像',
+              ),
+              if (_isPdf)
+                _buildMetaPill(
+                  icon: Icons.menu_book_outlined,
+                  label: '$_totalPages ページ',
+                ),
+              _buildMetaPill(
+                icon: Icons.folder_outlined,
+                label: _basename(item.folderRaw),
+              ),
+              _buildMetaPill(
+                icon: Icons.sell_outlined,
+                label: '${_tags.length} タグ',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetaPill({required IconData icon, required String label}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: _uiChip,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: Colors.white70),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAssignedTagsSection() {
+    final grouped = _groupAssignedTags();
+    final filteredCount = grouped.values.fold<int>(
+      0,
+      (sum, entries) => sum + entries.length,
+    );
+
+    return _buildTagSectionCard(
+      title: '付与済みタグ',
+      subtitle: filteredCount == _tags.length
+          ? '${_tags.length}件'
+          : '$filteredCount / ${_tags.length}件',
+      trailing: TextButton.icon(
+        onPressed: () {
+          setState(() => _tagEditMode = !_tagEditMode);
+        },
+        icon: Icon(_tagEditMode ? Icons.check : Icons.edit_outlined),
+        label: Text(_tagEditMode ? '編集を閉じる' : '編集する'),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildTagSearchField(
+            controller: _assignedFilterCtrl,
+            hintText: '付与済みタグを探す',
+            onChanged: (_) => setState(() {}),
+          ),
+          if (_tagEditMode) ...[
+            const SizedBox(height: 12),
+            _buildTagEditToolbar(),
+          ],
+          if (_tagsLoading) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(),
+          ],
+          const SizedBox(height: 12),
+          if (filteredCount == 0 && !_tagsLoading)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                _tags.isEmpty ? 'まだタグは付いていません。' : '検索条件に一致する付与済みタグはありません。',
+                style: const TextStyle(color: Colors.white70),
+              ),
+            )
+          else
+            Column(
+              children: [
+                for (final category in _orderedTagCategories)
+                  if ((grouped[category] ?? const <TagWithId>[]).isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _buildAssignedCategorySection(
+                        category: category,
+                        tags: grouped[category]!,
+                      ),
+                    ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTagEditToolbar() {
+    final categoryField = DropdownButtonFormField<TagCategory>(
+      initialValue: _selectedCategory,
+      decoration: const InputDecoration(
+        labelText: '追加カテゴリ',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: _orderedTagCategories
+          .map(
+            (category) => DropdownMenuItem<TagCategory>(
+              value: category,
+              child: Text(_categoryLongLabel(category)),
+            ),
+          )
+          .toList(growable: false),
+      onChanged: (value) {
+        if (value == null) {
+          return;
+        }
+        setState(() => _selectedCategory = value);
+      },
+    );
+    final inputField = TextField(
+      controller: _tagCtrl,
+      decoration: const InputDecoration(
+        hintText: 'タグ名を入力 / 空白は不可',
+        isDense: true,
+        border: OutlineInputBorder(),
+      ),
+      onSubmitted: (_) => _addTagFromUi(),
+    );
+    final addButton = FilledButton.icon(
+      onPressed: _addTagFromUi,
+      icon: const Icon(Icons.add),
+      label: const Text('追加'),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 720;
+        final layoutToggle = Wrap(
+          spacing: 8,
+          children: [
+            ChoiceChip(
+              label: const Text('チップ'),
+              selected: _tagLayoutMode == _TagLayoutMode.chips,
+              onSelected: (_) {
+                setState(() => _tagLayoutMode = _TagLayoutMode.chips);
+              },
+            ),
+            ChoiceChip(
+              label: const Text('リスト'),
+              selected: _tagLayoutMode == _TagLayoutMode.list,
+              onSelected: (_) {
+                setState(() => _tagLayoutMode = _TagLayoutMode.list);
+              },
+            ),
+          ],
+        );
+
+        if (narrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              categoryField,
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(child: inputField),
+                  const SizedBox(width: 8),
+                  addButton,
+                ],
+              ),
+              const SizedBox(height: 10),
+              layoutToggle,
+            ],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: 190, child: categoryField),
+            const SizedBox(width: 10),
+            Expanded(child: inputField),
+            const SizedBox(width: 10),
+            addButton,
+            const SizedBox(width: 12),
+            Flexible(child: layoutToggle),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildAssignedCategorySection({
+    required TagCategory category,
+    required List<TagWithId> tags,
+  }) {
+    final key = 'assigned:${category.name}';
+    final expanded = _isGroupExpanded(key, defaultValue: true);
+    return _buildCategorySectionShell(
+      category: category,
+      count: tags.length,
+      expanded: expanded,
+      onToggle: () => _toggleGroupExpanded(key, defaultValue: true),
+      child: _tagLayoutMode == _TagLayoutMode.list
+          ? Column(
+              children: [
+                for (final entry in tags)
+                  _buildAssignedListTile(
+                    entry,
+                    showDivider: entry != tags.last,
+                  ),
+              ],
+            )
+          : Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [for (final entry in tags) _buildAssignedChip(entry)],
+            ),
+    );
+  }
+
+  Widget _buildAssignedChip(TagWithId entry) {
+    return InputChip(
+      label: Text(
+        '#${entry.tag.name}',
+        style: const TextStyle(color: Colors.white),
+      ),
+      avatar: Icon(
+        _categoryIcon(entry.tag.category),
+        size: 16,
+        color: _categoryColor(entry.tag.category),
+      ),
+      backgroundColor: _uiChip,
+      deleteIconColor: Colors.white70,
+      onDeleted: _tagEditMode ? () => _removeTagFromUi(entry) : null,
+    );
+  }
+
+  Widget _buildAssignedListTile(TagWithId entry, {required bool showDivider}) {
+    final usageCount = _tagUsageCount(entry.tag);
+    final tile = ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: CircleAvatar(
+        radius: 15,
+        backgroundColor: _categoryColor(
+          entry.tag.category,
+        ).withValues(alpha: 0.18),
+        child: Icon(
+          _categoryIcon(entry.tag.category),
+          size: 16,
+          color: _categoryColor(entry.tag.category),
+        ),
+      ),
+      title: Text(
+        '#${entry.tag.name}',
+        style: const TextStyle(color: Colors.white),
+      ),
+      subtitle: Text(
+        usageCount > 0
+            ? '${_categoryLongLabel(entry.tag.category)} · $usageCount件'
+            : _categoryLongLabel(entry.tag.category),
+        style: const TextStyle(color: Colors.white70),
+      ),
+      trailing: _tagEditMode
+          ? IconButton(
+              tooltip: '削除',
+              icon: const Icon(Icons.close),
+              onPressed: () => _removeTagFromUi(entry),
+            )
+          : null,
+    );
+    if (!showDivider) {
+      return tile;
+    }
+    return Column(
+      children: [
+        tile,
+        Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
+      ],
+    );
+  }
+
+  Widget _buildCandidateTagsSection() {
+    final recommendedCount = _buildSuggestionEntries(
+      _TagSuggestionTab.recommended,
+    ).length;
+    final recentCount = _buildSuggestionEntries(
+      _TagSuggestionTab.recent,
+    ).length;
+    final allCount = _buildSuggestionEntries(_TagSuggestionTab.all).length;
+
+    return _buildTagSectionCard(
+      title: '候補タグ',
+      subtitle: _masterLoading ? '読み込み中...' : '$allCount件',
+      trailing: Wrap(
+        spacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          if (_tagUsageLoading)
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          IconButton(
+            tooltip: '候補を更新',
+            onPressed: () => _loadMasterTags(
+              contains: _masterFilterCtrl.text.trim().isEmpty
+                  ? null
+                  : _masterFilterCtrl.text.trim(),
+            ),
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      child: SizedBox(
+        height: _isWideLayout(context) ? 420 : 360,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildTagSearchField(
+              controller: _masterFilterCtrl,
+              hintText: '候補タグを探す',
+              onChanged: (value) {
+                setState(() {});
+                _scheduleMasterTagReload(value);
+              },
+            ),
+            const SizedBox(height: 12),
+            TabBar(
+              controller: _candidateTabController,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              tabs: [
+                Tab(text: 'おすすめ $recommendedCount'),
+                Tab(text: '最近使った $recentCount'),
+                Tab(text: 'すべて $allCount'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: TabBarView(
+                controller: _candidateTabController,
+                children: [
+                  _buildSuggestionTabBody(_TagSuggestionTab.recommended),
+                  _buildSuggestionTabBody(_TagSuggestionTab.recent),
+                  _buildSuggestionTabBody(_TagSuggestionTab.all),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSuggestionTabBody(_TagSuggestionTab tab) {
+    final grouped = _groupSuggestionEntries(tab);
+    final totalCount = grouped.values.fold<int>(
+      0,
+      (sum, entries) => sum + entries.length,
+    );
+    final scrollController = _candidateScrollControllers[tab]!;
+
+    if (totalCount == 0) {
+      return Center(
+        child: Text(
+          _masterLoading ? '候補を読み込み中です...' : '表示できる候補タグはありません。',
+          style: const TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    return Scrollbar(
+      controller: scrollController,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: scrollController,
+        padding: const EdgeInsets.only(right: 8),
+        child: Column(
+          children: [
+            for (final category in _orderedTagCategories)
+              if ((grouped[category] ?? const <_TagSuggestionEntry>[])
+                  .isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _buildSuggestionCategorySection(
+                    tab: tab,
+                    category: category,
+                    entries: grouped[category]!,
+                  ),
+                ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSuggestionCategorySection({
+    required _TagSuggestionTab tab,
+    required TagCategory category,
+    required List<_TagSuggestionEntry> entries,
+  }) {
+    final sectionKey = 'candidate:${tab.name}:${category.name}';
+    final expanded = _isGroupExpanded(
+      sectionKey,
+      defaultValue:
+          category == TagCategory.artist ||
+          category == TagCategory.free ||
+          entries.length <= 8,
+    );
+    final visibleCount = _visibleCandidateCount(tab, category, entries.length);
+    final visibleEntries = entries.take(visibleCount).toList(growable: false);
+
+    return _buildCategorySectionShell(
+      category: category,
+      count: entries.length,
+      expanded: expanded,
+      onToggle: () => _toggleGroupExpanded(
+        sectionKey,
+        defaultValue:
+            category == TagCategory.artist ||
+            category == TagCategory.free ||
+            entries.length <= 8,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_tagLayoutMode == _TagLayoutMode.list)
+            Column(
+              children: [
+                for (final entry in visibleEntries)
+                  _buildSuggestionListTile(
+                    entry,
+                    showDivider: entry != visibleEntries.last,
+                  ),
+              ],
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final entry in visibleEntries) _buildSuggestionChip(entry),
+              ],
+            ),
+          if (entries.length > visibleEntries.length) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => _showMoreCandidates(tab, category),
+                icon: const Icon(Icons.expand_more),
+                label: Text(
+                  'もっと見る (${entries.length - visibleEntries.length}件)',
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSuggestionChip(_TagSuggestionEntry entry) {
+    final usageCount = entry.usageCount;
+    return ActionChip(
+      avatar: Icon(
+        entry.isRecent ? Icons.history : Icons.add_circle_outline,
+        size: 16,
+        color: _categoryColor(entry.tag.category),
+      ),
+      label: Text(
+        usageCount > 0
+            ? '#${entry.tag.name} · $usageCount'
+            : '#${entry.tag.name}',
+      ),
+      onPressed: () => _addSuggestedTag(entry.tag),
+    );
+  }
+
+  Widget _buildSuggestionListTile(
+    _TagSuggestionEntry entry, {
+    required bool showDivider,
+  }) {
+    final subtitleParts = <String>[
+      _categoryLongLabel(entry.tag.category),
+      if (entry.usageCount > 0) '${entry.usageCount}件',
+      if (entry.isRecent) '最近使った',
+    ];
+    final tile = ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: CircleAvatar(
+        radius: 15,
+        backgroundColor: _categoryColor(
+          entry.tag.category,
+        ).withValues(alpha: 0.18),
+        child: Icon(
+          _categoryIcon(entry.tag.category),
+          size: 16,
+          color: _categoryColor(entry.tag.category),
+        ),
+      ),
+      title: Text(
+        '#${entry.tag.name}',
+        style: const TextStyle(color: Colors.white),
+      ),
+      subtitle: Text(
+        subtitleParts.join(' · '),
+        style: const TextStyle(color: Colors.white70),
+      ),
+      trailing: FilledButton.tonalIcon(
+        onPressed: () => _addSuggestedTag(entry.tag),
+        icon: const Icon(Icons.add),
+        label: const Text('追加'),
+      ),
+    );
+    if (!showDivider) {
+      return tile;
+    }
+    return Column(
+      children: [
+        tile,
+        Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
+      ],
+    );
+  }
+
+  Widget _buildTagSearchField({
+    required TextEditingController controller,
+    required String hintText,
+    required ValueChanged<String> onChanged,
+  }) {
+    return SizedBox(
+      height: 44,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        decoration: InputDecoration(
+          prefixIcon: const Icon(Icons.search),
+          hintText: hintText,
+          border: const OutlineInputBorder(),
+          isDense: true,
+          suffixIcon: controller.text.trim().isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'クリア',
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    controller.clear();
+                    onChanged('');
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTagSectionCard({
+    required String title,
+    required String subtitle,
+    required Widget child,
+    Widget? trailing,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[const SizedBox(width: 12), trailing],
+            ],
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategorySectionShell({
+    required TagCategory category,
+    required int count,
+    required bool expanded,
+    required VoidCallback onToggle,
+    required Widget child,
+  }) {
+    final color = _categoryColor(category);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.02),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            onTap: onToggle,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: Row(
+                children: [
+                  Icon(_categoryIcon(category), color: color, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    _categoryLongLabel(category),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '$count',
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
+                    color: Colors.white70,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              child: child,
+            ),
+        ],
+      ),
     );
   }
 
@@ -1416,16 +2769,63 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               style: const TextStyle(fontSize: 12),
             ),
             onPressed: () async {
-              final v = !_twoPage;
-              setState(() => _twoPage = v);
-              await _saveTwoPage(v);
-              _reloadForCurrent();
+              await _setTwoPageMode(!_twoPage);
             },
           ),
 
         const SizedBox(width: 6),
 
         // Fit ・亥・菴薙ｒ陦ｨ遉ｺ縺吶ｋ繝｢繝ｼ繝会ｼ・
+        if (_isPdf)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+            decoration: BoxDecoration(
+              color: _uiChip,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: _page.clamp(1, _totalPages).toInt(),
+                isDense: true,
+                menuMaxHeight: 360,
+                dropdownColor: _uiBar,
+                borderRadius: BorderRadius.circular(14),
+                iconEnabledColor: Colors.white,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                selectedItemBuilder: (context) => [
+                  for (var page = 1; page <= _totalPages; page++)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'ページ $page',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                ],
+                items: [
+                  for (var page = 1; page <= _totalPages; page++)
+                    DropdownMenuItem<int>(
+                      value: page,
+                      child: Text('ページ $page'),
+                    ),
+                ],
+                onChanged: _totalPages <= 1
+                    ? null
+                    : (value) {
+                        if (value == null || value == _page) {
+                          return;
+                        }
+                        _setCurrentPdfPage(value);
+                      },
+              ),
+            ),
+          ),
+
+        if (_isPdf) const SizedBox(width: 6),
+
         PopupMenuButton<ReaderFitMode>(
           tooltip: 'Fit',
           initialValue: _fitMode,
@@ -1556,5 +2956,3 @@ class _NextIntent extends Intent {
 class _EscapeIntent extends Intent {
   const _EscapeIntent();
 }
-
-

@@ -73,6 +73,8 @@ class MainActivity : FlutterActivity() {
         when (action) {
             Intent.ACTION_SEND -> {
                 collectUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), intent.flags, rawItems)
+                collectText(intent.getCharSequenceExtra(Intent.EXTRA_TEXT), rawItems)
+                collectClipData(intent.clipData, intent.flags, rawItems)
                 if (rawItems.isEmpty()) {
                     hasUnsupportedPayload = intent.hasExtra(Intent.EXTRA_STREAM) ||
                         intent.hasExtra(Intent.EXTRA_TEXT) ||
@@ -83,6 +85,8 @@ class MainActivity : FlutterActivity() {
             Intent.ACTION_SEND_MULTIPLE -> {
                 val items = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
                 items?.forEach { collectUri(it, intent.flags, rawItems) }
+                collectText(intent.getCharSequenceExtra(Intent.EXTRA_TEXT), rawItems)
+                collectClipData(intent.clipData, intent.flags, rawItems)
                 if (rawItems.isEmpty()) {
                     hasUnsupportedPayload = true
                 }
@@ -90,6 +94,7 @@ class MainActivity : FlutterActivity() {
 
             Intent.ACTION_VIEW -> {
                 collectUri(intent.data, intent.flags, rawItems)
+                collectText(intent.dataString, rawItems)
                 if (rawItems.isEmpty() && intent.data != null) {
                     hasUnsupportedPayload = true
                 }
@@ -114,6 +119,27 @@ class MainActivity : FlutterActivity() {
         if (uri == null) return
         maybePersistUriPermission(uri, flags)
         out.add(uri.toString())
+    }
+
+    private fun collectText(text: CharSequence?, out: MutableSet<String>) {
+        val value = text?.toString()?.trim().orEmpty()
+        if (value.isNotEmpty()) {
+            out.add(value)
+        }
+    }
+
+    private fun collectClipData(
+        clipData: android.content.ClipData?,
+        flags: Int,
+        out: MutableSet<String>
+    ) {
+        if (clipData == null) return
+        for (index in 0 until clipData.itemCount) {
+            val item = clipData.getItemAt(index)
+            collectUri(item.uri, flags, out)
+            collectText(item.text, out)
+            collectText(item.htmlText, out)
+        }
     }
 
     private fun maybePersistUriPermission(uri: Uri, flags: Int) {

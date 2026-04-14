@@ -44,6 +44,8 @@ dependencies:
   pdf: ^3.10.4
   printing: ^5.11.0
   image: ^4.2.0
+  webview_flutter: ^4.13.0
+  webview_windows: ^0.4.0
 
 dev_dependencies:
   flutter_test:

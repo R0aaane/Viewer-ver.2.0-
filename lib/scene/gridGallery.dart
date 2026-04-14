@@ -13,9 +13,11 @@ import '../models/folder.dart';
 import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
+import '../services/home_activity_store.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
 import '../services/item_name_service.dart';
+import '../services/external_share_service.dart';
 import 'import_to_host_dialog.dart';
 import 'tag_assign_after_import.dart';
 
@@ -78,6 +80,13 @@ class _FolderNavState {
   const _FolderNavState(this.folder, this.pageIndex);
 }
 
+class _HomeResumeCardData {
+  final MediaItem item;
+  final HomeActivityEntry activity;
+
+  const _HomeResumeCardData({required this.item, required this.activity});
+}
+
 class _GallerySearchSuggestion {
   final String query;
   final String label;
@@ -115,6 +124,8 @@ class _GeneratedPdfPostProcessResult {
 }
 
 enum _UrlImportQueueStatus { queued, running, completed, empty, failed }
+
+enum _SharedUrlImportTargetKind { currentFolder, library }
 
 enum _RegisteredFolderRemovalAction { unregisterOnly, deleteFiles }
 
@@ -162,6 +173,26 @@ class _UrlImportQueueEntry {
   }
 }
 
+class _PendingSharedUrlImport {
+  final List<String> urls;
+
+  const _PendingSharedUrlImport({required this.urls});
+}
+
+class _SharedUrlImportTarget {
+  final _SharedUrlImportTargetKind kind;
+  final FolderHandle folder;
+  final bool activateFolder;
+  final String folderLabel;
+
+  const _SharedUrlImportTarget({
+    required this.kind,
+    required this.folder,
+    required this.activateFolder,
+    required this.folderLabel,
+  });
+}
+
 class GalleryGridPage extends StatefulWidget {
   final MediaRepository repo;
   final TagService tagService;
@@ -179,6 +210,7 @@ class GalleryGridPage extends StatefulWidget {
 }
 
 class _GalleryGridPageState extends State<GalleryGridPage> {
+  final ExternalShareService _externalShareService = ExternalShareService();
   FolderHandle? _folder;
   List<MediaItem> _items = const [];
   bool _loading = false;
@@ -195,6 +227,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _thumbsEnabled = true;
 
   Timer? _thumbResumeDebounce;
+  StreamSubscription<ExternalSharePayload>? _externalShareSubscription;
+  final List<_PendingSharedUrlImport> _pendingSharedUrlImports =
+      <_PendingSharedUrlImport>[];
+  final Set<String> _handledSharedUrlPayloadKeys = <String>{};
+  bool _processingSharedUrlImport = false;
 
   final LinkedHashMap<String, Uint8List?> _folderPreviewCache = LinkedHashMap();
   int _folderPreviewCacheBytes = 0;
@@ -285,6 +322,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       <String, List<TagWithId>>{};
   String _homeSearchCorpusSignature = '';
   _SortMode _homeSearchSortMode = _SortMode.updatedAt;
+  int _homeSearchPageIndex = 0;
 
   Timer? _homeSearchDebounce;
 
@@ -336,6 +374,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   final Map<String, List<MediaItem>> _folderItemsCache = {};
   List<MediaItem> _favoriteItemsAll = const [];
   bool _loadingFavAll = false;
+  bool _homeShowcaseLoading = false;
+  String? _homeShowcaseErrorMessage;
+  List<MediaItem> _homeRecentAddedItems = const [];
+  List<MediaItem> _homeFavoriteShowcaseItems = const [];
+  List<MediaItem> _homeRecentViewedItems = const [];
+  Map<String, HomeActivityEntry> _homeRecentViewEntriesByItemId =
+      <String, HomeActivityEntry>{};
+  _HomeResumeCardData? _homeResumeCard;
+  int _homeShowcaseLoadVersion = 0;
 
   final Map<String, List<MediaItem>> _folderItemsCacheRecursive = {};
 
@@ -491,9 +538,97 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     _searchFocusNode.addListener(_handleGallerySearchFocusChange);
     _loadPrefsAndAutoOpenFolder();
     unawaited(_initializeHostServerIfNeeded());
+    _bindExternalSharePayloads();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reloadArtistTagMasters();
     });
+  }
+
+  void _bindExternalSharePayloads() {
+    _externalShareSubscription = _externalShareService.payloads.listen((
+      payload,
+    ) {
+      unawaited(_queueSharedUrlImportPayload(payload));
+    });
+    unawaited(() async {
+      final payload = await _externalShareService.takeInitialPayload();
+      if (payload == null) {
+        return;
+      }
+      await _queueSharedUrlImportPayload(payload);
+    }());
+  }
+
+  Future<void> _queueSharedUrlImportPayload(
+    ExternalSharePayload payload,
+  ) async {
+    final urls = _extractSharedImportUrls(payload);
+    if (urls.isEmpty) {
+      return;
+    }
+
+    final payloadKey =
+        '${payload.action}|${payload.mimeType}|${urls.join('\n')}';
+    if (!_handledSharedUrlPayloadKeys.add(payloadKey)) {
+      return;
+    }
+
+    _pendingSharedUrlImports.add(_PendingSharedUrlImport(urls: urls));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_drainSharedUrlImportQueue());
+    });
+  }
+
+  List<String> _extractSharedImportUrls(ExternalSharePayload payload) {
+    final urls = <String>[];
+    final seen = <String>{};
+    for (final rawItem in payload.rawItems) {
+      for (final url in const UrlImportOptions().collectSourceUrls(rawItem)) {
+        if (!_isSupportedSharedImportUrl(url)) {
+          continue;
+        }
+        if (seen.add(url)) {
+          urls.add(url);
+        }
+      }
+    }
+    return urls;
+  }
+
+  bool _isSupportedSharedImportUrl(String value) {
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null) {
+      return false;
+    }
+    final scheme = uri.scheme.trim().toLowerCase();
+    return (scheme == 'http' || scheme == 'https') &&
+        uri.host.trim().isNotEmpty;
+  }
+
+  Future<void> _drainSharedUrlImportQueue() async {
+    if (_processingSharedUrlImport || _initializing || !mounted) {
+      return;
+    }
+    _processingSharedUrlImport = true;
+    try {
+      while (mounted && !_initializing && _pendingSharedUrlImports.isNotEmpty) {
+        final pending = _pendingSharedUrlImports.removeAt(0);
+        await _handlePendingSharedUrlImport(pending);
+      }
+    } finally {
+      _processingSharedUrlImport = false;
+      if (mounted && !_initializing && _pendingSharedUrlImports.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) {
+            return;
+          }
+          unawaited(_drainSharedUrlImportQueue());
+        });
+      }
+    }
   }
 
   void _handleGallerySearchFocusChange() {
@@ -1300,7 +1435,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             _galleryLoadErrorMessage = null;
           }
         });
-        if (current == null) return;
+        if (current == null) {
+          await _refreshHomeShowcases();
+          return;
+        }
         await _loadFolder(
           FolderHandle(current),
           saveAsLast: false,
@@ -1369,7 +1507,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _folderAliases = aliases;
         _initializationErrorMessage = null;
       });
-      if (current == null) return;
+      if (current == null) {
+        await _refreshHomeShowcases();
+        return;
+      }
       await _loadFolder(
         FolderHandle(current),
         saveAsLast: false,
@@ -1391,6 +1532,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     } finally {
       if (mounted) {
         setState(() => _initializing = false);
+        unawaited(_drainSharedUrlImportQueue());
       } else {
         _initializing = false;
       }
@@ -1437,6 +1579,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       });
     }
 
+    await _refreshHomeShowcases();
     await _refreshCurrentPageTags();
   }
 
@@ -1788,6 +1931,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _homeSearching = false;
         _homeSearchResults = const [];
         _homeSearchErrorMessage = null;
+        _homeSearchPageIndex = 0;
       });
       return;
     }
@@ -1798,6 +1942,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _homeSearching = false;
         _homeSearchResults = const [];
         _homeSearchErrorMessage = null;
+        _homeSearchPageIndex = 0;
       });
       return;
     }
@@ -1822,6 +1967,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _homeSearching = false;
         _homeSearchResults = sorted;
         _homeSearchErrorMessage = null;
+        _homeSearchPageIndex = 0;
       });
     } catch (e, st) {
       _logUiError('home-search', e, st);
@@ -1865,7 +2011,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     required String value,
     required bool includeAllWhenEmpty,
   }) {
-    setState(() => _homeQuery = value);
+    setState(() {
+      _homeQuery = value;
+      _homeSearchPageIndex = 0;
+    });
 
     _homeSearchDebounce?.cancel();
     _homeSearchDebounce = Timer(const Duration(milliseconds: 250), () {
@@ -2504,6 +2653,89 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  int _detailedBrowseTotalPages() {
+    if (_homeSearchResults.isEmpty) return 0;
+    return (_homeSearchResults.length + _pageSize - 1) ~/ _pageSize;
+  }
+
+  int _detailedBrowseClampedPageIndex() {
+    final totalPages = _detailedBrowseTotalPages();
+    if (totalPages <= 1) return 0;
+    return _homeSearchPageIndex.clamp(0, totalPages - 1);
+  }
+
+  List<MediaItem> _currentDetailedBrowsePageItems() {
+    if (_homeSearchResults.isEmpty) return const <MediaItem>[];
+
+    final pageIndex = _detailedBrowseClampedPageIndex();
+    final start = pageIndex * _pageSize;
+    final end = start + _pageSize;
+
+    return _homeSearchResults.sublist(
+      start,
+      end > _homeSearchResults.length ? _homeSearchResults.length : end,
+    );
+  }
+
+  Widget _buildDetailedBrowsePager() {
+    if (_homeSearchResults.length <= _pageSize) {
+      return const SizedBox.shrink();
+    }
+
+    final totalPages = _detailedBrowseTotalPages();
+    final clamped = _detailedBrowseClampedPageIndex();
+    final start = clamped * _pageSize + 1;
+    final end = ((clamped + 1) * _pageSize).clamp(0, _homeSearchResults.length);
+    final useDropdown = totalPages > 10;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      child: Row(
+        children: [
+          Text('$start-$end / ${_homeSearchResults.length}'),
+          const Spacer(),
+          if (useDropdown)
+            DropdownButton<int>(
+              value: clamped,
+              items: List.generate(
+                totalPages,
+                (index) => DropdownMenuItem<int>(
+                  value: index,
+                  child: Text('ページ ${index + 1}'),
+                ),
+              ),
+              onChanged: (value) {
+                if (value == null || value == clamped) return;
+                setState(() => _homeSearchPageIndex = value);
+              },
+            )
+          else
+            Flexible(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(totalPages, (index) {
+                    final selected = index == clamped;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: ChoiceChip(
+                        label: Text('${index + 1}'),
+                        selected: selected,
+                        onSelected: (_) {
+                          if (selected) return;
+                          setState(() => _homeSearchPageIndex = index);
+                        },
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDetailedBrowseResultsBody() {
     Widget headerCard() {
       return Card(
@@ -2554,6 +2786,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           _homeSearchResults,
                           sortMode: _homeSearchSortMode,
                         );
+                        _homeSearchPageIndex = 0;
                       });
                     },
                   );
@@ -2598,6 +2831,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         const crossAxisCount = 3;
+        final pageItems = _currentDetailedBrowsePageItems();
+        final showPager = _homeSearchResults.length > _pageSize;
         final crossSpacing = constraints.maxWidth < 420 ? 8.0 : 12.0;
         final mainSpacing = constraints.maxWidth < 420 ? 14.0 : 18.0;
         final contentWidth = constraints.maxWidth <= 760
@@ -2621,12 +2856,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               ),
               if (_homeSearchErrorMessage != null)
                 SliverPadding(
-                  padding: EdgeInsets.fromLTRB(
-                    sidePadding,
-                    0,
-                    sidePadding,
-                    12,
-                  ),
+                  padding: EdgeInsets.fromLTRB(sidePadding, 0, sidePadding, 12),
                   sliver: SliverToBoxAdapter(
                     child: _buildErrorBody(
                       title: '詳細ブラウズの読み込みに失敗しました',
@@ -2637,12 +2867,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 )
               else if (!_homeSearching && _homeSearchResults.isEmpty)
                 SliverPadding(
-                  padding: EdgeInsets.fromLTRB(
-                    sidePadding,
-                    0,
-                    sidePadding,
-                    12,
-                  ),
+                  padding: EdgeInsets.fromLTRB(sidePadding, 0, sidePadding, 12),
                   sliver: SliverToBoxAdapter(
                     child: _buildEmptyBody(
                       title: '表示できる項目がありません',
@@ -2652,14 +2877,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     ),
                   ),
                 )
-              else
-                SliverPadding(
-                  padding: EdgeInsets.fromLTRB(
-                    sidePadding,
-                    0,
-                    sidePadding,
-                    12,
+              else ...[
+                if (showPager)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      sidePadding,
+                      0,
+                      sidePadding,
+                      12,
+                    ),
+                    sliver: SliverToBoxAdapter(
+                      child: _buildDetailedBrowsePager(),
+                    ),
                   ),
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(sidePadding, 0, sidePadding, 12),
                   sliver: SliverGrid(
                     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: crossAxisCount,
@@ -2668,11 +2900,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       mainAxisExtent: tileHeight,
                     ),
                     delegate: SliverChildBuilderDelegate((context, index) {
-                      final item = _homeSearchResults[index];
+                      final item = pageItems[index];
                       return _buildDetailedBrowseGridTile(item);
-                    }, childCount: _homeSearchResults.length),
+                    }, childCount: pageItems.length),
                   ),
                 ),
+                if (showPager)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      sidePadding,
+                      0,
+                      sidePadding,
+                      12,
+                    ),
+                    sliver: SliverToBoxAdapter(
+                      child: _buildDetailedBrowsePager(),
+                    ),
+                  ),
+              ],
             ],
           ),
         );
@@ -2704,35 +2949,610 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-  Widget _homeFavThumb(MediaItem item) {
-    return AspectRatio(
-      aspectRatio: 3 / 4,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: FutureBuilder<ThumbPair>(
-          future: widget.repo.readThumbPair(item, maxWidth: 240),
-          builder: (context, snap) {
-            if (snap.hasError) {
-              return Container(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                alignment: Alignment.center,
-                child: const Icon(Icons.broken_image_outlined),
-              );
-            }
-            if (!snap.hasData) {
-              return Container(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                alignment: Alignment.center,
-                child: const CircularProgressIndicator(strokeWidth: 2),
-              );
-            }
-
-            return Image.memory(
-              snap.data!.front,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
+  Widget _homeFavThumb(MediaItem item, {bool fill = false}) {
+    final thumb = ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: FutureBuilder<ThumbPair>(
+        future: widget.repo.readThumbPair(item, maxWidth: 240),
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return Container(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: const Icon(Icons.broken_image_outlined),
             );
-          },
+          }
+          if (!snap.hasData) {
+            return Container(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: const CircularProgressIndicator(strokeWidth: 2),
+            );
+          }
+
+          return Image.memory(
+            snap.data!.front,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          );
+        },
+      ),
+    );
+
+    if (fill) {
+      return thumb;
+    }
+
+    return AspectRatio(aspectRatio: 3 / 4, child: thumb);
+  }
+
+  bool _isFavoriteItem(MediaItem item) {
+    for (final variant in _idVariants(item.id)) {
+      if (_favorites.contains(variant)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  HomeActivityEntry? _homeRecentViewEntryForItem(MediaItem item) {
+    for (final variant in _idVariants(item.id)) {
+      final entry = _homeRecentViewEntriesByItemId[variant];
+      if (entry != null) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  DateTime _homeAddedTimestamp(MediaItem item) {
+    final added = _getAddedAt(item);
+    if (added.millisecondsSinceEpoch > 0) {
+      return added;
+    }
+    final updated = item.modified ?? _getUpdatedAt(item);
+    if (updated.millisecondsSinceEpoch > 0) {
+      return updated;
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  String _formatHomeDateTime(DateTime? value) {
+    if (value == null || value.millisecondsSinceEpoch <= 0) {
+      return '日時未取得';
+    }
+    final local = value.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.year}/$month/$day $hour:$minute';
+  }
+
+  Future<List<MediaItem>> _ensureHomeShelfCorpusLoaded() async {
+    if (_repoCapabilities.canRecursiveSearch) {
+      return _ensureHomeSearchCorpusLoaded();
+    }
+
+    for (final raw in _foldersRaw) {
+      if (_folderItemsCache.containsKey(raw)) {
+        continue;
+      }
+      try {
+        _folderItemsCache[raw] = await widget.repo.listMedia(FolderHandle(raw));
+      } catch (_) {
+        _folderItemsCache[raw] = const <MediaItem>[];
+      }
+    }
+
+    final all = <MediaItem>[];
+    for (final raw in _foldersRaw) {
+      final items = _folderItemsCache[raw] ?? const <MediaItem>[];
+      all.addAll(items.where((item) => item.kind != MediaKind.folder));
+    }
+
+    final signature = _buildHomeSearchCorpusSignature(all);
+    if (_homeSearchCorpusSignature == signature &&
+        _homeSearchCorpus.length == all.length) {
+      return _homeSearchCorpus;
+    }
+
+    widget.tagService.rememberItems(all);
+    final details = await widget.tagService.getDetailedTagsByItems(all);
+
+    final expandedNames = <String, List<String>>{};
+    final expandedDetails = <String, List<TagWithId>>{};
+    details.forEach((key, value) {
+      final names = value
+          .map((entry) => entry.tag.name)
+          .toList(growable: false);
+      for (final variant in _idVariants(key)) {
+        expandedNames[variant] = names;
+        expandedDetails[variant] = value;
+      }
+    });
+
+    _homeSearchCorpus = all.toList(growable: false);
+    _homeSearchCorpusSignature = signature;
+    _dbTagsByItemId = expandedNames;
+    _dbTagDetailsByItemId = expandedDetails;
+    return _homeSearchCorpus;
+  }
+
+  Future<void> _refreshHomeShowcases() async {
+    final loadVersion = ++_homeShowcaseLoadVersion;
+    if (mounted) {
+      setState(() {
+        _homeShowcaseLoading = true;
+        _homeShowcaseErrorMessage = null;
+      });
+    } else {
+      _homeShowcaseLoading = true;
+      _homeShowcaseErrorMessage = null;
+    }
+
+    try {
+      if (_foldersRaw.isEmpty) {
+        if (!mounted || loadVersion != _homeShowcaseLoadVersion) {
+          return;
+        }
+        setState(() {
+          _homeRecentAddedItems = const <MediaItem>[];
+          _homeFavoriteShowcaseItems = const <MediaItem>[];
+          _homeRecentViewedItems = const <MediaItem>[];
+          _homeRecentViewEntriesByItemId = <String, HomeActivityEntry>{};
+          _homeResumeCard = null;
+          _homeShowcaseErrorMessage = null;
+        });
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      final recentViews = HomeActivityStore.readRecentViews(prefs);
+      final allItems = await _ensureHomeShelfCorpusLoaded();
+      final mediaItems = allItems
+          .where((item) => item.kind != MediaKind.folder)
+          .toList(growable: false);
+
+      final recentAdded = mediaItems.toList(growable: true)
+        ..sort(
+          (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
+        );
+
+      final itemByVariant = <String, MediaItem>{};
+      for (final item in mediaItems) {
+        for (final variant in _idVariants(item.id)) {
+          itemByVariant.putIfAbsent(variant, () => item);
+        }
+      }
+
+      final recentViewedItems = <MediaItem>[];
+      final recentViewEntriesByItemId = <String, HomeActivityEntry>{};
+      _HomeResumeCardData? resumeCard;
+
+      for (final entry in recentViews) {
+        final resolved = itemByVariant[entry.itemId];
+        if (resolved == null) {
+          continue;
+        }
+
+        if (!recentViewEntriesByItemId.containsKey(resolved.id)) {
+          recentViewEntriesByItemId[resolved.id] = entry;
+          recentViewedItems.add(resolved);
+        }
+
+        if (resumeCard == null &&
+            resolved.kind == MediaKind.pdf &&
+            (entry.lastPage ?? 0) > 1) {
+          resumeCard = _HomeResumeCardData(item: resolved, activity: entry);
+        }
+      }
+
+      final favorites = mediaItems.where(_isFavoriteItem).toList(growable: true)
+        ..sort(
+          (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
+        );
+
+      if (!mounted || loadVersion != _homeShowcaseLoadVersion) {
+        return;
+      }
+
+      setState(() {
+        _homeRecentAddedItems = recentAdded.take(10).toList(growable: false);
+        _homeFavoriteShowcaseItems = favorites.take(10).toList(growable: false);
+        _homeRecentViewedItems = recentViewedItems
+            .take(10)
+            .toList(growable: false);
+        _homeRecentViewEntriesByItemId = recentViewEntriesByItemId;
+        _homeResumeCard = resumeCard;
+        _homeShowcaseErrorMessage = null;
+      });
+    } catch (error, stackTrace) {
+      _logUiError('home-showcases', error, stackTrace);
+      if (!mounted || loadVersion != _homeShowcaseLoadVersion) {
+        return;
+      }
+      setState(() {
+        _homeShowcaseErrorMessage = 'ホーム情報の更新に失敗しました: $error';
+      });
+    } finally {
+      if (mounted && loadVersion == _homeShowcaseLoadVersion) {
+        setState(() => _homeShowcaseLoading = false);
+      } else if (loadVersion == _homeShowcaseLoadVersion) {
+        _homeShowcaseLoading = false;
+      }
+    }
+  }
+
+  Widget _buildHomeSectionHeading(String title, String subtitle) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          subtitle,
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHomeShelfMetaLine(String label, String value) {
+    return Text(
+      '$label: $value',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+    );
+  }
+
+  Widget _buildHomeShelfEmptyState({
+    required IconData icon,
+    required String title,
+    required String message,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 4),
+                Text(
+                  message,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeMediaShelfCard({
+    required MediaItem item,
+    required String footerText,
+    required IconData footerIcon,
+    required VoidCallback onTap,
+    String? badgeText,
+    IconData? badgeIcon,
+    Color? badgeBackgroundColor,
+    Color? badgeForegroundColor,
+  }) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final artist = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.artist,
+      maxValues: 1,
+      emptyLabel: '未設定',
+    );
+    final series = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.series,
+      maxValues: 1,
+      emptyLabel: '未設定',
+    );
+    final width = MediaQuery.of(context).size.width < 560 ? 168.0 : 188.0;
+
+    return SizedBox(
+      width: width,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _homeFavThumb(item, fill: true),
+                      Positioned(
+                        left: 8,
+                        top: 8,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: _detailedBrowseAccentColor(context, item),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            child: Text(
+                              item.kind == MediaKind.pdf ? 'PDF' : '画像',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: _detailedBrowseAccentTextColor(
+                                  context,
+                                  item,
+                                ),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (badgeText != null && badgeText.trim().isNotEmpty)
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color:
+                                  badgeBackgroundColor ??
+                                  scheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (badgeIcon != null) ...[
+                                    Icon(
+                                      badgeIcon,
+                                      size: 12,
+                                      color:
+                                          badgeForegroundColor ??
+                                          scheme.onPrimaryContainer,
+                                    ),
+                                    const SizedBox(width: 4),
+                                  ],
+                                  Text(
+                                    badgeText,
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color:
+                                          badgeForegroundColor ??
+                                          scheme.onPrimaryContainer,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _displayTitleForItem(item),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _buildHomeShelfMetaLine('作者', artist),
+                const SizedBox(height: 4),
+                _buildHomeShelfMetaLine('シリーズ', series),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(footerIcon, size: 14, color: Colors.white70),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        footerText,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHomeMediaShelf({
+    required String title,
+    required String subtitle,
+    required List<MediaItem> items,
+    required String emptyTitle,
+    required String emptyMessage,
+    required Widget Function(MediaItem item) itemBuilder,
+  }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHomeSectionHeading(title, subtitle),
+            const SizedBox(height: 10),
+            if (_homeShowcaseLoading && items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (items.isEmpty)
+              _buildHomeShelfEmptyState(
+                icon: Icons.photo_library_outlined,
+                title: emptyTitle,
+                message: emptyMessage,
+              )
+            else
+              SizedBox(
+                height: 358,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: items.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 10),
+                  itemBuilder: (context, index) => itemBuilder(items[index]),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContinueReadingCard() {
+    final resume = _homeResumeCard;
+    if (resume == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHomeSectionHeading('続きから読む', '前回見ていた PDF をそのページから開けます。'),
+              const SizedBox(height: 10),
+              _buildHomeShelfEmptyState(
+                icon: Icons.auto_stories_outlined,
+                title: '再開できる PDF がありません',
+                message: 'PDF を開いてページを進めると、ここから続きが再開できます。',
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final item = resume.item;
+    final page = resume.activity.lastPage ?? 1;
+    final artist = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.artist,
+      maxValues: 1,
+      emptyLabel: '未設定',
+    );
+    final series = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.series,
+      maxValues: 1,
+      emptyLabel: '未設定',
+    );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHomeSectionHeading('続きから読む', '最後に見ていた PDF をワンタップで再開できます。'),
+            const SizedBox(height: 10),
+            InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _openDetailFromHome(item, initialPdfPage: page),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final narrow = constraints.maxWidth < 600;
+                    final thumb = SizedBox(
+                      width: narrow ? 112 : 132,
+                      child: _homeFavThumb(item),
+                    );
+                    final body = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${_displayTitleForItem(item)} p.$page から再開',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        _buildHomeShelfMetaLine('作者', artist),
+                        const SizedBox(height: 4),
+                        _buildHomeShelfMetaLine('シリーズ', series),
+                        const SizedBox(height: 4),
+                        _buildHomeShelfMetaLine(
+                          '前回閲覧',
+                          _formatHomeDateTime(resume.activity.viewedAt),
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton.icon(
+                          onPressed: () =>
+                              _openDetailFromHome(item, initialPdfPage: page),
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: Text('p.$page から開く'),
+                        ),
+                      ],
+                    );
+
+                    if (narrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [thumb, const SizedBox(height: 12), body],
+                      );
+                    }
+
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        thumb,
+                        const SizedBox(width: 14),
+                        Expanded(child: body),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2743,8 +3563,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return _buildRefreshableStatusBody(
         onRefresh: _handlePullToRefresh,
         child: _buildLoadingBody(
-          title: '初期化中です',
-          message: '設定とフォルダ情報を読み込んでいます。',
+          title: 'ホームを読み込み中',
+          message: '登録フォルダやホーム用の一覧を準備しています。',
         ),
       );
     }
@@ -2753,7 +3573,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return _buildRefreshableStatusBody(
         onRefresh: _handlePullToRefresh,
         child: _buildErrorBody(
-          title: '初期化に失敗しました',
+          title: 'ホームの初期化に失敗しました',
           message: _initializationErrorMessage!,
           onAction: _retryInitialization,
         ),
@@ -2767,6 +3587,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final homeSearchPreview = _homeSearchResults
         .take(4)
         .toList(growable: false);
+    final recentViewedEntries = _homeRecentViewEntriesByItemId;
 
     return RefreshIndicator(
       onRefresh: _handlePullToRefresh,
@@ -2781,7 +3602,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    '検索（全フォルダ）',
+                    'ホーム検索',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
@@ -2810,9 +3631,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       ),
                     )
                   else if (_homeQuery.trim().isEmpty)
-                    const Text('検索ワードを入力してください。')
+                    const Text('タイトル、タグ、作者、シリーズで検索できます。')
                   else if (_homeSearchResults.isEmpty)
-                    const Text('該当なし')
+                    const Text('一致する作品はありません。')
                   else ...[
                     Text('件数: ${_homeSearchResults.length} 件'),
                     const SizedBox(height: 8),
@@ -2896,7 +3717,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    '概要',
+                    'ライブラリ',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
@@ -2938,88 +3759,108 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
           ),
           const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'お気に入り（全フォルダ）',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_loadingFavAll)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else if (_favoriteItemsAll.isEmpty)
-                    const Text('お気に入りはまだありません。')
-                  else ...[
-                    Text('件数: ${_favoriteItemsAll.length}'),
-                    const SizedBox(height: 8),
-                    ..._favoriteItemsAll.take(10).map((item) {
-                      return Card(
-                        margin: const EdgeInsets.symmetric(vertical: 6),
-                        child: InkWell(
-                          onTap: () => _openDetailFromHome(item),
-                          child: Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                SizedBox(
-                                  height: 120,
-                                  child: _homeFavThumb(item),
-                                ),
-
-                                const SizedBox(width: 12),
-
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        _displayTitleForItem(item),
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.titleMedium,
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        item.kind == MediaKind.pdf
-                                            ? 'PDF'
-                                            : '画像',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        'フォルダ: ${_folderLabelForItem(item)}',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+          if (_homeShowcaseErrorMessage != null)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _homeShowcaseErrorMessage!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
                         ),
-                      );
-                    }),
+                      ),
+                    ),
                   ],
-                ],
+                ),
               ),
             ),
+          if (_homeShowcaseErrorMessage != null) const SizedBox(height: 12),
+          _buildHomeMediaShelf(
+            title: '最近追加',
+            subtitle: '追加された作品を表紙つきで一覧できます。',
+            items: _homeRecentAddedItems,
+            emptyTitle: '最近追加はまだありません',
+            emptyMessage: '作品が追加されると、ここに新着が並びます。',
+            itemBuilder: (item) => _buildHomeMediaShelfCard(
+              item: item,
+              footerText:
+                  '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
+              footerIcon: Icons.schedule_outlined,
+              onTap: () => _openDetailFromHome(item),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildContinueReadingCard(),
+          const SizedBox(height: 12),
+          _buildHomeMediaShelf(
+            title: 'お気に入り',
+            subtitle: 'お気に入り登録した作品をすぐ開けます。',
+            items: _homeFavoriteShowcaseItems,
+            emptyTitle: 'お気に入りはまだありません',
+            emptyMessage: '作品をお気に入りにすると、ここへ表紙つきで並びます。',
+            itemBuilder: (item) {
+              final activity = _homeRecentViewEntryForItem(item);
+              return _buildHomeMediaShelfCard(
+                item: item,
+                footerText: activity == null
+                    ? '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}'
+                    : '最終閲覧 ${_formatHomeDateTime(activity.viewedAt)}',
+                footerIcon: activity == null
+                    ? Icons.schedule_outlined
+                    : Icons.history,
+                badgeText: 'お気に入り',
+                badgeIcon: Icons.star_rounded,
+                badgeBackgroundColor: Theme.of(
+                  context,
+                ).colorScheme.primaryContainer,
+                badgeForegroundColor: Theme.of(
+                  context,
+                ).colorScheme.onPrimaryContainer,
+                onTap: () => _openDetailFromHome(item),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _buildHomeMediaShelf(
+            title: '最近閲覧',
+            subtitle: 'さっき見ていた作品へすぐ戻れます。',
+            items: _homeRecentViewedItems,
+            emptyTitle: '最近閲覧はまだありません',
+            emptyMessage: '作品を開くと、ここに最近見たものが並びます。',
+            itemBuilder: (item) {
+              final activity = recentViewedEntries[item.id];
+              final page = activity?.lastPage;
+              return _buildHomeMediaShelfCard(
+                item: item,
+                footerText: page != null
+                    ? '閲覧 ${_formatHomeDateTime(activity?.viewedAt)} / p.$page'
+                    : '閲覧 ${_formatHomeDateTime(activity?.viewedAt)}',
+                footerIcon: Icons.history,
+                badgeText: page != null ? 'p.$page' : null,
+                badgeIcon: page != null ? Icons.auto_stories_outlined : null,
+                badgeBackgroundColor: Theme.of(
+                  context,
+                ).colorScheme.secondaryContainer,
+                badgeForegroundColor: Theme.of(
+                  context,
+                ).colorScheme.onSecondaryContainer,
+                onTap: () => _openDetailFromHome(
+                  item,
+                  initialPdfPage: item.kind == MediaKind.pdf && page != null
+                      ? page
+                      : 1,
+                ),
+              );
+            },
           ),
           const SizedBox(height: 12),
           Card(
@@ -3191,10 +4032,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   String _displayTitleForItem(MediaItem item) {
-    return ItemNameService.formatMediaTitle(
-      item.displayName,
-      kind: item.kind,
-    );
+    return ItemNameService.formatMediaTitle(item.displayName, kind: item.kind);
   }
 
   String _folderLabel(String raw) {
@@ -3358,9 +4196,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       next.toList(growable: false),
     );
     await _refreshAllFavoritesItems();
+    await _refreshHomeShowcases();
   }
 
-  Future<void> _openDetailFromHome(MediaItem item) async {
+  Future<void> _openDetailFromHome(
+    MediaItem item, {
+    int initialPdfPage = 1,
+  }) async {
     final folderRaw = item.folderRaw;
 
     List<MediaItem> folderItems =
@@ -3411,7 +4253,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           tagService: widget.tagService,
           items: folderItems,
           initialIndex: idx,
-          initialPdfPage: 1,
+          initialPdfPage: initialPdfPage,
         ),
       ),
     );
@@ -3420,7 +4262,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _folderItemsCache.remove(folderRaw);
       _folderItemsCacheRecursive.remove(folderRaw);
       await _refreshVisibleContent();
+      return;
     }
+
+    await _refreshHomeShowcases();
   }
 
   bool _canDeleteItem(MediaItem item) {
@@ -3839,6 +4684,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       _folderItemsCache[folder.raw] = _items;
       await _refreshAllFavoritesItems();
+      unawaited(_refreshHomeShowcases());
       if (_query.trim().isNotEmpty) {
         unawaited(_ensureGallerySearchCacheLoaded());
       }
@@ -4007,40 +4853,40 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           builder: (dialogContext) => dialogHandle.bind(
             dialogContext,
             AlertDialog(
-            title: const Text('ホストへ取り込み中...'),
-            content: ValueListenableBuilder<MediaTransferProgress?>(
-              valueListenable: progress,
-              builder: (context, value, _) {
-                final fraction = value?.fraction;
-                final completed = value?.completedFiles ?? 0;
-                final total = value?.totalFiles ?? 0;
-                final statusLabel = value?.statusLabel?.trim();
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    LinearProgressIndicator(
-                      value: fraction == null || total == 0 ? null : fraction,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(total == 0 ? '準備中...' : '$completed / $total'),
-                    if (statusLabel != null && statusLabel.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(statusLabel),
-                    ],
-                    if (value?.currentFileName != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        value!.currentFileName!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+              title: const Text('ホストへ取り込み中...'),
+              content: ValueListenableBuilder<MediaTransferProgress?>(
+                valueListenable: progress,
+                builder: (context, value, _) {
+                  final fraction = value?.fraction;
+                  final completed = value?.completedFiles ?? 0;
+                  final total = value?.totalFiles ?? 0;
+                  final statusLabel = value?.statusLabel?.trim();
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LinearProgressIndicator(
+                        value: fraction == null || total == 0 ? null : fraction,
                       ),
+                      const SizedBox(height: 12),
+                      Text(total == 0 ? '準備中...' : '$completed / $total'),
+                      if (statusLabel != null && statusLabel.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(statusLabel),
+                      ],
+                      if (value?.currentFileName != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          value!.currentFileName!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ],
-                  ],
-                );
-              },
+                  );
+                },
+              ),
             ),
-          ),
           ),
         ),
       );
@@ -4152,10 +4998,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         if (items.isEmpty) {
           return null;
         }
-        return _HostImportSelection(
-          sourceKind: sourceKind,
-          items: items,
-        );
+        return _HostImportSelection(sourceKind: sourceKind, items: items);
       case ImportSourceKind.folder:
         final progress = ValueNotifier<MediaTransferProgress?>(
           const MediaTransferProgress(
@@ -4181,32 +5024,32 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 builder: (dialogContext) => dialogHandle.bind(
                   dialogContext,
                   AlertDialog(
-                  title: const Text('取り込み元を確認中...'),
-                  content: ValueListenableBuilder<MediaTransferProgress?>(
-                    valueListenable: progress,
-                    builder: (context, value, _) {
-                      final completed = value?.completedFiles ?? 0;
-                      final total = value?.totalFiles ?? 0;
-                      final statusLabel = value?.statusLabel?.trim();
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const LinearProgressIndicator(),
-                          const SizedBox(height: 12),
-                          if (total > 0)
-                            Text('$completed / $total')
-                          else
-                            const Text('準備中...'),
-                          if (statusLabel != null &&
-                              statusLabel.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Text(statusLabel),
+                    title: const Text('取り込み元を確認中...'),
+                    content: ValueListenableBuilder<MediaTransferProgress?>(
+                      valueListenable: progress,
+                      builder: (context, value, _) {
+                        final completed = value?.completedFiles ?? 0;
+                        final total = value?.totalFiles ?? 0;
+                        final statusLabel = value?.statusLabel?.trim();
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const LinearProgressIndicator(),
+                            const SizedBox(height: 12),
+                            if (total > 0)
+                              Text('$completed / $total')
+                            else
+                              const Text('準備中...'),
+                            if (statusLabel != null &&
+                                statusLabel.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(statusLabel),
+                            ],
                           ],
-                        ],
-                      );
-                    },
-                  ),
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -4378,7 +5221,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return out;
   }
 
-  Future<void> _cleanupHostImportSelection(_HostImportSelection selection) async {
+  Future<void> _cleanupHostImportSelection(
+    _HostImportSelection selection,
+  ) async {
     for (final path in selection.cleanupPaths) {
       final trimmed = path.trim();
       if (trimmed.isEmpty || trimmed.startsWith('content://')) {
@@ -4390,7 +5235,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           await file.delete();
         }
       } catch (error) {
-        debugPrint('[host-import] temp cleanup failed path=$trimmed error=$error');
+        debugPrint(
+          '[host-import] temp cleanup failed path=$trimmed error=$error',
+        );
       }
     }
   }
@@ -4591,34 +5438,34 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           builder: (dialogContext) => dialogHandle.bind(
             dialogContext,
             AlertDialog(
-            title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
-            content: ValueListenableBuilder<MediaTransferProgress?>(
-              valueListenable: progress,
-              builder: (context, value, _) {
-                final fraction = value?.fraction;
-                final completed = value?.completedFiles ?? 0;
-                final total = value?.totalFiles ?? 0;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    LinearProgressIndicator(
-                      value: fraction == null || total == 0 ? null : fraction,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(total == 0 ? '準備中...' : '$completed / $total'),
-                    if (value?.currentFileName != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        value!.currentFileName!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+              title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
+              content: ValueListenableBuilder<MediaTransferProgress?>(
+                valueListenable: progress,
+                builder: (context, value, _) {
+                  final fraction = value?.fraction;
+                  final completed = value?.completedFiles ?? 0;
+                  final total = value?.totalFiles ?? 0;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LinearProgressIndicator(
+                        value: fraction == null || total == 0 ? null : fraction,
                       ),
+                      const SizedBox(height: 12),
+                      Text(total == 0 ? '準備中...' : '$completed / $total'),
+                      if (value?.currentFileName != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          value!.currentFileName!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ],
-                  ],
-                );
-              },
-            ),
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -4689,34 +5536,34 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           builder: (dialogContext) => dialogHandle.bind(
             dialogContext,
             AlertDialog(
-            title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
-            content: ValueListenableBuilder<MediaTransferProgress?>(
-              valueListenable: progress,
-              builder: (context, value, _) {
-                final fraction = value?.fraction;
-                final completed = value?.completedFiles ?? 0;
-                final total = value?.totalFiles ?? 0;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    LinearProgressIndicator(
-                      value: fraction == null || total == 0 ? null : fraction,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(total == 0 ? '準備中...' : '$completed / $total'),
-                    if (value?.currentFileName != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        value!.currentFileName!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+              title: Text(widget.repo.isRemoteMode ? 'アップロード中...' : '取り込み中...'),
+              content: ValueListenableBuilder<MediaTransferProgress?>(
+                valueListenable: progress,
+                builder: (context, value, _) {
+                  final fraction = value?.fraction;
+                  final completed = value?.completedFiles ?? 0;
+                  final total = value?.totalFiles ?? 0;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LinearProgressIndicator(
+                        value: fraction == null || total == 0 ? null : fraction,
                       ),
+                      const SizedBox(height: 12),
+                      Text(total == 0 ? '準備中...' : '$completed / $total'),
+                      if (value?.currentFileName != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          value!.currentFileName!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ],
-                  ],
-                );
-              },
-            ),
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -4821,6 +5668,104 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  Future<void> _handlePendingSharedUrlImport(
+    _PendingSharedUrlImport pending,
+  ) async {
+    if (!widget.repo.canImportFromUrl) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('このモードでは共有 URL の取り込みは未対応です')),
+      );
+      return;
+    }
+
+    final target = await _pickSharedUrlImportTarget(
+      urlCount: pending.urls.length,
+    );
+    if (target == null) {
+      return;
+    }
+
+    await _runUrlImport(
+      folder: target.folder,
+      dialogTitle: '共有された URL を取り込む',
+      dialogDescription:
+          '共有された URL を確認して取り込みます。必要に応じて Cookie / favorites を調整してください。',
+      progressTitle: '共有 URL を取り込み中...',
+      successLabel: '共有 URL 取り込み',
+      activateFolder: target.activateFolder,
+      initialSourceText: pending.urls.join('\n'),
+    );
+  }
+
+  Future<_SharedUrlImportTarget?> _pickSharedUrlImportTarget({
+    required int urlCount,
+  }) async {
+    final libraryFolder = await widget.repo.getAppLibraryFolder();
+    if (!mounted) {
+      return null;
+    }
+
+    final currentFolderRaw = _currentFolderRaw?.trim();
+    final targets = <_SharedUrlImportTarget>[
+      if (currentFolderRaw != null && currentFolderRaw.isNotEmpty)
+        _SharedUrlImportTarget(
+          kind: _SharedUrlImportTargetKind.currentFolder,
+          folder: FolderHandle(currentFolderRaw),
+          activateFolder: true,
+          folderLabel: _folderLabel(currentFolderRaw),
+        ),
+      if (currentFolderRaw == null || currentFolderRaw != libraryFolder.raw)
+        _SharedUrlImportTarget(
+          kind: _SharedUrlImportTargetKind.library,
+          folder: libraryFolder,
+          activateFolder: true,
+          folderLabel: _folderLabel(libraryFolder.raw),
+        ),
+    ];
+
+    if (targets.isEmpty) {
+      return null;
+    }
+    if (targets.length == 1) {
+      return targets.first;
+    }
+
+    return showModalBottomSheet<_SharedUrlImportTarget>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: const Text('共有された URL を取り込む'),
+                subtitle: Text('$urlCount 件の URL を受け取りました。保存先を選んでください。'),
+              ),
+              for (final target in targets)
+                ListTile(
+                  leading: Icon(
+                    target.kind == _SharedUrlImportTargetKind.currentFolder
+                        ? Icons.folder_open_outlined
+                        : Icons.library_books_outlined,
+                  ),
+                  title: Text(target.folderLabel),
+                  subtitle: Text(
+                    target.kind == _SharedUrlImportTargetKind.currentFolder
+                        ? '現在のフォルダへ取り込みます'
+                        : 'ライブラリへ取り込みます',
+                  ),
+                  onTap: () => Navigator.of(context).pop(target),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _importUrlToLibrary() async {
     if (!widget.repo.canImportFromUrl) {
       if (!mounted) return;
@@ -4862,11 +5807,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     required String progressTitle,
     required String successLabel,
     bool activateFolder = false,
+    String initialSourceText = '',
   }) async {
     final importRequest = await UrlImportDialog.show(
       context,
       title: dialogTitle,
       description: dialogDescription,
+      initialSourceText: initialSourceText,
     );
     if (importRequest == null || !importRequest.hasAnySource) {
       return;
@@ -5091,10 +6038,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<({List<MediaItem>? afterItemsSnapshot, int observedImportedCount})>
-      _observeUrlImportChanges({
-        required FolderHandle folder,
-        required Set<String>? beforeItemIds,
-      }) async {
+  _observeUrlImportChanges({
+    required FolderHandle folder,
+    required Set<String>? beforeItemIds,
+  }) async {
     if (beforeItemIds == null) {
       return (afterItemsSnapshot: null, observedImportedCount: 0);
     }
@@ -5287,6 +6234,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   void dispose() {
     _thumbResumeDebounce?.cancel();
     _homeSearchDebounce?.cancel();
+    _externalShareSubscription?.cancel();
     _searchFocusNode
       ..removeListener(_handleGallerySearchFocusChange)
       ..dispose();
@@ -7334,7 +8282,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
         if (changed == true) {
           await _refreshVisibleContent();
+          return;
         }
+
+        await _refreshHomeShowcases();
       },
       child: _ThumbTile(
         repo: widget.repo,
@@ -7475,10 +8426,7 @@ class _ThumbTile extends StatelessWidget {
   });
 
   String get _displayTitle {
-    return ItemNameService.formatMediaTitle(
-      item.displayName,
-      kind: item.kind,
-    );
+    return ItemNameService.formatMediaTitle(item.displayName, kind: item.kind);
   }
 
   @override
@@ -7519,10 +8467,7 @@ class _ThumbTile extends StatelessWidget {
             left: 8,
             right: 8,
             bottom: 8,
-            child: _TitleChip(
-              title: _displayTitle,
-              subtitle: subtitle,
-            ),
+            child: _TitleChip(title: _displayTitle, subtitle: subtitle),
           ),
           if (selected) _buildSelectionOverlay(),
         ],
@@ -7579,10 +8524,7 @@ class _ThumbTile extends StatelessWidget {
             left: 8,
             right: 8,
             bottom: 8,
-            child: _TitleChip(
-              title: _displayTitle,
-              subtitle: subtitle,
-            ),
+            child: _TitleChip(title: _displayTitle, subtitle: subtitle),
           ),
           if (selected) _buildSelectionOverlay(),
         ],
@@ -7638,10 +8580,7 @@ class _ThumbTile extends StatelessWidget {
             left: 8,
             right: 8,
             bottom: 8,
-            child: _TitleChip(
-              title: _displayTitle,
-              subtitle: subtitle,
-            ),
+            child: _TitleChip(title: _displayTitle, subtitle: subtitle),
           ),
           if (selected) _buildSelectionOverlay(),
         ],

@@ -7,6 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   pdfx
   printing
   sqlite3_flutter_libs
+  webview_windows
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

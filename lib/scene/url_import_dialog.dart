@@ -1,17 +1,15 @@
-﻿import 'package:file_selector/file_selector.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../repository/mediaRepository.dart';
 import '../services/url_import_project_cookie_store_service.dart';
+import 'url_import_browser_page.dart';
 
 class UrlImportDialogResult {
   final String sourceUrl;
   final UrlImportOptions options;
 
-  const UrlImportDialogResult({
-    required this.sourceUrl,
-    required this.options,
-  });
+  const UrlImportDialogResult({required this.sourceUrl, required this.options});
 
   bool get hasAnySource => options.hasAnySource(sourceUrl);
 }
@@ -19,23 +17,27 @@ class UrlImportDialogResult {
 class UrlImportDialog extends StatefulWidget {
   final String title;
   final String description;
+  final String initialSourceText;
 
   const UrlImportDialog({
     super.key,
     required this.title,
     required this.description,
+    this.initialSourceText = '',
   });
 
   static Future<UrlImportDialogResult?> show(
     BuildContext context, {
     required String title,
     required String description,
+    String initialSourceText = '',
   }) {
     return showDialog<UrlImportDialogResult>(
       context: context,
       builder: (_) => UrlImportDialog(
         title: title,
         description: description,
+        initialSourceText: initialSourceText,
       ),
     );
   }
@@ -50,7 +52,8 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _urlListFileController = TextEditingController();
   final TextEditingController _cookieFileController = TextEditingController();
-  final TextEditingController _favoriteUsersController = TextEditingController();
+  final TextEditingController _favoriteUsersController =
+      TextEditingController();
   final TextEditingController _parallelDownloadsController =
       TextEditingController(text: '6');
 
@@ -74,6 +77,10 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
   @override
   void initState() {
     super.initState();
+    final initialSourceText = widget.initialSourceText.trim();
+    if (initialSourceText.isNotEmpty) {
+      _urlController.text = initialSourceText;
+    }
     _loadProjectCookieSlots();
   }
 
@@ -127,18 +134,18 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
 
     if (!options.hasAnySource(sourceUrl)) {
       message = 'URL、URL 一覧ファイル、またはお気に入り条件を入力してください。';
-    } else if (
-        options.usesCustomCookieFile &&
+    } else if (options.usesCustomCookieFile &&
         options.normalizedCookieFilePath == null) {
       message = 'カスタム Cookie ファイルを選択してください。';
     } else if (options.hasFavoriteTargets && !options.hasCookieSelection) {
       message = 'お気に入り取得には Cookie を選択してください。';
-    } else if (
-        options.hasFavoriteTargets && options.normalizedFavoriteSites.isEmpty) {
+    } else if (options.hasFavoriteTargets &&
+        options.normalizedFavoriteSites.isEmpty) {
       message = 'お気に入り取得には対象サイトを 1 つ以上選択してください。';
     } else {
       final resolvedProfile = options.resolveProjectCookieProfile(sourceUrl);
-      if (resolvedProfile != null && !_hasProjectCookieProfile(resolvedProfile)) {
+      if (resolvedProfile != null &&
+          !_hasProjectCookieProfile(resolvedProfile)) {
         message = 'プロジェクト Cookie が未登録です: ${_profileLabel(resolvedProfile)}';
       }
     }
@@ -223,6 +230,57 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
     return values;
   }
 
+  List<String> _collectSourceUrls(String raw) {
+    return const UrlImportOptions().collectSourceUrls(raw);
+  }
+
+  void _mergeSourceUrls(Iterable<String> incomingUrls) {
+    final merged = <String>[];
+    final seen = <String>{};
+    for (final url in <String>[
+      ..._collectSourceUrls(_urlController.text),
+      ...incomingUrls,
+    ]) {
+      final trimmed = url.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      if (seen.add(trimmed)) {
+        merged.add(trimmed);
+      }
+    }
+    final nextText = merged.join('\n');
+    _urlController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+    );
+  }
+
+  Future<void> _openInAppBrowser() async {
+    if (!UrlImportBrowserPage.isSupported) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('この端末では内蔵ブラウザを利用できません')));
+      return;
+    }
+
+    final currentUrls = _collectSourceUrls(_urlController.text);
+    final selectedUrl = await UrlImportBrowserPage.show(
+      context,
+      initialUrl: currentUrls.isEmpty ? null : currentUrls.first,
+    );
+    if (selectedUrl == null || selectedUrl.trim().isEmpty || !mounted) {
+      return;
+    }
+    setState(() {
+      _mergeSourceUrls(<String>[selectedUrl]);
+      _validationMessage = null;
+    });
+  }
+
   Widget _buildFilePickerRow({
     required TextEditingController controller,
     required String labelText,
@@ -284,6 +342,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final detectedUrlCount = _collectSourceUrls(_urlController.text).length;
     return AlertDialog(
       title: Text(widget.title),
       content: ConstrainedBox(
@@ -297,7 +356,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
               const SizedBox(height: 16),
               TextField(
                 controller: _urlController,
-                autofocus: true,
+                autofocus: widget.initialSourceText.trim().isEmpty,
                 minLines: 4,
                 maxLines: 8,
                 onChanged: (_) => setState(() => _validationMessage = null),
@@ -309,6 +368,32 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
                   helperText: '複数 URL を一括で取り込みできます',
                 ),
               ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  if (UrlImportBrowserPage.isSupported)
+                    OutlinedButton.icon(
+                      onPressed: _openInAppBrowser,
+                      icon: const Icon(Icons.open_in_browser_outlined),
+                      label: const Text('内蔵ブラウザで開く'),
+                    ),
+                  if (detectedUrlCount > 0)
+                    Chip(
+                      avatar: const Icon(Icons.link, size: 18),
+                      label: Text('$detectedUrlCount 件の URL'),
+                    ),
+                ],
+              ),
+              if (UrlImportBrowserPage.isSupported) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'URL を実際に開いて確認したい場合は、内蔵ブラウザから現在のページを取り込み候補へ追加できます。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
               const SizedBox(height: 12),
               _buildFilePickerRow(
                 controller: _urlListFileController,
@@ -410,10 +495,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
                 ),
               ),
               const SizedBox(height: 20),
-              Text(
-                'ダウンロード設定',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              Text('ダウンロード設定', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
               DropdownButtonFormField<UrlImportMediaType>(
                 value: _mediaType,
