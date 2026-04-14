@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/metadata_settings.dart';
 import '../services/app_settings_service.dart';
+import '../services/controller_navigation_service.dart';
 import '../web/web_remote_viewer_page.dart';
 import 'app_bootstrap_shared.dart';
 import 'app_theme.dart';
@@ -13,19 +14,16 @@ Future<void> bootstrapApp() async {
   final settingsService = AppSettingsService();
   MetadataSettings settings = const MetadataSettings();
   try {
-    settings = await settingsService
-        .loadMetadataSettings()
-        .timeout(const Duration(seconds: 4));
+    settings = await settingsService.loadMetadataSettings().timeout(
+      const Duration(seconds: 4),
+    );
   } catch (error, stackTrace) {
     debugPrint('[WebBootstrap] Failed to load settings: $error');
     debugPrintStack(label: '[WebBootstrap]', stackTrace: stackTrace);
   }
 
   runApp(
-    WebViewerApp(
-      initialSettings: settings,
-      settingsService: settingsService,
-    ),
+    WebViewerApp(initialSettings: settings, settingsService: settingsService),
   );
 }
 
@@ -45,6 +43,8 @@ class WebViewerApp extends StatelessWidget {
       title: 'メディアビューア Web',
       theme: buildAppTheme(),
       debugShowCheckedModeBanner: false,
+      builder: (context, child) =>
+          ControllerNavigationShell(child: child ?? const SizedBox.shrink()),
       home: WebRemoteViewerPage(
         initialSettings: initialSettings,
         settingsService: settingsService,

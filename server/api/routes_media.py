@@ -5,7 +5,13 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
-from server.models.dto import MediaMetaResponse, MediaStatsDto
+from server.models.dto import (
+    MediaActivityDto,
+    MediaActivityListResponse,
+    MediaMetaResponse,
+    MediaStatsDto,
+    RecordMediaActivityRequest,
+)
 from server.services.auth_service import require_bearer_token
 
 
@@ -35,6 +41,32 @@ def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
 def record_media_view(request: Request, media_id: str) -> MediaStatsDto:
     stats = request.app.state.metadata_store.record_media_view(media_id)
     return MediaStatsDto(**stats)
+
+
+@router.get("/activity/recent", response_model=MediaActivityListResponse)
+def list_recent_media_activity(
+    request: Request,
+    limit: int = 24,
+) -> MediaActivityListResponse:
+    items = request.app.state.metadata_store.list_recent_media_activity(limit=limit)
+    return MediaActivityListResponse(items=items)
+
+
+@router.post("/media/{media_id}/activity", response_model=MediaActivityDto)
+@router.post("/items/{media_id}/activity", response_model=MediaActivityDto)
+def record_media_activity(
+    request: Request,
+    media_id: str,
+    payload: RecordMediaActivityRequest,
+) -> MediaActivityDto:
+    identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
+    item = request.app.state.metadata_store.record_media_activity(
+        media_id,
+        identity=identity,
+        last_page=payload.lastPage,
+        total_pages=payload.totalPages,
+    )
+    return MediaActivityDto(**item)
 
 
 @router.get("/media/{media_id}/download")

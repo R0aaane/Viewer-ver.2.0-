@@ -70,6 +70,23 @@ class MediaStatsDto(BaseModel):
     viewCount: int = 0
 
 
+class MediaActivityDto(BaseModel):
+    mediaId: str
+    folderRaw: str
+    viewedAt: datetime
+    lastPage: int | None = None
+
+
+class MediaActivityListResponse(BaseModel):
+    items: list[MediaActivityDto]
+
+
+class RecordMediaActivityRequest(BaseModel):
+    lastPage: int | None = None
+    totalPages: int | None = None
+    identity: ResolvedIdentityDto | None = None
+
+
 class MediaItemDto(BaseModel):
     mediaId: str
     displayName: str

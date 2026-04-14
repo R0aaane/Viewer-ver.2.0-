@@ -5,6 +5,7 @@ import '../database/tag_service.dart';
 import '../repository/mediaRepository.dart';
 import '../repository/repositoryFactory.dart';
 import '../scene/gridGallery.dart';
+import '../services/controller_navigation_service.dart';
 import '../services/host_api_server_service.dart';
 import 'app_bootstrap_shared.dart';
 import 'app_theme.dart';
@@ -54,6 +55,8 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'メディアビューア',
       theme: buildAppTheme(),
+      builder: (context, child) =>
+          ControllerNavigationShell(child: child ?? const SizedBox.shrink()),
       home: GalleryGridPage(
         repo: repo,
         tagService: tagService,

@@ -265,6 +265,54 @@ class MetadataStore:
             "viewCount": 1,
         }
 
+    def list_recent_media_activity(self, *, limit: int = 24) -> list[dict[str, Any]]:
+        rows = self._db.list_media_activity(limit=max(1, min(limit, 200)))
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            viewed_at = _parse_datetime(row.get("last_viewed_at"))
+            if viewed_at is None:
+                continue
+            last_page = _parse_epoch(row.get("last_page"))
+            items.append(
+                {
+                    "mediaId": str(row.get("media_id") or ""),
+                    "folderRaw": str(row.get("folder_raw") or ""),
+                    "viewedAt": viewed_at,
+                    "lastPage": last_page if last_page is not None and last_page > 0 else None,
+                }
+            )
+        return items
+
+    def record_media_activity(
+        self,
+        media_id: str | None,
+        *,
+        identity: dict[str, Any] | None = None,
+        last_page: int | None = None,
+        total_pages: int | None = None,
+    ) -> dict[str, Any]:
+        media = self.resolve_media_record(media_id, identity=identity)
+        normalized_last_page = None
+        if str(media.get("kind") or "") == "pdf" and last_page is not None:
+            normalized_last_page = max(1, int(last_page))
+            if total_pages is not None and int(total_pages) > 0:
+                if normalized_last_page >= int(total_pages):
+                    normalized_last_page = None
+
+        now = _utcnow_iso()
+        row = self._db.upsert_media_activity(
+            str(media["media_id"]),
+            viewed_at=now,
+            last_page=normalized_last_page,
+        )
+        viewed_at = _parse_datetime(row.get("last_viewed_at")) or _parse_datetime(now)
+        return {
+            "mediaId": str(media["media_id"]),
+            "folderRaw": str(media.get("folder_raw") or ""),
+            "viewedAt": viewed_at,
+            "lastPage": normalized_last_page,
+        }
+
     def list_tag_master(
         self,
         *,

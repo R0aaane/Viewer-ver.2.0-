@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/mediaItem.dart';
+import '../services/controller_navigation_service.dart';
 import '../services/item_name_service.dart';
 
 Future<String?> showRenameItemDialog(
@@ -11,7 +12,7 @@ Future<String?> showRenameItemDialog(
     text: ItemNameService.editableBaseName(item),
   );
 
-  return showDialog<String>(
+  return showControllerDialog<String>(
     context: context,
     builder: (dialogContext) {
       String? errorText;
@@ -57,10 +58,7 @@ Future<String?> showRenameItemDialog(
                 onPressed: () => Navigator.of(dialogContext).pop(),
                 child: const Text('キャンセル'),
               ),
-              FilledButton(
-                onPressed: submit,
-                child: const Text('変更'),
-              ),
+              FilledButton(onPressed: submit, child: const Text('変更')),
             ],
           );
         },

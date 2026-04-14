@@ -17,11 +17,14 @@ import '../services/home_activity_store.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
 import '../services/item_name_service.dart';
+import '../services/media_id_resolver.dart';
+import '../services/controller_navigation_service.dart';
 import '../services/external_share_service.dart';
 import 'import_to_host_dialog.dart';
 import 'tag_assign_after_import.dart';
 
 import '../repository/mediaRepository.dart';
+import '../widgets/controller_focusable.dart';
 
 import 'artistTagIndex.dart';
 import 'detailImage.dart';
@@ -211,6 +214,7 @@ class GalleryGridPage extends StatefulWidget {
 
 class _GalleryGridPageState extends State<GalleryGridPage> {
   final ExternalShareService _externalShareService = ExternalShareService();
+  final MediaIdResolver _homeMediaIdResolver = MediaIdResolver();
   FolderHandle? _folder;
   List<MediaItem> _items = const [];
   bool _loading = false;
@@ -463,6 +467,46 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     s.add(lower.replaceAll('\\', '/'));
 
     return s;
+  }
+
+  bool _looksLikeStableMediaId(String value) {
+    return value.trim().startsWith('mid_');
+  }
+
+  Future<Map<String, MediaItem>> _buildHomeItemLookup(
+    List<MediaItem> mediaItems,
+    Iterable<HomeActivityEntry> recentViews,
+  ) async {
+    final itemByVariant = <String, MediaItem>{};
+    for (final item in mediaItems) {
+      for (final variant in _idVariants(item.id)) {
+        itemByVariant.putIfAbsent(variant, () => item);
+      }
+    }
+
+    final unresolvedStableIds = recentViews
+        .map((entry) => entry.itemId.trim())
+        .where(_looksLikeStableMediaId)
+        .where((itemId) => !itemByVariant.containsKey(itemId))
+        .toSet();
+    if (unresolvedStableIds.isEmpty) {
+      return itemByVariant;
+    }
+
+    for (final item in mediaItems) {
+      try {
+        final stableId = (await _homeMediaIdResolver.resolve(item)).stableId;
+        itemByVariant.putIfAbsent(stableId, () => item);
+        unresolvedStableIds.remove(stableId);
+        if (unresolvedStableIds.isEmpty) {
+          break;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    return itemByVariant;
   }
 
   bool _loadingArtistTags = false;
@@ -2328,7 +2372,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       margin: const EdgeInsets.symmetric(vertical: 8),
       clipBehavior: Clip.antiAlias,
       elevation: isSelected ? 3 : 1,
-      child: InkWell(
+      child: ControllerFocusable(
+        debugLabel: 'browse-card-${item.id}',
+        borderRadius: BorderRadius.circular(18),
         onLongPress: () {
           if (!_selectMode) {
             _enterSelectMode(item);
@@ -2336,7 +2382,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             _toggleSelect(item);
           }
         },
-        onTap: () async {
+        onPressed: () async {
           if (_selectMode) {
             _toggleSelect(item);
             return;
@@ -2523,7 +2569,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final accent = _detailedBrowseAccentColor(context, item);
     final accentText = _detailedBrowseAccentTextColor(context, item);
 
-    return InkWell(
+    return ControllerFocusable(
+      debugLabel: 'browse-grid-${item.id}',
       borderRadius: BorderRadius.circular(18),
       onLongPress: () {
         if (!_selectMode) {
@@ -2532,7 +2579,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           _toggleSelect(item);
         }
       },
-      onTap: () async {
+      onPressed: () async {
         if (_selectMode) {
           _toggleSelect(item);
           return;
@@ -3108,7 +3155,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      final recentViews = HomeActivityStore.readRecentViews(prefs);
+      final recentViews = await HomeActivityStore.loadRecentViews(prefs);
       final allItems = await _ensureHomeShelfCorpusLoaded();
       final mediaItems = allItems
           .where((item) => item.kind != MediaKind.folder)
@@ -3119,12 +3166,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
         );
 
-      final itemByVariant = <String, MediaItem>{};
-      for (final item in mediaItems) {
-        for (final variant in _idVariants(item.id)) {
-          itemByVariant.putIfAbsent(variant, () => item);
-        }
-      }
+      final itemByVariant = await _buildHomeItemLookup(mediaItems, recentViews);
 
       final recentViewedItems = <MediaItem>[];
       final recentViewEntriesByItemId = <String, HomeActivityEntry>{};
@@ -3281,8 +3323,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       child: Card(
         clipBehavior: Clip.antiAlias,
         margin: EdgeInsets.zero,
-        child: InkWell(
-          onTap: onTap,
+        child: ControllerFocusable(
+          debugLabel: 'home-shelf-${item.id}',
+          borderRadius: BorderRadius.circular(14),
+          onPressed: onTap,
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: Column(
@@ -3492,9 +3536,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           children: [
             _buildHomeSectionHeading('続きから読む', '最後に見ていた PDF をワンタップで再開できます。'),
             const SizedBox(height: 10),
-            InkWell(
+            ControllerFocusable(
+              debugLabel: 'continue-reading-${item.id}',
               borderRadius: BorderRadius.circular(14),
-              onTap: () => _openDetailFromHome(item, initialPdfPage: page),
+              onPressed: () => _openDetailFromHome(item, initialPdfPage: page),
               child: Padding(
                 padding: const EdgeInsets.all(4),
                 child: LayoutBuilder(
@@ -3640,8 +3685,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     ...homeSearchPreview.map((item) {
                       return Card(
                         margin: const EdgeInsets.symmetric(vertical: 6),
-                        child: InkWell(
-                          onTap: () => _openDetailFromHome(item),
+                        child: ControllerFocusable(
+                          debugLabel: 'home-search-${item.id}',
+                          borderRadius: BorderRadius.circular(14),
+                          onPressed: () => _openDetailFromHome(item),
                           child: Padding(
                             padding: const EdgeInsets.all(8),
                             child: Row(
@@ -4113,7 +4160,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final controller = TextEditingController(
       text: _folderAliases[raw] ?? _basename(raw),
     );
-    final result = await showDialog<String>(
+    final result = await showControllerDialog<String>(
       context: context,
       builder: (ctx) {
         return AlertDialog(
@@ -4359,7 +4406,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<bool> _confirmItemDeletion(MediaItem item) async {
     final label = _itemDeletionTypeLabel(item);
-    final result = await showDialog<bool>(
+    final result = await showControllerDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
@@ -4420,7 +4467,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (folderCount > 0) 'フォルダ: $folderCount件',
     ].join('\n');
 
-    final result = await showDialog<bool>(
+    final result = await showControllerDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
@@ -4847,7 +4894,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       dialogShown = true;
       unawaited(
-        showDialog<void>(
+        showControllerDialog<void>(
           context: context,
           barrierDismissible: false,
           builder: (dialogContext) => dialogHandle.bind(
@@ -4956,7 +5003,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<ImportSourceKind?> _pickHostImportSourceKind() async {
-    return showModalBottomSheet<ImportSourceKind>(
+    return showControllerModalBottomSheet<ImportSourceKind>(
       context: context,
       builder: (context) {
         return SafeArea(
@@ -5018,7 +5065,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             }
             dialogShown = true;
             unawaited(
-              showDialog<void>(
+              showControllerDialog<void>(
                 context: context,
                 barrierDismissible: false,
                 builder: (dialogContext) => dialogHandle.bind(
@@ -5327,7 +5374,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     String raw,
   ) {
     final canHardDelete = _canHardDeleteRegisteredFolder(raw);
-    return showDialog<_RegisteredFolderRemovalAction>(
+    return showControllerDialog<_RegisteredFolderRemovalAction>(
       context: context,
       builder: (context) {
         return AlertDialog(
@@ -5432,7 +5479,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     try {
       dialogShown = true;
       unawaited(
-        showDialog<void>(
+        showControllerDialog<void>(
           context: context,
           barrierDismissible: false,
           builder: (dialogContext) => dialogHandle.bind(
@@ -5530,7 +5577,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       dialogShown = true;
       unawaited(
-        showDialog<void>(
+        showControllerDialog<void>(
           context: context,
           barrierDismissible: false,
           builder: (dialogContext) => dialogHandle.bind(
@@ -5733,7 +5780,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return targets.first;
     }
 
-    return showModalBottomSheet<_SharedUrlImportTarget>(
+    return showControllerModalBottomSheet<_SharedUrlImportTarget>(
       context: context,
       builder: (context) {
         return SafeArea(
@@ -6742,7 +6789,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     int done = 0;
     final total = images.length;
 
-    showDialog(
+    showControllerDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
@@ -7109,7 +7156,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Future<void> _showFolderTileModeDialog() async {
-    final mode = await showDialog<FolderTileMode>(
+    final mode = await showControllerDialog<FolderTileMode>(
       context: context,
       builder: (context) => SimpleDialog(
         title: const Text('フォルダ表示設定'),
@@ -7925,151 +7972,170 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   @override
   Widget build(BuildContext context) {
     if (_page == _MainPage.home) {
-      return Scaffold(
-        drawer: _isWideLayout(context) ? null : _buildSidebar(),
-        appBar: AppBar(
-          title: const Text('ホーム'),
-          actions: _appendTopBarRescanAction([_buildHomeOverflowMenu()]),
-        ),
-        body: _wrapBodyWithUrlImportQueue(
-          _withSidebar(context, _buildGuardedBody('home-body', _buildHomeBody)),
-        ),
-      );
-    }
-
-    if (_page == _MainPage.search) {
-      return Scaffold(
-        drawer: _isWideLayout(context) ? null : _buildSidebar(),
-        appBar: AppBar(
-          title: const Text('詳細ブラウズ'),
-          actions: _buildSearchAppBarActions(),
-        ),
-        body: _wrapBodyWithUrlImportQueue(
-          _withSidebar(
-            context,
-            _buildGuardedBody('search-body', _buildHomeSearchGalleryBody),
+      return ControllerNavigationRegion(
+        key: const ValueKey<String>('gallery-home'),
+        debugLabel: 'gallery-home',
+        autofocusFirstFocusable: true,
+        child: Scaffold(
+          drawer: _isWideLayout(context) ? null : _buildSidebar(),
+          appBar: AppBar(
+            title: const Text('ホーム'),
+            actions: _appendTopBarRescanAction([_buildHomeOverflowMenu()]),
+          ),
+          body: _wrapBodyWithUrlImportQueue(
+            _withSidebar(
+              context,
+              _buildGuardedBody('home-body', _buildHomeBody),
+            ),
           ),
         ),
       );
     }
 
-    return DefaultTabController(
-      length: 3,
-      child: Builder(
-        builder: (context) {
-          final tabController = DefaultTabController.of(context);
-          if (!_tabListenerInstalled) {
-            _tabListenerInstalled = true;
-            tabController.addListener(() {
-              if (!tabController.indexIsChanging && tabController.index == 2) {
-                _refreshAllFavoritesItems();
-              }
-            });
-          }
+    if (_page == _MainPage.search) {
+      return ControllerNavigationRegion(
+        key: const ValueKey<String>('gallery-search'),
+        debugLabel: 'gallery-search',
+        autofocusFirstFocusable: true,
+        child: Scaffold(
+          drawer: _isWideLayout(context) ? null : _buildSidebar(),
+          appBar: AppBar(
+            title: const Text('詳細ブラウズ'),
+            actions: _buildSearchAppBarActions(),
+          ),
+          body: _wrapBodyWithUrlImportQueue(
+            _withSidebar(
+              context,
+              _buildGuardedBody('search-body', _buildHomeSearchGalleryBody),
+            ),
+          ),
+        ),
+      );
+    }
 
-          return Scaffold(
-            drawer: _isWideLayout(context) ? null : _buildSidebar(),
-            appBar: AppBar(
-              leading: _canGoUp
-                  ? IconButton(
-                      tooltip: '親フォルダへ',
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: () {
-                        _exitSelectMode();
-                        _goUpFolder();
-                      },
-                    )
-                  : null,
-              title: Text(
-                _folder == null
-                    ? '一覧表示'
-                    : '一覧表示: ${_folderLabel(_folder!.raw)}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              actions: _buildGalleryAppBarActions(tabController),
-              bottom: PreferredSize(
-                preferredSize: const Size.fromHeight(160),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                      child: SizedBox(
-                        height: 44,
-                        child: _buildGallerySearchField(),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: SizedBox(
-                        height: 36,
-                        child: Row(
-                          children: [
-                            const Text('ソート'),
-                            const SizedBox(width: 8),
-                            DropdownButton<_SortMode>(
-                              value: _sortMode,
-                              items: const [
-                                DropdownMenuItem(
-                                  value: _SortMode.name,
-                                  child: Text('名前'),
-                                ),
-                                DropdownMenuItem(
-                                  value: _SortMode.updatedAt,
-                                  child: Text('更新日'),
-                                ),
-                                DropdownMenuItem(
-                                  value: _SortMode.addedAt,
-                                  child: Text('追加日'),
-                                ),
-                              ],
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() => _sortMode = value);
-                              },
-                            ),
-                            const Spacer(),
-                            if (_loading) ...[
-                              if (_loadTotal > 0)
-                                Text(
-                                  '${((_loadProcessed / _loadTotal) * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                                )
-                              else
-                                const Text('...'),
-                              const SizedBox(width: 8),
-                              const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                            ],
-                          ],
+    return ControllerNavigationRegion(
+      key: const ValueKey<String>('gallery-main'),
+      debugLabel: 'gallery-main',
+      autofocusFirstFocusable: true,
+      child: DefaultTabController(
+        length: 3,
+        child: Builder(
+          builder: (context) {
+            final tabController = DefaultTabController.of(context);
+            if (!_tabListenerInstalled) {
+              _tabListenerInstalled = true;
+              tabController.addListener(() {
+                if (!tabController.indexIsChanging &&
+                    tabController.index == 2) {
+                  _refreshAllFavoritesItems();
+                }
+              });
+            }
+
+            return Scaffold(
+              drawer: _isWideLayout(context) ? null : _buildSidebar(),
+              appBar: AppBar(
+                leading: _canGoUp
+                    ? IconButton(
+                        tooltip: '親フォルダへ',
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () {
+                          _exitSelectMode();
+                          _goUpFolder();
+                        },
+                      )
+                    : null,
+                title: Text(
+                  _folder == null
+                      ? '一覧表示'
+                      : '一覧表示: ${_folderLabel(_folder!.raw)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                actions: _buildGalleryAppBarActions(tabController),
+                bottom: PreferredSize(
+                  preferredSize: const Size.fromHeight(160),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                        child: SizedBox(
+                          height: 44,
+                          child: _buildGallerySearchField(),
                         ),
                       ),
-                    ),
-                    const TabBar(
-                      isScrollable: true,
-                      tabs: [
-                        Tab(text: 'すべて'),
-                        Tab(text: 'タグなし'),
-                        Tab(text: 'お気に入り'),
-                      ],
-                    ),
-                  ],
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: SizedBox(
+                          height: 36,
+                          child: Row(
+                            children: [
+                              const Text('ソート'),
+                              const SizedBox(width: 8),
+                              DropdownButton<_SortMode>(
+                                value: _sortMode,
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: _SortMode.name,
+                                    child: Text('名前'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: _SortMode.updatedAt,
+                                    child: Text('更新日'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: _SortMode.addedAt,
+                                    child: Text('追加日'),
+                                  ),
+                                ],
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setState(() => _sortMode = value);
+                                },
+                              ),
+                              const Spacer(),
+                              if (_loading) ...[
+                                if (_loadTotal > 0)
+                                  Text(
+                                    '${((_loadProcessed / _loadTotal) * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                                  )
+                                else
+                                  const Text('...'),
+                                const SizedBox(width: 8),
+                                const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const TabBar(
+                        isScrollable: true,
+                        tabs: [
+                          Tab(text: 'すべて'),
+                          Tab(text: 'タグなし'),
+                          Tab(text: 'お気に入り'),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            body: _wrapBodyWithUrlImportQueue(
-              _withSidebar(
-                context,
-                _buildGuardedBody('gallery-body', _buildGalleryMainBody),
+              body: _wrapBodyWithUrlImportQueue(
+                _withSidebar(
+                  context,
+                  _buildGuardedBody('gallery-body', _buildGalleryMainBody),
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -8242,7 +8308,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final isFavorite = _favorites.contains(item.id);
     final isSelected = _selectedIds.contains(item.id);
 
-    return InkWell(
+    return ControllerFocusable(
+      debugLabel: 'gallery-tile-${item.id}',
+      borderRadius: BorderRadius.circular(10),
       onLongPress: () {
         if (!_selectMode) {
           _enterSelectMode(item);
@@ -8250,7 +8318,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           _toggleSelect(item);
         }
       },
-      onTap: () async {
+      onPressed: () async {
         if (_selectMode) {
           _toggleSelect(item);
           return;

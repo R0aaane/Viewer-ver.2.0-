@@ -12,8 +12,10 @@ import '../repository/mediaRepository.dart';
 
 import '../database/tag_service.dart';
 import '../models/tag.dart';
+import '../services/controller_navigation_service.dart';
 import '../services/home_activity_store.dart';
 import '../services/item_name_service.dart';
+import '../widgets/controller_focusable.dart';
 import 'rename_item_dialog.dart';
 
 enum ReaderFitMode { vertical, horizontal, contain }
@@ -1226,7 +1228,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     final item = _item;
 
-    final ok = await showDialog<bool>(
+    final ok = await showControllerDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('この PDF を削除しますか？'),
@@ -1433,145 +1435,142 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Widget build(BuildContext context) {
     final wide = _isWideLayout(context);
 
-    return WillPopScope(
-      onWillPop: () async {
-        _popWithResult();
-        return false;
-      },
-      child: Scaffold(
-        drawer: wide ? null : _buildSidebar(),
-        backgroundColor: _uiBg,
-        appBar: AppBar(
-          backgroundColor: _uiBar,
-          foregroundColor: Colors.white,
+    return ControllerNavigationRegion(
+      debugLabel: 'detail-page',
+      autofocusFirstFocusable: true,
+      child: WillPopScope(
+        onWillPop: () async {
+          _popWithResult();
+          return false;
+        },
+        child: Scaffold(
+          drawer: wide ? null : _buildSidebar(),
+          backgroundColor: _uiBg,
+          appBar: AppBar(
+            backgroundColor: _uiBar,
+            foregroundColor: Colors.white,
 
-          title: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _displayTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (_inReader) ...[
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      reverse: true, // 蜿ｳ遶ｯ・域桃菴懷・・峨ｒ隕九○繧・☆縺上☆繧・
-                      child: _topReaderControls(),
-                    ),
+            title: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _displayTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              ],
-            ],
-          ),
-
-          leadingWidth: wide ? 56 : 96,
-          leading: Row(
-            children: [
-              IconButton(
-                tooltip: '戻る',
-                icon: const Icon(Icons.arrow_back),
-                onPressed: _popWithResult,
-              ),
-              if (!wide)
-                Builder(
-                  builder: (ctx) => IconButton(
-                    tooltip: 'メニュー',
-                    icon: const Icon(Icons.menu),
-                    onPressed: () => Scaffold.of(ctx).openDrawer(),
-                  ),
-                ),
-            ],
-          ),
-
-          actions: [
-            IconButton(
-              tooltip: _isFavorite ? 'お気に入りを解除' : 'お気に入りに追加',
-              onPressed: _toggleFavorite,
-              icon: Icon(_isFavorite ? Icons.star : Icons.star_border),
-            ),
-            IconButton(
-              tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
-              onPressed: _toggleFullscreen,
-              icon: Icon(
-                _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-              ),
-            ),
-            if (_canDeleteFromLibrary)
-              PopupMenuButton<_DetailMenuAction>(
-                tooltip: 'メニュー',
-                onSelected: (a) {
-                  if (a == _DetailMenuAction.delete) {
-                    _deleteCurrentItemWithWarning();
-                  }
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
-                    value: _DetailMenuAction.delete,
-                    child: ListTile(
-                      leading: Icon(Icons.delete_outline),
-                      title: Text('PDF を削除'),
+                if (_inReader) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        reverse: true, // 蜿ｳ遶ｯ・域桃菴懷・・峨ｒ隕九○繧・☆縺上☆繧・
+                        child: _topReaderControls(),
+                      ),
                     ),
                   ),
                 ],
-              ),
-          ],
-          bottom: TabBar(
-            controller: _tab,
-            tabs: const [
-              Tab(text: '閲覧'),
-              Tab(text: '詳細'),
-            ],
-          ),
-        ),
+              ],
+            ),
 
-        body: _withSidebar(
-          context,
-          Shortcuts(
-            shortcuts: const <ShortcutActivator, Intent>{
-              SingleActivator(LogicalKeyboardKey.arrowLeft): _PrevIntent(),
-              SingleActivator(LogicalKeyboardKey.arrowRight): _NextIntent(),
-              SingleActivator(LogicalKeyboardKey.escape): _EscapeIntent(),
-            },
-            child: Actions(
-              actions: <Type, Action<Intent>>{
-                _PrevIntent: CallbackAction<_PrevIntent>(
-                  onInvoke: (intent) {
-                    // 髢ｲ隕ｧ逕ｨ繧ｿ繝悶・縺ｨ縺阪□縺代・繝ｼ繧ｸ繧堤ｧｻ蜍・
-                    if (_tab.index == 0) _prev();
-                    return null;
-                  },
+            leadingWidth: wide ? 56 : 96,
+            leading: Row(
+              children: [
+                IconButton(
+                  tooltip: '戻る',
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: _popWithResult,
                 ),
-                _NextIntent: CallbackAction<_NextIntent>(
-                  onInvoke: (intent) {
-                    if (_tab.index == 0) _next();
-                    return null;
-                  },
+                if (!wide)
+                  Builder(
+                    builder: (ctx) => IconButton(
+                      tooltip: 'メニュー',
+                      icon: const Icon(Icons.menu),
+                      onPressed: () => Scaffold.of(ctx).openDrawer(),
+                    ),
+                  ),
+              ],
+            ),
+
+            actions: [
+              IconButton(
+                tooltip: _isFavorite ? 'お気に入りを解除' : 'お気に入りに追加',
+                onPressed: _toggleFavorite,
+                icon: Icon(_isFavorite ? Icons.star : Icons.star_border),
+              ),
+              IconButton(
+                tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
+                onPressed: _toggleFullscreen,
+                icon: Icon(
+                  _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
                 ),
-                _EscapeIntent: CallbackAction<_EscapeIntent>(
-                  onInvoke: (intent) {
-                    if (_fullscreen) {
-                      _toggleFullscreen();
-                    } else {
-                      _popWithResult(); // Grid繝壹・繧ｸ縺ｸ謌ｻ繧・
+              ),
+              if (_canDeleteFromLibrary)
+                PopupMenuButton<_DetailMenuAction>(
+                  tooltip: 'メニュー',
+                  onSelected: (a) {
+                    if (a == _DetailMenuAction.delete) {
+                      _deleteCurrentItemWithWarning();
                     }
-                    return null;
                   },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: _DetailMenuAction.delete,
+                      child: ListTile(
+                        leading: Icon(Icons.delete_outline),
+                        title: Text('PDF を削除'),
+                      ),
+                    ),
+                  ],
                 ),
+            ],
+            bottom: TabBar(
+              controller: _tab,
+              tabs: const [
+                Tab(text: '閲覧'),
+                Tab(text: '詳細'),
+              ],
+            ),
+          ),
+
+          body: _withSidebar(
+            context,
+            Shortcuts(
+              shortcuts: const <ShortcutActivator, Intent>{
+                SingleActivator(LogicalKeyboardKey.pageUp): _PrevIntent(),
+                SingleActivator(LogicalKeyboardKey.pageDown): _NextIntent(),
+                SingleActivator(LogicalKeyboardKey.gameButtonLeft1):
+                    _PrevIntent(),
+                SingleActivator(LogicalKeyboardKey.gameButtonRight1):
+                    _NextIntent(),
               },
-              child: Focus(
-                autofocus: true,
-                child: AnimatedBuilder(
-                  animation: _tab,
-                  builder: (context, _) {
-                    if (_tab.index == 0) return _buildReader();
-                    return _buildDetail();
-                  },
+              child: Actions(
+                actions: <Type, Action<Intent>>{
+                  _PrevIntent: CallbackAction<_PrevIntent>(
+                    onInvoke: (intent) {
+                      // 髢ｲ隕ｧ逕ｨ繧ｿ繝悶・縺ｨ縺阪□縺代・繝ｼ繧ｸ繧堤ｧｻ蜍・
+                      if (_tab.index == 0) _prev();
+                      return null;
+                    },
+                  ),
+                  _NextIntent: CallbackAction<_NextIntent>(
+                    onInvoke: (intent) {
+                      if (_tab.index == 0) _next();
+                      return null;
+                    },
+                  ),
+                },
+                child: Focus(
+                  autofocus: true,
+                  child: AnimatedBuilder(
+                    animation: _tab,
+                    builder: (context, _) {
+                      if (_tab.index == 0) return _buildReader();
+                      return _buildDetail();
+                    },
+                  ),
                 ),
               ),
             ),
@@ -2881,8 +2880,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       delegate: SliverChildBuilderDelegate((context, i) {
         final page = i + 1;
 
-        return InkWell(
-          onTap: () {
+        return ControllerFocusable(
+          debugLabel: 'detail-thumb-$page',
+          borderRadius: BorderRadius.circular(10),
+          onPressed: () {
             _setCurrentPdfPage(page);
             _tab.animateTo(0);
           },
@@ -2951,8 +2952,4 @@ class _PrevIntent extends Intent {
 
 class _NextIntent extends Intent {
   const _NextIntent();
-}
-
-class _EscapeIntent extends Intent {
-  const _EscapeIntent();
 }

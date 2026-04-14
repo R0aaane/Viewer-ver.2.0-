@@ -87,6 +87,34 @@ class MediaStatsTest(unittest.TestCase):
         with self.assertRaises(Exception):
             self.store.record_media_view(self.image_media_id)
 
+    def test_record_media_activity_persists_resume_page_and_recent_order(self) -> None:
+        first = self.store.record_media_activity(
+            self.pdf_media_id,
+            last_page=7,
+            total_pages=20,
+        )
+        second = self.store.record_media_activity(self.image_media_id)
+
+        recent = self.store.list_recent_media_activity(limit=10)
+
+        self.assertEqual(first["mediaId"], self.pdf_media_id)
+        self.assertEqual(first["lastPage"], 7)
+        self.assertEqual(second["mediaId"], self.image_media_id)
+        self.assertIsNone(second["lastPage"])
+        self.assertEqual(
+            [entry["mediaId"] for entry in recent[:2]],
+            [self.image_media_id, self.pdf_media_id],
+        )
+
+    def test_record_media_activity_clears_resume_at_last_page(self) -> None:
+        entry = self.store.record_media_activity(
+            self.pdf_media_id,
+            last_page=12,
+            total_pages=12,
+        )
+
+        self.assertIsNone(entry["lastPage"])
+
 
 if __name__ == "__main__":
     unittest.main()

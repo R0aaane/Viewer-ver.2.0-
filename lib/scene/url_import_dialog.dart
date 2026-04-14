@@ -2,6 +2,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../repository/mediaRepository.dart';
+import '../services/controller_navigation_service.dart';
 import '../services/url_import_project_cookie_store_service.dart';
 import 'url_import_browser_page.dart';
 
@@ -32,7 +33,7 @@ class UrlImportDialog extends StatefulWidget {
     required String description,
     String initialSourceText = '',
   }) {
-    return showDialog<UrlImportDialogResult>(
+    return showControllerDialog<UrlImportDialogResult>(
       context: context,
       builder: (_) => UrlImportDialog(
         title: title,

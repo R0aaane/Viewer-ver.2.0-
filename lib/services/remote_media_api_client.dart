@@ -1,7 +1,6 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -146,6 +145,20 @@ class RemoteMediaPage {
   });
 }
 
+class RemoteMediaActivityEntry {
+  final String mediaId;
+  final String folderRaw;
+  final DateTime viewedAt;
+  final int? lastPage;
+
+  const RemoteMediaActivityEntry({
+    required this.mediaId,
+    required this.folderRaw,
+    required this.viewedAt,
+    required this.lastPage,
+  });
+}
+
 class RemoteMediaApiClient {
   final String baseUrl;
   final String? authToken;
@@ -236,6 +249,41 @@ class RemoteMediaApiClient {
     );
   }
 
+  Future<List<RemoteMediaActivityEntry>> fetchRecentMediaActivity({
+    int limit = 24,
+  }) async {
+    final json = await _getJson(
+      '/activity/recent',
+      queryParameters: <String, String>{'limit': '${limit < 1 ? 1 : limit}'},
+    );
+    final rows = _unwrapList(json, preferredKeys: const ['items', 'results']);
+    return rows
+        .whereType<Map>()
+        .map((row) => _parseMediaActivityEntry(Map<String, dynamic>.from(row)))
+        .toList(growable: false);
+  }
+
+  Future<RemoteMediaActivityEntry> recordMediaActivity(
+    String mediaId, {
+    ResolvedMediaIdentity? identity,
+    int? lastPage,
+    int? totalPages,
+  }) async {
+    final jsonBody = await _sendJsonRequest(
+      'POST',
+      '/media/${Uri.encodeComponent(mediaId)}/activity',
+      body: <String, dynamic>{
+        if (identity != null) 'identity': identity.toJson(),
+        if (lastPage != null) 'lastPage': lastPage,
+        if (totalPages != null) 'totalPages': totalPages,
+      },
+    );
+    if (jsonBody is! Map<String, dynamic>) {
+      throw const RemoteMediaException('閲覧履歴の形式が不正です');
+    }
+    return _parseMediaActivityEntry(jsonBody);
+  }
+
   Future<void> renameMedia({
     required MediaItem beforeItem,
     required MediaItem afterItem,
@@ -300,11 +348,14 @@ class RemoteMediaApiClient {
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final payload = await response
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .join();
-        final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
+            .transform(const Utf8Decoder(allowMalformed: true))
+            .join();
+        final jsonBody = payload.trim().isEmpty
+            ? null
+            : _tryDecodeJson(payload);
         throw RemoteMediaException(
-          _extractErrorMessage(jsonBody) ?? _messageForStatus(response.statusCode),
+          _extractErrorMessage(jsonBody) ??
+              _messageForStatus(response.statusCode),
           statusCode: response.statusCode,
         );
       }
@@ -366,9 +417,7 @@ class RemoteMediaApiClient {
   }) async {
     return _getBytes(
       '/media/${Uri.encodeComponent(mediaId)}/page/$pageNo',
-      queryParameters: <String, String>{
-        if (width != null) 'width': '$width',
-      },
+      queryParameters: <String, String>{if (width != null) 'width': '$width'},
     );
   }
 
@@ -406,12 +455,10 @@ class RemoteMediaApiClient {
     final trimmedArtistTag = importMetadata?.artistTag?.trim();
     final trimmedSeriesTag = importMetadata?.seriesTag?.trim();
     final trimmedTargetCollection = importMetadata?.targetCollection?.trim();
-    final artistTag =
-        trimmedArtistTag != null && trimmedArtistTag.isNotEmpty
+    final artistTag = trimmedArtistTag != null && trimmedArtistTag.isNotEmpty
         ? trimmedArtistTag
         : null;
-    final seriesTag =
-        trimmedSeriesTag != null && trimmedSeriesTag.isNotEmpty
+    final seriesTag = trimmedSeriesTag != null && trimmedSeriesTag.isNotEmpty
         ? trimmedSeriesTag
         : null;
     final targetCollection =
@@ -434,27 +481,28 @@ class RemoteMediaApiClient {
     final originalDisplayNamesJson = jsonEncode(
       files.map((file) => file.fileName).toList(growable: false),
     );
-    final sourceRelativePaths =
-        files
-            .map((file) => file.sourceRelativePath?.trim() ?? '')
-            .toList(growable: false);
+    final sourceRelativePaths = files
+        .map((file) => file.sourceRelativePath?.trim() ?? '')
+        .toList(growable: false);
     final hasSourceRelativePaths = sourceRelativePaths.any(
       (entry) => entry.isNotEmpty,
     );
     final sourceRelativePathsJson = hasSourceRelativePaths
         ? jsonEncode(sourceRelativePaths)
         : null;
-    final serializedFileTagGroups =
-        files
-            .map(
-              (file) => file.tags.map(_tagToJson).toList(growable: false),
-            )
-            .toList(growable: false);
-    final hasFileTags = serializedFileTagGroups.any((group) => group.isNotEmpty);
-    final fileTagsJson = hasFileTags ? jsonEncode(serializedFileTagGroups) : null;
+    final serializedFileTagGroups = files
+        .map((file) => file.tags.map(_tagToJson).toList(growable: false))
+        .toList(growable: false);
+    final hasFileTags = serializedFileTagGroups.any(
+      (group) => group.isNotEmpty,
+    );
+    final fileTagsJson = hasFileTags
+        ? jsonEncode(serializedFileTagGroups)
+        : null;
     final freeTagsJson = freeTags.isNotEmpty ? jsonEncode(freeTags) : null;
-    final characterTagsJson =
-        characterTags.isNotEmpty ? jsonEncode(characterTags) : null;
+    final characterTagsJson = characterTags.isNotEmpty
+        ? jsonEncode(characterTags)
+        : null;
 
     debugPrint(
       '[UPLOAD][CLIENT][req:$traceId] start '
@@ -646,7 +694,8 @@ class RemoteMediaApiClient {
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw RemoteMediaException(
-          _extractErrorMessage(jsonBody) ?? _messageForStatus(response.statusCode),
+          _extractErrorMessage(jsonBody) ??
+              _messageForStatus(response.statusCode),
           statusCode: response.statusCode,
         );
       }
@@ -740,7 +789,8 @@ class RemoteMediaApiClient {
     final cookieFilePath = effectiveOptions.normalizedCookieFilePath;
     final urlListFilePath = effectiveOptions.normalizedUrlListFilePath;
     final favoriteSites = effectiveOptions.normalizedFavoriteSites;
-    final favoriteUserServices = effectiveOptions.normalizedFavoriteUserServices;
+    final favoriteUserServices =
+        effectiveOptions.normalizedFavoriteUserServices;
 
     final jsonBody = await _sendJsonRequest(
       'POST',
@@ -827,7 +877,8 @@ class RemoteMediaApiClient {
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw RemoteMediaException(
-          _extractErrorMessage(jsonBody) ?? _messageForStatus(response.statusCode),
+          _extractErrorMessage(jsonBody) ??
+              _messageForStatus(response.statusCode),
           statusCode: response.statusCode,
         );
       }
@@ -864,7 +915,8 @@ class RemoteMediaApiClient {
         final raw = utf8.decode(chunks, allowMalformed: true);
         final jsonBody = raw.trim().isEmpty ? null : _tryDecodeJson(raw);
         throw RemoteMediaException(
-          _extractErrorMessage(jsonBody) ?? _messageForStatus(response.statusCode),
+          _extractErrorMessage(jsonBody) ??
+              _messageForStatus(response.statusCode),
           statusCode: response.statusCode,
         );
       }
@@ -879,14 +931,13 @@ class RemoteMediaApiClient {
     }
   }
 
-  Uri _buildUri(
-    String path, {
-    Map<String, String>? queryParameters,
-  }) {
+  Uri _buildUri(String path, {Map<String, String>? queryParameters}) {
     final baseUri = _parseBaseUri();
     return baseUri.replace(
       path: _joinPath(baseUri.path, path),
-      queryParameters: queryParameters?.isEmpty == true ? null : queryParameters,
+      queryParameters: queryParameters?.isEmpty == true
+          ? null
+          : queryParameters,
     );
   }
 
@@ -988,10 +1039,19 @@ class RemoteMediaApiClient {
   }
 
   Map<String, dynamic> _tagToJson(Tag tag) {
-    return <String, dynamic>{
-      'name': tag.name,
-      'category': tag.category.name,
-    };
+    return <String, dynamic>{'name': tag.name, 'category': tag.category.name};
+  }
+
+  RemoteMediaActivityEntry _parseMediaActivityEntry(Map<String, dynamic> json) {
+    final viewedAt =
+        _parseDateTime(json['viewedAt']?.toString()) ?? DateTime.now();
+    final rawLastPage = _asInt(json['lastPage']);
+    return RemoteMediaActivityEntry(
+      mediaId: json['mediaId']?.toString().trim() ?? '',
+      folderRaw: json['folderRaw']?.toString().trim() ?? '',
+      viewedAt: viewedAt,
+      lastPage: rawLastPage != null && rawLastPage > 0 ? rawLastPage : null,
+    );
   }
 
   String _normalizeUploadRequestId(String? raw) {
@@ -1030,11 +1090,10 @@ class RemoteMediaApiClient {
   }
 
   String _formatClientTagList(Iterable<Tag> tags) {
-    final values =
-        tags
-            .map((tag) => '${tag.category.name}:${tag.name.trim()}')
-            .where((entry) => entry.isNotEmpty)
-            .toList(growable: false);
+    final values = tags
+        .map((tag) => '${tag.category.name}:${tag.name.trim()}')
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
     return _debugUploadStringList(values);
   }
 
@@ -1045,8 +1104,7 @@ class RemoteMediaApiClient {
     final items = <RemoteUploadedMediaTags>[];
     for (final entry in raw.entries) {
       final mediaId = entry.key.toString();
-      final values =
-          entry.value is List
+      final values = entry.value is List
           ? (entry.value as List)
                 .map((item) => item.toString())
                 .toList(growable: false)
@@ -1060,19 +1118,21 @@ class RemoteMediaApiClient {
     if (items.isEmpty) {
       return '[]';
     }
-    final values =
-        items
-            .map(
-              (item) =>
-                  '{mediaId:${_debugUploadString(item.mediaId)}, tags:${_debugUploadStringList(item.tags)}}',
-            )
-            .toList(growable: false);
+    final values = items
+        .map(
+          (item) =>
+              '{mediaId:${_debugUploadString(item.mediaId)}, tags:${_debugUploadStringList(item.tags)}}',
+        )
+        .toList(growable: false);
     return '[${values.join(', ')}]';
   }
 
   String _utf8HexPreview(String value) {
     final bytes = utf8.encode(value);
-    final preview = bytes.take(32).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+    final preview = bytes
+        .take(32)
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
     return bytes.length > 32 ? '$preview...' : preview;
   }
 
@@ -1184,7 +1244,3 @@ class RemoteMediaApiClient {
     }
   }
 }
-
-
-
-

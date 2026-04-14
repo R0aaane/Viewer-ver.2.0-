@@ -1,8 +1,9 @@
-﻿import 'package:file_selector/file_selector.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../database/tag_service.dart';
 import '../models/metadata_settings.dart';
+import '../services/controller_navigation_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/url_import_project_cookie_store_service.dart';
 
@@ -21,7 +22,7 @@ class MetadataSettingsDialog extends StatefulWidget {
     required TagService tagService,
     required HostApiServerService hostServerService,
   }) {
-    return showDialog<bool>(
+    return showControllerDialog<bool>(
       context: context,
       builder: (_) => MetadataSettingsDialog(
         tagService: tagService,
@@ -68,9 +69,13 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     final settings = widget.tagService.settings;
     _initialSettings = settings;
     _mode = settings.appMode;
-    _clientUrlController = TextEditingController(text: settings.clientApiBaseUrl);
+    _clientUrlController = TextEditingController(
+      text: settings.clientApiBaseUrl,
+    );
     _hostPortController = TextEditingController(text: '${settings.hostPort}');
-    _authTokenController = TextEditingController(text: settings.authToken ?? '');
+    _authTokenController = TextEditingController(
+      text: settings.authToken ?? '',
+    );
     _hostLibraryPathController = TextEditingController(
       text: settings.hostLibraryPath,
     );
@@ -163,7 +168,9 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
 
   void _showSnackBar(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Widget _buildProjectCookieSection(BuildContext context) {
@@ -209,15 +216,21 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton(
-                    onPressed: _saving ? null : () => _importProjectCookie(profile),
+                    onPressed: _saving
+                        ? null
+                        : () => _importProjectCookie(profile),
                     child: Text(
-                      _projectCookieSlots[profile]?.exists == true ? '差し替え' : '登録',
+                      _projectCookieSlots[profile]?.exists == true
+                          ? '差し替え'
+                          : '登録',
                     ),
                   ),
                   const SizedBox(width: 8),
                   IconButton(
                     tooltip: '削除',
-                    onPressed: (_saving || _projectCookieSlots[profile]?.exists != true)
+                    onPressed:
+                        (_saving ||
+                            _projectCookieSlots[profile]?.exists != true)
                         ? null
                         : () => _removeProjectCookie(profile),
                     icon: const Icon(Icons.delete_outline),
@@ -333,10 +346,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Library フォルダ',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
+          Text('Library フォルダ', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           TextField(
             controller: _hostLibraryPathController,
@@ -423,7 +433,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     required String sourcePath,
     required String targetPath,
   }) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showControllerDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
@@ -432,9 +442,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                '現在の Library を新しい保存先へ移動し、ホスト側のメタデータ参照先も更新します。',
-              ),
+              const Text('現在の Library を新しい保存先へ移動し、ホスト側のメタデータ参照先も更新します。'),
               const SizedBox(height: 12),
               Text('移行元: $sourcePath'),
               const SizedBox(height: 4),
@@ -504,9 +512,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
           draft.isStandaloneMode
               ? MetadataConnectionState.localMode
               : MetadataConnectionState.connected,
-          draft.isStandaloneMode
-              ? 'スタンドアロンモードでは再スキャンは不要です。'
-              : '再スキャンを要求しました。',
+          draft.isStandaloneMode ? 'スタンドアロンモードでは再スキャンは不要です。' : '再スキャンを要求しました。',
         );
       });
     } catch (error) {
@@ -527,9 +533,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   Future<void> _startHostServer() async {
     final draft = _draftSettings();
     if (_canOfferLibraryMigration(draft)) {
-      _showSnackBar(
-        'Library フォルダの変更は保存から適用してください。移行する場合はチェックを入れて保存します。',
-      );
+      _showSnackBar('Library フォルダの変更は保存から適用してください。移行する場合はチェックを入れて保存します。');
       return;
     }
 
@@ -756,10 +760,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '接続状態',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
+          Text('接続状態', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 6),
           Text(
             _safeMessage(
@@ -868,7 +869,9 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                   constraints: const BoxConstraints(maxHeight: 140),
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: SingleChildScrollView(
@@ -922,7 +925,8 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                           _mode = value;
                           if (value == AppMode.standalone) {
                             _status = _localModeStatus();
-                          } else if (_status.state == MetadataConnectionState.localMode) {
+                          } else if (_status.state ==
+                              MetadataConnectionState.localMode) {
                             _status = _unknownStatus();
                           }
                           _syncMigrationSelection();
@@ -1010,7 +1014,8 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                     label: const Text('接続確認'),
                   ),
                   OutlinedButton.icon(
-                    onPressed: (_rescanning || _saving || _mode == AppMode.standalone)
+                    onPressed:
+                        (_rescanning || _saving || _mode == AppMode.standalone)
                         ? null
                         : _requestRescan,
                     icon: _rescanning

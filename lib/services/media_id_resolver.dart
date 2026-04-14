@@ -63,12 +63,18 @@ class MediaIdResolver {
   Future<ResolvedMediaIdentity> _resolveInternal(MediaItem item) async {
     final normalizedPath = normalizeLocator(item.id);
     final normalizedFolder = normalizeLocator(item.folderRaw);
-    final relativePathHint = _relativePathHint(item, normalizedPath, normalizedFolder);
+    final relativePathHint = _relativePathHint(
+      item,
+      normalizedPath,
+      normalizedFolder,
+    );
 
     int? sizeBytes = item.sizeBytes;
     final modifiedEpochMs = item.modified?.millisecondsSinceEpoch;
 
-    if (sizeBytes == null && !_isContentUri(item.id) && item.kind != MediaKind.folder) {
+    if (sizeBytes == null &&
+        !_isContentUri(item.id) &&
+        item.kind != MediaKind.folder) {
       try {
         final stat = await File(item.id).stat();
         sizeBytes = stat.size;
@@ -82,7 +88,7 @@ class MediaIdResolver {
       item.kind.name,
       normalizedPath,
       normalizedFolder,
-      relativePathHint,
+      item.displayName,
       (sizeBytes ?? -1).toString(),
       (modifiedEpochMs ?? -1).toString(),
     ].join('|');
@@ -119,7 +125,10 @@ class MediaIdResolver {
 
     if (_looksLikeWindowsPath(trimmed)) {
       try {
-        return _windowsPath.normalize(trimmed).replaceAll('/', '\\').toLowerCase();
+        return _windowsPath
+            .normalize(trimmed)
+            .replaceAll('/', '\\')
+            .toLowerCase();
       } on ArgumentError {
         return trimmed.replaceAll('/', '\\').toLowerCase();
       }
@@ -133,7 +142,9 @@ class MediaIdResolver {
           ? trimmed.replaceAll('/', '\\').toLowerCase()
           : trimmed;
     }
-    return Platform.isWindows ? normalized.replaceAll('/', '\\').toLowerCase() : normalized;
+    return Platform.isWindows
+        ? normalized.replaceAll('/', '\\').toLowerCase()
+        : normalized;
   }
 
   String _relativePathHint(
@@ -145,10 +156,13 @@ class MediaIdResolver {
       return item.displayName;
     }
 
-    if (normalizedFolder.isNotEmpty && normalizedPath.startsWith(normalizedFolder)) {
+    if (normalizedFolder.isNotEmpty &&
+        normalizedPath.startsWith(normalizedFolder)) {
       final prefixLength = normalizedFolder.length;
       if (normalizedPath.length > prefixLength) {
-        return normalizedPath.substring(prefixLength).replaceFirst(RegExp(r'^[\\/]+'), '');
+        return normalizedPath
+            .substring(prefixLength)
+            .replaceFirst(RegExp(r'^[\\/]+'), '');
       }
     }
     return item.displayName;

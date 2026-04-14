@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/mediaItem.dart';
+import '../models/metadata_settings.dart';
+import 'app_settings_service.dart';
+import 'media_id_resolver.dart';
+import 'remote_media_api_client.dart';
 
 class HomeActivityEntry {
   final String itemId;
@@ -50,6 +54,8 @@ class HomeActivityEntry {
 class HomeActivityStore {
   static const String recentViewsKey = 'prefs.homeRecentViewsJson';
   static const int maxRecentViews = 24;
+  static final AppSettingsService _settingsService = AppSettingsService();
+  static final MediaIdResolver _idResolver = MediaIdResolver();
 
   static List<HomeActivityEntry> readRecentViews(SharedPreferences prefs) {
     final raw = prefs.getString(recentViewsKey);
@@ -96,6 +102,20 @@ class HomeActivityStore {
     }
   }
 
+  static Future<List<HomeActivityEntry>> loadRecentViews(
+    SharedPreferences prefs,
+  ) async {
+    final local = readRecentViews(prefs);
+    final remote = await _readRemoteRecentViews();
+    if (remote == null || remote.isEmpty) {
+      return local;
+    }
+
+    final merged = _mergeEntries(remote, local);
+    await _writeRecentViews(prefs, merged);
+    return merged;
+  }
+
   static Future<List<HomeActivityEntry>> recordView(
     SharedPreferences prefs, {
     required MediaItem item,
@@ -103,9 +123,17 @@ class HomeActivityStore {
     int? totalPages,
     DateTime? viewedAt,
   }) async {
-    final next = readRecentViews(
-      prefs,
-    ).where((entry) => entry.itemId != item.id).toList(growable: true);
+    final viewedAtValue = viewedAt ?? DateTime.now();
+    ResolvedMediaIdentity? identity;
+    try {
+      identity = await _idResolver.resolve(item);
+    } catch (_) {}
+
+    final entryItemId = identity?.stableId ?? item.id;
+    final knownItemIds = <String>{item.id, entryItemId, ...?identity?.aliases};
+    final next = readRecentViews(prefs)
+        .where((entry) => !knownItemIds.contains(entry.itemId))
+        .toList(growable: true);
 
     final normalizedPage = item.kind == MediaKind.pdf && lastPage != null
         ? (lastPage < 1 ? 1 : lastPage)
@@ -123,19 +151,116 @@ class HomeActivityStore {
       next.insert(
         0,
         HomeActivityEntry(
-          itemId: item.id,
+          itemId: entryItemId,
           folderRaw: item.folderRaw,
-          viewedAt: viewedAt ?? DateTime.now(),
+          viewedAt: viewedAtValue,
           lastPage: normalizedPage,
         ),
       );
     }
 
-    final limited = next.take(maxRecentViews).toList(growable: false);
+    final limited = _mergeEntries(next, const <HomeActivityEntry>[]);
+    await _writeRecentViews(prefs, limited);
+    await _recordRemoteView(
+      item: item,
+      identity: identity,
+      lastPage: normalizedPage,
+      totalPages: normalizedTotalPages,
+    );
+    return limited;
+  }
+
+  static List<HomeActivityEntry> _mergeEntries(
+    Iterable<HomeActivityEntry> primary,
+    Iterable<HomeActivityEntry> secondary,
+  ) {
+    final combined = <HomeActivityEntry>[...primary, ...secondary]
+      ..sort((a, b) => b.viewedAt.compareTo(a.viewedAt));
+
+    final deduped = <HomeActivityEntry>[];
+    final seen = <String>{};
+    for (final entry in combined) {
+      if (!seen.add(entry.itemId)) {
+        continue;
+      }
+      deduped.add(entry);
+      if (deduped.length >= maxRecentViews) {
+        break;
+      }
+    }
+    return deduped.toList(growable: false);
+  }
+
+  static Future<void> _writeRecentViews(
+    SharedPreferences prefs,
+    List<HomeActivityEntry> entries,
+  ) async {
     final encoded = jsonEncode(
-      limited.map((entry) => entry.toJson()).toList(growable: false),
+      entries.map((entry) => entry.toJson()).toList(growable: false),
     );
     await prefs.setString(recentViewsKey, encoded);
-    return limited;
+  }
+
+  static Future<List<HomeActivityEntry>?> _readRemoteRecentViews() async {
+    final client = await _buildRemoteClient();
+    if (client == null) {
+      return null;
+    }
+    try {
+      final entries = await client.fetchRecentMediaActivity(
+        limit: maxRecentViews,
+      );
+      return entries
+          .map(
+            (entry) => HomeActivityEntry(
+              itemId: entry.mediaId,
+              folderRaw: entry.folderRaw,
+              viewedAt: entry.viewedAt,
+              lastPage: entry.lastPage,
+            ),
+          )
+          .toList(growable: false);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> _recordRemoteView({
+    required MediaItem item,
+    required ResolvedMediaIdentity? identity,
+    required int? lastPage,
+    required int? totalPages,
+  }) async {
+    final client = await _buildRemoteClient();
+    if (client == null) {
+      return;
+    }
+
+    try {
+      await client.recordMediaActivity(
+        identity?.stableId ?? item.id,
+        identity: identity,
+        lastPage: lastPage,
+        totalPages: totalPages,
+      );
+    } catch (_) {}
+  }
+
+  static Future<RemoteMediaApiClient?> _buildRemoteClient() async {
+    final settings = await _settingsService.loadMetadataSettings();
+    final baseUrl = switch (settings.appMode) {
+      AppMode.host => settings.hostLoopbackApiBaseUrl,
+      AppMode.client => settings.remoteApiBaseUrl,
+      AppMode.standalone => '',
+    };
+    final token = settings.authToken?.trim();
+    final client = RemoteMediaApiClient(
+      baseUrl: baseUrl,
+      authToken: token == null || token.isEmpty ? null : token,
+    );
+    if (!client.isConfigured) {
+      return null;
+    }
+    return client;
   }
 }

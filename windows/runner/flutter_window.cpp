@@ -25,7 +25,10 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  controller_navigation_channel_ = std::make_unique<ControllerNavigationChannel>(
+      flutter_controller_->engine()->messenger());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  SetTimer(GetHandle(), kControllerPollTimerId, 16, nullptr);
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -40,6 +43,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  KillTimer(GetHandle(), kControllerPollTimerId);
+  controller_navigation_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -62,6 +67,19 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_TIMER:
+      if (wparam == kControllerPollTimerId && controller_navigation_channel_) {
+        controller_navigation_channel_->Poll();
+        return 0;
+      }
+      break;
+
+    case WM_ACTIVATEAPP:
+      if (controller_navigation_channel_) {
+        controller_navigation_channel_->SetWindowActive(wparam != FALSE);
+      }
+      break;
+
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;

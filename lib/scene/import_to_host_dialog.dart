@@ -4,6 +4,7 @@ import '../database/tag_service.dart';
 import '../models/mediaItem.dart';
 import '../models/tag.dart';
 import '../repository/mediaRepository.dart';
+import '../services/controller_navigation_service.dart';
 
 class ImportToHostDialog {
   const ImportToHostDialog._();
@@ -41,7 +42,7 @@ class ImportToHostSheet extends StatefulWidget {
     required ImportSourceKind sourceKind,
     required List<MediaItem> selectedItems,
   }) {
-    return showModalBottomSheet<ImportRequest>(
+    return showControllerModalBottomSheet<ImportRequest>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -105,12 +106,15 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
       );
       if (!mounted) return;
       setState(() {
-        _artistMaster =
-            artist.map((entry) => entry.tag.name).toList(growable: false);
-        _seriesMaster =
-            series.map((entry) => entry.tag.name).toList(growable: false);
-        _characterMaster =
-            character.map((entry) => entry.tag.name).toList(growable: false);
+        _artistMaster = artist
+            .map((entry) => entry.tag.name)
+            .toList(growable: false);
+        _seriesMaster = series
+            .map((entry) => entry.tag.name)
+            .toList(growable: false);
+        _characterMaster = character
+            .map((entry) => entry.tag.name)
+            .toList(growable: false);
       });
     } catch (_) {
       if (!mounted) return;
@@ -241,9 +245,8 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
       .where((item) => item.kind == MediaKind.pdf)
       .toList(growable: false);
 
-  int get _selectedImageCount => widget.selectedItems
-      .where((item) => item.kind == MediaKind.image)
-      .length;
+  int get _selectedImageCount =>
+      widget.selectedItems.where((item) => item.kind == MediaKind.image).length;
 
   String _selectionSummary() {
     final parts = <String>['合計 ${widget.selectedItems.length} 件'];
@@ -460,119 +463,116 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
   }
 
   Widget _buildArtistCard() => _SectionCard(
-        title: 'アーティストタグ',
-        description: '必要なら取り込み対象全体にまとめて付与します。',
-        child: _TagInputSection(
-          inputLabel: 'アーティスト名',
-          hintText: '例: 作家名',
-          addButtonLabel: '設定',
-          controller: _artistController,
-          selectedTags: _artistTags,
-          suggestions: _matchSuggestions(
-            source: _artistMaster,
-            query: _artistController.text,
-            selectedTags: _artistTags,
-          ),
-          loadingSuggestions: _loadingSuggestions,
-          selectedEmptyText: 'まだ選択されていません',
-          suggestionEmptyText: '入力すると候補を絞り込めます。',
-          onChanged: (_) => setState(() {}),
-          onAdd: () => _setSingleTag(
-            _artistTags,
-            _artistController,
-            _artistController.text,
-          ),
-          onSuggestionPressed: (value) =>
-              _setSingleTag(_artistTags, _artistController, value),
-          onDeletedTag: (value) => _removeTag(_artistTags, value),
-        ),
-      );
+    title: 'アーティストタグ',
+    description: '必要なら取り込み対象全体にまとめて付与します。',
+    child: _TagInputSection(
+      inputLabel: 'アーティスト名',
+      hintText: '例: 作家名',
+      addButtonLabel: '設定',
+      controller: _artistController,
+      selectedTags: _artistTags,
+      suggestions: _matchSuggestions(
+        source: _artistMaster,
+        query: _artistController.text,
+        selectedTags: _artistTags,
+      ),
+      loadingSuggestions: _loadingSuggestions,
+      selectedEmptyText: 'まだ選択されていません',
+      suggestionEmptyText: '入力すると候補を絞り込めます。',
+      onChanged: (_) => setState(() {}),
+      onAdd: () =>
+          _setSingleTag(_artistTags, _artistController, _artistController.text),
+      onSuggestionPressed: (value) =>
+          _setSingleTag(_artistTags, _artistController, value),
+      onDeletedTag: (value) => _removeTag(_artistTags, value),
+    ),
+  );
 
   Widget _buildSeriesCard() => _SectionCard(
-        title: 'シリーズタグ',
-        description: '作品名やシリーズ名をひとつ選んで付与できます。',
-        child: _TagInputSection(
-          inputLabel: 'シリーズ名',
-          hintText: '例: シリーズ名',
-          addButtonLabel: '設定',
-          controller: _seriesController,
-          selectedTags: _seriesTags,
-          suggestions: _matchSuggestions(
-            source: _seriesMaster,
-            query: _seriesController.text,
-            selectedTags: _seriesTags,
-          ),
-          loadingSuggestions: _loadingSuggestions,
-          selectedEmptyText: 'まだ選択されていません',
-          suggestionEmptyText: '入力すると候補を絞り込めます。',
-          onChanged: (_) => setState(() {}),
-          onAdd: () => _setSingleTag(
-            _seriesTags,
-            _seriesController,
-            _seriesController.text,
-          ),
-          onSuggestionPressed: (value) =>
-              _setSingleTag(_seriesTags, _seriesController, value),
-          onDeletedTag: (value) => _removeTag(_seriesTags, value),
-        ),
-      );
+    title: 'シリーズタグ',
+    description: '作品名やシリーズ名をひとつ選んで付与できます。',
+    child: _TagInputSection(
+      inputLabel: 'シリーズ名',
+      hintText: '例: シリーズ名',
+      addButtonLabel: '設定',
+      controller: _seriesController,
+      selectedTags: _seriesTags,
+      suggestions: _matchSuggestions(
+        source: _seriesMaster,
+        query: _seriesController.text,
+        selectedTags: _seriesTags,
+      ),
+      loadingSuggestions: _loadingSuggestions,
+      selectedEmptyText: 'まだ選択されていません',
+      suggestionEmptyText: '入力すると候補を絞り込めます。',
+      onChanged: (_) => setState(() {}),
+      onAdd: () =>
+          _setSingleTag(_seriesTags, _seriesController, _seriesController.text),
+      onSuggestionPressed: (value) =>
+          _setSingleTag(_seriesTags, _seriesController, value),
+      onDeletedTag: (value) => _removeTag(_seriesTags, value),
+    ),
+  );
 
   Widget _buildExtraTagsCard(BuildContext context) => _SectionCard(
-        title: '追加タグ（任意）',
-        description: '既存機能のキャラクタータグと自由入力タグも残しています。',
-        child: Theme(
-          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            childrenPadding: const EdgeInsets.only(top: 12),
-            title: const Text('キャラクタータグ・追加タグを設定'),
-            subtitle: Text(_additionalTagSummary()),
-            children: [
-              _TagInputSection(
-                inputLabel: 'キャラクタータグ',
-                hintText: '複数ある場合はカンマ区切りでも追加できます',
-                addButtonLabel: '追加',
-                controller: _characterController,
-                selectedTags: _characterTags,
-                suggestions: _matchSuggestions(
-                  source: _characterMaster,
-                  query: _characterController.text,
-                  selectedTags: _characterTags,
-                ),
-                loadingSuggestions: _loadingSuggestions,
-                selectedEmptyText: 'まだ追加されていません',
-                suggestionEmptyText: '候補がなければ新しいタグ名も追加できます。',
-                onChanged: (_) => setState(() {}),
-                onAdd: () => _addTags(
-                  _characterTags,
-                  _characterController,
-                  _characterController.text,
-                ),
-                onSuggestionPressed: (value) =>
-                    _addTags(_characterTags, _characterController, value),
-                onDeletedTag: (value) => _removeTag(_characterTags, value),
-              ),
-              const SizedBox(height: 16),
-              _TagInputSection(
-                inputLabel: '追加タグ',
-                hintText: 'カンマ区切りで複数追加できます',
-                addButtonLabel: '追加',
-                controller: _freeTagsController,
-                selectedTags: _freeTags,
-                suggestions: const [],
-                loadingSuggestions: false,
-                selectedEmptyText: 'まだ追加されていません',
-                suggestionEmptyText: '自由入力タグは Enter または追加ボタンで登録します。',
-                onChanged: (_) => setState(() {}),
-                onAdd: () =>
-                    _addTags(_freeTags, _freeTagsController, _freeTagsController.text),
-                onSuggestionPressed: (_) {},
-                onDeletedTag: (value) => _removeTag(_freeTags, value),
-              ),
-            ],
+    title: '追加タグ（任意）',
+    description: '既存機能のキャラクタータグと自由入力タグも残しています。',
+    child: Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(top: 12),
+        title: const Text('キャラクタータグ・追加タグを設定'),
+        subtitle: Text(_additionalTagSummary()),
+        children: [
+          _TagInputSection(
+            inputLabel: 'キャラクタータグ',
+            hintText: '複数ある場合はカンマ区切りでも追加できます',
+            addButtonLabel: '追加',
+            controller: _characterController,
+            selectedTags: _characterTags,
+            suggestions: _matchSuggestions(
+              source: _characterMaster,
+              query: _characterController.text,
+              selectedTags: _characterTags,
+            ),
+            loadingSuggestions: _loadingSuggestions,
+            selectedEmptyText: 'まだ追加されていません',
+            suggestionEmptyText: '候補がなければ新しいタグ名も追加できます。',
+            onChanged: (_) => setState(() {}),
+            onAdd: () => _addTags(
+              _characterTags,
+              _characterController,
+              _characterController.text,
+            ),
+            onSuggestionPressed: (value) =>
+                _addTags(_characterTags, _characterController, value),
+            onDeletedTag: (value) => _removeTag(_characterTags, value),
           ),
-        ),
-      );
+          const SizedBox(height: 16),
+          _TagInputSection(
+            inputLabel: '追加タグ',
+            hintText: 'カンマ区切りで複数追加できます',
+            addButtonLabel: '追加',
+            controller: _freeTagsController,
+            selectedTags: _freeTags,
+            suggestions: const [],
+            loadingSuggestions: false,
+            selectedEmptyText: 'まだ追加されていません',
+            suggestionEmptyText: '自由入力タグは Enter または追加ボタンで登録します。',
+            onChanged: (_) => setState(() {}),
+            onAdd: () => _addTags(
+              _freeTags,
+              _freeTagsController,
+              _freeTagsController.text,
+            ),
+            onSuggestionPressed: (_) {},
+            onDeletedTag: (value) => _removeTag(_freeTags, value),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _buildSelectedItemsCard(BuildContext context) {
     final pdfItems = _selectedPdfItems;
@@ -614,9 +614,9 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
             const _TagPlaceholder('選択した取り込み対象に PDF は含まれていません。')
           else
             Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
-              ),
+              data: Theme.of(
+                context,
+              ).copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 initiallyExpanded: true,
                 tilePadding: EdgeInsets.zero,
@@ -729,10 +729,7 @@ class _SelectionStatChip extends StatelessWidget {
   final IconData icon;
   final String label;
 
-  const _SelectionStatChip({
-    required this.icon,
-    required this.label,
-  });
+  const _SelectionStatChip({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -760,10 +757,7 @@ class _SelectedPdfTile extends StatelessWidget {
   final MediaItem item;
   final String sizeLabel;
 
-  const _SelectedPdfTile({
-    required this.item,
-    required this.sizeLabel,
-  });
+  const _SelectedPdfTile({required this.item, required this.sizeLabel});
 
   @override
   Widget build(BuildContext context) {
@@ -928,10 +922,7 @@ class _TagInputSection extends StatelessWidget {
       textInputAction: TextInputAction.done,
       minLines: 1,
       maxLines: 2,
-      decoration: InputDecoration(
-        labelText: inputLabel,
-        hintText: hintText,
-      ),
+      decoration: InputDecoration(labelText: inputLabel, hintText: hintText),
     );
     final action = OutlinedButton.icon(
       onPressed: onAdd,
@@ -958,10 +949,7 @@ class _TagInputSection extends StatelessWidget {
               children: [
                 Expanded(child: field),
                 const SizedBox(width: 12),
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: action,
-                ),
+                Padding(padding: const EdgeInsets.only(top: 6), child: action),
               ],
             );
           },
@@ -1028,9 +1016,9 @@ class _TagPlaceholder extends StatelessWidget {
       ),
       child: Text(
         text,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: colorScheme.onSurfaceVariant,
-        ),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -1049,10 +1037,7 @@ class _TagLoadingState extends StatelessWidget {
           child: CircularProgressIndicator(strokeWidth: 2),
         ),
         const SizedBox(width: 10),
-        Text(
-          '候補を読み込み中...',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
+        Text('候補を読み込み中...', style: Theme.of(context).textTheme.bodySmall),
       ],
     );
   }
@@ -1067,11 +1052,7 @@ class _ChipText extends StatelessWidget {
   Widget build(BuildContext context) {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 240),
-      child: Text(
-        text,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
     );
   }
 }

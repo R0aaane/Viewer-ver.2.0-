@@ -72,6 +72,16 @@ class SqliteStore:
                 CREATE INDEX IF NOT EXISTS idx_media_stats_view_count
                     ON media_stats(view_count);
 
+                CREATE TABLE IF NOT EXISTS media_activity (
+                    media_id TEXT PRIMARY KEY,
+                    last_viewed_at TEXT NOT NULL,
+                    last_page INTEGER,
+                    FOREIGN KEY (media_id) REFERENCES media_records(media_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_media_activity_last_viewed_at
+                    ON media_activity(last_viewed_at);
+
                 CREATE TABLE IF NOT EXISTS tag_master (
                     tag_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -307,6 +317,63 @@ class SqliteStore:
         if row is None:
             raise RuntimeError(f"media_stats row not found after increment: {media_id}")
         return dict(row)
+
+    def upsert_media_activity(
+        self,
+        media_id: str,
+        *,
+        viewed_at: str,
+        last_page: int | None,
+    ) -> dict[str, Any]:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO media_activity (
+                    media_id,
+                    last_viewed_at,
+                    last_page
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    last_viewed_at = excluded.last_viewed_at,
+                    last_page = excluded.last_page
+                """,
+                (media_id, viewed_at, last_page),
+            )
+            row = cur.execute(
+                """
+                SELECT media_id, last_viewed_at, last_page
+                  FROM media_activity
+                 WHERE media_id = ?
+                """,
+                (media_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"media_activity row not found after upsert: {media_id}"
+            )
+        return dict(row)
+
+    def list_media_activity(self, *, limit: int = 24) -> list[dict[str, Any]]:
+        normalized_limit = max(1, int(limit))
+        with self._cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT
+                    activity.media_id,
+                    activity.last_viewed_at,
+                    activity.last_page,
+                    records.folder_raw
+                  FROM media_activity AS activity
+                  JOIN media_records AS records
+                    ON records.media_id = activity.media_id
+                 WHERE records.is_deleted = 0
+              ORDER BY activity.last_viewed_at DESC
+                 LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def mark_deleted_by_ids(self, media_ids: list[str], is_deleted: bool = True) -> None:
         if not media_ids:
