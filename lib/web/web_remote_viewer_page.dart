@@ -71,6 +71,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   List<WebRemoteFolder> _folders = const <WebRemoteFolder>[];
   List<WebRemoteEntry> _entries = const <WebRemoteEntry>[];
   List<WebRemoteEntry> _homeEntries = const <WebRemoteEntry>[];
+  Map<String, WebRemoteMediaActivityEntry> _homeRecentActivityById =
+      const <String, WebRemoteMediaActivityEntry>{};
   WebRemoteEntry? _selectedEntry;
   WebRemoteFolder? _libraryRoot;
   String? _selectedFolderRaw;
@@ -262,6 +264,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
+        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
@@ -280,6 +283,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
+        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
@@ -325,6 +329,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
+        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _errorMessage = error.toString();
@@ -431,6 +436,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       }
       setState(() {
         _homeEntries = const <WebRemoteEntry>[];
+        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
         _homeErrorMessage = null;
       });
       return;
@@ -447,17 +453,24 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
 
     try {
-      final fetched = await _loadPdfEntries(
+      final fetchedFuture = _loadPdfEntries(
         client,
         folderRaw: folderRaw,
         rawQuery: '',
       );
+      final recentActivityFuture = client
+          .fetchRecentMediaActivity(limit: 200)
+          .catchError((_) => const <WebRemoteMediaActivityEntry>[]);
+      final fetched = await fetchedFuture;
+      final recentActivity = await recentActivityFuture;
       final sorted = _sortedPdfEntries(fetched);
+      final recentActivityById = _mapHomeRecentActivity(sorted, recentActivity);
       if (!mounted) {
         return;
       }
       setState(() {
         _homeEntries = sorted;
+        _homeRecentActivityById = recentActivityById;
         _homeErrorMessage = null;
       });
     } catch (error) {
@@ -466,6 +479,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       }
       setState(() {
         _homeEntries = const <WebRemoteEntry>[];
+        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
         _homeErrorMessage = error.toString();
       });
     } finally {
@@ -475,6 +489,29 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         });
       }
     }
+  }
+
+  Map<String, WebRemoteMediaActivityEntry> _mapHomeRecentActivity(
+    List<WebRemoteEntry> entries,
+    List<WebRemoteMediaActivityEntry> activityEntries,
+  ) {
+    if (entries.isEmpty || activityEntries.isEmpty) {
+      return const <String, WebRemoteMediaActivityEntry>{};
+    }
+
+    final knownIds = entries
+        .map((entry) => entry.stableId.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final mapped = <String, WebRemoteMediaActivityEntry>{};
+    for (final activity in activityEntries) {
+      final mediaId = activity.mediaId.trim();
+      if (mediaId.isEmpty || !knownIds.contains(mediaId)) {
+        continue;
+      }
+      mapped.putIfAbsent(mediaId, () => activity);
+    }
+    return mapped;
   }
 
   Future<void> _recordEntryView(WebRemoteEntry entry) async {
@@ -930,7 +967,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     );
   }
 
-  Future<void> _openPdfViewerPage(WebRemoteEntry entry) async {
+  Future<void> _openPdfViewerPage(
+    WebRemoteEntry entry, {
+    int? initialPage,
+  }) async {
     final client = _client;
     if (!mounted || client == null || !entry.isPdf) return;
     await _recordEntryView(entry);
@@ -939,10 +979,18 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         builder: (_) => WebPdfViewerPage(
           client: client,
           entry: entry,
+          initialPage: initialPage,
           onOpenDetail: () => _openDetailPage(entry, allowOpenPdfViewer: false),
         ),
       ),
     );
+    if (!mounted) {
+      return;
+    }
+    await _refreshHomeEntries(force: true);
+    if (_searchController.text.trim().isEmpty) {
+      await _loadEntries();
+    }
   }
 
   Future<void> _handleEntryTap(
@@ -1347,12 +1395,30 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return entry.stats?.lastViewedAt?.toLocal();
   }
 
+  WebRemoteMediaActivityEntry? _recentActivityForEntry(WebRemoteEntry entry) {
+    return _homeRecentActivityById[entry.stableId];
+  }
+
   List<_WebHomeSectionData> _buildHomeSections(List<WebRemoteEntry> entries) {
+    final recentActivityById = _homeRecentActivityById;
     final recentlyAdded = entries.toList(growable: false)
       ..sort(
         (left, right) =>
             _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
       );
+    final recentlyViewed =
+        entries
+            .where((entry) => recentActivityById.containsKey(entry.stableId))
+            .toList(growable: false)
+          ..sort((left, right) {
+            final rightViewed =
+                recentActivityById[right.stableId]?.viewedAt ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final leftViewed =
+                recentActivityById[left.stableId]?.viewedAt ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            return rightViewed.compareTo(leftViewed);
+          });
     final viewed = entries
         .where((entry) => _viewCountForEntry(entry) > 0)
         .toList(growable: false);
@@ -1405,6 +1471,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         entries: recentlyAdded.take(12).toList(growable: false),
       ),
       _WebHomeSectionData(
+        title: '最近閲覧',
+        subtitle: '最近開いた PDF と閲覧ページを同期表示します。',
+        icon: Icons.history_rounded,
+        entries: recentlyViewed.take(12).toList(growable: false),
+        activityByStableId: recentActivityById,
+        resumeFromActivity: true,
+      ),
+      _WebHomeSectionData(
         title: 'よく見る作品',
         subtitle: '閲覧回数の多い PDF をまとめています。',
         icon: Icons.local_fire_department_outlined,
@@ -1425,11 +1499,19 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     ];
   }
 
-  Future<void> _openPdfFromHome(WebRemoteEntry entry) async {
+  Future<void> _openPdfFromHome(
+    WebRemoteEntry entry, {
+    WebRemoteMediaActivityEntry? activity,
+    bool resumeFromActivity = false,
+  }) async {
+    activity ??= _recentActivityForEntry(entry);
     setState(() {
       _selectedEntry = entry;
     });
-    await _openPdfViewerPage(entry);
+    await _openPdfViewerPage(
+      entry,
+      initialPage: resumeFromActivity ? activity?.lastPage : null,
+    );
   }
 
   Widget _buildHomePane() {
@@ -2019,12 +2101,16 @@ class _WebHomeSectionData {
   final String subtitle;
   final IconData icon;
   final List<WebRemoteEntry> entries;
+  final Map<String, WebRemoteMediaActivityEntry> activityByStableId;
+  final bool resumeFromActivity;
 
   const _WebHomeSectionData({
     required this.title,
     required this.subtitle,
     required this.icon,
     required this.entries,
+    this.activityByStableId = const <String, WebRemoteMediaActivityEntry>{},
+    this.resumeFromActivity = false,
   });
 }
 
@@ -2170,7 +2256,12 @@ class _WebHomeMetricChip extends StatelessWidget {
 class _WebHomeSection extends StatelessWidget {
   final _WebHomeSectionData section;
   final WebRemoteApiClient? client;
-  final Future<void> Function(WebRemoteEntry entry) onOpen;
+  final Future<void> Function(
+    WebRemoteEntry entry, {
+    WebRemoteMediaActivityEntry? activity,
+    bool resumeFromActivity,
+  })
+  onOpen;
 
   const _WebHomeSection({
     required this.section,
@@ -2230,11 +2321,18 @@ class _WebHomeSection extends StatelessWidget {
               separatorBuilder: (context, index) => const SizedBox(width: 12),
               itemBuilder: (context, index) {
                 final entry = section.entries[index];
+                final activity = section.activityByStableId[entry.stableId];
                 return _WebHomePdfCard(
                   client: client,
                   entry: entry,
+                  activity: activity,
+                  showRecentActivity: section.resumeFromActivity,
                   compact: compact,
-                  onTap: () => onOpen(entry),
+                  onTap: () => onOpen(
+                    entry,
+                    activity: activity,
+                    resumeFromActivity: section.resumeFromActivity,
+                  ),
                 );
               },
             ),
@@ -2247,12 +2345,16 @@ class _WebHomeSection extends StatelessWidget {
 class _WebHomePdfCard extends StatelessWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
+  final WebRemoteMediaActivityEntry? activity;
+  final bool showRecentActivity;
   final bool compact;
   final Future<void> Function() onTap;
 
   const _WebHomePdfCard({
     required this.client,
     required this.entry,
+    this.activity,
+    this.showRecentActivity = false,
     required this.compact,
     required this.onTap,
   });
@@ -2262,6 +2364,8 @@ class _WebHomePdfCard extends StatelessWidget {
     final addedAt = (entry.stats?.addedAt ?? entry.modifiedAt)?.toLocal();
     final lastViewedAt = entry.stats?.lastViewedAt?.toLocal();
     final viewCount = entry.stats?.viewCount ?? 0;
+    final recentViewedAt = activity?.viewedAt.toLocal();
+    final recentPage = activity?.lastPage;
 
     return SizedBox(
       width: compact ? 236 : 270,
@@ -2303,6 +2407,23 @@ class _WebHomePdfCard extends StatelessWidget {
                   style: const TextStyle(color: Colors.white60),
                 ),
                 const SizedBox(height: 10),
+                /*
+                if (showRecentActivity) ...[
+                  _WebHomeStatLine(
+                    label: '追加',
+                    value: _formatBrowseDateTime(addedAt),
+                  ),
+                  _WebHomeStatLine(
+                    label: 'ページ',
+                    value: recentPage == null ? '記録なし' : 'p.$recentPage',
+                  ),
+                  _WebHomeStatLine(
+                    label: '最終閲覧',
+                    value: recentViewedAt == null
+                        ? '未読'
+                        : _formatBrowseDateTime(recentViewedAt),
+                  ),
+                ] else ...[
                 _WebHomeStatLine(
                   label: '追加',
                   value: _formatBrowseDateTime(addedAt),
@@ -2314,6 +2435,36 @@ class _WebHomePdfCard extends StatelessWidget {
                       ? '未読'
                       : _formatBrowseDateTime(lastViewedAt),
                 ),
+                ],
+                */
+                if (showRecentActivity) ...[
+                  _WebHomeStatLine(
+                    label: '追加',
+                    value: _formatBrowseDateTime(addedAt),
+                  ),
+                  _WebHomeStatLine(
+                    label: 'ページ',
+                    value: recentPage == null ? '記録なし' : 'p.$recentPage',
+                  ),
+                  _WebHomeStatLine(
+                    label: '最終閲覧',
+                    value: recentViewedAt == null
+                        ? '未読'
+                        : _formatBrowseDateTime(recentViewedAt),
+                  ),
+                ] else ...[
+                  _WebHomeStatLine(
+                    label: '追加',
+                    value: _formatBrowseDateTime(addedAt),
+                  ),
+                  _WebHomeStatLine(label: '閲覧', value: '$viewCount'),
+                  _WebHomeStatLine(
+                    label: '最終',
+                    value: lastViewedAt == null
+                        ? '未読'
+                        : _formatBrowseDateTime(lastViewedAt),
+                  ),
+                ],
                 const Spacer(),
                 Align(
                   alignment: Alignment.centerLeft,
@@ -4917,12 +5068,14 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
 class WebPdfViewerPage extends StatefulWidget {
   final WebRemoteApiClient client;
   final WebRemoteEntry entry;
+  final int? initialPage;
   final Future<void> Function()? onOpenDetail;
 
   const WebPdfViewerPage({
     super.key,
     required this.client,
     required this.entry,
+    this.initialPage,
     this.onOpenDetail,
   });
 
@@ -4949,6 +5102,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   String? _activeViewerStableId;
   Future<Uint8List>? _leftFuture;
   Future<Uint8List>? _rightFuture;
+  Timer? _activityPersistDebounce;
+  int? _lastPersistedPage;
 
   @override
   void initState() {
@@ -4960,6 +5115,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   void didUpdateWidget(covariant WebPdfViewerPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.entry.stableId != widget.entry.stableId) {
+      _activityPersistDebounce?.cancel();
+      _lastPersistedPage = null;
       _clearViewerPageCaches();
       _page = 1;
       _totalPages = 1;
@@ -4972,6 +5129,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
   @override
   void dispose() {
+    _activityPersistDebounce?.cancel();
+    unawaited(_persistCurrentActivity(force: true));
     _viewerGeneration += 1;
     _activeViewerMediaId = null;
     _activeViewerStableId = null;
@@ -5026,6 +5185,35 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     }
   }
 
+  void _schedulePersistCurrentActivity() {
+    _activityPersistDebounce?.cancel();
+    _activityPersistDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () => unawaited(_persistCurrentActivity()),
+    );
+  }
+
+  Future<void> _persistCurrentActivity({bool force = false}) async {
+    final mediaId = widget.entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty) {
+      return;
+    }
+
+    final page = _page < 1 ? 1 : _page;
+    if (!force && _lastPersistedPage == page) {
+      return;
+    }
+
+    _lastPersistedPage = page;
+    try {
+      await widget.client.recordMediaActivity(
+        mediaId,
+        lastPage: page,
+        totalPages: _pageCountReliable ? _totalPages : null,
+      );
+    } catch (_) {}
+  }
+
   MemoryImage _pageImageProviderFor(int pageNumber, Uint8List bytes) {
     return _pageImageProviders.putIfAbsent(
       pageNumber,
@@ -5062,11 +5250,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     final generation = ++_viewerGeneration;
     _activeViewerMediaId = mediaId;
     _activeViewerStableId = stableId;
+    _lastPersistedPage = null;
     _clearViewerPageCaches();
     setState(() {
       _loading = true;
       _loadError = null;
-      _page = 1;
+      _page = widget.initialPage != null && widget.initialPage! > 0
+          ? widget.initialPage!
+          : 1;
       _totalPages = 1;
       _pageCountReliable = false;
       _leftFuture = null;
@@ -5107,6 +5298,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         _page = _page.clamp(1, _totalPages);
         _syncPageFutures();
       });
+      _schedulePersistCurrentActivity();
     } catch (error) {
       if (!_isCurrentViewerRequest(
         generation: generation,
@@ -5203,6 +5395,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _page = page.clamp(1, _totalPages);
       _syncPageFutures();
     });
+    _schedulePersistCurrentActivity();
   }
 
   Future<bool> _tryOpenPage(int page) async {
@@ -5250,6 +5443,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         _page = page;
         _syncPageFutures();
       });
+      _schedulePersistCurrentActivity();
       return true;
     } catch (_) {
       if (!_isCurrentViewerRequest(

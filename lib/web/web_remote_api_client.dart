@@ -111,21 +111,19 @@ Future<void> _loadPdfJsScript() async {
     final existingElement = html.document.getElementById(_pdfJsScriptId);
     final script =
         existingElement is html.ScriptElement
-            ? existingElement
-            : html.ScriptElement()
-              ..id = _pdfJsScriptId
-              ..async = true
-              ..defer = true
-              ..crossOrigin = 'anonymous'
-              ..src = _pdfJsLibraryUrl;
+              ? existingElement
+              : html.ScriptElement()
+          ..id = _pdfJsScriptId
+          ..async = true
+          ..defer = true
+          ..crossOrigin = 'anonymous'
+          ..src = _pdfJsLibraryUrl;
 
     loadSubscription = script.onLoad.listen((_) {
       finishSuccessfully();
     });
     errorSubscription = script.onError.listen((_) {
-      finishWithError(
-        const WebRemoteException('PDF.js の読み込みに失敗しました'),
-      );
+      finishWithError(const WebRemoteException('PDF.js の読み込みに失敗しました'));
     });
 
     if (existingElement == null) {
@@ -147,8 +145,8 @@ Future<void> _loadPdfJsScript() async {
 
     await completer.future.timeout(
       const Duration(seconds: 20),
-      onTimeout:
-          () => throw const WebRemoteException('PDF.js の読み込みがタイムアウトしました'),
+      onTimeout: () =>
+          throw const WebRemoteException('PDF.js の読み込みがタイムアウトしました'),
     );
   } finally {
     await loadSubscription?.cancel();
@@ -187,6 +185,20 @@ class WebRemoteMediaStats {
     required this.addedAt,
     required this.lastViewedAt,
     required this.viewCount,
+  });
+}
+
+class WebRemoteMediaActivityEntry {
+  final String mediaId;
+  final String folderRaw;
+  final DateTime viewedAt;
+  final int? lastPage;
+
+  const WebRemoteMediaActivityEntry({
+    required this.mediaId,
+    required this.folderRaw,
+    required this.viewedAt,
+    required this.lastPage,
   });
 }
 
@@ -271,7 +283,6 @@ class WebRemoteMediaMeta {
 }
 
 class WebRemotePdfPageCountInfo {
-
   final int count;
   final bool isReliable;
 
@@ -564,19 +575,15 @@ class WebRemoteApiClient {
     return future;
   }
 
-  String _cacheKey(
-    String path, {
-    Map<String, String>? queryParameters,
-  }) {
+  String _cacheKey(String path, {Map<String, String>? queryParameters}) {
     final uri = Uri(
       path: path,
-      queryParameters:
-          queryParameters == null || queryParameters.isEmpty
-              ? null
-              : Map<String, String>.fromEntries(
-                queryParameters.entries.toList()
-                  ..sort((left, right) => left.key.compareTo(right.key)),
-              ),
+      queryParameters: queryParameters == null || queryParameters.isEmpty
+          ? null
+          : Map<String, String>.fromEntries(
+              queryParameters.entries.toList()
+                ..sort((left, right) => left.key.compareTo(right.key)),
+            ),
     );
     return uri.toString();
   }
@@ -614,8 +621,7 @@ class WebRemoteApiClient {
         await Future<void>.delayed(const Duration(milliseconds: 350));
       }
     }
-    throw lastError ??
-        const WebRemoteException('サーバーへの接続に失敗しました');
+    throw lastError ?? const WebRemoteException('サーバーへの接続に失敗しました');
   }
 
   Future<void> checkHealth() async {
@@ -665,10 +671,9 @@ class WebRemoteApiClient {
           '/folders/children',
           queryParameters: queryParameters,
         );
-        return _unwrapItems(json)
-            .whereType<Map>()
-            .map(_parseEntry)
-            .toList(growable: false);
+        return _unwrapItems(
+          json,
+        ).whereType<Map>().map(_parseEntry).toList(growable: false);
       },
     );
   }
@@ -708,47 +713,37 @@ class WebRemoteApiClient {
       _cacheKey(path, queryParameters: queryParameters),
       () async {
         final json = await _getJson(path, queryParameters: queryParameters);
-        return _unwrapItems(json)
-            .whereType<Map>()
-            .map(_parseEntry)
-            .toList(growable: false);
+        return _unwrapItems(
+          json,
+        ).whereType<Map>().map(_parseEntry).toList(growable: false);
       },
     );
   }
 
   Future<List<Tag>> fetchItemTags(String mediaId) async {
-    return _memoize(
-      _itemTagsCache,
-      mediaId,
-      () async {
-        final json = await _getJson('/items/${Uri.encodeComponent(mediaId)}/tags');
-        return _unwrapItems(json)
-            .whereType<Map>()
-            .map(_parseTag)
-            .toList(growable: false);
-      },
-    );
+    return _memoize(_itemTagsCache, mediaId, () async {
+      final json = await _getJson(
+        '/items/${Uri.encodeComponent(mediaId)}/tags',
+      );
+      return _unwrapItems(
+        json,
+      ).whereType<Map>().map(_parseTag).toList(growable: false);
+    });
   }
 
   Future<void> requestRescan({String? folderRaw}) async {
     final trimmedFolder = folderRaw?.trim();
-    await _postJson(
-      '/rescan',
-      <String, dynamic>{
-        if (trimmedFolder != null && trimmedFolder.isNotEmpty)
-          'folderRaw': trimmedFolder,
-      },
-      requestTimeout: actionTimeout,
-    );
+    await _postJson('/rescan', <String, dynamic>{
+      if (trimmedFolder != null && trimmedFolder.isNotEmpty)
+        'folderRaw': trimmedFolder,
+    }, requestTimeout: actionTimeout);
     clearCaches();
   }
 
   Future<WebRemoteOrganizeResult> organizeLibrary(String folderRaw) async {
-    final json = await _postJson(
-      '/organize',
-      <String, dynamic>{'folderRaw': folderRaw},
-      requestTimeout: actionTimeout,
-    );
+    final json = await _postJson('/organize', <String, dynamic>{
+      'folderRaw': folderRaw,
+    }, requestTimeout: actionTimeout);
     if (json is! Map<String, dynamic>) {
       throw const WebRemoteException('整理結果の形式が不正です');
     }
@@ -789,42 +784,39 @@ class WebRemoteApiClient {
     final cookieFilePath = effectiveOptions.normalizedCookieFilePath;
     final urlListFilePath = effectiveOptions.normalizedUrlListFilePath;
     final favoriteSites = effectiveOptions.normalizedFavoriteSites;
-    final favoriteUserServices = effectiveOptions.normalizedFavoriteUserServices;
+    final favoriteUserServices =
+        effectiveOptions.normalizedFavoriteUserServices;
 
-    final json = await _postJson(
-      '/download-url',
-      <String, dynamic>{
-        'folderRaw': folderRaw,
-        'url': sourceUrl,
-        'urls': sourceUrls,
-        if (cookieFilePath != null) 'cookieFilePath': cookieFilePath,
-        'cookieMode': effectiveOptions.cookieMode.apiValue,
-        if (urlListFilePath != null) 'urlListFilePath': urlListFilePath,
-        if (favoriteSites.isNotEmpty) 'sites': favoriteSites,
-        'favoritePosts': effectiveOptions.favoritePosts,
-        if (favoriteUserServices.isNotEmpty)
-          'favoriteUserServices': favoriteUserServices,
-        'mediaType': effectiveOptions.mediaType.apiValue,
-        'parallelDownloads': effectiveOptions.effectiveParallelDownloads,
-        'inline': effectiveOptions.includeInlineImages,
-        'content': effectiveOptions.includePostContent,
-        'comments': effectiveOptions.includeComments,
-        'saveJson': effectiveOptions.saveJson,
-        'overwrite': effectiveOptions.overwriteExistingFiles,
-        'verbose': effectiveOptions.verbose,
-        'convertHitomiToPdf': effectiveOptions.convertHitomiToPdf,
-        if (artistTag != null && artistTag.isNotEmpty) 'artistTag': artistTag,
-        if (seriesTag != null && seriesTag.isNotEmpty) 'seriesTag': seriesTag,
-        if (importMetadata != null && importMetadata.freeTags.isNotEmpty)
-          'freeTags': importMetadata.freeTags,
-        if (importMetadata != null && importMetadata.characterTags.isNotEmpty)
-          'characterTags': importMetadata.characterTags,
-        if (targetCollection != null && targetCollection.isNotEmpty)
-          'targetCollection': targetCollection,
-        'organizeAfterImport': importMetadata?.organizeAfterImport ?? false,
-      },
-      requestTimeout: actionTimeout,
-    );
+    final json = await _postJson('/download-url', <String, dynamic>{
+      'folderRaw': folderRaw,
+      'url': sourceUrl,
+      'urls': sourceUrls,
+      if (cookieFilePath != null) 'cookieFilePath': cookieFilePath,
+      'cookieMode': effectiveOptions.cookieMode.apiValue,
+      if (urlListFilePath != null) 'urlListFilePath': urlListFilePath,
+      if (favoriteSites.isNotEmpty) 'sites': favoriteSites,
+      'favoritePosts': effectiveOptions.favoritePosts,
+      if (favoriteUserServices.isNotEmpty)
+        'favoriteUserServices': favoriteUserServices,
+      'mediaType': effectiveOptions.mediaType.apiValue,
+      'parallelDownloads': effectiveOptions.effectiveParallelDownloads,
+      'inline': effectiveOptions.includeInlineImages,
+      'content': effectiveOptions.includePostContent,
+      'comments': effectiveOptions.includeComments,
+      'saveJson': effectiveOptions.saveJson,
+      'overwrite': effectiveOptions.overwriteExistingFiles,
+      'verbose': effectiveOptions.verbose,
+      'convertHitomiToPdf': effectiveOptions.convertHitomiToPdf,
+      if (artistTag != null && artistTag.isNotEmpty) 'artistTag': artistTag,
+      if (seriesTag != null && seriesTag.isNotEmpty) 'seriesTag': seriesTag,
+      if (importMetadata != null && importMetadata.freeTags.isNotEmpty)
+        'freeTags': importMetadata.freeTags,
+      if (importMetadata != null && importMetadata.characterTags.isNotEmpty)
+        'characterTags': importMetadata.characterTags,
+      if (targetCollection != null && targetCollection.isNotEmpty)
+        'targetCollection': targetCollection,
+      'organizeAfterImport': importMetadata?.organizeAfterImport ?? false,
+    }, requestTimeout: actionTimeout);
 
     if (json is! Map<String, dynamic>) {
       throw const WebRemoteException('URL 取り込み結果の形式が不正です');
@@ -844,28 +836,26 @@ class WebRemoteApiClient {
   }
 
   Future<WebRemoteMediaMeta> fetchMediaMeta(String mediaId) async {
-    return _memoize(
-      _mediaMetaCache,
-      mediaId,
-      () async {
-        final json = await _getJson('/media/${Uri.encodeComponent(mediaId)}/meta');
-        if (json is! Map<String, dynamic>) {
-          throw const WebRemoteException('メディア情報の形式が不正です');
-        }
-        return WebRemoteMediaMeta(
-          mediaId: json['mediaId']?.toString() ?? mediaId,
-          displayName: json['displayName']?.toString() ?? mediaId,
-          kind: json['kind']?.toString() ?? 'image',
-          mimeType: json['mimeType']?.toString(),
-          sizeBytes: _asInt(json['sizeBytes']),
-          modifiedAt: _parseDateTime(json['modifiedAt']),
-          etag: json['etag']?.toString(),
-          supportsRange: json['supportsRange'] == true,
-          pageCount: _asInt(json['pageCount']),
-          stats: _parseMediaStats(json['stats']),
-        );
-      },
-    );
+    return _memoize(_mediaMetaCache, mediaId, () async {
+      final json = await _getJson(
+        '/media/${Uri.encodeComponent(mediaId)}/meta',
+      );
+      if (json is! Map<String, dynamic>) {
+        throw const WebRemoteException('メディア情報の形式が不正です');
+      }
+      return WebRemoteMediaMeta(
+        mediaId: json['mediaId']?.toString() ?? mediaId,
+        displayName: json['displayName']?.toString() ?? mediaId,
+        kind: json['kind']?.toString() ?? 'image',
+        mimeType: json['mimeType']?.toString(),
+        sizeBytes: _asInt(json['sizeBytes']),
+        modifiedAt: _parseDateTime(json['modifiedAt']),
+        etag: json['etag']?.toString(),
+        supportsRange: json['supportsRange'] == true,
+        pageCount: _asInt(json['pageCount']),
+        stats: _parseMediaStats(json['stats']),
+      );
+    });
   }
 
   Future<WebRemoteMediaStats> recordMediaView(String mediaId) async {
@@ -881,6 +871,41 @@ class WebRemoteApiClient {
     _searchCache.clear();
     _folderChildrenCache.clear();
     return stats;
+  }
+
+  Future<List<WebRemoteMediaActivityEntry>> fetchRecentMediaActivity({
+    int limit = 24,
+  }) async {
+    final json = await _getJson(
+      '/activity/recent',
+      queryParameters: <String, String>{'limit': '${limit < 1 ? 1 : limit}'},
+    );
+    final items = (json is Map<String, dynamic> ? json['items'] : null);
+    if (items is! List) {
+      return const <WebRemoteMediaActivityEntry>[];
+    }
+    return items
+        .whereType<Map>()
+        .map((raw) => _parseMediaActivityEntry(Map<String, dynamic>.from(raw)))
+        .toList(growable: false);
+  }
+
+  Future<WebRemoteMediaActivityEntry> recordMediaActivity(
+    String mediaId, {
+    int? lastPage,
+    int? totalPages,
+  }) async {
+    final json = await _postJson(
+      '/media/${Uri.encodeComponent(mediaId)}/activity',
+      <String, dynamic>{
+        if (lastPage != null) 'lastPage': lastPage,
+        if (totalPages != null) 'totalPages': totalPages,
+      },
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const WebRemoteException('Invalid media activity response');
+    }
+    return _parseMediaActivityEntry(json);
   }
 
   Future<Uint8List> fetchThumbnail(
@@ -901,16 +926,10 @@ class WebRemoteApiClient {
     );
   }
 
-  Future<Uint8List> fetchPdfPage(
-    String mediaId,
-    int pageNo, {
-    int? width,
-  }) {
+  Future<Uint8List> fetchPdfPage(String mediaId, int pageNo, {int? width}) {
     return _getBytes(
       '/media/${Uri.encodeComponent(mediaId)}/page/$pageNo',
-      queryParameters: <String, String>{
-        if (width != null) 'width': '$width',
-      },
+      queryParameters: <String, String>{if (width != null) 'width': '$width'},
     );
   }
 
@@ -978,29 +997,22 @@ class WebRemoteApiClient {
     int? pageCountHint,
   }) async {
     final cacheKey = '$mediaId:${pageCountHint ?? 0}';
-    return _memoize(
-      _pdfPageCountCache,
-      cacheKey,
-      () async {
-        if (pageCountHint != null && pageCountHint > 0) {
-          return WebRemotePdfPageCountInfo(
-            count: pageCountHint,
-            isReliable: true,
-          );
-        }
-
+    return _memoize(_pdfPageCountCache, cacheKey, () async {
+      if (pageCountHint != null && pageCountHint > 0) {
         return WebRemotePdfPageCountInfo(
-          count: await _resolvePdfPageCountByPageProbe(mediaId),
-          isReliable: false,
+          count: pageCountHint,
+          isReliable: true,
         );
-      },
-    );
+      }
+
+      return WebRemotePdfPageCountInfo(
+        count: await _resolvePdfPageCountByPageProbe(mediaId),
+        isReliable: false,
+      );
+    });
   }
 
-  Future<int> resolvePdfPageCount(
-    String mediaId, {
-    int? pageCountHint,
-  }) async {
+  Future<int> resolvePdfPageCount(String mediaId, {int? pageCountHint}) async {
     final info = await resolvePdfPageCountInfo(
       mediaId,
       pageCountHint: pageCountHint,
@@ -1037,12 +1049,7 @@ class WebRemoteApiClient {
 
   Future<bool> _pdfPageExists(String mediaId, int pageNo) async {
     try {
-      await fetchThumbnail(
-        mediaId,
-        width: 64,
-        height: 64,
-        page: pageNo,
-      );
+      await fetchThumbnail(mediaId, width: 64, height: 64, page: pageNo);
       return true;
     } on WebRemoteException catch (error) {
       final statusCode = error.statusCode;
@@ -1093,7 +1100,11 @@ class WebRemoteApiClient {
     String path, {
     Map<String, String>? queryParameters,
   }) async {
-    final raw = await _requestText('GET', path, queryParameters: queryParameters);
+    final raw = await _requestText(
+      'GET',
+      path,
+      queryParameters: queryParameters,
+    );
     if (raw.trim().isEmpty) {
       return <String, dynamic>{};
     }
@@ -1244,8 +1255,10 @@ class WebRemoteApiClient {
         );
       }
 
-      final thumbnailStatus =
-          request.getResponseHeader('X-Thumbnail-Status')?.trim().toLowerCase();
+      final thumbnailStatus = request
+          .getResponseHeader('X-Thumbnail-Status')
+          ?.trim()
+          .toLowerCase();
       if (thumbnailStatus == 'placeholder') {
         final detail =
             request.getResponseHeader('X-Thumbnail-Detail')?.trim() ??
@@ -1266,10 +1279,7 @@ class WebRemoteApiClient {
     }
   }
 
-  Uri _buildUri(
-    String path, {
-    Map<String, String>? queryParameters,
-  }) {
+  Uri _buildUri(String path, {Map<String, String>? queryParameters}) {
     final trimmed = baseUrl.trim();
     if (trimmed.isEmpty) {
       throw const WebRemoteException('API URL が未設定です');
@@ -1286,7 +1296,9 @@ class WebRemoteApiClient {
     final right = path.startsWith('/') ? path : '/$path';
     return baseUri.replace(
       path: '$left$right',
-      queryParameters: queryParameters?.isEmpty == true ? null : queryParameters,
+      queryParameters: queryParameters?.isEmpty == true
+          ? null
+          : queryParameters,
     );
   }
 
@@ -1352,7 +1364,6 @@ class WebRemoteApiClient {
     );
   }
 
-
   WebRemoteMediaStats? _parseMediaStats(dynamic raw) {
     if (raw is! Map) {
       return null;
@@ -1365,6 +1376,19 @@ class WebRemoteApiClient {
       addedAt: addedAt,
       lastViewedAt: _parseDateTime(raw['lastViewedAt']),
       viewCount: _asInt(raw['viewCount']) ?? 0,
+    );
+  }
+
+  WebRemoteMediaActivityEntry _parseMediaActivityEntry(
+    Map<String, dynamic> raw,
+  ) {
+    final viewedAt = _parseDateTime(raw['viewedAt']) ?? DateTime.now();
+    final lastPage = _asInt(raw['lastPage']);
+    return WebRemoteMediaActivityEntry(
+      mediaId: raw['mediaId']?.toString() ?? '',
+      folderRaw: raw['folderRaw']?.toString() ?? '',
+      viewedAt: viewedAt,
+      lastPage: lastPage != null && lastPage > 0 ? lastPage : null,
     );
   }
 

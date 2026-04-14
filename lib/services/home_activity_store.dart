@@ -53,7 +53,7 @@ class HomeActivityEntry {
 
 class HomeActivityStore {
   static const String recentViewsKey = 'prefs.homeRecentViewsJson';
-  static const int maxRecentViews = 24;
+  static const int maxRecentViews = 200;
   static final AppSettingsService _settingsService = AppSettingsService();
   static final MediaIdResolver _idResolver = MediaIdResolver();
 
