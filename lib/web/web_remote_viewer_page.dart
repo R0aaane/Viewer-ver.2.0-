@@ -10,7 +10,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 import '../models/tag.dart';
-import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
 import 'web_remote_api_client.dart';
@@ -1399,6 +1398,34 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return _homeRecentActivityById[entry.stableId];
   }
 
+  List<WebRemoteEntry> _recentlyViewedEntries(List<WebRemoteEntry> entries) {
+    final recentActivityById = _homeRecentActivityById;
+    return entries
+        .where((entry) => recentActivityById.containsKey(entry.stableId))
+        .toList(growable: false)
+      ..sort((left, right) {
+        final rightViewed =
+            recentActivityById[right.stableId]?.viewedAt ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final leftViewed =
+            recentActivityById[left.stableId]?.viewedAt ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return rightViewed.compareTo(leftViewed);
+      });
+  }
+
+  _WebHomeResumeData? _buildHomeResumeData(List<WebRemoteEntry> entries) {
+    final recentlyViewed = _recentlyViewedEntries(entries);
+    for (final entry in recentlyViewed) {
+      final activity = _recentActivityForEntry(entry);
+      if (activity == null || (activity.lastPage ?? 0) <= 1) {
+        continue;
+      }
+      return _WebHomeResumeData(entry: entry, activity: activity);
+    }
+    return null;
+  }
+
   List<_WebHomeSectionData> _buildHomeSections(List<WebRemoteEntry> entries) {
     final recentActivityById = _homeRecentActivityById;
     final recentlyAdded = entries.toList(growable: false)
@@ -1406,19 +1433,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         (left, right) =>
             _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
       );
-    final recentlyViewed =
-        entries
-            .where((entry) => recentActivityById.containsKey(entry.stableId))
-            .toList(growable: false)
-          ..sort((left, right) {
-            final rightViewed =
-                recentActivityById[right.stableId]?.viewedAt ??
-                DateTime.fromMillisecondsSinceEpoch(0);
-            final leftViewed =
-                recentActivityById[left.stableId]?.viewedAt ??
-                DateTime.fromMillisecondsSinceEpoch(0);
-            return rightViewed.compareTo(leftViewed);
-          });
+    final recentlyViewed = _recentlyViewedEntries(entries);
     final viewed = entries
         .where((entry) => _viewCountForEntry(entry) > 0)
         .toList(growable: false);
@@ -1468,13 +1483,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         title: '新着',
         subtitle: '最近ライブラリに追加された PDF です。',
         icon: Icons.schedule_outlined,
-        entries: recentlyAdded.take(12).toList(growable: false),
+        entries: recentlyAdded.take(10).toList(growable: false),
       ),
       _WebHomeSectionData(
         title: '最近閲覧',
         subtitle: '最近開いた PDF と閲覧ページを同期表示します。',
         icon: Icons.history_rounded,
-        entries: recentlyViewed.take(12).toList(growable: false),
+        entries: recentlyViewed.take(10).toList(growable: false),
         activityByStableId: recentActivityById,
         resumeFromActivity: true,
       ),
@@ -1537,6 +1552,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           ).isAfter(DateTime.now().toLocal().subtract(const Duration(days: 7))),
         )
         .length;
+    final resume = _buildHomeResumeData(entries);
     final sections = _buildHomeSections(entries);
 
     return RefreshIndicator(
@@ -1581,17 +1597,41 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               '接続中のライブラリに、ホームへ表示できる PDF がまだありません。',
               Colors.white70,
             )
-          else
-            ...sections.map(
-              (section) => Padding(
+          else ...<Widget>[
+            if (sections.isNotEmpty)
+              Padding(
                 padding: const EdgeInsets.only(bottom: 18),
                 child: _WebHomeSection(
-                  section: section,
+                  section: sections.first,
                   client: _client,
                   onOpen: _openPdfFromHome,
                 ),
               ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 18),
+              child: _WebHomeContinueReadingCard(
+                client: _client,
+                resume: resume,
+                onOpen: (entry, activity) => _openPdfFromHome(
+                  entry,
+                  activity: activity,
+                  resumeFromActivity: true,
+                ),
+              ),
             ),
+            ...sections
+                .skip(1)
+                .map(
+                  (section) => Padding(
+                    padding: const EdgeInsets.only(bottom: 18),
+                    child: _WebHomeSection(
+                      section: section,
+                      client: _client,
+                      onOpen: _openPdfFromHome,
+                    ),
+                  ),
+                ),
+          ],
         ],
       ),
     );
@@ -2114,6 +2154,13 @@ class _WebHomeSectionData {
   });
 }
 
+class _WebHomeResumeData {
+  final WebRemoteEntry entry;
+  final WebRemoteMediaActivityEntry activity;
+
+  const _WebHomeResumeData({required this.entry, required this.activity});
+}
+
 class _WebHomeHeroCard extends StatelessWidget {
   final int totalCount;
   final int unreadCount;
@@ -2253,6 +2300,148 @@ class _WebHomeMetricChip extends StatelessWidget {
   }
 }
 
+class _WebHomeContinueReadingCard extends StatelessWidget {
+  final WebRemoteApiClient? client;
+  final _WebHomeResumeData? resume;
+  final Future<void> Function(
+    WebRemoteEntry entry,
+    WebRemoteMediaActivityEntry activity,
+  )
+  onOpen;
+
+  const _WebHomeContinueReadingCard({
+    required this.client,
+    required this.resume,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final resumeData = resume;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text(
+              '続きから読む',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              '最後に見ていた PDF をワンタップで再開できます。',
+              style: TextStyle(color: Colors.white60),
+            ),
+            const SizedBox(height: 14),
+            if (resumeData == null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141922),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Icon(
+                      Icons.auto_stories_outlined,
+                      size: 28,
+                      color: Colors.white70,
+                    ),
+                    SizedBox(height: 10),
+                    Text(
+                      '続きから読める PDF はありません',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'PDF を開いてページを進めると、ここから再開できます。',
+                      style: TextStyle(color: Colors.white60),
+                    ),
+                  ],
+                ),
+              )
+            else
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final entry = resumeData.entry;
+                  final activity = resumeData.activity;
+                  final page = activity.lastPage ?? 1;
+                  final narrow = constraints.maxWidth < 640;
+                  final thumb = SizedBox(
+                    width: narrow ? 120 : 144,
+                    child: _RemoteThumbnail(
+                      client: client,
+                      entry: entry,
+                      width: narrow ? 120 : 144,
+                      height: narrow ? 164 : 196,
+                      borderRadius: 14,
+                      backgroundColor: const Color(0xFF151721),
+                    ),
+                  );
+                  final body = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        '${_entryDisplayTitle(entry)} p.$page から再開',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      _WebHomeStatLine(label: 'ページ', value: 'p.$page'),
+                      _WebHomeStatLine(
+                        label: '最終閲覧',
+                        value: _formatBrowseDateTime(activity.viewedAt),
+                      ),
+                      _WebHomeStatLine(label: 'フォルダ', value: entry.folderRaw),
+                      const SizedBox(height: 10),
+                      FilledButton.icon(
+                        onPressed: () => onOpen(entry, activity),
+                        icon: const Icon(Icons.play_arrow_rounded),
+                        label: Text('p.$page から開く'),
+                      ),
+                    ],
+                  );
+
+                  if (narrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        thumb,
+                        const SizedBox(height: 14),
+                        body,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      thumb,
+                      const SizedBox(width: 16),
+                      Expanded(child: body),
+                    ],
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _WebHomeSection extends StatelessWidget {
   final _WebHomeSectionData section;
   final WebRemoteApiClient? client;
@@ -2366,6 +2555,9 @@ class _WebHomePdfCard extends StatelessWidget {
     final viewCount = entry.stats?.viewCount ?? 0;
     final recentViewedAt = activity?.viewedAt.toLocal();
     final recentPage = activity?.lastPage;
+    final openLabel = showRecentActivity && recentPage != null
+        ? 'p.$recentPage から開く'
+        : '開く';
 
     return SizedBox(
       width: compact ? 236 : 270,
@@ -2471,7 +2663,7 @@ class _WebHomePdfCard extends StatelessWidget {
                   child: FilledButton.icon(
                     onPressed: () => onTap(),
                     icon: const Icon(Icons.menu_book_rounded),
-                    label: const Text('開く'),
+                    label: Text(openLabel),
                   ),
                 ),
               ],
