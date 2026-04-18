@@ -477,6 +477,18 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return value.trim().startsWith('mid_');
   }
 
+  String _readingProgressLookupKey(String folderRaw, String title) {
+    final normalizedTitle = title.trim().toLowerCase();
+    final normalizedFolder = folderRaw.trim();
+    if (normalizedTitle.isEmpty || normalizedFolder.isEmpty) {
+      return '';
+    }
+    final folderKey = normalizedFolder.startsWith('content://')
+        ? normalizedFolder
+        : _normalizePath(normalizedFolder);
+    return '$folderKey|$normalizedTitle';
+  }
+
   Future<Map<String, MediaItem>> _buildHomeItemLookup(
     List<MediaItem> mediaItems,
     Iterable<ReadingProgressEntry> recentProgress,
@@ -485,6 +497,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     for (final item in mediaItems) {
       for (final variant in _idVariants(item.id)) {
         itemByVariant.putIfAbsent(variant, () => item);
+      }
+      final progressLookupKey = _readingProgressLookupKey(
+        item.folderRaw,
+        item.displayName,
+      );
+      if (progressLookupKey.isNotEmpty) {
+        itemByVariant.putIfAbsent(progressLookupKey, () => item);
       }
     }
 
@@ -3181,7 +3200,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _HomeResumeCardData? resumeCard;
 
       for (final entry in recentProgress) {
-        final resolved = itemByVariant[entry.mediaId];
+        final resolved =
+            itemByVariant[entry.mediaId] ??
+            itemByVariant[_readingProgressLookupKey(entry.folderRaw, entry.title)];
         if (resolved == null) {
           continue;
         }
