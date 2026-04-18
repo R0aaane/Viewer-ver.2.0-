@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from server.core.errors import bad_request, not_found
 from server.repositories.sqlite_store import SqliteStore
@@ -56,8 +57,41 @@ def _parse_epoch(raw: Any) -> int | None:
         return None
 
 
+def _parse_float(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _utcnow_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _ensure_utc_datetime(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(tz=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _clamp_progress_value(value: float | None) -> float:
+    if value is None:
+        return 0.0
+    return max(0.0, min(float(value), 1.0))
+
+
+def _calc_progress_value(
+    current_page: int | None,
+    total_pages: int | None,
+    fallback: float | None = None,
+) -> float:
+    if current_page is not None and current_page > 0 and total_pages is not None and total_pages > 0:
+        return _clamp_progress_value(current_page / total_pages)
+    return _clamp_progress_value(fallback)
 
 
 def _fnv1a64_hex(source: str) -> str:
@@ -266,21 +300,148 @@ class MetadataStore:
         }
 
     def list_recent_media_activity(self, *, limit: int = 24) -> list[dict[str, Any]]:
-        rows = self._db.list_media_activity(limit=max(1, min(limit, 200)))
-        items: list[dict[str, Any]] = []
-        for row in rows:
+        normalized_limit = max(1, min(limit, 200))
+        items_by_media_id: dict[str, dict[str, Any]] = {}
+        for entry in self.list_recent_reading_progress(limit=normalized_limit):
+            items_by_media_id[str(entry["mediaId"])] = {
+                "mediaId": str(entry["mediaId"]),
+                "folderRaw": str(entry["folderRaw"]),
+                "viewedAt": entry["lastReadAt"],
+                "lastPage": int(entry["currentPage"]),
+            }
+
+        for row in self._db.list_media_activity(limit=max(normalized_limit * 4, normalized_limit)):
+            media_id = str(row.get("media_id") or "").strip()
+            if not media_id or media_id in items_by_media_id:
+                continue
+            media = self._db.get_media_record(media_id)
+            if media is None or bool(media.get("is_deleted")):
+                continue
             viewed_at = _parse_datetime(row.get("last_viewed_at"))
             if viewed_at is None:
                 continue
             last_page = _parse_epoch(row.get("last_page"))
-            items.append(
-                {
-                    "mediaId": str(row.get("media_id") or ""),
-                    "folderRaw": str(row.get("folder_raw") or ""),
-                    "viewedAt": viewed_at,
-                    "lastPage": last_page if last_page is not None and last_page > 0 else None,
-                }
+            items_by_media_id[media_id] = {
+                "mediaId": media_id,
+                "folderRaw": str(row.get("folder_raw") or media.get("folder_raw") or ""),
+                "viewedAt": viewed_at,
+                "lastPage": last_page if last_page is not None and last_page > 0 else None,
+            }
+
+        items = list(items_by_media_id.values())
+        items.sort(key=lambda entry: entry["viewedAt"], reverse=True)
+        return items[:normalized_limit]
+
+    def get_reading_progress(
+        self,
+        media_id: str | None,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        media = self.resolve_media_record(media_id, identity=identity)
+        if str(media.get("kind") or "") != "pdf":
+            raise bad_request("Reading progress is only available for PDF media")
+        row = self._db.get_reading_progress(str(media["media_id"]))
+        if row is None:
+            raise not_found("Reading progress was not found")
+        return self._reading_progress_row_to_dict(media, row)
+
+    def upsert_reading_progress(
+        self,
+        media_id: str | None,
+        *,
+        identity: dict[str, Any] | None = None,
+        current_page: int | None = None,
+        total_pages: int | None = None,
+        progress: float | None = None,
+        last_read_at: datetime | None = None,
+        updated_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        media = self.resolve_media_record(media_id, identity=identity)
+        if str(media.get("kind") or "") != "pdf":
+            raise bad_request("Reading progress is only available for PDF media")
+
+        resolved_media_id = str(media["media_id"])
+        existing = self._db.get_reading_progress(resolved_media_id)
+        existing_current_page = _parse_epoch(existing.get("current_page")) if existing else None
+        existing_total_pages = _parse_epoch(existing.get("total_pages")) if existing else None
+        existing_progress = _parse_float(existing.get("progress")) if existing else None
+        existing_last_read_at = (
+            _parse_datetime(existing.get("last_read_at")) if existing else None
+        )
+        existing_updated_at = (
+            _parse_datetime(existing.get("updated_at")) if existing else None
+        )
+
+        normalized_total_pages = (
+            max(1, int(total_pages)) if total_pages is not None and int(total_pages) > 0 else None
+        )
+        normalized_current_page = (
+            max(1, int(current_page))
+            if current_page is not None
+            else (existing_current_page if existing_current_page is not None and existing_current_page > 0 else 1)
+        )
+        incoming_last_read_at = _ensure_utc_datetime(
+            last_read_at or updated_at or datetime.now(tz=timezone.utc)
+        )
+        incoming_updated_at = _ensure_utc_datetime(
+            updated_at or last_read_at or datetime.now(tz=timezone.utc)
+        )
+
+        if (
+            existing is not None
+            and existing_updated_at is not None
+            and incoming_updated_at < existing_updated_at
+        ):
+            merged_total_pages = existing_total_pages
+            if (merged_total_pages is None or merged_total_pages <= 0) and normalized_total_pages is not None:
+                merged_total_pages = normalized_total_pages
+            merged_current_page = existing_current_page if existing_current_page is not None and existing_current_page > 0 else 1
+            if merged_total_pages is not None and merged_current_page > merged_total_pages:
+                merged_current_page = merged_total_pages
+            merged_progress = _calc_progress_value(
+                merged_current_page,
+                merged_total_pages,
+                existing_progress,
             )
+            merged_last_read_at = existing_last_read_at or incoming_last_read_at
+            merged_updated_at = existing_updated_at
+        else:
+            merged_total_pages = normalized_total_pages
+            if merged_total_pages is None and existing_total_pages is not None and existing_total_pages > 0:
+                merged_total_pages = existing_total_pages
+            merged_current_page = normalized_current_page
+            if merged_total_pages is not None and merged_current_page > merged_total_pages:
+                merged_current_page = merged_total_pages
+            merged_progress = _calc_progress_value(
+                merged_current_page,
+                merged_total_pages,
+                progress,
+            )
+            merged_last_read_at = incoming_last_read_at
+            merged_updated_at = incoming_updated_at
+
+        row = self._db.upsert_reading_progress(
+            resolved_media_id,
+            current_page=merged_current_page,
+            total_pages=merged_total_pages,
+            progress=merged_progress,
+            last_read_at=_ensure_utc_datetime(merged_last_read_at).isoformat(),
+            updated_at=_ensure_utc_datetime(merged_updated_at).isoformat(),
+        )
+        return self._reading_progress_row_to_dict(media, row)
+
+    def list_recent_reading_progress(self, *, limit: int = 24) -> list[dict[str, Any]]:
+        rows = self._db.list_reading_progress(limit=max(1, min(limit, 200)))
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            media_id = str(row.get("media_id") or "").strip()
+            if not media_id:
+                continue
+            media = self._db.get_media_record(media_id)
+            if media is None:
+                continue
+            items.append(self._reading_progress_row_to_dict(media, row))
         return items
 
     def record_media_activity(
@@ -292,25 +453,34 @@ class MetadataStore:
         total_pages: int | None = None,
     ) -> dict[str, Any]:
         media = self.resolve_media_record(media_id, identity=identity)
-        normalized_last_page = None
-        if str(media.get("kind") or "") == "pdf" and last_page is not None:
-            normalized_last_page = max(1, int(last_page))
-            if total_pages is not None and int(total_pages) > 0:
-                if normalized_last_page >= int(total_pages):
-                    normalized_last_page = None
+        if str(media.get("kind") or "") != "pdf":
+            now = _utcnow_iso()
+            row = self._db.upsert_media_activity(
+                str(media["media_id"]),
+                viewed_at=now,
+                last_page=None,
+            )
+            viewed_at = _parse_datetime(row.get("last_viewed_at")) or _parse_datetime(now)
+            return {
+                "mediaId": str(media["media_id"]),
+                "folderRaw": str(media.get("folder_raw") or ""),
+                "viewedAt": viewed_at,
+                "lastPage": None,
+            }
 
-        now = _utcnow_iso()
-        row = self._db.upsert_media_activity(
+        now = datetime.now(tz=timezone.utc)
+        progress_item = self.upsert_reading_progress(
             str(media["media_id"]),
-            viewed_at=now,
-            last_page=normalized_last_page,
+            current_page=last_page,
+            total_pages=total_pages,
+            last_read_at=now,
+            updated_at=now,
         )
-        viewed_at = _parse_datetime(row.get("last_viewed_at")) or _parse_datetime(now)
         return {
-            "mediaId": str(media["media_id"]),
-            "folderRaw": str(media.get("folder_raw") or ""),
-            "viewedAt": viewed_at,
-            "lastPage": normalized_last_page,
+            "mediaId": str(progress_item["mediaId"]),
+            "folderRaw": str(progress_item["folderRaw"]),
+            "viewedAt": progress_item["lastReadAt"],
+            "lastPage": int(progress_item["currentPage"]),
         }
 
     def list_tag_master(
@@ -1114,6 +1284,45 @@ class MetadataStore:
             "etag": row["etag"],
             "isDeleted": bool(row["is_deleted"]),
             "modifiedEpochMs": _parse_epoch(row.get("modified_epoch_ms")),
+        }
+
+    def _reading_progress_row_to_dict(
+        self,
+        media: dict[str, Any],
+        row: dict[str, Any],
+    ) -> dict[str, Any]:
+        total_pages = _parse_epoch(row.get("total_pages"))
+        current_page = _parse_epoch(row.get("current_page"))
+        if current_page is None or current_page < 1:
+            current_page = 1
+        if total_pages is not None and total_pages > 0 and current_page > total_pages:
+            current_page = total_pages
+        progress = _calc_progress_value(
+            current_page,
+            total_pages,
+            _parse_float(row.get("progress")),
+        )
+        last_read_at = (
+            _parse_datetime(row.get("last_read_at"))
+            or _parse_datetime(row.get("updated_at"))
+            or datetime.now(tz=timezone.utc)
+        )
+        updated_at = (
+            _parse_datetime(row.get("updated_at"))
+            or last_read_at
+            or datetime.now(tz=timezone.utc)
+        )
+        media_id = str(media["media_id"])
+        return {
+            "mediaId": media_id,
+            "title": str(media.get("display_name") or media_id),
+            "folderRaw": str(media.get("folder_raw") or ""),
+            "currentPage": current_page,
+            "totalPages": total_pages if total_pages is not None and total_pages > 0 else None,
+            "progress": progress,
+            "lastReadAt": last_read_at,
+            "updatedAt": updated_at,
+            "thumbnailUrl": f"/media/{quote(media_id, safe='')}/thumb",
         }
 
     def _stats_row_to_dict(self, row: dict[str, Any] | None) -> dict[str, Any] | None:

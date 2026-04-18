@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from server.repositories.sqlite_store import SqliteStore
@@ -106,14 +107,68 @@ class MediaStatsTest(unittest.TestCase):
             [self.image_media_id, self.pdf_media_id],
         )
 
-    def test_record_media_activity_clears_resume_at_last_page(self) -> None:
-        entry = self.store.record_media_activity(
+    def test_upsert_reading_progress_clamps_page_and_progress(self) -> None:
+        entry = self.store.upsert_reading_progress(
             self.pdf_media_id,
-            last_page=12,
+            current_page=99,
             total_pages=12,
+            progress=0.1,
+            last_read_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         )
 
-        self.assertIsNone(entry["lastPage"])
+        self.assertEqual(entry["currentPage"], 12)
+        self.assertEqual(entry["totalPages"], 12)
+        self.assertEqual(entry["progress"], 1.0)
+
+    def test_upsert_reading_progress_prefers_newer_updated_at(self) -> None:
+        newer = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        older = newer - timedelta(minutes=5)
+
+        first = self.store.upsert_reading_progress(
+            self.pdf_media_id,
+            current_page=15,
+            total_pages=40,
+            progress=0.375,
+            last_read_at=newer,
+            updated_at=newer,
+        )
+        second = self.store.upsert_reading_progress(
+            self.pdf_media_id,
+            current_page=3,
+            total_pages=10,
+            progress=0.3,
+            last_read_at=older,
+            updated_at=older,
+        )
+
+        self.assertEqual(first["currentPage"], 15)
+        self.assertEqual(second["currentPage"], 15)
+        self.assertEqual(second["totalPages"], 40)
+        self.assertEqual(second["updatedAt"], newer)
+
+    def test_list_recent_reading_progress_returns_home_card_fields(self) -> None:
+        timestamp = datetime(2026, 1, 4, tzinfo=timezone.utc)
+        self.store.upsert_reading_progress(
+            self.pdf_media_id,
+            current_page=8,
+            total_pages=16,
+            progress=0.5,
+            last_read_at=timestamp,
+            updated_at=timestamp,
+        )
+
+        recent = self.store.list_recent_reading_progress(limit=10)
+
+        self.assertEqual(len(recent), 1)
+        self.assertEqual(recent[0]["mediaId"], self.pdf_media_id)
+        self.assertEqual(recent[0]["title"], "sample.pdf")
+        self.assertEqual(recent[0]["currentPage"], 8)
+        self.assertEqual(recent[0]["totalPages"], 16)
+        self.assertEqual(recent[0]["progress"], 0.5)
+        self.assertEqual(recent[0]["lastReadAt"], timestamp)
+        self.assertEqual(recent[0]["updatedAt"], timestamp)
+        self.assertTrue(str(recent[0]["thumbnailUrl"]).endswith("/thumb"))
 
 
 if __name__ == "__main__":

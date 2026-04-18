@@ -12,8 +12,8 @@ import '../repository/mediaRepository.dart';
 
 import '../database/tag_service.dart';
 import '../models/tag.dart';
+import '../services/app_reading_progress_service.dart';
 import '../services/controller_navigation_service.dart';
-import '../services/home_activity_store.dart';
 import '../services/item_name_service.dart';
 import '../widgets/controller_focusable.dart';
 import 'rename_item_dialog.dart';
@@ -68,7 +68,10 @@ class ImageDetailPage extends StatefulWidget {
 }
 
 class _ImageDetailPageState extends State<ImageDetailPage>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin
+    , WidgetsBindingObserver {
+  final AppReadingProgressService _readingProgressService =
+      AppReadingProgressService();
   FolderHandle? _folder;
 
   late List<MediaItem> _items;
@@ -113,6 +116,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Timer? _masterFilterDebounce;
   Timer? _activityPersistDebounce;
   int? _pendingInitialPdfPage;
+  bool _canPersistReadingProgress = true;
+  bool _hasMovedPdfPageSinceLoad = false;
 
   TagCategory _selectedCategory = TagCategory.free;
   final TextEditingController _tagCtrl = TextEditingController();
@@ -187,6 +192,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _items = widget.items;
     _index = widget.initialIndex;
@@ -253,6 +259,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _activityPersistDebounce?.cancel();
     _masterFilterDebounce?.cancel();
     unawaited(_persistCurrentActivity());
@@ -268,6 +275,15 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(_persistCurrentActivity(force: true));
+    }
   }
 
   Future<void> _saveFitMode(ReaderFitMode v) async {
@@ -995,6 +1011,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   void _setCurrentPdfPage(int page) {
     setState(() {
+      _hasMovedPdfPageSinceLoad = true;
       _page = page.clamp(1, _totalPages);
       _syncReaderFutures(_item);
     });
@@ -1026,6 +1043,52 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
+  Future<void> _loadReadingProgressForCurrent(
+    MediaItem item,
+    int loadVersion,
+  ) async {
+    if (item.kind != MediaKind.pdf) {
+      return;
+    }
+
+    try {
+      final entry = await _readingProgressService.fetchProgressForItem(item);
+      if (!_isCurrentLoad(loadVersion, item)) {
+        return;
+      }
+
+      final progressTotalPages = entry?.totalPages;
+      final effectiveTotalPages =
+          progressTotalPages != null && progressTotalPages > 0
+          ? progressTotalPages
+          : _totalPages;
+      final nextPage =
+          entry != null && !_hasMovedPdfPageSinceLoad
+          ? entry.currentPage
+          : _page;
+
+      setState(() {
+        _canPersistReadingProgress = true;
+        if (effectiveTotalPages > 0) {
+          _totalPages = effectiveTotalPages;
+          _page = nextPage.clamp(1, _totalPages);
+        } else {
+          _page = nextPage < 1 ? 1 : nextPage;
+        }
+        _syncReaderFutures(item);
+      });
+      _schedulePersistCurrentActivity();
+    } catch (_) {
+      if (!_isCurrentLoad(loadVersion, item)) {
+        return;
+      }
+      setState(() {
+        _canPersistReadingProgress = true;
+      });
+      _schedulePersistCurrentActivity();
+    }
+  }
+
   Future<void> _reloadForCurrent() async {
     final item = _item;
     final loadVersion = ++_detailLoadVersion;
@@ -1039,6 +1102,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           : 1;
       _pendingInitialPdfPage = null;
       setState(() {
+        _canPersistReadingProgress = item.kind != MediaKind.pdf;
+        _hasMovedPdfPageSinceLoad = false;
         _isFavorite = false;
         _tags = const [];
         _tagsLoading = false;
@@ -1054,8 +1119,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
 
     unawaited(_loadFavoriteForCurrent(loadVersion: loadVersion));
-    _schedulePersistCurrentActivity();
     if (item.kind == MediaKind.pdf) {
+      unawaited(_loadReadingProgressForCurrent(item, loadVersion));
       unawaited(_loadPageCountForCurrent(item, loadVersion));
     }
     if (!_inReader) {
@@ -1181,6 +1246,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   void _schedulePersistCurrentActivity() {
+    if (_isPdf && !_canPersistReadingProgress && !_hasMovedPdfPageSinceLoad) {
+      return;
+    }
     _activityPersistDebounce?.cancel();
     _activityPersistDebounce = Timer(
       const Duration(milliseconds: 350),
@@ -1188,15 +1256,21 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     );
   }
 
-  Future<void> _persistCurrentActivity() async {
+  Future<void> _persistCurrentActivity({bool force = false}) async {
     final item = _item;
-    final page = item.kind == MediaKind.pdf ? _page : null;
-    final totalPages = item.kind == MediaKind.pdf ? _totalPages : null;
-    final prefs = await SharedPreferences.getInstance();
-    await HomeActivityStore.recordView(
-      prefs,
-      item: item,
-      lastPage: page,
+    if (item.kind != MediaKind.pdf) {
+      return;
+    }
+    if (!force &&
+        !_canPersistReadingProgress &&
+        !_hasMovedPdfPageSinceLoad) {
+      return;
+    }
+    final page = _page < 1 ? 1 : _page;
+    final totalPages = _totalPages > 0 ? _totalPages : null;
+    await _readingProgressService.saveProgressForItem(
+      item,
+      currentPage: page,
       totalPages: totalPages,
     );
   }

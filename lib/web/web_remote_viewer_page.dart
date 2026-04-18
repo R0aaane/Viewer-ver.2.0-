@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
 import 'dart:async';
+import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -9,10 +10,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
+import '../models/reading_progress.dart';
 import '../models/tag.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
+import '../services/reading_progress_service.dart';
 import 'web_remote_api_client.dart';
+import 'web_remote_reading_progress_repository.dart';
 import 'web_url_import_sheet.dart';
 
 enum _WebMediaFilter {
@@ -70,8 +74,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   List<WebRemoteFolder> _folders = const <WebRemoteFolder>[];
   List<WebRemoteEntry> _entries = const <WebRemoteEntry>[];
   List<WebRemoteEntry> _homeEntries = const <WebRemoteEntry>[];
-  Map<String, WebRemoteMediaActivityEntry> _homeRecentActivityById =
-      const <String, WebRemoteMediaActivityEntry>{};
+  Map<String, ReadingProgressEntry> _homeRecentActivityById =
+      const <String, ReadingProgressEntry>{};
+  ReadingProgressService? _readingProgressService;
   WebRemoteEntry? _selectedEntry;
   WebRemoteFolder? _libraryRoot;
   String? _selectedFolderRaw;
@@ -260,10 +265,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (!mounted) return;
       setState(() {
         _client = null;
+        _readingProgressService = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
-        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
+        _homeRecentActivityById = const <String, ReadingProgressEntry>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
@@ -279,10 +285,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (!mounted) return;
       setState(() {
         _client = null;
+        _readingProgressService = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
-        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
+        _homeRecentActivityById = const <String, ReadingProgressEntry>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
@@ -305,6 +312,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (!mounted) return;
       setState(() {
         _client = client;
+        _readingProgressService = ReadingProgressService(
+          WebRemoteReadingProgressRepository(client),
+        );
         _folders = libraryRoot == null
             ? const <WebRemoteFolder>[]
             : <WebRemoteFolder>[libraryRoot];
@@ -325,10 +335,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (!mounted) return;
       setState(() {
         _client = null;
+        _readingProgressService = null;
         _folders = const <WebRemoteFolder>[];
         _entries = const <WebRemoteEntry>[];
         _homeEntries = const <WebRemoteEntry>[];
-        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
+        _homeRecentActivityById = const <String, ReadingProgressEntry>{};
         _libraryRoot = null;
         _selectedEntry = null;
         _errorMessage = error.toString();
@@ -428,14 +439,18 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   Future<void> _refreshHomeEntries({bool force = false}) async {
     final client = _client;
+    final readingProgressService = _readingProgressService;
     final folderRaw = _libraryRoot?.raw ?? _selectedFolderRaw;
-    if (client == null || folderRaw == null || folderRaw.trim().isEmpty) {
+    if (client == null ||
+        readingProgressService == null ||
+        folderRaw == null ||
+        folderRaw.trim().isEmpty) {
       if (!mounted) {
         return;
       }
       setState(() {
         _homeEntries = const <WebRemoteEntry>[];
-        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
+        _homeRecentActivityById = const <String, ReadingProgressEntry>{};
         _homeErrorMessage = null;
       });
       return;
@@ -457,9 +472,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         folderRaw: folderRaw,
         rawQuery: '',
       );
-      final recentActivityFuture = client
-          .fetchRecentMediaActivity(limit: 200)
-          .catchError((_) => const <WebRemoteMediaActivityEntry>[]);
+      final recentActivityFuture = readingProgressService
+          .fetchRecent(limit: 200)
+          .catchError((_) => const <ReadingProgressEntry>[]);
       final fetched = await fetchedFuture;
       final recentActivity = await recentActivityFuture;
       final sorted = _sortedPdfEntries(fetched);
@@ -478,7 +493,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       }
       setState(() {
         _homeEntries = const <WebRemoteEntry>[];
-        _homeRecentActivityById = const <String, WebRemoteMediaActivityEntry>{};
+        _homeRecentActivityById = const <String, ReadingProgressEntry>{};
         _homeErrorMessage = error.toString();
       });
     } finally {
@@ -490,19 +505,19 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
   }
 
-  Map<String, WebRemoteMediaActivityEntry> _mapHomeRecentActivity(
+  Map<String, ReadingProgressEntry> _mapHomeRecentActivity(
     List<WebRemoteEntry> entries,
-    List<WebRemoteMediaActivityEntry> activityEntries,
+    List<ReadingProgressEntry> activityEntries,
   ) {
     if (entries.isEmpty || activityEntries.isEmpty) {
-      return const <String, WebRemoteMediaActivityEntry>{};
+      return const <String, ReadingProgressEntry>{};
     }
 
     final knownIds = entries
         .map((entry) => entry.stableId.trim())
         .where((id) => id.isNotEmpty)
         .toSet();
-    final mapped = <String, WebRemoteMediaActivityEntry>{};
+    final mapped = <String, ReadingProgressEntry>{};
     for (final activity in activityEntries) {
       final mediaId = activity.mediaId.trim();
       if (mediaId.isEmpty || !knownIds.contains(mediaId)) {
@@ -1394,7 +1409,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return entry.stats?.lastViewedAt?.toLocal();
   }
 
-  WebRemoteMediaActivityEntry? _recentActivityForEntry(WebRemoteEntry entry) {
+  ReadingProgressEntry? _recentActivityForEntry(WebRemoteEntry entry) {
     return _homeRecentActivityById[entry.stableId];
   }
 
@@ -1405,10 +1420,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         .toList(growable: false)
       ..sort((left, right) {
         final rightViewed =
-            recentActivityById[right.stableId]?.viewedAt ??
+            recentActivityById[right.stableId]?.lastReadAt ??
             DateTime.fromMillisecondsSinceEpoch(0);
         final leftViewed =
-            recentActivityById[left.stableId]?.viewedAt ??
+            recentActivityById[left.stableId]?.lastReadAt ??
             DateTime.fromMillisecondsSinceEpoch(0);
         return rightViewed.compareTo(leftViewed);
       });
@@ -1418,7 +1433,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     final recentlyViewed = _recentlyViewedEntries(entries);
     for (final entry in recentlyViewed) {
       final activity = _recentActivityForEntry(entry);
-      if (activity == null || (activity.lastPage ?? 0) <= 1) {
+      if (activity == null || !ReadingProgressService.shouldShowContinueCard(activity)) {
         continue;
       }
       return _WebHomeResumeData(entry: entry, activity: activity);
@@ -1516,7 +1531,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   Future<void> _openPdfFromHome(
     WebRemoteEntry entry, {
-    WebRemoteMediaActivityEntry? activity,
+    ReadingProgressEntry? activity,
     bool resumeFromActivity = false,
   }) async {
     activity ??= _recentActivityForEntry(entry);
@@ -1525,7 +1540,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     });
     await _openPdfViewerPage(
       entry,
-      initialPage: resumeFromActivity ? activity?.lastPage : null,
+      initialPage: resumeFromActivity ? activity?.currentPage : null,
     );
   }
 
@@ -2141,7 +2156,7 @@ class _WebHomeSectionData {
   final String subtitle;
   final IconData icon;
   final List<WebRemoteEntry> entries;
-  final Map<String, WebRemoteMediaActivityEntry> activityByStableId;
+  final Map<String, ReadingProgressEntry> activityByStableId;
   final bool resumeFromActivity;
 
   const _WebHomeSectionData({
@@ -2149,14 +2164,14 @@ class _WebHomeSectionData {
     required this.subtitle,
     required this.icon,
     required this.entries,
-    this.activityByStableId = const <String, WebRemoteMediaActivityEntry>{},
+    this.activityByStableId = const <String, ReadingProgressEntry>{},
     this.resumeFromActivity = false,
   });
 }
 
 class _WebHomeResumeData {
   final WebRemoteEntry entry;
-  final WebRemoteMediaActivityEntry activity;
+  final ReadingProgressEntry activity;
 
   const _WebHomeResumeData({required this.entry, required this.activity});
 }
@@ -2305,7 +2320,7 @@ class _WebHomeContinueReadingCard extends StatelessWidget {
   final _WebHomeResumeData? resume;
   final Future<void> Function(
     WebRemoteEntry entry,
-    WebRemoteMediaActivityEntry activity,
+    ReadingProgressEntry activity,
   )
   onOpen;
 
@@ -2373,7 +2388,13 @@ class _WebHomeContinueReadingCard extends StatelessWidget {
                 builder: (context, constraints) {
                   final entry = resumeData.entry;
                   final activity = resumeData.activity;
-                  final page = activity.lastPage ?? 1;
+                  final page = activity.currentPage;
+                  final totalPages = activity.totalPages;
+                  final pageText = totalPages != null
+                      ? 'p.$page / $totalPages'
+                      : 'p.$page';
+                  final progressText =
+                      '${(activity.progress * 100).round()}%';
                   final narrow = constraints.maxWidth < 640;
                   final thumb = SizedBox(
                     width: narrow ? 120 : 144,
@@ -2390,7 +2411,7 @@ class _WebHomeContinueReadingCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        '${_entryDisplayTitle(entry)} p.$page から再開',
+                        '${_entryDisplayTitle(entry)} $pageText から再開',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -2399,17 +2420,18 @@ class _WebHomeContinueReadingCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 10),
-                      _WebHomeStatLine(label: 'ページ', value: 'p.$page'),
+                      _WebHomeStatLine(label: 'ページ', value: pageText),
+                      _WebHomeStatLine(label: '進捗', value: progressText),
                       _WebHomeStatLine(
                         label: '最終閲覧',
-                        value: _formatBrowseDateTime(activity.viewedAt),
+                        value: _formatBrowseDateTime(activity.lastReadAt),
                       ),
                       _WebHomeStatLine(label: 'フォルダ', value: entry.folderRaw),
                       const SizedBox(height: 10),
                       FilledButton.icon(
                         onPressed: () => onOpen(entry, activity),
                         icon: const Icon(Icons.play_arrow_rounded),
-                        label: Text('p.$page から開く'),
+                        label: Text('$pageText から開く'),
                       ),
                     ],
                   );
@@ -2447,7 +2469,7 @@ class _WebHomeSection extends StatelessWidget {
   final WebRemoteApiClient? client;
   final Future<void> Function(
     WebRemoteEntry entry, {
-    WebRemoteMediaActivityEntry? activity,
+    ReadingProgressEntry? activity,
     bool resumeFromActivity,
   })
   onOpen;
@@ -2534,7 +2556,7 @@ class _WebHomeSection extends StatelessWidget {
 class _WebHomePdfCard extends StatelessWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
-  final WebRemoteMediaActivityEntry? activity;
+  final ReadingProgressEntry? activity;
   final bool showRecentActivity;
   final bool compact;
   final Future<void> Function() onTap;
@@ -2553,10 +2575,19 @@ class _WebHomePdfCard extends StatelessWidget {
     final addedAt = (entry.stats?.addedAt ?? entry.modifiedAt)?.toLocal();
     final lastViewedAt = entry.stats?.lastViewedAt?.toLocal();
     final viewCount = entry.stats?.viewCount ?? 0;
-    final recentViewedAt = activity?.viewedAt.toLocal();
-    final recentPage = activity?.lastPage;
-    final openLabel = showRecentActivity && recentPage != null
-        ? 'p.$recentPage から開く'
+    final recentViewedAt = activity?.lastReadAt.toLocal();
+    final recentPage = activity?.currentPage;
+    final recentTotalPages = activity?.totalPages;
+    final recentPageText = recentPage == null
+        ? null
+        : recentTotalPages != null
+        ? 'p.$recentPage / $recentTotalPages'
+        : 'p.$recentPage';
+    final recentProgressText = activity == null
+        ? null
+        : '${(activity!.progress * 100).round()}%';
+    final openLabel = showRecentActivity && recentPageText != null
+        ? '$recentPageText から開く'
         : '開く';
 
     return SizedBox(
@@ -2607,7 +2638,11 @@ class _WebHomePdfCard extends StatelessWidget {
                   ),
                   _WebHomeStatLine(
                     label: 'ページ',
-                    value: recentPage == null ? '記録なし' : 'p.$recentPage',
+                    value: recentPageText ?? '記録なし',
+                  ),
+                  _WebHomeStatLine(
+                    label: '進捗',
+                    value: recentProgressText ?? '0%',
                   ),
                   _WebHomeStatLine(
                     label: '最終閲覧',
@@ -2636,7 +2671,11 @@ class _WebHomePdfCard extends StatelessWidget {
                   ),
                   _WebHomeStatLine(
                     label: 'ページ',
-                    value: recentPage == null ? '記録なし' : 'p.$recentPage',
+                    value: recentPageText ?? '記録なし',
+                  ),
+                  _WebHomeStatLine(
+                    label: '進捗',
+                    value: recentProgressText ?? '0%',
                   ),
                   _WebHomeStatLine(
                     label: '最終閲覧',
@@ -5278,6 +5317,8 @@ class WebPdfViewerPage extends StatefulWidget {
 class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   static const String _twoPagePrefsKey = 'prefs.readerTwoPage';
   static const int _pdfViewerRenderWidth = 1280;
+  late final ReadingProgressService _readingProgressService =
+      ReadingProgressService(WebRemoteReadingProgressRepository(widget.client));
 
   Object? _loadError;
   bool _loading = false;
@@ -5295,11 +5336,19 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   Future<Uint8List>? _leftFuture;
   Future<Uint8List>? _rightFuture;
   Timer? _activityPersistDebounce;
-  int? _lastPersistedPage;
+  String? _lastPersistedProgressKey;
+  bool _canPersistReadingProgress = false;
+  bool _hasMovedPageSinceLoad = false;
+  StreamSubscription<html.Event>? _visibilitySubscription;
 
   @override
   void initState() {
     super.initState();
+    _visibilitySubscription = html.document.onVisibilityChange.listen((_) {
+      if (html.document.visibilityState == 'hidden') {
+        unawaited(_persistCurrentActivity(force: true));
+      }
+    });
     _loadViewer();
   }
 
@@ -5308,7 +5357,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.entry.stableId != widget.entry.stableId) {
       _activityPersistDebounce?.cancel();
-      _lastPersistedPage = null;
+      _lastPersistedProgressKey = null;
+      _canPersistReadingProgress = false;
+      _hasMovedPageSinceLoad = false;
       _clearViewerPageCaches();
       _page = 1;
       _totalPages = 1;
@@ -5321,6 +5372,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
   @override
   void dispose() {
+    _visibilitySubscription?.cancel();
     _activityPersistDebounce?.cancel();
     unawaited(_persistCurrentActivity(force: true));
     _viewerGeneration += 1;
@@ -5378,6 +5430,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _schedulePersistCurrentActivity() {
+    if (!_canPersistReadingProgress && !_hasMovedPageSinceLoad) {
+      return;
+    }
     _activityPersistDebounce?.cancel();
     _activityPersistDebounce = Timer(
       const Duration(milliseconds: 350),
@@ -5390,19 +5445,24 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     if (mediaId == null || mediaId.isEmpty) {
       return;
     }
-
-    final page = _page < 1 ? 1 : _page;
-    if (!force && _lastPersistedPage == page) {
+    if (!force && !_canPersistReadingProgress && !_hasMovedPageSinceLoad) {
       return;
     }
 
-    _lastPersistedPage = page;
+    final page = _page < 1 ? 1 : _page;
+    final totalPages = _totalPages > 0 ? _totalPages : null;
+    final progressKey = '$page/${totalPages ?? 0}';
+    if (!force && _lastPersistedProgressKey == progressKey) {
+      return;
+    }
+
     try {
-      await widget.client.recordMediaActivity(
-        mediaId,
-        lastPage: page,
-        totalPages: _pageCountReliable ? _totalPages : null,
+      await _readingProgressService.saveProgress(
+        mediaId: mediaId,
+        currentPage: page,
+        totalPages: totalPages,
       );
+      _lastPersistedProgressKey = progressKey;
     } catch (_) {}
   }
 
@@ -5442,7 +5502,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     final generation = ++_viewerGeneration;
     _activeViewerMediaId = mediaId;
     _activeViewerStableId = stableId;
-    _lastPersistedPage = null;
+    _lastPersistedProgressKey = null;
+    _canPersistReadingProgress = false;
+    _hasMovedPageSinceLoad = false;
     _clearViewerPageCaches();
     setState(() {
       _loading = true;
@@ -5470,12 +5532,16 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             );
             return null;
           });
+      final progressFuture = _readingProgressService
+          .fetchProgress(mediaId)
+          .catchError((_) => null);
       final meta = await widget.client.fetchMediaMeta(mediaId);
       final pageCountInfo = await widget.client.resolvePdfPageCountInfo(
         mediaId,
         pageCountHint: meta.pageCount,
       );
       final twoPage = await twoPageFuture;
+      final progress = await progressFuture;
       if (!_isCurrentViewerRequest(
         generation: generation,
         mediaId: mediaId,
@@ -5483,11 +5549,23 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       )) {
         return;
       }
+      final savedTotalPages = progress?.totalPages;
+      final effectiveTotalPages = [
+        pageCountInfo.count.clamp(1, 1 << 30),
+        if (savedTotalPages != null && savedTotalPages > 0) savedTotalPages,
+      ].reduce((left, right) => left > right ? left : right);
+      final effectivePage =
+          !_hasMovedPageSinceLoad && progress != null
+          ? progress.currentPage
+          : _page;
       setState(() {
         _twoPage = twoPage ?? _twoPage;
-        _totalPages = pageCountInfo.count.clamp(1, 1 << 30);
-        _pageCountReliable = pageCountInfo.isReliable;
-        _page = _page.clamp(1, _totalPages);
+        _totalPages = effectiveTotalPages;
+        _pageCountReliable =
+            pageCountInfo.isReliable ||
+            (savedTotalPages != null && savedTotalPages > 0);
+        _page = effectivePage.clamp(1, _totalPages);
+        _canPersistReadingProgress = true;
         _syncPageFutures();
       });
       _schedulePersistCurrentActivity();
@@ -5584,6 +5662,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
   void _setCurrentPage(int page) {
     setState(() {
+      _hasMovedPageSinceLoad = true;
       _page = page.clamp(1, _totalPages);
       _syncPageFutures();
     });

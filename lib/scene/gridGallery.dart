@@ -11,13 +11,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../database/tag_service.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
+import '../models/reading_progress.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
-import '../services/home_activity_store.dart';
+import '../services/app_reading_progress_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
 import '../services/item_name_service.dart';
 import '../services/media_id_resolver.dart';
+import '../services/reading_progress_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/external_share_service.dart';
 import 'import_to_host_dialog.dart';
@@ -85,9 +87,9 @@ class _FolderNavState {
 
 class _HomeResumeCardData {
   final MediaItem item;
-  final HomeActivityEntry activity;
+  final ReadingProgressEntry progress;
 
-  const _HomeResumeCardData({required this.item, required this.activity});
+  const _HomeResumeCardData({required this.item, required this.progress});
 }
 
 class _GallerySearchSuggestion {
@@ -215,6 +217,8 @@ class GalleryGridPage extends StatefulWidget {
 class _GalleryGridPageState extends State<GalleryGridPage> {
   final ExternalShareService _externalShareService = ExternalShareService();
   final MediaIdResolver _homeMediaIdResolver = MediaIdResolver();
+  final AppReadingProgressService _readingProgressService =
+      AppReadingProgressService();
   FolderHandle? _folder;
   List<MediaItem> _items = const [];
   bool _loading = false;
@@ -383,8 +387,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _homeRecentAddedItems = const [];
   List<MediaItem> _homeFavoriteShowcaseItems = const [];
   List<MediaItem> _homeRecentViewedItems = const [];
-  Map<String, HomeActivityEntry> _homeRecentViewEntriesByItemId =
-      <String, HomeActivityEntry>{};
+  Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
+      <String, ReadingProgressEntry>{};
   _HomeResumeCardData? _homeResumeCard;
   int _homeShowcaseLoadVersion = 0;
 
@@ -475,7 +479,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<Map<String, MediaItem>> _buildHomeItemLookup(
     List<MediaItem> mediaItems,
-    Iterable<HomeActivityEntry> recentViews,
+    Iterable<ReadingProgressEntry> recentProgress,
   ) async {
     final itemByVariant = <String, MediaItem>{};
     for (final item in mediaItems) {
@@ -484,8 +488,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
     }
 
-    final unresolvedStableIds = recentViews
-        .map((entry) => entry.itemId.trim())
+    final unresolvedStableIds = recentProgress
+        .map((entry) => entry.mediaId.trim())
         .where(_looksLikeStableMediaId)
         .where((itemId) => !itemByVariant.containsKey(itemId))
         .toSet();
@@ -3042,7 +3046,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return false;
   }
 
-  HomeActivityEntry? _homeRecentViewEntryForItem(MediaItem item) {
+  ReadingProgressEntry? _homeRecentViewEntryForItem(MediaItem item) {
     for (final variant in _idVariants(item.id)) {
       final entry = _homeRecentViewEntriesByItemId[variant];
       if (entry != null) {
@@ -3147,15 +3151,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           _homeRecentAddedItems = const <MediaItem>[];
           _homeFavoriteShowcaseItems = const <MediaItem>[];
           _homeRecentViewedItems = const <MediaItem>[];
-          _homeRecentViewEntriesByItemId = <String, HomeActivityEntry>{};
+          _homeRecentViewEntriesByItemId = <String, ReadingProgressEntry>{};
           _homeResumeCard = null;
           _homeShowcaseErrorMessage = null;
         });
         return;
       }
 
-      final prefs = await SharedPreferences.getInstance();
-      final recentViews = await HomeActivityStore.loadRecentViews(prefs);
+      final recentProgress = await _readingProgressService.fetchRecent(
+        limit: 200,
+      );
       final allItems = await _ensureHomeShelfCorpusLoaded();
       final mediaItems = allItems
           .where((item) => item.kind != MediaKind.folder)
@@ -3166,14 +3171,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
         );
 
-      final itemByVariant = await _buildHomeItemLookup(mediaItems, recentViews);
+      final itemByVariant = await _buildHomeItemLookup(
+        mediaItems,
+        recentProgress,
+      );
 
       final recentViewedItems = <MediaItem>[];
-      final recentViewEntriesByItemId = <String, HomeActivityEntry>{};
+      final recentViewEntriesByItemId = <String, ReadingProgressEntry>{};
       _HomeResumeCardData? resumeCard;
 
-      for (final entry in recentViews) {
-        final resolved = itemByVariant[entry.itemId];
+      for (final entry in recentProgress) {
+        final resolved = itemByVariant[entry.mediaId];
         if (resolved == null) {
           continue;
         }
@@ -3185,8 +3193,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
         if (resumeCard == null &&
             resolved.kind == MediaKind.pdf &&
-            (entry.lastPage ?? 0) > 1) {
-          resumeCard = _HomeResumeCardData(item: resolved, activity: entry);
+            ReadingProgressService.shouldShowContinueCard(entry)) {
+          resumeCard = _HomeResumeCardData(item: resolved, progress: entry);
         }
       }
 
@@ -3514,7 +3522,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     final item = resume.item;
-    final page = resume.activity.lastPage ?? 1;
+    final progress = resume.progress;
+    final page = progress.currentPage;
+    final totalPages = progress.totalPages;
+    final pageText = totalPages != null ? 'p.$page / $totalPages' : 'p.$page';
+    final progressText = '${(progress.progress * 100).round()}%';
     final artist = _homeSearchPrimaryValueForCategory(
       item,
       TagCategory.artist,
@@ -3566,14 +3578,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         const SizedBox(height: 4),
                         _buildHomeShelfMetaLine(
                           '前回閲覧',
-                          _formatHomeDateTime(resume.activity.viewedAt),
+                          _formatHomeDateTime(progress.lastReadAt),
+                        ),
+                        const SizedBox(height: 4),
+                        _buildHomeShelfMetaLine(
+                          '進捗',
+                          '$pageText / $progressText',
                         ),
                         const SizedBox(height: 12),
                         FilledButton.icon(
                           onPressed: () =>
                               _openDetailFromHome(item, initialPdfPage: page),
                           icon: const Icon(Icons.play_arrow_rounded),
-                          label: Text('p.$page から開く'),
+                          label: Text('$pageText から開く'),
                         ),
                       ],
                     );
@@ -3860,7 +3877,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 item: item,
                 footerText: activity == null
                     ? '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}'
-                    : '最終閲覧 ${_formatHomeDateTime(activity.viewedAt)}',
+                    : '最終閲覧 ${_formatHomeDateTime(activity.lastReadAt)}',
                 footerIcon: activity == null
                     ? Icons.schedule_outlined
                     : Icons.history,
@@ -3885,15 +3902,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             emptyMessage: '作品を開くと、ここに最近見たものが並びます。',
             itemBuilder: (item) {
               final activity = recentViewedEntries[item.id];
-              final page = activity?.lastPage;
+              final page = activity?.currentPage;
+              final totalPages = activity?.totalPages;
+              final pageText = page == null
+                  ? null
+                  : totalPages != null
+                  ? 'p.$page / $totalPages'
+                  : 'p.$page';
+              final progressText = activity == null
+                  ? null
+                  : '${(activity.progress * 100).round()}%';
               return _buildHomeMediaShelfCard(
                 item: item,
-                footerText: page != null
-                    ? '閲覧 ${_formatHomeDateTime(activity?.viewedAt)} / p.$page'
-                    : '閲覧 ${_formatHomeDateTime(activity?.viewedAt)}',
+                footerText: pageText != null
+                    ? '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)} / $pageText / $progressText'
+                    : '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)}',
                 footerIcon: Icons.history,
-                badgeText: page != null ? 'p.$page' : null,
-                badgeIcon: page != null ? Icons.auto_stories_outlined : null,
+                badgeText: pageText,
+                badgeIcon: pageText != null ? Icons.auto_stories_outlined : null,
                 badgeBackgroundColor: Theme.of(
                   context,
                 ).colorScheme.secondaryContainer,

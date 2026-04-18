@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../models/mediaItem.dart';
+import '../models/reading_progress.dart';
 import '../models/tag.dart';
 import '../models/folder.dart';
 import '../repository/mediaRepository.dart';
@@ -261,6 +262,62 @@ class RemoteMediaApiClient {
         .whereType<Map>()
         .map((row) => _parseMediaActivityEntry(Map<String, dynamic>.from(row)))
         .toList(growable: false);
+  }
+
+  Future<ReadingProgressEntry?> fetchReadingProgress(String mediaId) async {
+    try {
+      final json = await _getJson('/progress/${Uri.encodeComponent(mediaId)}');
+      if (json is! Map<String, dynamic>) {
+        throw const RemoteMediaException('読書進捗の形式が不正です');
+      }
+      return _parseReadingProgressEntry(json);
+    } on RemoteMediaException catch (error) {
+      if (error.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<ReadingProgressEntry>> fetchRecentReadingProgress({
+    int limit = 24,
+  }) async {
+    final json = await _getJson(
+      '/progress/recent',
+      queryParameters: <String, String>{'limit': '${limit < 1 ? 1 : limit}'},
+    );
+    final rows = _unwrapList(json, preferredKeys: const ['items', 'results']);
+    return rows
+        .whereType<Map>()
+        .map((row) => _parseReadingProgressEntry(Map<String, dynamic>.from(row)))
+        .toList(growable: false);
+  }
+
+  Future<ReadingProgressEntry> upsertReadingProgress(
+    String mediaId, {
+    required int currentPage,
+    int? totalPages,
+    double? progress,
+    DateTime? lastReadAt,
+    DateTime? updatedAt,
+    Map<String, dynamic>? identity,
+  }) async {
+    final jsonBody = await _sendJsonRequest(
+      'PUT',
+      '/progress/${Uri.encodeComponent(mediaId)}',
+      body: <String, dynamic>{
+        'currentPage': currentPage,
+        if (totalPages != null) 'totalPages': totalPages,
+        if (progress != null) 'progress': progress,
+        if (lastReadAt != null) 'lastReadAt': lastReadAt.toUtc().toIso8601String(),
+        if (updatedAt != null) 'updatedAt': updatedAt.toUtc().toIso8601String(),
+        if (identity != null) 'identity': identity,
+      },
+    );
+    if (jsonBody is! Map<String, dynamic>) {
+      throw const RemoteMediaException('読書進捗の形式が不正です');
+    }
+    return _parseReadingProgressEntry(jsonBody);
   }
 
   Future<RemoteMediaActivityEntry> recordMediaActivity(
@@ -951,6 +1008,8 @@ class RemoteMediaApiClient {
         return client.getUrl(uri);
       case 'POST':
         return client.postUrl(uri);
+      case 'PUT':
+        return client.putUrl(uri);
       case 'DELETE':
         return client.deleteUrl(uri);
       default:
@@ -1051,6 +1110,28 @@ class RemoteMediaApiClient {
       folderRaw: json['folderRaw']?.toString().trim() ?? '',
       viewedAt: viewedAt,
       lastPage: rawLastPage != null && rawLastPage > 0 ? rawLastPage : null,
+    );
+  }
+
+  ReadingProgressEntry _parseReadingProgressEntry(Map<String, dynamic> json) {
+    final currentPage =
+        (_asInt(json['currentPage']) ?? 1).clamp(1, 1 << 30) as int;
+    final totalPages = _asInt(json['totalPages']);
+    final lastReadAt =
+        _parseDateTime(json['lastReadAt']?.toString()) ?? DateTime.now();
+    final updatedAt =
+        _parseDateTime(json['updatedAt']?.toString()) ?? lastReadAt;
+    return ReadingProgressEntry(
+      mediaId: json['mediaId']?.toString().trim() ?? '',
+      title: json['title']?.toString().trim() ?? '',
+      folderRaw: json['folderRaw']?.toString().trim() ?? '',
+      currentPage: currentPage,
+      totalPages: totalPages != null && totalPages > 0 ? totalPages : null,
+      progress: ((_asDouble(json['progress']) ?? 0.0).clamp(0.0, 1.0) as num)
+          .toDouble(),
+      lastReadAt: lastReadAt,
+      updatedAt: updatedAt,
+      thumbnailUrl: json['thumbnailUrl']?.toString(),
     );
   }
 
@@ -1205,6 +1286,16 @@ class RemoteMediaApiClient {
       return raw;
     }
     return int.tryParse(raw.toString());
+  }
+
+  double? _asDouble(dynamic raw) {
+    if (raw == null) {
+      return null;
+    }
+    if (raw is num) {
+      return raw.toDouble();
+    }
+    return double.tryParse(raw.toString());
   }
 
   String? _extractErrorMessage(dynamic json) {

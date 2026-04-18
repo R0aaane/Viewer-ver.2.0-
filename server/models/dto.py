@@ -87,6 +87,31 @@ class RecordMediaActivityRequest(BaseModel):
     identity: ResolvedIdentityDto | None = None
 
 
+class ReadingProgressDto(BaseModel):
+    mediaId: str
+    title: str
+    folderRaw: str
+    currentPage: int
+    totalPages: int | None = None
+    progress: float = 0.0
+    lastReadAt: datetime
+    updatedAt: datetime
+    thumbnailUrl: str | None = None
+
+
+class ReadingProgressListResponse(BaseModel):
+    items: list[ReadingProgressDto]
+
+
+class UpdateReadingProgressRequest(BaseModel):
+    currentPage: int | None = None
+    totalPages: int | None = None
+    progress: float | None = None
+    lastReadAt: datetime | None = None
+    updatedAt: datetime | None = None
+    identity: ResolvedIdentityDto | None = None
+
+
 class MediaItemDto(BaseModel):
     mediaId: str
     displayName: str

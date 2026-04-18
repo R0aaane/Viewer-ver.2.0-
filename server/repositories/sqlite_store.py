@@ -82,6 +82,21 @@ class SqliteStore:
                 CREATE INDEX IF NOT EXISTS idx_media_activity_last_viewed_at
                     ON media_activity(last_viewed_at);
 
+                CREATE TABLE IF NOT EXISTS reading_progress (
+                    media_id TEXT PRIMARY KEY,
+                    current_page INTEGER NOT NULL,
+                    total_pages INTEGER,
+                    progress REAL NOT NULL DEFAULT 0,
+                    last_read_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (media_id) REFERENCES media_records(media_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_reading_progress_last_read_at
+                    ON reading_progress(last_read_at);
+                CREATE INDEX IF NOT EXISTS idx_reading_progress_updated_at
+                    ON reading_progress(updated_at);
+
                 CREATE TABLE IF NOT EXISTS tag_master (
                     tag_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -104,6 +119,29 @@ class SqliteStore:
                     display_name TEXT NOT NULL,
                     last_scanned_at TEXT
                 );
+
+                INSERT INTO reading_progress (
+                    media_id,
+                    current_page,
+                    total_pages,
+                    progress,
+                    last_read_at,
+                    updated_at
+                )
+                SELECT
+                    legacy.media_id,
+                    CASE
+                        WHEN legacy.last_page IS NOT NULL AND legacy.last_page > 0 THEN legacy.last_page
+                        ELSE 1
+                    END,
+                    NULL,
+                    0,
+                    legacy.last_viewed_at,
+                    legacy.last_viewed_at
+                FROM media_activity AS legacy
+                LEFT JOIN reading_progress AS progress
+                    ON progress.media_id = legacy.media_id
+                WHERE progress.media_id IS NULL;
                 """
             )
 
@@ -375,6 +413,108 @@ class SqliteStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_reading_progress(self, media_id: str) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            row = cur.execute(
+                """
+                SELECT
+                    media_id,
+                    current_page,
+                    total_pages,
+                    progress,
+                    last_read_at,
+                    updated_at
+                  FROM reading_progress
+                 WHERE media_id = ?
+                """,
+                (media_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_reading_progress(
+        self,
+        media_id: str,
+        *,
+        current_page: int,
+        total_pages: int | None,
+        progress: float,
+        last_read_at: str,
+        updated_at: str,
+    ) -> dict[str, Any]:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO reading_progress (
+                    media_id,
+                    current_page,
+                    total_pages,
+                    progress,
+                    last_read_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    current_page = excluded.current_page,
+                    total_pages = excluded.total_pages,
+                    progress = excluded.progress,
+                    last_read_at = excluded.last_read_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    media_id,
+                    current_page,
+                    total_pages,
+                    progress,
+                    last_read_at,
+                    updated_at,
+                ),
+            )
+            row = cur.execute(
+                """
+                SELECT
+                    media_id,
+                    current_page,
+                    total_pages,
+                    progress,
+                    last_read_at,
+                    updated_at
+                  FROM reading_progress
+                 WHERE media_id = ?
+                """,
+                (media_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"reading_progress row not found after upsert: {media_id}"
+            )
+        return dict(row)
+
+    def list_reading_progress(self, *, limit: int = 24) -> list[dict[str, Any]]:
+        normalized_limit = max(1, int(limit))
+        with self._cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT
+                    progress.media_id,
+                    progress.current_page,
+                    progress.total_pages,
+                    progress.progress,
+                    progress.last_read_at,
+                    progress.updated_at,
+                    records.folder_raw,
+                    records.display_name
+                  FROM reading_progress AS progress
+                  JOIN media_records AS records
+                    ON records.media_id = progress.media_id
+                 WHERE records.is_deleted = 0
+                   AND records.kind = 'pdf'
+              ORDER BY progress.last_read_at DESC, progress.updated_at DESC
+                 LIMIT ?
+                """,
+                (normalized_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def mark_deleted_by_ids(self, media_ids: list[str], is_deleted: bool = True) -> None:
         if not media_ids:
             return
@@ -639,6 +779,79 @@ class SqliteStore:
                 )
                 cur.execute(
                     "DELETE FROM media_stats WHERE media_id = ?",
+                    (old_media_id,),
+                )
+
+            progress_row = cur.execute(
+                """
+                SELECT
+                    current_page,
+                    total_pages,
+                    progress,
+                    last_read_at,
+                    updated_at
+                  FROM reading_progress
+                 WHERE media_id = ?
+                """,
+                (old_media_id,),
+            ).fetchone()
+            if progress_row is not None:
+                cur.execute(
+                    """
+                    INSERT INTO reading_progress (
+                        media_id,
+                        current_page,
+                        total_pages,
+                        progress,
+                        last_read_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(media_id) DO UPDATE SET
+                        current_page = CASE
+                            WHEN reading_progress.updated_at IS NULL THEN excluded.current_page
+                            WHEN excluded.updated_at IS NULL THEN reading_progress.current_page
+                            WHEN reading_progress.updated_at >= excluded.updated_at THEN reading_progress.current_page
+                            ELSE excluded.current_page
+                        END,
+                        total_pages = CASE
+                            WHEN reading_progress.total_pages IS NULL OR reading_progress.total_pages <= 0 THEN excluded.total_pages
+                            WHEN excluded.total_pages IS NULL OR excluded.total_pages <= 0 THEN reading_progress.total_pages
+                            WHEN reading_progress.updated_at IS NULL THEN excluded.total_pages
+                            WHEN excluded.updated_at IS NULL THEN reading_progress.total_pages
+                            WHEN reading_progress.updated_at >= excluded.updated_at THEN reading_progress.total_pages
+                            ELSE excluded.total_pages
+                        END,
+                        progress = CASE
+                            WHEN reading_progress.updated_at IS NULL THEN excluded.progress
+                            WHEN excluded.updated_at IS NULL THEN reading_progress.progress
+                            WHEN reading_progress.updated_at >= excluded.updated_at THEN reading_progress.progress
+                            ELSE excluded.progress
+                        END,
+                        last_read_at = CASE
+                            WHEN reading_progress.last_read_at IS NULL THEN excluded.last_read_at
+                            WHEN excluded.last_read_at IS NULL THEN reading_progress.last_read_at
+                            WHEN reading_progress.last_read_at >= excluded.last_read_at THEN reading_progress.last_read_at
+                            ELSE excluded.last_read_at
+                        END,
+                        updated_at = CASE
+                            WHEN reading_progress.updated_at IS NULL THEN excluded.updated_at
+                            WHEN excluded.updated_at IS NULL THEN reading_progress.updated_at
+                            WHEN reading_progress.updated_at >= excluded.updated_at THEN reading_progress.updated_at
+                            ELSE excluded.updated_at
+                        END
+                    """,
+                    (
+                        new_media_id,
+                        progress_row["current_page"],
+                        progress_row["total_pages"],
+                        progress_row["progress"],
+                        progress_row["last_read_at"],
+                        progress_row["updated_at"],
+                    ),
+                )
+                cur.execute(
+                    "DELETE FROM reading_progress WHERE media_id = ?",
                     (old_media_id,),
                 )
 

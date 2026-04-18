@@ -11,6 +11,9 @@ from server.models.dto import (
     MediaMetaResponse,
     MediaStatsDto,
     RecordMediaActivityRequest,
+    ReadingProgressDto,
+    ReadingProgressListResponse,
+    UpdateReadingProgressRequest,
 )
 from server.services.auth_service import require_bearer_token
 
@@ -41,6 +44,40 @@ def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
 def record_media_view(request: Request, media_id: str) -> MediaStatsDto:
     stats = request.app.state.metadata_store.record_media_view(media_id)
     return MediaStatsDto(**stats)
+
+
+@router.get("/progress/recent", response_model=ReadingProgressListResponse)
+def list_recent_reading_progress(
+    request: Request,
+    limit: int = 24,
+) -> ReadingProgressListResponse:
+    items = request.app.state.metadata_store.list_recent_reading_progress(limit=limit)
+    return ReadingProgressListResponse(items=items)
+
+
+@router.get("/progress/{media_id}", response_model=ReadingProgressDto)
+def get_reading_progress(request: Request, media_id: str) -> ReadingProgressDto:
+    item = request.app.state.metadata_store.get_reading_progress(media_id)
+    return ReadingProgressDto(**item)
+
+
+@router.put("/progress/{media_id}", response_model=ReadingProgressDto)
+def update_reading_progress(
+    request: Request,
+    media_id: str,
+    payload: UpdateReadingProgressRequest,
+) -> ReadingProgressDto:
+    identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
+    item = request.app.state.metadata_store.upsert_reading_progress(
+        media_id,
+        identity=identity,
+        current_page=payload.currentPage,
+        total_pages=payload.totalPages,
+        progress=payload.progress,
+        last_read_at=payload.lastReadAt,
+        updated_at=payload.updatedAt,
+    )
+    return ReadingProgressDto(**item)
 
 
 @router.get("/activity/recent", response_model=MediaActivityListResponse)

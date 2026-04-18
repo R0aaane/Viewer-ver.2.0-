@@ -10,6 +10,7 @@ import 'package:pdfx/src/renderer/web/pdfjs.dart';
 
 import '../repository/mediaRepository.dart';
 import '../models/tag.dart';
+import '../models/reading_progress.dart';
 
 const String _pdfJsScriptId = 'pdfjs-runtime-loader';
 const String _pdfJsLibraryUrl =
@@ -890,6 +891,64 @@ class WebRemoteApiClient {
         .toList(growable: false);
   }
 
+  Future<ReadingProgressEntry?> fetchReadingProgress(String mediaId) async {
+    try {
+      final json = await _getJson('/progress/${Uri.encodeComponent(mediaId)}');
+      if (json is! Map<String, dynamic>) {
+        throw const WebRemoteException('読書進捗の形式が不正です');
+      }
+      return _parseReadingProgressEntry(json);
+    } on WebRemoteException catch (error) {
+      if (error.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<ReadingProgressEntry>> fetchRecentReadingProgress({
+    int limit = 24,
+  }) async {
+    final json = await _getJson(
+      '/progress/recent',
+      queryParameters: <String, String>{'limit': '${limit < 1 ? 1 : limit}'},
+    );
+    final items = (json is Map<String, dynamic> ? json['items'] : null);
+    if (items is! List) {
+      return const <ReadingProgressEntry>[];
+    }
+    return items
+        .whereType<Map>()
+        .map((raw) => _parseReadingProgressEntry(Map<String, dynamic>.from(raw)))
+        .toList(growable: false);
+  }
+
+  Future<ReadingProgressEntry> upsertReadingProgress(
+    String mediaId, {
+    required int currentPage,
+    int? totalPages,
+    double? progress,
+    DateTime? lastReadAt,
+    DateTime? updatedAt,
+    Map<String, dynamic>? identity,
+  }) async {
+    final json = await _putJson(
+      '/progress/${Uri.encodeComponent(mediaId)}',
+      <String, dynamic>{
+        'currentPage': currentPage,
+        if (totalPages != null) 'totalPages': totalPages,
+        if (progress != null) 'progress': progress,
+        if (lastReadAt != null) 'lastReadAt': lastReadAt.toUtc().toIso8601String(),
+        if (updatedAt != null) 'updatedAt': updatedAt.toUtc().toIso8601String(),
+        if (identity != null) 'identity': identity,
+      },
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const WebRemoteException('読書進捗の形式が不正です');
+    }
+    return _parseReadingProgressEntry(json);
+  }
+
   Future<WebRemoteMediaActivityEntry> recordMediaActivity(
     String mediaId, {
     int? lastPage,
@@ -1392,6 +1451,26 @@ class WebRemoteApiClient {
     );
   }
 
+  ReadingProgressEntry _parseReadingProgressEntry(Map<String, dynamic> raw) {
+    final currentPage =
+        (_asInt(raw['currentPage']) ?? 1).clamp(1, 1 << 30) as int;
+    final totalPages = _asInt(raw['totalPages']);
+    final lastReadAt = _parseDateTime(raw['lastReadAt']) ?? DateTime.now();
+    final updatedAt = _parseDateTime(raw['updatedAt']) ?? lastReadAt;
+    return ReadingProgressEntry(
+      mediaId: raw['mediaId']?.toString().trim() ?? '',
+      title: raw['title']?.toString().trim() ?? '',
+      folderRaw: raw['folderRaw']?.toString().trim() ?? '',
+      currentPage: currentPage,
+      totalPages: totalPages != null && totalPages > 0 ? totalPages : null,
+      progress: ((_asDouble(raw['progress']) ?? 0.0).clamp(0.0, 1.0) as num)
+          .toDouble(),
+      lastReadAt: lastReadAt,
+      updatedAt: updatedAt,
+      thumbnailUrl: raw['thumbnailUrl']?.toString(),
+    );
+  }
+
   TagCategory _parseTagCategory(String? raw) {
     switch (raw?.trim().toLowerCase()) {
       case 'artist':
@@ -1425,6 +1504,16 @@ class WebRemoteApiClient {
       return raw;
     }
     return int.tryParse(raw.toString());
+  }
+
+  double? _asDouble(dynamic raw) {
+    if (raw == null) {
+      return null;
+    }
+    if (raw is num) {
+      return raw.toDouble();
+    }
+    return double.tryParse(raw.toString());
   }
 
   Uint8List _responseBytes(Object? response) {
