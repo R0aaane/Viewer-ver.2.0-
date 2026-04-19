@@ -61,8 +61,6 @@ class WebRemoteViewerPage extends StatefulWidget {
 }
 
 class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
-  static const String _browserDisplayModePrefsKey =
-      'prefs.webRemoteBrowserDisplayMode';
   static const int _threeUpPageSize = 30;
 
   late MetadataSettings _settings;
@@ -89,7 +87,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   String? _homeErrorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.pdf;
   _WebRemoteSurface _surface = _WebRemoteSurface.home;
-  _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.list;
+  final _WebBrowserDisplayMode _browserDisplayMode =
+      _WebBrowserDisplayMode.list;
   int _threeUpPage = 1;
 
   @override
@@ -99,7 +98,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     _apiController = TextEditingController(text: _settings.clientApiBaseUrl);
     _tokenController = TextEditingController(text: _settings.authToken ?? '');
     _searchController = TextEditingController();
-    unawaited(_restoreBrowserDisplayMode());
     if (_settings.clientApiBaseUrl.trim().isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _saveAndConnect(showSuccessMessage: false);
@@ -128,51 +126,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       authToken: tokenFromUri ?? settings.authToken,
       clearAuthToken: tokenFromUri != null && tokenFromUri.isEmpty,
     );
-  }
-
-  Future<void> _restoreBrowserDisplayMode() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_browserDisplayModePrefsKey)?.trim();
-      final normalizedRaw = raw == 'tiles' ? 'tile' : raw;
-      final restored =
-          _WebBrowserDisplayMode.values
-              .where((mode) => mode.name == normalizedRaw)
-              .cast<_WebBrowserDisplayMode?>()
-              .firstOrNull ??
-          _WebBrowserDisplayMode.list;
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _browserDisplayMode = restored;
-      });
-    } catch (error) {
-      debugPrint(
-        '[WebRemoteViewerPage] Failed to restore browser display mode: $error',
-      );
-    }
-  }
-
-  Future<void> _persistBrowserDisplayMode(_WebBrowserDisplayMode mode) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_browserDisplayModePrefsKey, mode.name);
-    } catch (error) {
-      debugPrint(
-        '[WebRemoteViewerPage] Failed to persist browser display mode: $error',
-      );
-    }
-  }
-
-  void _setBrowserDisplayMode(_WebBrowserDisplayMode mode) {
-    if (_browserDisplayMode == mode) {
-      return;
-    }
-    setState(() {
-      _browserDisplayMode = mode;
-    });
-    unawaited(_persistBrowserDisplayMode(mode));
   }
 
   String _resolveInitialApiBaseUrl(
@@ -934,6 +887,23 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return '$rootLabel / ${parts.join(' / ')}';
   }
 
+  String? _urlImportTargetFolderRaw() {
+    final selected = _selectedFolderRaw?.trim();
+    if (selected != null && selected.isNotEmpty) {
+      return selected;
+    }
+    final libraryRoot = _libraryRoot?.raw.trim();
+    if (libraryRoot == null || libraryRoot.isEmpty) {
+      return null;
+    }
+    return libraryRoot;
+  }
+
+  bool get _canAccessUrlImport {
+    final folderRaw = _urlImportTargetFolderRaw();
+    return _client != null && folderRaw != null && folderRaw.isNotEmpty;
+  }
+
   Future<void> _selectFolder(String folderRaw) async {
     final libraryRootRaw = _libraryRoot?.raw;
     if (libraryRootRaw != null && !_isPathWithin(folderRaw, libraryRootRaw)) {
@@ -1070,14 +1040,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Future<void> _importUrlToCurrentFolder() async {
-    final folderRaw = _selectedFolderRaw?.trim();
+    final folderRaw = _urlImportTargetFolderRaw();
     if (folderRaw == null || folderRaw.isEmpty) {
       return;
     }
 
     final request = await WebUrlImportSheet.show(
       context,
-      folderName: _folderName(folderRaw),
+      folderName: _currentFolderLabel(folderRaw),
     );
     if (request == null || !request.hasAnySource) {
       return;
@@ -1211,6 +1181,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         final showSidebar = constraints.maxWidth >= 980;
         final splitView = constraints.maxWidth >= 1180;
         final compactScreen = constraints.maxWidth < 720;
+        final canImportUrl =
+            _canAccessUrlImport &&
+            !_isConnecting &&
+            !_isLoading &&
+            !_actionBusy;
         final keyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
         final contentPadding = EdgeInsets.fromLTRB(
           compactScreen ? 10 : 16,
@@ -1243,6 +1218,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                     ),
                   ),
             actions: <Widget>[
+              IconButton(
+                tooltip: 'URL取り込み',
+                onPressed: canImportUrl ? _importUrlToCurrentFolder : null,
+                icon: const Icon(Icons.download_outlined),
+              ),
               if (_isConnecting || _isLoading || _actionBusy)
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16),
@@ -1588,6 +1568,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             viewedCount: viewedCount,
             recentCount: recentCount,
             isBusy: _homeLoading || _isConnecting || _actionBusy,
+            onImportUrl: _canAccessUrlImport && !_actionBusy
+                ? _importUrlToCurrentFolder
+                : null,
             onBrowseAll: () {
               setState(() {
                 _surface = _WebRemoteSurface.browse;
@@ -1696,10 +1679,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           onGoParent: parentFolder == null
               ? null
               : () => _selectFolder(parentFolder),
-          onImportUrl:
-              _client == null || _selectedFolderRaw == null || _actionBusy
-              ? null
-              : _importUrlToCurrentFolder,
+          onImportUrl: _canAccessUrlImport && !_actionBusy
+              ? _importUrlToCurrentFolder
+              : null,
           onOrganizeFolder:
               _client == null || _selectedFolderRaw == null || _actionBusy
               ? null
@@ -1715,11 +1697,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             _loadEntries();
           },
           showSearchField: false,
-        ),
-        const SizedBox(height: 12),
-        _BrowserDisplayModeCard(
-          mode: _browserDisplayMode,
-          onChanged: _setBrowserDisplayMode,
         ),
       ],
     );
@@ -2182,6 +2159,7 @@ class _WebHomeHeroCard extends StatelessWidget {
   final int viewedCount;
   final int recentCount;
   final bool isBusy;
+  final VoidCallback? onImportUrl;
   final VoidCallback onBrowseAll;
   final Future<void> Function() onRefresh;
 
@@ -2191,6 +2169,7 @@ class _WebHomeHeroCard extends StatelessWidget {
     required this.viewedCount,
     required this.recentCount,
     required this.isBusy,
+    required this.onImportUrl,
     required this.onBrowseAll,
     required this.onRefresh,
   });
@@ -2258,6 +2237,11 @@ class _WebHomeHeroCard extends StatelessWidget {
               spacing: 10,
               runSpacing: 10,
               children: <Widget>[
+                FilledButton.icon(
+                  onPressed: isBusy ? null : onImportUrl,
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('URL蜿冶ｾｼ'),
+                ),
                 FilledButton.icon(
                   onPressed: onBrowseAll,
                   icon: const Icon(Icons.grid_view_rounded),
@@ -3281,6 +3265,7 @@ Color _entryAccentColor(WebRemoteEntry entry) {
   return palette[index];
 }
 
+// ignore: unused_element
 class _BrowserDisplayModeCard extends StatelessWidget {
   final _WebBrowserDisplayMode mode;
   final ValueChanged<_WebBrowserDisplayMode> onChanged;
@@ -3332,6 +3317,7 @@ class _BrowserDisplayModeCard extends StatelessWidget {
     );
   }
 
+  // ignore: unused_element
   Widget _buildWebViewerVersionCard() {
     return Container(
       width: double.infinity,
