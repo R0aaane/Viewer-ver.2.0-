@@ -1,9 +1,16 @@
 import 'dart:async';
+import 'dart:js_interop';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../repository/mediaRepository.dart';
+
+@JS('window.navigator.userAgent')
+external JSString get _browserUserAgent;
+
+@JS('window.prompt')
+external JSString? _windowPrompt(JSString message, JSString initialValue);
 
 class WebUrlImportRequest {
   final String sourceUrl;
@@ -78,6 +85,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   bool _organizeAfterImport = false;
   bool _detailsExpanded = false;
   bool _loadingClipboard = false;
+  bool _normalizingUrlInput = false;
   UrlImportMediaType _mediaType = UrlImportMediaType.all;
   UrlImportCookieMode _cookieMode = UrlImportCookieMode.auto;
   _ClipboardUrlCandidate? _clipboardCandidate;
@@ -87,11 +95,30 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       ? _cookieMode
       : UrlImportCookieMode.auto;
 
+  bool get _useSafariPastePrompt {
+    final userAgent = _browserUserAgent.toDart.toLowerCase();
+    final isAppleMobileDevice =
+        userAgent.contains('iphone') ||
+        userAgent.contains('ipad') ||
+        userAgent.contains('ipod');
+    final isSafari =
+        userAgent.contains('safari') &&
+        !userAgent.contains('crios') &&
+        !userAgent.contains('fxios') &&
+        !userAgent.contains('edgios') &&
+        !userAgent.contains('oprios');
+    return isAppleMobileDevice && isSafari;
+  }
+
   @override
   void initState() {
     super.initState();
-    _urlController = TextEditingController(text: widget.initialSourceText);
-    unawaited(_refreshClipboardCandidate());
+    _urlController = TextEditingController(
+      text: _normalizeAdjacentUrlInput(widget.initialSourceText),
+    );
+    if (!_useSafariPastePrompt) {
+      unawaited(_refreshClipboardCandidate());
+    }
   }
 
   @override
@@ -196,6 +223,70 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
         uri.host.trim().isNotEmpty;
   }
 
+  String _normalizeAdjacentUrlInput(String raw) {
+    return raw.replaceAllMapped(
+      RegExp(r'(?<!^)(?<![\s,])(?=https?://)', caseSensitive: false),
+      (_) => ', ',
+    );
+  }
+
+  int _normalizedSelectionOffset(String raw, int offset) {
+    final safeOffset = offset.clamp(0, raw.length);
+    return _normalizeAdjacentUrlInput(raw.substring(0, safeOffset)).length;
+  }
+
+  void _handleUrlChanged(String raw) {
+    if (_normalizingUrlInput) {
+      return;
+    }
+    final normalized = _normalizeAdjacentUrlInput(raw);
+    if (normalized != raw) {
+      final selectionOffset = _normalizedSelectionOffset(
+        raw,
+        _urlController.selection.extentOffset,
+      );
+      _normalizingUrlInput = true;
+      _urlController.value = TextEditingValue(
+        text: normalized,
+        selection: TextSelection.collapsed(offset: selectionOffset),
+      );
+      _normalizingUrlInput = false;
+    }
+    setState(() {});
+  }
+
+  String _safariPastePromptInitialText() {
+    final currentText = _normalizeAdjacentUrlInput(_urlController.text).trim();
+    if (currentText.isEmpty) {
+      return '';
+    }
+    if (currentText.endsWith(',') || currentText.endsWith(', ')) {
+      return currentText;
+    }
+    return '$currentText, ';
+  }
+
+  void _pasteSourceUrlsWithSafariPrompt() {
+    final pastedText = _windowPrompt(
+      'Safari ではここに URL を貼り付けてください'.toJS,
+      _safariPastePromptInitialText().toJS,
+    )?.toDart;
+    if (pastedText == null || !mounted) {
+      return;
+    }
+    final draft = _analyzeSourceUrls(pastedText);
+    if (draft.validUrls.isEmpty) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('貼り付けた内容に URL が見つかりませんでした')));
+      return;
+    }
+    setState(() {
+      _replaceUrlInput(draft.validUrls);
+      _clipboardCandidate = null;
+    });
+  }
+
   Future<void> _refreshClipboardCandidate() async {
     setState(() {
       _loadingClipboard = true;
@@ -225,6 +316,10 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   }
 
   Future<void> _pasteSourceUrls() async {
+    if (_useSafariPastePrompt) {
+      _pasteSourceUrlsWithSafariPrompt();
+      return;
+    }
     try {
       final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
       final clipboardText = clipboardData?.text ?? '';
@@ -894,10 +989,13 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
                                         controller: _urlController,
                                         autofocus: widget.initialSourceText
                                             .trim()
-                                            .isEmpty,
+                                            .isEmpty &&
+                                            !_useSafariPastePrompt,
+                                        keyboardType: TextInputType.url,
+                                        textInputAction: TextInputAction.done,
                                         minLines: 4,
                                         maxLines: 8,
-                                        onChanged: (_) => setState(() {}),
+                                        onChanged: _handleUrlChanged,
                                         decoration: _fieldDecoration(
                                           context: context,
                                           labelText: 'URL',
