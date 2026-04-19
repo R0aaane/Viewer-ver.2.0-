@@ -87,8 +87,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   String? _homeErrorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.pdf;
   _WebRemoteSurface _surface = _WebRemoteSurface.home;
-  final _WebBrowserDisplayMode _browserDisplayMode =
-      _WebBrowserDisplayMode.list;
+  _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
   int _threeUpPage = 1;
 
   @override
@@ -904,6 +903,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return _client != null && folderRaw != null && folderRaw.isNotEmpty;
   }
 
+  void _setBrowserDisplayMode(_WebBrowserDisplayMode mode) {
+    if (mode == _WebBrowserDisplayMode.list || _browserDisplayMode == mode) {
+      return;
+    }
+    setState(() {
+      _browserDisplayMode = mode;
+    });
+  }
+
   Future<void> _selectFolder(String folderRaw) async {
     final libraryRootRaw = _libraryRoot?.raw;
     if (libraryRootRaw != null && !_isPathWithin(folderRaw, libraryRootRaw)) {
@@ -1698,6 +1706,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           },
           showSearchField: false,
         ),
+        const SizedBox(height: 12),
+        _BrowserDisplayModeCard(
+          mode: _browserDisplayMode,
+          onChanged: _setBrowserDisplayMode,
+        ),
       ],
     );
   }
@@ -2240,7 +2253,7 @@ class _WebHomeHeroCard extends StatelessWidget {
                 FilledButton.icon(
                   onPressed: isBusy ? null : onImportUrl,
                   icon: const Icon(Icons.download_outlined),
-                  label: const Text('URL蜿冶ｾｼ'),
+                  label: const Text('URL取り込み'),
                 ),
                 FilledButton.icon(
                   onPressed: onBrowseAll,
@@ -2838,7 +2851,7 @@ class _BrowserHeader extends StatelessWidget {
                 FilledButton.icon(
                   onPressed: actionsBusy ? null : onImportUrl,
                   icon: const Icon(Icons.download_outlined),
-                  label: const Text('URL取込'),
+                  label: const Text('URL取り込み'),
                 ),
                 OutlinedButton.icon(
                   onPressed: actionsBusy ? null : onOrganizeFolder,
@@ -2929,7 +2942,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
           child: ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.download_outlined),
-            title: Text('URL取込'),
+            title: Text('URL取り込み'),
           ),
         ),
       if (onOrganizeFolder != null)
@@ -3127,7 +3140,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                 FilledButton.icon(
                   onPressed: actionsBusy ? null : onImportUrl,
                   icon: const Icon(Icons.download_outlined),
-                  label: const Text('URL取込'),
+                  label: const Text('URL取り込み'),
                 ),
                 OutlinedButton.icon(
                   onPressed: actionsBusy ? null : onOrganizeFolder,
@@ -3265,7 +3278,6 @@ Color _entryAccentColor(WebRemoteEntry entry) {
   return palette[index];
 }
 
-// ignore: unused_element
 class _BrowserDisplayModeCard extends StatelessWidget {
   final _WebBrowserDisplayMode mode;
   final ValueChanged<_WebBrowserDisplayMode> onChanged;
@@ -3275,6 +3287,13 @@ class _BrowserDisplayModeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.of(context).size.width < 720;
+    const selectableModes = <_WebBrowserDisplayMode>[
+      _WebBrowserDisplayMode.tile,
+      _WebBrowserDisplayMode.threeUp,
+    ];
+    final selectedMode = selectableModes.contains(mode)
+        ? mode
+        : _WebBrowserDisplayMode.tile;
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -3292,7 +3311,7 @@ class _BrowserDisplayModeCard extends StatelessWidget {
             ),
             SegmentedButton<_WebBrowserDisplayMode>(
               showSelectedIcon: false,
-              segments: _WebBrowserDisplayMode.values
+              segments: selectableModes
                   .map(
                     (candidate) => ButtonSegment<_WebBrowserDisplayMode>(
                       value: candidate,
@@ -3303,7 +3322,7 @@ class _BrowserDisplayModeCard extends StatelessWidget {
                     ),
                   )
                   .toList(growable: false),
-              selected: <_WebBrowserDisplayMode>{mode},
+              selected: <_WebBrowserDisplayMode>{selectedMode},
               onSelectionChanged: (selection) {
                 final next = selection.firstOrNull;
                 if (next != null) {
