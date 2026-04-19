@@ -44,6 +44,17 @@ enum _WebBrowserDisplayMode {
   });
 }
 
+enum _WebBrowserSortMode {
+  newest(label: '新着', icon: Icons.schedule_outlined),
+  unread(label: '未読', icon: Icons.mark_email_unread_outlined),
+  recentlyViewed(label: '最近閲覧', icon: Icons.history_rounded);
+
+  final String label;
+  final IconData icon;
+
+  const _WebBrowserSortMode({required this.label, required this.icon});
+}
+
 const String _webViewerVersion = '2026.04.12.1';
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -87,6 +98,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   String? _homeErrorMessage;
   _WebMediaFilter _filter = _WebMediaFilter.pdf;
   _WebRemoteSurface _surface = _WebRemoteSurface.home;
+  _WebBrowserSortMode _browserSortMode = _WebBrowserSortMode.newest;
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
   int _threeUpPage = 1;
 
@@ -326,7 +338,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       final rawQuery = _searchController.text.trim();
       final fetched =
           rawQuery.isEmpty && reuseHomeOnEmptyQuery && _homeEntries.isNotEmpty
-          ? _sortedPdfEntries(_homeEntries)
+          ? _homeEntries
           : _sortedPdfEntries(
               await _loadPdfEntries(
                 client,
@@ -334,7 +346,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 rawQuery: rawQuery,
               ),
             );
-      final filtered = _applyFilter(fetched);
+      final filtered = _sortBrowserEntries(_applyFilter(fetched));
       WebRemoteEntry? nextSelected = _selectedEntry;
       if (nextSelected != null) {
         final stableId = nextSelected.stableId;
@@ -375,17 +387,85 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   List<WebRemoteEntry> _sortedPdfEntries(Iterable<WebRemoteEntry> entries) {
     final sorted = entries.toList(growable: false);
-    sorted.sort((left, right) {
-      final leftModified = left.modifiedAt?.millisecondsSinceEpoch ?? 0;
-      final rightModified = right.modifiedAt?.millisecondsSinceEpoch ?? 0;
-      final modifiedCompare = rightModified.compareTo(leftModified);
-      if (modifiedCompare != 0) {
-        return modifiedCompare;
-      }
-      return left.displayName.toLowerCase().compareTo(
-        right.displayName.toLowerCase(),
-      );
-    });
+    sorted.sort(_compareEntriesByModifiedThenName);
+    return sorted;
+  }
+
+  int _compareEntriesByModifiedThenName(
+    WebRemoteEntry left,
+    WebRemoteEntry right,
+  ) {
+    final leftModified = left.modifiedAt?.millisecondsSinceEpoch ?? 0;
+    final rightModified = right.modifiedAt?.millisecondsSinceEpoch ?? 0;
+    final modifiedCompare = rightModified.compareTo(leftModified);
+    if (modifiedCompare != 0) {
+      return modifiedCompare;
+    }
+    return left.displayName.toLowerCase().compareTo(
+      right.displayName.toLowerCase(),
+    );
+  }
+
+  DateTime? _recentSortDateForEntry(WebRemoteEntry entry) {
+    return _recentActivityForEntry(entry)?.lastReadAt.toLocal() ??
+        _lastViewedAtForEntry(entry);
+  }
+
+  List<WebRemoteEntry> _sortBrowserEntries(Iterable<WebRemoteEntry> entries) {
+    final sorted = entries.toList(growable: false);
+    switch (_browserSortMode) {
+      case _WebBrowserSortMode.newest:
+        sorted.sort((left, right) {
+          final addedCompare = _addedAtForEntry(right).compareTo(
+            _addedAtForEntry(left),
+          );
+          if (addedCompare != 0) {
+            return addedCompare;
+          }
+          return _compareEntriesByModifiedThenName(left, right);
+        });
+        break;
+      case _WebBrowserSortMode.unread:
+        sorted.sort((left, right) {
+          final leftUnread = _viewCountForEntry(left) == 0;
+          final rightUnread = _viewCountForEntry(right) == 0;
+          if (leftUnread != rightUnread) {
+            return rightUnread ? 1 : -1;
+          }
+          final addedCompare = _addedAtForEntry(right).compareTo(
+            _addedAtForEntry(left),
+          );
+          if (addedCompare != 0) {
+            return addedCompare;
+          }
+          return _compareEntriesByModifiedThenName(left, right);
+        });
+        break;
+      case _WebBrowserSortMode.recentlyViewed:
+        sorted.sort((left, right) {
+          final leftViewed = _recentSortDateForEntry(left);
+          final rightViewed = _recentSortDateForEntry(right);
+          final leftHasViewed = leftViewed != null;
+          final rightHasViewed = rightViewed != null;
+          if (leftHasViewed != rightHasViewed) {
+            return rightHasViewed ? 1 : -1;
+          }
+          if (leftViewed != null && rightViewed != null) {
+            final viewedCompare = rightViewed.compareTo(leftViewed);
+            if (viewedCompare != 0) {
+              return viewedCompare;
+            }
+          }
+          final addedCompare = _addedAtForEntry(right).compareTo(
+            _addedAtForEntry(left),
+          );
+          if (addedCompare != 0) {
+            return addedCompare;
+          }
+          return _compareEntriesByModifiedThenName(left, right);
+        });
+        break;
+    }
     return sorted;
   }
 
@@ -901,6 +981,17 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   bool get _canAccessUrlImport {
     final folderRaw = _urlImportTargetFolderRaw();
     return _client != null && folderRaw != null && folderRaw.isNotEmpty;
+  }
+
+  void _setBrowserSortMode(_WebBrowserSortMode mode) {
+    if (_browserSortMode == mode) {
+      return;
+    }
+    setState(() {
+      _browserSortMode = mode;
+      _entries = _sortBrowserEntries(_entries);
+      _threeUpPage = 1;
+    });
   }
 
   void _setBrowserDisplayMode(_WebBrowserDisplayMode mode) {
@@ -1704,6 +1795,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             });
             _loadEntries();
           },
+          sortMode: _browserSortMode,
+          onSortModeChanged: _setBrowserSortMode,
           showSearchField: false,
         ),
         const SizedBox(height: 12),
@@ -2890,6 +2983,8 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
   final VoidCallback? onRescan;
   final _WebMediaFilter filter;
   final ValueChanged<_WebMediaFilter> onFilterChanged;
+  final _WebBrowserSortMode sortMode;
+  final ValueChanged<_WebBrowserSortMode> onSortModeChanged;
   final bool showSearchField;
 
   const _ResponsiveBrowserHeader({
@@ -2908,6 +3003,8 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
     required this.onRescan,
     required this.filter,
     required this.onFilterChanged,
+    required this.sortMode,
+    required this.onSortModeChanged,
     this.showSearchField = true,
   });
 
@@ -3061,6 +3158,21 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                   style: const TextStyle(color: Colors.white60),
                 ),
               ],
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _WebBrowserSortMode.values
+                    .map(
+                      (mode) => ChoiceChip(
+                        avatar: Icon(mode.icon, size: 18),
+                        label: Text(mode.label),
+                        selected: sortMode == mode,
+                        onSelected: (_) => onSortModeChanged(mode),
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
             ],
           ),
         ),
@@ -3153,6 +3265,21 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
                   label: const Text('再スキャン'),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _WebBrowserSortMode.values
+                  .map(
+                    (mode) => ChoiceChip(
+                      avatar: Icon(mode.icon, size: 18),
+                      label: Text(mode.label),
+                      selected: sortMode == mode,
+                      onSelected: (_) => onSortModeChanged(mode),
+                    ),
+                  )
+                  .toList(growable: false),
             ),
           ],
         ),
