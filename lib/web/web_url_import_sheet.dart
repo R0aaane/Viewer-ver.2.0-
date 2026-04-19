@@ -71,6 +71,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       TextEditingController();
   final TextEditingController _parallelDownloadsController =
       TextEditingController(text: '6');
+  final List<String> _confirmedUrls = <String>[];
 
   bool _siteKemono = true;
   bool _siteCoomer = false;
@@ -86,6 +87,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   bool _detailsExpanded = false;
   bool _loadingClipboard = false;
   bool _normalizingUrlInput = false;
+  String _lastUrlInputText = '';
   UrlImportMediaType _mediaType = UrlImportMediaType.all;
   UrlImportCookieMode _cookieMode = UrlImportCookieMode.auto;
   _ClipboardUrlCandidate? _clipboardCandidate;
@@ -113,9 +115,12 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   @override
   void initState() {
     super.initState();
-    _urlController = TextEditingController(
-      text: _normalizeAdjacentUrlInput(widget.initialSourceText),
+    _confirmedUrls.addAll(
+      _analyzeSourceUrls(
+        _normalizeAdjacentUrlInput(widget.initialSourceText),
+      ).validUrls,
     );
+    _urlController = TextEditingController();
     if (!_useSafariPastePrompt) {
       unawaited(_refreshClipboardCandidate());
     }
@@ -153,6 +158,26 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       ImportMetadata(organizeAfterImport: _organizeAfterImport);
 
   _ParsedUrlDraft get _urlDraft => _analyzeSourceUrls(_urlController.text);
+
+  List<String> get _allSourceUrls =>
+      _mergeUniqueUrls(<String>[..._confirmedUrls, ..._urlDraft.validUrls]);
+
+  _ParsedUrlDraft get _displayUrlDraft {
+    final draft = _urlDraft;
+    final committedSet = _confirmedUrls.toSet();
+    var duplicateCount = draft.duplicateCount;
+    for (final url in draft.validUrls) {
+      if (committedSet.contains(url)) {
+        duplicateCount += 1;
+      }
+    }
+    return _ParsedUrlDraft(
+      validUrls: List<String>.unmodifiable(_confirmedUrls),
+      duplicateCount: duplicateCount,
+      invalidCount: draft.invalidCount,
+      hadRawInput: draft.hadRawInput,
+    );
+  }
 
   List<String> _splitCommaSeparated(String raw) {
     final values = <String>[];
@@ -230,15 +255,74 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
     );
   }
 
+  List<String> _mergeUniqueUrls(Iterable<String> urls) {
+    final mergedUrls = <String>[];
+    final seen = <String>{};
+    for (final url in urls) {
+      if (seen.add(url)) {
+        mergedUrls.add(url);
+      }
+    }
+    return mergedUrls;
+  }
+
   int _normalizedSelectionOffset(String raw, int offset) {
     final safeOffset = offset.clamp(0, raw.length);
     return _normalizeAdjacentUrlInput(raw.substring(0, safeOffset)).length;
   }
 
-  void _handleUrlChanged(String raw) {
-    if (_normalizingUrlInput) {
+  void _setUrlInputText(String text) {
+    _normalizingUrlInput = true;
+    _urlController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    _normalizingUrlInput = false;
+    _lastUrlInputText = text;
+  }
+
+  void _clearUrlInput() {
+    _setUrlInputText('');
+  }
+
+  void _appendConfirmedUrls(List<String> incomingUrls) {
+    final mergedUrls = _mergeUniqueUrls(
+      <String>[..._confirmedUrls, ..._urlDraft.validUrls, ...incomingUrls],
+    );
+    _confirmedUrls
+      ..clear()
+      ..addAll(mergedUrls);
+    _clearUrlInput();
+  }
+
+  bool _shouldAutoCommitInput(
+    String previousText,
+    String currentText,
+    _ParsedUrlDraft draft,
+  ) {
+    if (draft.validUrls.isEmpty || draft.invalidCount > 0) {
+      return false;
+    }
+    final insertedLength = currentText.length - previousText.length;
+    return previousText.trim().isEmpty && insertedLength > 1;
+  }
+
+  void _commitPendingInputIfPossible() {
+    final draft = _urlDraft;
+    if (draft.validUrls.isEmpty) {
       return;
     }
+    setState(() {
+      _appendConfirmedUrls(draft.validUrls);
+    });
+  }
+
+  void _handleUrlChanged(String raw) {
+    if (_normalizingUrlInput) {
+      _lastUrlInputText = raw;
+      return;
+    }
+    final previousText = _lastUrlInputText;
     final normalized = _normalizeAdjacentUrlInput(raw);
     if (normalized != raw) {
       final selectionOffset = _normalizedSelectionOffset(
@@ -251,6 +335,14 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
         selection: TextSelection.collapsed(offset: selectionOffset),
       );
       _normalizingUrlInput = false;
+    }
+    final draft = _analyzeSourceUrls(normalized);
+    _lastUrlInputText = normalized;
+    if (_shouldAutoCommitInput(previousText, normalized, draft)) {
+      setState(() {
+        _appendConfirmedUrls(draft.validUrls);
+      });
+      return;
     }
     setState(() {});
   }
@@ -282,7 +374,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       return;
     }
     setState(() {
-      _replaceUrlInput(draft.validUrls);
+      _appendConfirmedUrls(draft.validUrls);
       _clipboardCandidate = null;
     });
   }
@@ -333,8 +425,8 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
         );
         return;
       }
-      _mergeUrlsIntoInput(draft.validUrls);
       setState(() {
+        _appendConfirmedUrls(draft.validUrls);
         _clipboardCandidate = _ClipboardUrlCandidate(draft: draft);
       });
     } catch (_) {
@@ -347,31 +439,12 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
     }
   }
 
-  void _mergeUrlsIntoInput(List<String> incomingUrls) {
-    final mergedUrls = <String>[];
-    final seen = <String>{};
-    for (final url in <String>[..._urlDraft.validUrls, ...incomingUrls]) {
-      if (seen.add(url)) {
-        mergedUrls.add(url);
-      }
-    }
-    _replaceUrlInput(mergedUrls);
-  }
-
-  void _replaceUrlInput(List<String> urls) {
-    final normalizedText = urls.join(', ');
-    _urlController.value = TextEditingValue(
-      text: normalizedText,
-      selection: TextSelection.collapsed(offset: normalizedText.length),
-    );
-  }
-
   void _removeUrl(String url) {
-    final remainingUrls = _urlDraft.validUrls
-        .where((entry) => entry != url)
-        .toList();
+    final remainingUrls = _confirmedUrls.where((entry) => entry != url).toList();
     setState(() {
-      _replaceUrlInput(remainingUrls);
+      _confirmedUrls
+        ..clear()
+        ..addAll(remainingUrls);
     });
   }
 
@@ -380,7 +453,9 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
     if (candidate == null) {
       return const <String>[];
     }
-    final currentUrls = currentDraft.validUrls.toSet();
+    final currentUrls = _mergeUniqueUrls(
+      <String>[..._confirmedUrls, ...currentDraft.validUrls],
+    ).toSet();
     return candidate.draft.validUrls
         .where((url) => !currentUrls.contains(url))
         .toList(growable: false);
@@ -440,7 +515,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
 
   String? _submitDisabledReason(_ParsedUrlDraft draft) {
     final options = _options;
-    if (!draft.hasValidUrls && !options.hasFavoriteTargets) {
+    if (_allSourceUrls.isEmpty && !options.hasFavoriteTargets) {
       return draft.hadRawInput ? '有効な URL を1件以上入力してください' : 'URL を1件以上入力してください';
     }
     if (options.hasFavoriteTargets && !options.hasCookieSelection) {
@@ -453,10 +528,11 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   }
 
   String _submitLabel(_ParsedUrlDraft draft) {
-    if (draft.validUrls.length == 1) {
+    final urlCount = _allSourceUrls.length;
+    if (urlCount == 1) {
       return '1件を実行';
     }
-    if (draft.validUrls.length > 1) {
+    if (urlCount > 1) {
       return '${draft.validUrls.length}件を実行';
     }
     return 'ホストで実行';
@@ -471,11 +547,11 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       )?.showSnackBar(SnackBar(content: Text(disabledReason)));
       return;
     }
+    final sourceUrls = _allSourceUrls;
     FocusManager.instance.primaryFocus?.unfocus();
-    _replaceUrlInput(draft.validUrls);
     Navigator.of(context).pop(
       WebUrlImportRequest(
-        sourceUrl: draft.normalizedText,
+        sourceUrl: sourceUrls.join(', '),
         options: _options,
         importMetadata: _importMetadata,
       ),
@@ -524,8 +600,9 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: () {
-          _mergeUrlsIntoInput(clipboardUrls);
-          setState(() {});
+          setState(() {
+            _appendConfirmedUrls(clipboardUrls);
+          });
         },
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -557,8 +634,9 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
               const SizedBox(width: 12),
               FilledButton.tonal(
                 onPressed: () {
-                  _mergeUrlsIntoInput(clipboardUrls);
-                  setState(() {});
+                  setState(() {
+                    _appendConfirmedUrls(clipboardUrls);
+                  });
                 },
                 child: const Text('反映'),
               ),
@@ -892,6 +970,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
     final bottomInset = mediaQuery.viewInsets.bottom;
     final initialChildSize = mediaQuery.size.height < 760 ? 0.76 : 0.72;
     final draft = _urlDraft;
+    final displayDraft = _displayUrlDraft;
     final clipboardUrls = _availableClipboardUrls(draft);
     final disabledReason = _submitDisabledReason(draft);
 
@@ -996,6 +1075,10 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
                                         minLines: 4,
                                         maxLines: 8,
                                         onChanged: _handleUrlChanged,
+                                        onEditingComplete:
+                                            _commitPendingInputIfPossible,
+                                        onSubmitted: (_) =>
+                                            _commitPendingInputIfPossible(),
                                         decoration: _fieldDecoration(
                                           context: context,
                                           labelText: 'URL',
@@ -1036,11 +1119,14 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
                                           ),
                                   ),
                                 ],
-                                if (draft.hasValidUrls ||
-                                    draft.duplicateCount > 0 ||
-                                    draft.invalidCount > 0) ...[
+                                if (displayDraft.hasValidUrls ||
+                                    displayDraft.duplicateCount > 0 ||
+                                    displayDraft.invalidCount > 0) ...[
                                   const SizedBox(height: 16),
-                                  _buildUrlRecognitionSection(context, draft),
+                                  _buildUrlRecognitionSection(
+                                    context,
+                                    displayDraft,
+                                  ),
                                 ],
                                 const SizedBox(height: 16),
                                 _SheetSectionCard(
@@ -1083,7 +1169,9 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
                       ),
                       _SheetFooter(
                         disabledReason: disabledReason,
-                        submitLabel: _submitLabel(draft),
+                        submitLabel: _submitLabel(
+                          _ParsedUrlDraft(validUrls: _allSourceUrls),
+                        ),
                         onCancel: () => Navigator.of(context).pop(),
                         onSubmit: disabledReason == null ? _submit : null,
                       ),
