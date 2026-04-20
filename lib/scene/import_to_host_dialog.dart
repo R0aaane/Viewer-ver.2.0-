@@ -73,6 +73,7 @@ enum _HostImportMode { keepFiles, convertToPdfOnHost }
 class _ImportToHostSheetState extends State<ImportToHostSheet> {
   late final ImportSourceKind _sourceKind;
   var _importMode = _HostImportMode.keepFiles;
+  final TextEditingController _hostPdfNameController = TextEditingController();
   final TextEditingController _artistController = TextEditingController();
   final TextEditingController _seriesController = TextEditingController();
   final TextEditingController _characterController = TextEditingController();
@@ -90,11 +91,13 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
   void initState() {
     super.initState();
     _sourceKind = widget.sourceKind;
+    _hostPdfNameController.text = _defaultHostPdfFileNameHint();
     _loadSuggestions();
   }
 
   @override
   void dispose() {
+    _hostPdfNameController.dispose();
     _artistController.dispose();
     _seriesController.dispose();
     _characterController.dispose();
@@ -147,7 +150,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
   List<String> _parseTags(String raw) {
     final result = <String>[];
     final seen = <String>{};
-    for (final entry in raw.split(RegExp(r'[,\\n\\r]+'))) {
+    for (final entry in raw.split(RegExp(r'[\n\r,]+'))) {
       final trimmed = entry.trim();
       if (trimmed.isEmpty) {
         continue;
@@ -374,6 +377,11 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     if (colonIndex >= 0 && colonIndex + 1 < candidate.length) {
       final afterColon = candidate.substring(colonIndex + 1).trim();
       if (afterColon.isNotEmpty) {
+        final normalizedAfterColon = afterColon.replaceAll('\\', '/');
+        final afterColonName = p.basename(normalizedAfterColon).trim();
+        if (afterColonName.isNotEmpty) {
+          return afterColonName;
+        }
         return afterColon;
       }
     }
@@ -386,35 +394,55 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     return candidate;
   }
 
-  String? _hostPdfFileNameHint() {
-    if (!_isHostPdfSelected) {
-      return null;
+  String _normalizeHostPdfName(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return '';
     }
+    final normalized = trimmed.replaceAll('\\', '/');
+    final baseName = p.basename(normalized).trim();
+    if (baseName.isEmpty) {
+      return '';
+    }
+    return p.basenameWithoutExtension(baseName).trim();
+  }
+
+  String _defaultHostPdfFileNameHint() {
     if (_sourceKind == ImportSourceKind.folder) {
       final sourceRoot = _selectedSourceRootRaw();
-      if (sourceRoot.isNotEmpty) {
-        final label = _displayNameFromRaw(sourceRoot).trim();
-        if (label.isNotEmpty) {
-          return label;
-        }
+      final label = _normalizeHostPdfName(_displayNameFromRaw(sourceRoot));
+      if (label.isNotEmpty) {
+        return label;
+      }
+    }
+    final locations = _sourceLocations();
+    if (locations.length == 1) {
+      final label = _normalizeHostPdfName(_displayNameFromRaw(locations.first));
+      if (label.isNotEmpty) {
+        return label;
       }
     }
     if (_selectedMediaItems.length == 1) {
-      final singleName = p.basenameWithoutExtension(
+      final singleName = _normalizeHostPdfName(
         _selectedMediaItems.first.displayName,
-      ).trim();
+      );
       if (singleName.isNotEmpty) {
         return singleName;
       }
     }
-    final locations = _sourceLocations();
-    if (locations.length == 1 && !locations.first.startsWith('content://')) {
-      final folderName = p.basename(locations.first).trim();
-      if (folderName.isNotEmpty) {
-        return folderName;
-      }
+    final fallback = _normalizeHostPdfName(_selectionName());
+    return fallback.isNotEmpty ? fallback : 'imported_images';
+  }
+
+  String? _hostPdfFileNameHint() {
+    if (!_isHostPdfSelected) {
+      return null;
     }
-    final fallback = _displayNameFromRaw(_selectionName()).trim();
+    final edited = _normalizeHostPdfName(_hostPdfNameController.text);
+    if (edited.isNotEmpty) {
+      return edited;
+    }
+    final fallback = _defaultHostPdfFileNameHint();
     return fallback.isNotEmpty ? fallback : null;
   }
 
@@ -749,6 +777,19 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
             icon: Icons.smartphone_outlined,
             text: 'この画面では Android 端末上のローカルPDF変換は行いません。',
           ),
+          if (_isHostPdfSelected) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _hostPdfNameController,
+              onChanged: (_) => setState(() {}),
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(
+                labelText: '生成PDF名',
+                hintText: '選択元フォルダ名を初期値にします',
+                helperText: '拡張子 .pdf は自動で付与されます',
+              ),
+            ),
+          ],
           if (executionWarning != null) ...[
             const SizedBox(height: 12),
             _InlineNotice(
