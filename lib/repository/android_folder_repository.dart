@@ -857,9 +857,7 @@ class AndroidFolderRepository implements MediaRepository {
     void Function(int processed, int total)? onProgress,
   }) async {
     // Count recursively only when progress reporting is enabled.
-    final total = (onProgress == null)
-        ? 0
-        : await _safCountMedia(folder.raw);
+    final total = (onProgress == null) ? 0 : await _safCountMedia(folder.raw);
 
     final entries = await _safListRecursive(
       folder.raw,
@@ -1024,7 +1022,8 @@ class AndroidFolderRepository implements MediaRepository {
     MediaItem item, {
     int maxWidth = 2800,
   }) async {
-    if (_lowerExt(item.displayName) == '.avif' || _lowerExt(item.id) == '.avif') {
+    if (_lowerExt(item.displayName) == '.avif' ||
+        _lowerExt(item.id) == '.avif') {
       return renderPageBytes(item, 1, maxWidth: maxWidth);
     }
     return readBytes(item);
@@ -1602,14 +1601,22 @@ class AndroidFolderRepository implements MediaRepository {
       );
     }
 
-    final picked = await DocMan.pick.files(
-      extensions: MediaFileTypes.mediaPickerExtensions,
-      limit: 200,
+    final pickedItems = await pickExternalMediaFiles(
+      allowMultiple: true,
+      includeImages: true,
+      includePdf: true,
     );
-    if (picked.isEmpty) return 0;
+    if (pickedItems.isEmpty) return 0;
 
-    final overwriteExisting = !(request?.skipIfExists ?? true);
+    return importItemsIntoFolder(
+      folder,
+      pickedItems,
+      importMetadata: request?.metadata,
+      skipIfExists: request?.skipIfExists ?? true,
+      onProgress: onProgress,
+    );
 
+    /*
     if (!folder.raw.startsWith('content://')) {
       final dir = Directory(folder.raw);
       if (!await dir.exists()) await dir.create(recursive: true);
@@ -1684,6 +1691,7 @@ class AndroidFolderRepository implements MediaRepository {
       }
       return ok;
     });
+    */
   }
 
   @override
@@ -2152,7 +2160,10 @@ Future<Uint8List> _makeImageThumb(Uint8List src, int targetWidth) async {
   }
 }
 
-Future<Uint8List> _makeImageThumbFromPath(String sourcePath, int targetWidth) async {
+Future<Uint8List> _makeImageThumbFromPath(
+  String sourcePath,
+  int targetWidth,
+) async {
   ui.ImmutableBuffer? buffer;
   ui.ImageDescriptor? descriptor;
   ui.Codec? codec;
