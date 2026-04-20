@@ -386,6 +386,38 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     return candidate;
   }
 
+  String? _hostPdfFileNameHint() {
+    if (!_isHostPdfSelected) {
+      return null;
+    }
+    if (_sourceKind == ImportSourceKind.folder) {
+      final sourceRoot = _selectedSourceRootRaw();
+      if (sourceRoot.isNotEmpty) {
+        final label = _displayNameFromRaw(sourceRoot).trim();
+        if (label.isNotEmpty) {
+          return label;
+        }
+      }
+    }
+    if (_selectedMediaItems.length == 1) {
+      final singleName = p.basenameWithoutExtension(
+        _selectedMediaItems.first.displayName,
+      ).trim();
+      if (singleName.isNotEmpty) {
+        return singleName;
+      }
+    }
+    final locations = _sourceLocations();
+    if (locations.length == 1 && !locations.first.startsWith('content://')) {
+      final folderName = p.basename(locations.first).trim();
+      if (folderName.isNotEmpty) {
+        return folderName;
+      }
+    }
+    final fallback = _displayNameFromRaw(_selectionName()).trim();
+    return fallback.isNotEmpty ? fallback : null;
+  }
+
   String _shortenMiddle(String text, {int maxChars = 72}) {
     final trimmed = text.trim();
     if (trimmed.length <= maxChars) {
@@ -485,6 +517,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
         freeTags: _resolveMultiTags(_freeTags, _freeTagsController),
         targetCollection: 'library',
         convertToPdfOnHost: _isHostPdfSelected,
+        hostPdfFileNameHint: _hostPdfFileNameHint(),
         organizeAfterImport: false,
       ),
     );

@@ -736,46 +736,6 @@ class AndroidFolderRepository implements MediaRepository {
     return <MediaItem>[...folders, ...files];
   }
 
-  Future<int> _safCountMedia(String treeUri) async {
-    return _docmanSync(() async {
-      int total = 0;
-
-      final root = await DocumentFile.fromUri(treeUri);
-      if (root == null || root.isDirectory != true) return 0;
-
-      final queue = <String>[root.uri];
-
-      while (queue.isNotEmpty) {
-        final dirUri = queue.removeLast();
-        final dir = await DocumentFile.fromUri(dirUri);
-        if (dir == null || dir.isDirectory != true) continue;
-
-        List<DocumentFile> children;
-        try {
-          children = await dir.listDocuments();
-        } catch (_) {
-          continue;
-        }
-
-        for (final f in children) {
-          final name = f.name.trim();
-          if (name.isEmpty) continue;
-
-          if (f.isDirectory == true) {
-            if (f.uri.isNotEmpty) queue.add(f.uri);
-          } else {
-            final ext = _lowerExt(name);
-            if (ext == _pdfExt || _imageExt.contains(ext)) total++;
-          }
-        }
-
-        await Future<void>.delayed(Duration.zero);
-      }
-
-      return total;
-    });
-  }
-
   Future<List<MediaItem>> _listMediaFs(
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
@@ -856,13 +816,12 @@ class AndroidFolderRepository implements MediaRepository {
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
-    // Count recursively only when progress reporting is enabled.
-    final total = (onProgress == null) ? 0 : await _safCountMedia(folder.raw);
-
     final entries = await _safListRecursive(
       folder.raw,
       onProgress: onProgress,
-      total: total,
+      // Avoid a full pre-scan count on SAF folders because it can block the
+      // UI for a long time before any progress is shown.
+      total: 0,
     );
 
     // Convert file entries into MediaItem instances.

@@ -512,6 +512,8 @@ class RemoteMediaApiClient {
     final trimmedArtistTag = importMetadata?.artistTag?.trim();
     final trimmedSeriesTag = importMetadata?.seriesTag?.trim();
     final trimmedTargetCollection = importMetadata?.targetCollection?.trim();
+    final trimmedHostPdfFileNameHint =
+        importMetadata?.hostPdfFileNameHint?.trim();
     final artistTag = trimmedArtistTag != null && trimmedArtistTag.isNotEmpty
         ? trimmedArtistTag
         : null;
@@ -521,6 +523,11 @@ class RemoteMediaApiClient {
     final targetCollection =
         trimmedTargetCollection != null && trimmedTargetCollection.isNotEmpty
         ? trimmedTargetCollection
+        : null;
+    final hostPdfFileNameHint =
+        trimmedHostPdfFileNameHint != null &&
+            trimmedHostPdfFileNameHint.isNotEmpty
+        ? trimmedHostPdfFileNameHint
         : null;
     final freeTags =
         importMetadata?.freeTags
@@ -535,6 +542,7 @@ class RemoteMediaApiClient {
             .toList(growable: false) ??
         const <String>[];
     final organizeAfterImport = importMetadata?.organizeAfterImport ?? false;
+    final convertToPdfOnHost = importMetadata?.convertToPdfOnHost ?? false;
     final originalDisplayNamesJson = jsonEncode(
       files.map((file) => file.fileName).toList(growable: false),
     );
@@ -566,6 +574,7 @@ class RemoteMediaApiClient {
       'targetFolderId=${_debugUploadString(folderRaw)} '
       'fileNames=${_debugUploadStringList(files.map((file) => file.fileName))} '
       'targetCollection=${_debugUploadString(targetCollection)} '
+      'convertToPdfOnHost=$convertToPdfOnHost '
       'organizeAfterImport=$organizeAfterImport '
       'sourceRelativePathsJsonPresent=$hasSourceRelativePaths',
     );
@@ -648,6 +657,13 @@ class RemoteMediaApiClient {
       }
       if (importMetadata != null) {
         writeField(
+          'convertToPdfOnHost',
+          convertToPdfOnHost ? 'true' : 'false',
+        );
+        if (hostPdfFileNameHint != null) {
+          writeField('hostPdfFileNameHint', hostPdfFileNameHint);
+        }
+        writeField(
           'organizeAfterImport',
           organizeAfterImport ? 'true' : 'false',
         );
@@ -665,6 +681,8 @@ class RemoteMediaApiClient {
         'characterTagsJson=${characterTagsJson ?? 'null'} '
         'freeTagsJson=${freeTagsJson ?? 'null'} '
         'targetCollection=${_debugUploadString(targetCollection)} '
+        'convertToPdfOnHost=$convertToPdfOnHost '
+        'hostPdfFileNameHint=${_debugUploadString(hostPdfFileNameHint)} '
         'organizeAfterImport=$organizeAfterImport',
       );
 

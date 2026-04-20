@@ -1,4 +1,5 @@
 ﻿import asyncio
+import base64
 import json
 import os
 import tempfile
@@ -101,12 +102,20 @@ class _RecordingIndexService:
         self.rescan_error = rescan_error
         self.scan_calls: list[str] = []
         self.rescan_calls: list[list[str]] = []
+        self.index_calls: list[list[str]] = []
 
     def scan_folder(self, folder_raw: str) -> int:
         self.scan_calls.append(folder_raw)
         if self.scan_error is not None:
             raise self.scan_error
         return len(self.scan_calls)
+
+    def index_files(self, paths: list[str]) -> int:
+        normalized = [os.path.normpath(path) for path in paths]
+        self.index_calls.append(normalized)
+        for path in normalized:
+            self.scan_calls.append(os.path.dirname(path))
+        return len(normalized)
 
     def rescan_configured_roots(self, roots: list[str]) -> list[dict[str, int | str]]:
         self.rescan_calls.append(list(roots))
@@ -254,6 +263,12 @@ class _FakeUploadFile:
 
     async def close(self) -> None:
         self.closed = True
+
+
+def _tiny_png_bytes() -> bytes:
+    return base64.b64decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cC1EAAAAASUVORK5CYII='
+    )
 
 
 def _request(
@@ -465,6 +480,59 @@ class ActionsRoutesTest(unittest.TestCase):
                         'media_ids': ['mid:sample.jpg'],
                     }
                 ],
+            )
+
+    def test_upload_files_converts_uploaded_images_to_pdf_on_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            index_service = _RecordingIndexService()
+            request = _request(
+                metadata_store,
+                index_service=index_service,
+                media_roots=[temp_dir],
+            )
+            png_bytes = _tiny_png_bytes()
+
+            response = asyncio.run(
+                upload_files(
+                    request,
+                    folderRaw=temp_dir,
+                    skipIfExists=True,
+                    artistTag='Artist',
+                    freeTagsJson='["bonus"]',
+                    convertToPdfOnHost=True,
+                    hostPdfNameHint='Selected Folder',
+                    files=[
+                        _FakeUploadFile('001.png', png_bytes),
+                        _FakeUploadFile('002.png', png_bytes),
+                    ],
+                )
+            )
+
+            expected_pdf = os.path.join(temp_dir, 'Selected Folder.pdf')
+            self.assertEqual(response['importedCount'], 1)
+            self.assertEqual(response['skippedCount'], 0)
+            self.assertEqual(response['taggedCount'], 1)
+            self.assertEqual(response['rescannedCount'], 1)
+            self.assertTrue(os.path.exists(expected_pdf))
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, '001.png')))
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, '002.png')))
+            self.assertEqual(index_service.index_calls, [[os.path.normpath(expected_pdf)]])
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'artist', 'name': 'Artist'},
+                    {'category': 'free', 'name': 'bonus'},
+                ],
+            )
+            self.assertEqual(
+                response['attachedTagsByMedia'],
+                {
+                    'mid:Selected Folder.pdf': [
+                        'artist:Artist',
+                        'free:bonus',
+                    ]
+                },
             )
 
     def test_upload_files_uses_explicit_metadata_tags_even_when_source_relative_path_suggests_artist(self) -> None:

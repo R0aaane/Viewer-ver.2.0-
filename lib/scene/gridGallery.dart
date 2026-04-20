@@ -4976,20 +4976,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       tagService: widget.tagService,
       sourceKind: selection.sourceKind,
       selectedItems: selection.items,
-      supportsHostPdfConversion: false,
+      supportsHostPdfConversion: true,
     );
     if (request == null) {
       await _cleanupPreparedImportSelection(selection);
       return;
     }
 
-    if (request.metadata.convertToPdfOnHost) {
+    if (request.metadata.convertToPdfOnHost &&
+        !_shouldUseRawHostImportSelection()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'ホスト側PDF化APIはまだ未実装です。画像のまま取り込むを選択してください。',
-          ),
+          content: Text('ホスト側PDF化APIはまだ未実装です。画像のまま取り込むを選択してください。'),
         ),
       );
       await _cleanupPreparedImportSelection(selection);
@@ -5220,6 +5219,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             );
           }
 
+          ensureDialogShown();
+          await Future<void>.delayed(Duration.zero);
           final pickedItems = await widget.repo.pickExternalMediaFolderItems(
             onProgress: (processed, total) {
               ensureDialogShown();
@@ -5276,8 +5277,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-  // Keep the original file selection for host import. Host-side PDF conversion
-  // will be wired once the server API exists.
+  // Keep the original file selection so the host can optionally convert the
+  // uploaded images into a PDF after transfer.
   bool _shouldUseRawHostImportSelection() => true;
 
   Future<_PreparedImportSelection> _convertHostFolderSelectionToPdf(
@@ -5666,6 +5667,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         );
       }
 
+      ensureDialogShown();
+      await Future<void>.delayed(Duration.zero);
       final pickedItems = await widget.repo.pickExternalMediaFolderItems(
         onProgress: (processed, total) {
           ensureDialogShown();

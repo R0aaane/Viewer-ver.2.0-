@@ -10,9 +10,14 @@ import unicodedata
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from server.core.errors import ApiError, bad_request, server_error
-from server.core.media_formats import is_supported_media_extension, normalized_extension
+from server.core.media_formats import (
+    is_supported_image_extension,
+    is_supported_media_extension,
+    normalized_extension,
+)
 from server.models.dto import (
     DeleteRequest,
     DownloadUrlRequest,
@@ -122,13 +127,29 @@ async def upload_files(
     sourceRelativePathsJson: str | None = Form(None),
     originalDisplayNamesJson: str | None = Form(None),
     targetCollection: str | None = Form(None),
+    convertToPdfOnHost: bool = Form(False),
+    hostPdfNameHint: str | None = Form(None),
     organizeAfterImport: bool = Form(False),
     uploadRequestId: str | None = Form(None),
     files: list[UploadFile] = File(...),
 ) -> dict[str, object]:
+    folderRaw = _resolve_form_string(folderRaw)
+    artistTag = _resolve_optional_form_string(artistTag)
+    seriesTag = _resolve_optional_form_string(seriesTag)
+    freeTagsJson = _resolve_optional_form_string(freeTagsJson)
+    characterTagsJson = _resolve_optional_form_string(characterTagsJson)
+    fileTagsJson = _resolve_optional_form_string(fileTagsJson)
+    sourceRelativePathsJson = _resolve_optional_form_string(sourceRelativePathsJson)
+    originalDisplayNamesJson = _resolve_optional_form_string(originalDisplayNamesJson)
+    targetCollection = _resolve_optional_form_string(targetCollection)
+    hostPdfNameHint = _resolve_optional_form_string(hostPdfNameHint)
+    uploadRequestId = _resolve_optional_form_string(uploadRequestId)
+    skipIfExists = _resolve_form_bool(skipIfExists, default=True)
+    convertToPdfOnHost = _resolve_form_bool(convertToPdfOnHost, default=False)
+    organizeAfterImport = _resolve_form_bool(organizeAfterImport, default=False)
     request_id = _normalize_upload_request_id(uploadRequestId)
     logger.info(
-        '[UPLOAD][SERVER][req:%s] received metadata folderRaw=%s skipIfExists=%s artistTag=%s seriesTag=%s characterTagsJson=%s freeTagsJson=%s fileTagsJson=%s sourceRelativePathsJson=%s targetCollection=%s organizeAfterImport=%s files=%s',
+        '[UPLOAD][SERVER][req:%s] received metadata folderRaw=%s skipIfExists=%s artistTag=%s seriesTag=%s characterTagsJson=%s freeTagsJson=%s fileTagsJson=%s sourceRelativePathsJson=%s targetCollection=%s convertToPdfOnHost=%s hostPdfNameHint=%s organizeAfterImport=%s files=%s',
         request_id,
         _log_scalar(folderRaw),
         skipIfExists,
@@ -139,6 +160,8 @@ async def upload_files(
         _log_scalar(fileTagsJson),
         _log_scalar(sourceRelativePathsJson),
         _log_scalar(targetCollection),
+        convertToPdfOnHost,
+        _log_scalar(hostPdfNameHint),
         organizeAfterImport,
         len(files),
     )
@@ -214,6 +237,8 @@ async def upload_files(
     imported_count = 0
     skipped_count = 0
     saved_entries: list[tuple[str, str, list[dict[str, str]]]] = []
+    host_pdf_saved_entries: list[tuple[str, str, list[dict[str, str]]]] = []
+    host_pdf_temp_dir = tempfile.mkdtemp(prefix="upload-host-pdf-") if convertToPdfOnHost else ""
     attached_tags_by_media: dict[str, list[str]] = {}
     tag_attach_success_count = 0
     tag_attach_failure_count = 0
@@ -249,17 +274,26 @@ async def upload_files(
             logger.info('[UPLOAD][SERVER][req:%s] skip index=%s reason=empty_filename', request_id, index)
             continue
 
-        if not is_supported_media_extension(normalized_extension(file_name)):
+        extension = normalized_extension(file_name)
+        if not is_supported_media_extension(extension):
             raise bad_request(f"Unsupported media file type: {file_name}")
+        if convertToPdfOnHost and not is_supported_image_extension(extension):
+            raise bad_request("Host PDF conversion supports image files only")
 
-        destination = os.path.join(folder_path, file_name)
-        if os.path.exists(destination):
-            if skipIfExists:
-                skipped_count += 1
-                await upload.close()
-                logger.info('[UPLOAD][SERVER][req:%s] skip index=%s destination=%s reason=exists', request_id, index, _log_scalar(destination))
-                continue
-            logger.info('[UPLOAD][SERVER][req:%s] overwrite index=%s destination=%s reason=explicit_overwrite', request_id, index, _log_scalar(destination))
+        if convertToPdfOnHost:
+            destination = os.path.join(
+                host_pdf_temp_dir,
+                f"{index:04d}_{_sanitize_upload_display_name(file_name)}",
+            )
+        else:
+            destination = os.path.join(folder_path, file_name)
+            if os.path.exists(destination):
+                if skipIfExists:
+                    skipped_count += 1
+                    await upload.close()
+                    logger.info('[UPLOAD][SERVER][req:%s] skip index=%s destination=%s reason=exists', request_id, index, _log_scalar(destination))
+                    continue
+                logger.info('[UPLOAD][SERVER][req:%s] overwrite index=%s destination=%s reason=explicit_overwrite', request_id, index, _log_scalar(destination))
         logger.info(
             '[UPLOAD][SERVER][req:%s] saving index=%s destination=%s final_filename=%s sourceRelativePath=%s',
             request_id,
@@ -276,8 +310,12 @@ async def upload_files(
                 request_id=request_id,
                 index=index,
             )
-            saved_entries.append((os.path.normpath(destination), relative_path_hint, file_tags))
-            imported_count += 1
+            normalized_destination = os.path.normpath(destination)
+            if convertToPdfOnHost:
+                host_pdf_saved_entries.append((normalized_destination, relative_path_hint, file_tags))
+            else:
+                saved_entries.append((normalized_destination, relative_path_hint, file_tags))
+                imported_count += 1
             logger.info('[UPLOAD][SERVER][req:%s] save_success index=%s destination=%s', request_id, index, _log_scalar(destination))
         except Exception:
             logger.exception(
@@ -291,6 +329,41 @@ async def upload_files(
             raise
         finally:
             await upload.close()
+
+    if convertToPdfOnHost:
+        try:
+            if host_pdf_saved_entries:
+                pdf_file_name = _build_host_pdf_file_name(
+                    host_pdf_name_hint=hostPdfNameHint,
+                    source_relative_paths=source_relative_paths,
+                    original_display_names=original_display_names,
+                )
+                pdf_destination = os.path.normpath(os.path.join(folder_path, pdf_file_name))
+                if os.path.exists(pdf_destination) and skipIfExists:
+                    skipped_count += 1
+                    logger.info(
+                        '[UPLOAD][SERVER][req:%s] host_pdf_skip destination=%s reason=exists',
+                        request_id,
+                        _log_scalar(pdf_destination),
+                    )
+                else:
+                    _convert_uploaded_images_to_pdf(
+                        [saved_path for saved_path, _, _ in host_pdf_saved_entries],
+                        pdf_destination,
+                    )
+                    merged_file_tags = _merge_import_tags(
+                        *[file_tags for _, _, file_tags in host_pdf_saved_entries]
+                    )
+                    saved_entries.append((pdf_destination, pdf_file_name, merged_file_tags))
+                    imported_count = 1
+                    logger.info(
+                        '[UPLOAD][SERVER][req:%s] host_pdf_success destination=%s sourceCount=%s',
+                        request_id,
+                        _log_scalar(pdf_destination),
+                        len(host_pdf_saved_entries),
+                    )
+        finally:
+            shutil.rmtree(host_pdf_temp_dir, ignore_errors=True)
 
     tagged_count = 0
     organized_count = 0
@@ -691,6 +764,27 @@ def _parse_json_tag_list(raw: str | None, *, field_name: str) -> list[str]:
 
 
 
+def _resolve_form_string(value: str | object) -> str:
+    if isinstance(value, str):
+        return value
+    default = getattr(value, "default", "")
+    return default if isinstance(default, str) else ""
+
+
+def _resolve_optional_form_string(value: str | None | object) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    default = getattr(value, "default", None)
+    return default if isinstance(default, str) or default is None else None
+
+
+def _resolve_form_bool(value: bool | object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    fallback = getattr(value, "default", default)
+    return fallback if isinstance(fallback, bool) else default
+
+
 def _parse_json_tag_groups(
     raw: str | None,
     *,
@@ -944,6 +1038,106 @@ def _collect_media_paths(folder_path: str) -> set[str]:
                 continue
             found.add(os.path.normpath(os.path.join(base, file_name)))
     return found
+
+
+def _build_host_pdf_file_name(
+    *,
+    host_pdf_name_hint: str | None,
+    source_relative_paths: list[str],
+    original_display_names: list[str],
+) -> str:
+    candidates = [
+        host_pdf_name_hint or "",
+        _derive_host_pdf_name_from_source_paths(source_relative_paths),
+        _derive_host_pdf_name_from_original_names(original_display_names),
+        "imported_images",
+    ]
+    for candidate in candidates:
+        sanitized = _sanitize_upload_display_name(candidate)
+        if not sanitized:
+            continue
+        stem = Path(sanitized).stem if normalized_extension(sanitized) else sanitized
+        stem = stem.strip()
+        if stem:
+            return f"{stem}.pdf"
+    return "imported_images.pdf"
+
+
+def _derive_host_pdf_name_from_source_paths(source_relative_paths: list[str]) -> str:
+    normalized_paths = [
+        str(path or "").strip().replace("\\", "/")
+        for path in source_relative_paths
+        if str(path or "").strip()
+    ]
+    directory_paths = [
+        posixpath.dirname(path)
+        for path in normalized_paths
+        if posixpath.dirname(path) not in {"", ".", "/"}
+    ]
+    if not directory_paths:
+        return ""
+    try:
+        common_dir = posixpath.commonpath(directory_paths)
+    except ValueError:
+        common_dir = directory_paths[0]
+    base_name = posixpath.basename(common_dir.rstrip("/"))
+    return base_name.strip()
+
+
+def _derive_host_pdf_name_from_original_names(original_display_names: list[str]) -> str:
+    normalized_names = [
+        _sanitize_upload_display_name(name)
+        for name in original_display_names
+        if _sanitize_upload_display_name(name)
+    ]
+    if len(normalized_names) != 1:
+        return ""
+    return Path(normalized_names[0]).stem.strip()
+
+
+def _convert_uploaded_images_to_pdf(image_paths: list[str], destination: str) -> None:
+    if not image_paths:
+        raise bad_request("No images were provided for host PDF conversion")
+
+    folder_path = os.path.dirname(destination)
+    os.makedirs(folder_path, exist_ok=True)
+    fd, temp_pdf_path = tempfile.mkstemp(
+        prefix=".upload-host-pdf-",
+        suffix=".pdf",
+        dir=folder_path,
+    )
+    os.close(fd)
+
+    images: list[Image.Image] = []
+    try:
+        for image_path in image_paths:
+            try:
+                with Image.open(image_path) as opened:
+                    prepared = ImageOps.exif_transpose(opened)
+                    if prepared.mode != "RGB":
+                        prepared = prepared.convert("RGB")
+                    else:
+                        prepared = prepared.copy()
+                    images.append(prepared)
+            except UnidentifiedImageError as error:
+                raise bad_request(
+                    f"Host PDF conversion could not read image: {os.path.basename(image_path)}"
+                ) from error
+
+        first, rest = images[0], images[1:]
+        first.save(temp_pdf_path, "PDF", resolution=100.0, save_all=True, append_images=rest)
+        os.replace(temp_pdf_path, destination)
+    finally:
+        for image in images:
+            try:
+                image.close()
+            except Exception:
+                pass
+        if os.path.exists(temp_pdf_path):
+            try:
+                os.remove(temp_pdf_path)
+            except OSError:
+                pass
 
 
 def _prefer_generated_pdf_import_paths(
