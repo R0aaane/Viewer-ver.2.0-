@@ -17,6 +17,7 @@ import '../database/pdf_export_service.dart';
 import '../services/app_reading_progress_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
+import '../services/import_pdf_conversion_service.dart';
 import '../services/item_name_service.dart';
 import '../services/media_id_resolver.dart';
 import '../services/reading_progress_service.dart';
@@ -135,6 +136,8 @@ enum _SharedUrlImportTargetKind { currentFolder, library }
 enum _RegisteredFolderRemovalAction { unregisterOnly, deleteFiles }
 
 enum _ThumbTileMenuAction { renameItem, deleteItem }
+
+enum _AndroidImportConversionChoice { keepImages, mergeToPdf }
 
 class _UrlImportQueueEntry {
   final String id;
@@ -4973,9 +4976,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       tagService: widget.tagService,
       sourceKind: selection.sourceKind,
       selectedItems: selection.items,
+      supportsHostPdfConversion: false,
     );
     if (request == null) {
-      await _cleanupHostImportSelection(selection);
+      await _cleanupPreparedImportSelection(selection);
+      return;
+    }
+
+    if (request.metadata.convertToPdfOnHost) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ホスト側PDF化APIはまだ未実装です。画像のまま取り込むを選択してください。',
+          ),
+        ),
+      );
+      await _cleanupPreparedImportSelection(selection);
       return;
     }
 
@@ -5095,14 +5112,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ).showSnackBar(SnackBar(content: Text('ホスト取り込みに失敗しました: $e')));
     } finally {
       progress.dispose();
-      await _cleanupHostImportSelection(selection);
+      await _cleanupPreparedImportSelection(selection);
       if (dialogShown) {
         dialogHandle.close();
       }
     }
   }
 
-  Future<ImportSourceKind?> _pickHostImportSourceKind() async {
+  Future<ImportSourceKind?> _pickImportSourceKind() async {
     return showControllerModalBottomSheet<ImportSourceKind>(
       context: context,
       builder: (context) {
@@ -5129,8 +5146,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
-  Future<_HostImportSelection?> _pickHostImportSelection() async {
-    final sourceKind = await _pickHostImportSourceKind();
+  Future<_PreparedImportSelection?> _pickHostImportSelection() async {
+    final sourceKind = await _pickImportSourceKind();
     if (sourceKind == null) {
       return null;
     }
@@ -5145,7 +5162,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         if (items.isEmpty) {
           return null;
         }
-        return _HostImportSelection(sourceKind: sourceKind, items: items);
+        return _PreparedImportSelection(sourceKind: sourceKind, items: items);
       case ImportSourceKind.folder:
         final progress = ValueNotifier<MediaTransferProgress?>(
           const MediaTransferProgress(
@@ -5218,6 +5235,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           if (pickedItems.isEmpty) {
             return null;
           }
+          if (_shouldUseRawHostImportSelection()) {
+            return _PreparedImportSelection(
+              sourceKind: sourceKind,
+              items: pickedItems,
+            );
+          }
           ensureDialogShown();
           progress.value = const MediaTransferProgress(
             sentBytes: 0,
@@ -5239,7 +5262,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               );
             },
           );
-          return _HostImportSelection(
+          return _PreparedImportSelection(
             sourceKind: sourceKind,
             items: converted.items,
             cleanupPaths: converted.cleanupPaths,
@@ -5253,7 +5276,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-  Future<_HostImportSelection> _convertHostFolderSelectionToPdf(
+  // Keep the original file selection for host import. Host-side PDF conversion
+  // will be wired once the server API exists.
+  bool _shouldUseRawHostImportSelection() => true;
+
+  Future<_PreparedImportSelection> _convertHostFolderSelectionToPdf(
     List<MediaItem> items, {
     void Function(int done, int total)? onProgress,
   }) async {
@@ -5264,7 +5291,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .where((item) => item.kind == MediaKind.image)
         .toList(growable: false);
     if (imageItems.isEmpty || pdfItems.isNotEmpty) {
-      return _HostImportSelection(
+      return _PreparedImportSelection(
         sourceKind: ImportSourceKind.folder,
         items: items,
       );
@@ -5299,7 +5326,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       tags: mergedTags,
     );
 
-    return _HostImportSelection(
+    return _PreparedImportSelection(
       sourceKind: ImportSourceKind.folder,
       items: <MediaItem>[taggedItem],
       cleanupPaths: <String>[
@@ -5368,8 +5395,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return out;
   }
 
-  Future<void> _cleanupHostImportSelection(
-    _HostImportSelection selection,
+  Future<void> _cleanupPreparedImportSelection(
+    _PreparedImportSelection selection,
   ) async {
     for (final path in selection.cleanupPaths) {
       final trimmed = path.trim();
@@ -5583,6 +5610,253 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _persistFolders();
   }
 
+  bool get _usesAndroidImportPreparationFlow =>
+      Platform.isAndroid && !_repoCapabilities.canImportToHost;
+
+  Future<List<MediaItem>> _pickAndroidFolderImportItems() async {
+    final progress = ValueNotifier<MediaTransferProgress?>(
+      const MediaTransferProgress(
+        sentBytes: 0,
+        totalBytes: 0,
+        completedFiles: 0,
+        totalFiles: 0,
+        statusLabel: 'Scanning folder...',
+      ),
+    );
+    var dialogShown = false;
+    final dialogHandle = _RouteBoundDialogHandle();
+    try {
+      void ensureDialogShown() {
+        if (dialogShown || !mounted) {
+          return;
+        }
+        dialogShown = true;
+        unawaited(
+          showControllerDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (dialogContext) => dialogHandle.bind(
+              dialogContext,
+              AlertDialog(
+                title: const Text('Preparing Folder Import...'),
+                content: ValueListenableBuilder<MediaTransferProgress?>(
+                  valueListenable: progress,
+                  builder: (context, value, _) {
+                    final completed = value?.completedFiles ?? 0;
+                    final total = value?.totalFiles ?? 0;
+                    final statusLabel = value?.statusLabel?.trim();
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 12),
+                        Text(total > 0 ? '$completed / $total' : 'Loading...'),
+                        if (statusLabel != null && statusLabel.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(statusLabel),
+                        ],
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      final pickedItems = await widget.repo.pickExternalMediaFolderItems(
+        onProgress: (processed, total) {
+          ensureDialogShown();
+          progress.value = MediaTransferProgress(
+            sentBytes: 0,
+            totalBytes: 0,
+            completedFiles: processed,
+            totalFiles: total,
+            statusLabel: 'Scanning folder...',
+          );
+        },
+      );
+      return pickedItems;
+    } finally {
+      progress.dispose();
+      if (dialogShown) {
+        dialogHandle.close();
+      }
+    }
+  }
+
+  Future<_AndroidImportConversionChoice?> _pickAndroidImportConversionChoice(
+    List<MediaItem> items,
+  ) async {
+    final imageCount = items
+        .where((item) => item.kind == MediaKind.image)
+        .length;
+    if (imageCount < 2 ||
+        !ImportPdfConversionService.canConvertItemsToPdf(items)) {
+      return _AndroidImportConversionChoice.keepImages;
+    }
+
+    return showControllerModalBottomSheet<_AndroidImportConversionChoice>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: const Text('Choose Import Format'),
+                subtitle: Text(
+                  '$imageCount images were detected. Keep them as images or merge them into one PDF.',
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Import Images'),
+                subtitle: Text('Keep $imageCount image files.'),
+                onTap: () => Navigator.of(
+                  context,
+                ).pop(_AndroidImportConversionChoice.keepImages),
+              ),
+              ListTile(
+                leading: const Icon(Icons.picture_as_pdf_outlined),
+                title: const Text('Merge into PDF'),
+                subtitle: const Text('Create one PDF before importing.'),
+                onTap: () => Navigator.of(
+                  context,
+                ).pop(_AndroidImportConversionChoice.mergeToPdf),
+              ),
+              ListTile(
+                leading: const Icon(Icons.close),
+                title: const Text('Cancel'),
+                onTap: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<_PreparedImportSelection?> _prepareAndroidImportSelection({
+    required ImportSourceKind sourceKind,
+    required List<MediaItem> items,
+  }) async {
+    if (items.isEmpty) {
+      return null;
+    }
+
+    final choice = await _pickAndroidImportConversionChoice(items);
+    if (choice == null) {
+      return null;
+    }
+    if (choice != _AndroidImportConversionChoice.mergeToPdf) {
+      return _PreparedImportSelection(sourceKind: sourceKind, items: items);
+    }
+
+    String? libraryRootRaw;
+    try {
+      libraryRootRaw = (await widget.repo.getAppLibraryFolder()).raw;
+    } catch (_) {}
+
+    final progress = ValueNotifier<MediaTransferProgress?>(
+      const MediaTransferProgress(
+        sentBytes: 0,
+        totalBytes: 0,
+        completedFiles: 0,
+        totalFiles: 0,
+        statusLabel: 'Building PDF...',
+      ),
+    );
+    var dialogShown = false;
+    final dialogHandle = _RouteBoundDialogHandle();
+    try {
+      dialogShown = true;
+      unawaited(
+        showControllerDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => dialogHandle.bind(
+            dialogContext,
+            AlertDialog(
+              title: const Text('Building PDF...'),
+              content: ValueListenableBuilder<MediaTransferProgress?>(
+                valueListenable: progress,
+                builder: (context, value, _) {
+                  final completed = value?.completedFiles ?? 0;
+                  final total = value?.totalFiles ?? 0;
+                  final fraction = total == 0 ? null : completed / total;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LinearProgressIndicator(value: fraction),
+                      const SizedBox(height: 12),
+                      Text(total > 0 ? '$completed / $total' : 'Loading...'),
+                      if (value?.statusLabel != null &&
+                          value!.statusLabel!.trim().isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(value.statusLabel!.trim()),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final converted = await ImportPdfConversionService.prepareForImport(
+        repo: widget.repo,
+        items: items,
+        convertToPdf: true,
+        libraryRootRaw: libraryRootRaw,
+        onPdfProgress: (done, total) {
+          progress.value = MediaTransferProgress(
+            sentBytes: 0,
+            totalBytes: 0,
+            completedFiles: done,
+            totalFiles: total,
+            statusLabel: 'Building PDF...',
+          );
+        },
+      );
+      return _PreparedImportSelection(
+        sourceKind: sourceKind,
+        items: converted.items,
+        cleanupPaths: converted.cleanupPaths,
+      );
+    } finally {
+      progress.dispose();
+      if (dialogShown) {
+        dialogHandle.close();
+      }
+    }
+  }
+
+  Future<_PreparedImportSelection?> _pickAndroidImportSelection() async {
+    final sourceKind = await _pickImportSourceKind();
+    if (sourceKind == null) {
+      return null;
+    }
+
+    final items = switch (sourceKind) {
+      ImportSourceKind.files => await widget.repo.pickExternalMediaFiles(
+        allowMultiple: true,
+        includeImages: true,
+        includePdf: true,
+      ),
+      ImportSourceKind.folder => await _pickAndroidFolderImportItems(),
+    };
+    if (items.isEmpty) {
+      return null;
+    }
+
+    return _prepareAndroidImportSelection(sourceKind: sourceKind, items: items);
+  }
+
   Future<void> _importToCurrentFolder() async {
     if (_repoCapabilities.canImportToHost) {
       await _importToHostWithTags();
@@ -5597,6 +5871,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
     final folder = _activeImportFolder();
     if (folder == null) return;
+    _PreparedImportSelection? selection;
+    if (_usesAndroidImportPreparationFlow) {
+      selection = await _pickAndroidImportSelection();
+      if (selection == null) {
+        return;
+      }
+    }
     final progress = ValueNotifier<MediaTransferProgress?>(null);
     var dialogShown = false;
     final dialogHandle = _RouteBoundDialogHandle();
@@ -5641,10 +5922,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           ),
         ),
       );
-      final count = await widget.repo.importIntoFolder(
-        folder,
-        onProgress: (next) => progress.value = next,
-      );
+      final count = selection == null
+          ? await widget.repo.importIntoFolder(
+              folder,
+              onProgress: (next) => progress.value = next,
+            )
+          : await widget.repo.importItemsIntoFolder(
+              folder,
+              selection.items,
+              skipIfExists: true,
+              onProgress: (next) => progress.value = next,
+            );
       if (!mounted) return;
 
       if (count > 0) {
@@ -5664,6 +5952,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ).showSnackBar(SnackBar(content: Text('取り込みに失敗しました: $e')));
     } finally {
       progress.dispose();
+      if (selection != null) {
+        await _cleanupPreparedImportSelection(selection);
+      }
       if (dialogShown) {
         dialogHandle.close();
       }
@@ -5685,6 +5976,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final progress = ValueNotifier<MediaTransferProgress?>(null);
     var dialogShown = false;
     final dialogHandle = _RouteBoundDialogHandle();
+    _PreparedImportSelection? selection;
     try {
       final lib = await widget.repo.getAppLibraryFolder();
       final libRaw = lib.raw;
@@ -5698,6 +5990,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       final before = await widget.repo.listMedia(lib);
       final beforeIds = before.map((e) => e.id).toSet();
+      if (_usesAndroidImportPreparationFlow) {
+        selection = await _pickAndroidImportSelection();
+        if (selection == null) {
+          return;
+        }
+      }
 
       dialogShown = true;
       unawaited(
@@ -5740,10 +6038,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ),
       );
 
-      final importedCount = await widget.repo.importIntoFolder(
-        lib,
-        onProgress: (next) => progress.value = next,
-      );
+      final importedCount = selection == null
+          ? await widget.repo.importIntoFolder(
+              lib,
+              onProgress: (next) => progress.value = next,
+            )
+          : await widget.repo.importItemsIntoFolder(
+              lib,
+              selection.items,
+              skipIfExists: true,
+              onProgress: (next) => progress.value = next,
+            );
       if (!mounted) return;
 
       if (importedCount <= 0) {
@@ -5808,6 +6113,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ).showSnackBar(SnackBar(content: Text('ライブラリ取り込みに失敗しました: $e')));
     } finally {
       progress.dispose();
+      if (selection != null) {
+        await _cleanupPreparedImportSelection(selection);
+      }
       if (dialogShown) {
         dialogHandle.close();
       }
@@ -6354,11 +6662,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    await _runSharedMediaImport(items: mediaItems, target: target);
+    final selection = Platform.isAndroid
+        ? await _prepareAndroidImportSelection(
+            sourceKind: ImportSourceKind.files,
+            items: mediaItems,
+          )
+        : _PreparedImportSelection(
+            sourceKind: ImportSourceKind.files,
+            items: mediaItems,
+          );
+    if (selection == null) {
+      return;
+    }
+
+    await _runSharedMediaImport(selection: selection, target: target);
   }
 
   Future<void> _runSharedMediaImport({
-    required List<MediaItem> items,
+    required _PreparedImportSelection selection,
     required _SharedUrlImportTarget target,
   }) async {
     final progress = ValueNotifier<MediaTransferProgress?>(
@@ -6366,7 +6687,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         sentBytes: 0,
         totalBytes: 0,
         completedFiles: 0,
-        totalFiles: items.length,
+        totalFiles: selection.items.length,
         statusLabel: 'Importing shared files...',
       ),
     );
@@ -6387,7 +6708,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 builder: (context, value, _) {
                   final fraction = value?.fraction;
                   final completed = value?.completedFiles ?? 0;
-                  final total = value?.totalFiles ?? items.length;
+                  final total = value?.totalFiles ?? selection.items.length;
                   return Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -6416,7 +6737,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       final importedCount = await widget.repo.importItemsIntoFolder(
         target.folder,
-        items,
+        selection.items,
         skipIfExists: true,
         onProgress: (next) => progress.value = next,
       );
@@ -6461,6 +6782,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
     } finally {
       progress.dispose();
+      await _cleanupPreparedImportSelection(selection);
       if (dialogShown) {
         dialogHandle.close();
       }
@@ -9675,12 +9997,12 @@ class _RouteBoundDialogHandle {
   }
 }
 
-class _HostImportSelection {
+class _PreparedImportSelection {
   final ImportSourceKind sourceKind;
   final List<MediaItem> items;
   final List<String> cleanupPaths;
 
-  const _HostImportSelection({
+  const _PreparedImportSelection({
     required this.sourceKind,
     required this.items,
     this.cleanupPaths = const <String>[],

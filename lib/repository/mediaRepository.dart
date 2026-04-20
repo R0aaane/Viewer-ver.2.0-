@@ -127,6 +127,7 @@ class ImportMetadata {
   final List<String> freeTags;
   final List<String> characterTags;
   final String? targetCollection;
+  final bool convertToPdfOnHost;
   final bool organizeAfterImport;
 
   const ImportMetadata({
@@ -135,6 +136,7 @@ class ImportMetadata {
     this.freeTags = const <String>[],
     this.characterTags = const <String>[],
     this.targetCollection,
+    this.convertToPdfOnHost = false,
     this.organizeAfterImport = false,
   });
 
