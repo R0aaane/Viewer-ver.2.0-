@@ -129,6 +129,7 @@ async def upload_files(
     targetCollection: str | None = Form(None),
     convertToPdfOnHost: bool = Form(False),
     hostPdfNameHint: str | None = Form(None),
+    hostPdfFileNameHint: str | None = Form(None),
     organizeAfterImport: bool = Form(False),
     uploadRequestId: str | None = Form(None),
     files: list[UploadFile] = File(...),
@@ -143,10 +144,13 @@ async def upload_files(
     originalDisplayNamesJson = _resolve_optional_form_string(originalDisplayNamesJson)
     targetCollection = _resolve_optional_form_string(targetCollection)
     hostPdfNameHint = _resolve_optional_form_string(hostPdfNameHint)
+    hostPdfFileNameHint = _resolve_optional_form_string(hostPdfFileNameHint)
     uploadRequestId = _resolve_optional_form_string(uploadRequestId)
     skipIfExists = _resolve_form_bool(skipIfExists, default=True)
     convertToPdfOnHost = _resolve_form_bool(convertToPdfOnHost, default=False)
     organizeAfterImport = _resolve_form_bool(organizeAfterImport, default=False)
+    if hostPdfNameHint is None or not hostPdfNameHint.strip():
+        hostPdfNameHint = hostPdfFileNameHint
     request_id = _normalize_upload_request_id(uploadRequestId)
     logger.info(
         '[UPLOAD][SERVER][req:%s] received metadata folderRaw=%s skipIfExists=%s artistTag=%s seriesTag=%s characterTagsJson=%s freeTagsJson=%s fileTagsJson=%s sourceRelativePathsJson=%s targetCollection=%s convertToPdfOnHost=%s hostPdfNameHint=%s organizeAfterImport=%s files=%s',

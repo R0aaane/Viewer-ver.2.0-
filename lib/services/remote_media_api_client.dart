@@ -661,7 +661,7 @@ class RemoteMediaApiClient {
           convertToPdfOnHost ? 'true' : 'false',
         );
         if (hostPdfFileNameHint != null) {
-          writeField('hostPdfFileNameHint', hostPdfFileNameHint);
+          writeField('hostPdfNameHint', hostPdfFileNameHint);
         }
         writeField(
           'organizeAfterImport',
