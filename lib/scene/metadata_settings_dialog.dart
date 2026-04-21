@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 
 import '../database/tag_service.dart';
 import '../models/metadata_settings.dart';
+import '../services/app_update_publish_service.dart';
+import '../services/app_version_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/url_import_project_cookie_store_service.dart';
@@ -42,6 +44,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   late TextEditingController _hostPortController;
   late TextEditingController _authTokenController;
   late TextEditingController _hostLibraryPathController;
+  late TextEditingController _updateVersionController;
   late bool _autoStartHostServer;
   String? _defaultLibraryPath;
   bool _migrateLibrary = false;
@@ -62,6 +65,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   bool _checking = false;
   bool _rescanning = false;
   bool _hostWorking = false;
+  bool _publishingUpdate = false;
 
   @override
   void initState() {
@@ -79,9 +83,13 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     _hostLibraryPathController = TextEditingController(
       text: settings.hostLibraryPath,
     );
+    _updateVersionController = TextEditingController(
+      text: defaultAppUpdateVersion.trim(),
+    );
     _autoStartHostServer = settings.autoStartHostServer;
     _status = settings.isStandaloneMode ? _localModeStatus() : _unknownStatus();
     widget.hostServerService.refresh();
+    _loadDefaultUpdateVersion();
     _loadDefaultLibraryPath();
     _loadProjectCookies();
   }
@@ -92,7 +100,15 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     _hostPortController.dispose();
     _authTokenController.dispose();
     _hostLibraryPathController.dispose();
+    _updateVersionController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadDefaultUpdateVersion() async {
+    if (_updateVersionController.text.trim().isNotEmpty) return;
+    final version = await AppVersionService().currentVersionLabel();
+    if (!mounted || _updateVersionController.text.trim().isNotEmpty) return;
+    setState(() => _updateVersionController.text = version);
   }
 
   MetadataConnectionStatus _unknownStatus() {
@@ -530,6 +546,55 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     }
   }
 
+  Future<void> _publishAppUpdate() async {
+    final draft = _draftSettings();
+    final version = _updateVersionController.text.trim();
+    if (draft.isStandaloneMode) {
+      _showSnackBar('ホストまたはクライアントモードで実行してください');
+      return;
+    }
+    if (version.isEmpty) {
+      _showSnackBar('公開バージョンを入力してください');
+      return;
+    }
+
+    final file = await openFile(
+      acceptedTypeGroups: const <XTypeGroup>[
+        XTypeGroup(
+          label: 'App update files',
+          extensions: <String>[
+            'apk',
+            'aab',
+            'zip',
+            'msi',
+            'msix',
+            'exe',
+            'dmg',
+            'pkg',
+          ],
+        ),
+      ],
+    );
+    if (file == null) return;
+
+    setState(() => _publishingUpdate = true);
+    try {
+      final result = await const AppUpdatePublishService().uploadUpdate(
+        settings: draft,
+        version: version,
+        filePath: file.path,
+        fileName: file.name,
+      );
+      _showSnackBar('アップデートを公開しました: ${result.version}');
+    } catch (error) {
+      _showSnackBar('アップデート公開に失敗しました: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _publishingUpdate = false);
+      }
+    }
+  }
+
   Future<void> _startHostServer() async {
     final draft = _draftSettings();
     if (_canOfferLibraryMigration(draft)) {
@@ -783,6 +848,59 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     );
   }
 
+  Widget _buildDeveloperUpdateSection(
+    BuildContext context,
+    MetadataSettings draft,
+  ) {
+    final target = draft.isHostMode
+        ? draft.hostLoopbackApiBaseUrl
+        : draft.remoteApiBaseUrl.trim();
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('開発ビルド公開', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _updateVersionController,
+            enabled: !_saving && !_publishingUpdate,
+            decoration: const InputDecoration(
+              labelText: '公開バージョン',
+              hintText: '例: 1.0.2+3',
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            target.isEmpty ? '公開先: 未設定' : '公開先: $target',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.tonalIcon(
+              onPressed: (_saving || _publishingUpdate)
+                  ? null
+                  : _publishAppUpdate,
+              icon: _publishingUpdate
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.upload_file),
+              label: Text(_publishingUpdate ? '公開中...' : 'ファイルを公開'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHostStatusCard(BuildContext context) {
     return AnimatedBuilder(
       animation: widget.hostServerService,
@@ -907,7 +1025,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               DropdownButtonFormField<AppMode>(
-                value: _mode,
+                initialValue: _mode,
                 decoration: const InputDecoration(labelText: '動作モード'),
                 items: AppMode.values
                     .map(
@@ -996,6 +1114,10 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
               const SizedBox(height: 12),
               _buildProjectCookieSection(context),
               const SizedBox(height: 12),
+              if (!draft.isStandaloneMode) ...[
+                _buildDeveloperUpdateSection(context, draft),
+                const SizedBox(height: 12),
+              ],
               _buildConnectionStatusCard(context),
               const SizedBox(height: 12),
               Wrap(

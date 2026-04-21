@@ -29,6 +29,7 @@ from server.models.dto import (
     RescanRequest,
 )
 from server.services.auth_service import require_bearer_token
+from server.services.app_update_store import save_app_update_upload, update_download_path
 from server.services.import_tag_rule_service import (
     build_inferred_import_tags,
     filter_hitomi_pdf_auto_tags,
@@ -83,6 +84,30 @@ def request_rescan(
     except Exception as error:
         logger.exception("[rescan] unexpected failure target=%s roots=%s", target or None, settings.media_roots)
         raise server_error(f"Rescan failed: {error}") from error
+
+
+@router.post("/app-update/upload")
+async def upload_app_update(
+    request: Request,
+    version: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, object]:
+    try:
+        info = await save_app_update_upload(
+            request.app.state.settings,
+            version=_resolve_form_string(version),
+            upload=file,
+        )
+        return {
+            "ok": True,
+            "version": info.version,
+            "fileName": info.file_name,
+            "originalFileName": info.original_file_name,
+            "sizeBytes": info.size_bytes,
+            "updateUrl": update_download_path(info),
+        }
+    finally:
+        await file.close()
 
 
 @router.post("/organize", response_model=OrganizeLibraryResponse)

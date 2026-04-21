@@ -10,7 +10,7 @@ import '../models/metadata_settings.dart';
 
 const String _fallbackAppVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.1+2',
+  defaultValue: '1.0.2+3',
 );
 const String defaultAppUpdateVersion = String.fromEnvironment(
   'PDF_VIEWER_UPDATE_VERSION',
@@ -47,12 +47,14 @@ class _HostVersionInfo {
   final String version;
   final String? latestKnownVersion;
   final List<String> clientVersions;
+  final String? updateVersion;
   final String? updateUrl;
 
   const _HostVersionInfo({
     required this.version,
     required this.latestKnownVersion,
     required this.clientVersions,
+    required this.updateVersion,
     required this.updateUrl,
   });
 }
@@ -108,6 +110,7 @@ class AppVersionService {
       localVersion,
       hostInfo.version,
       if (hostInfo.latestKnownVersion != null) hostInfo.latestKnownVersion!,
+      if (hostInfo.updateVersion != null) hostInfo.updateVersion!,
       ...hostInfo.clientVersions,
     }.where((version) => version.trim().isNotEmpty).toList(growable: false);
     final latestVersion = _latestVersion(knownVersions);
@@ -121,7 +124,9 @@ class AppVersionService {
       hostVersion: hostInfo.version,
       latestVersion: latestVersion,
       hostUrl: baseUrl,
-      updateUrl: _resolveUpdateUrl(baseUrl, hostInfo.updateUrl),
+      updateUrl: hostInfo.updateVersion == latestVersion
+          ? _resolveUpdateUrl(baseUrl, hostInfo.updateUrl)
+          : null,
       knownVersions: knownVersions,
     );
   }
@@ -184,6 +189,7 @@ class AppVersionService {
         version: version,
         latestKnownVersion: decoded['latestKnownVersion']?.toString().trim(),
         clientVersions: clientVersions,
+        updateVersion: decoded['updateVersion']?.toString().trim(),
         updateUrl: decoded['updateUrl']?.toString().trim(),
       );
     } on FormatException {
