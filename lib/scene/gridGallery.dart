@@ -107,6 +107,13 @@ class _GallerySearchSuggestion {
   });
 }
 
+class _FolderSeriesFilterChip {
+  final String name;
+  final int count;
+
+  const _FolderSeriesFilterChip({required this.name, required this.count});
+}
+
 class _GeneratedPdfPostProcessResult {
   final MediaItem? item;
   final List<Tag> inferredTags;
@@ -376,6 +383,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   final TextEditingController _searchCtrl = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   String _query = '';
+  bool _gallerySearchSuggestionsEnabled = false;
   List<MediaItem>? _gallerySearchItemsAll;
   String? _gallerySearchFolderRaw;
   bool _gallerySearchLoading = false;
@@ -736,10 +744,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   void _handleGallerySearchFocusChange() {
     if (_searchFocusNode.hasFocus) {
+      if (!_gallerySearchSuggestionsEnabled && mounted) {
+        setState(() => _gallerySearchSuggestionsEnabled = true);
+      }
       unawaited(_ensureGallerySearchCacheLoaded());
+      return;
     }
     if (!mounted) return;
-    setState(() {});
+    if (_gallerySearchSuggestionsEnabled) {
+      setState(() => _gallerySearchSuggestionsEnabled = false);
+    }
   }
 
   Future<void> _initializeHostServerIfNeeded() async {
@@ -964,10 +978,157 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return prefix.isEmpty ? replacement : '$prefix $replacement';
   }
 
+  String? _activeGallerySeriesFilterKey() {
+    final tokens = _query
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((token) => token.isNotEmpty);
+
+    String? active;
+    for (final token in tokens) {
+      final separator = token.indexOf(':');
+      if (separator <= 0 || separator >= token.length - 1) {
+        continue;
+      }
+      final key = token.substring(0, separator).toLowerCase();
+      if (key != 'series') {
+        continue;
+      }
+      final value = token.substring(separator + 1).trim();
+      if (value.isEmpty) {
+        continue;
+      }
+      active = value.toLowerCase();
+    }
+    return active;
+  }
+
+  List<_FolderSeriesFilterChip> _currentFolderSeriesFilterChips() {
+    final folderRaw = _folder?.raw;
+    if (folderRaw == null) {
+      return const <_FolderSeriesFilterChip>[];
+    }
+
+    final useSearchCache =
+        _gallerySearchFolderRaw == folderRaw && _gallerySearchItemsAll != null;
+    final items = useSearchCache ? _gallerySearchItemsAll! : _items;
+    final tagDetailsById = useSearchCache
+        ? _gallerySearchTagDetailsById
+        : _tagDetailsById;
+
+    final counts = <String, int>{};
+    final labels = <String, String>{};
+
+    for (final item in items) {
+      if (item.kind != MediaKind.pdf) {
+        continue;
+      }
+      final details = tagDetailsById[item.id] ?? const <TagWithId>[];
+      final seenSeriesInItem = <String>{};
+      for (final detail in details) {
+        if (detail.tag.category != TagCategory.series) {
+          continue;
+        }
+        final name = detail.tag.name.trim();
+        if (name.isEmpty) {
+          continue;
+        }
+        final key = name.toLowerCase();
+        if (!seenSeriesInItem.add(key)) {
+          continue;
+        }
+        labels.putIfAbsent(key, () => name);
+        counts.update(key, (value) => value + 1, ifAbsent: () => 1);
+      }
+    }
+
+    final chips = counts.entries
+        .map(
+          (entry) => _FolderSeriesFilterChip(
+            name: labels[entry.key] ?? entry.key,
+            count: entry.value,
+          ),
+        )
+        .toList(growable: true);
+    chips.sort((left, right) {
+      final countCompare = right.count.compareTo(left.count);
+      if (countCompare != 0) {
+        return countCompare;
+      }
+      return left.name.toLowerCase().compareTo(right.name.toLowerCase());
+    });
+    return chips.toList(growable: false);
+  }
+
+  void _setGallerySearchQuery(
+    String value, {
+    required bool enableSuggestions,
+    bool syncController = false,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _query = value;
+      _gallerySearchSuggestionsEnabled =
+          enableSuggestions && _searchFocusNode.hasFocus;
+    });
+
+    if (syncController && _searchCtrl.text != value) {
+      _searchCtrl.value = TextEditingValue(
+        text: value,
+        selection: TextSelection.collapsed(offset: value.length),
+      );
+    }
+
+    if (value.trim().isNotEmpty || _searchFocusNode.hasFocus) {
+      unawaited(_ensureGallerySearchCacheLoaded());
+    }
+  }
+
+  void _toggleGallerySeriesFilter(String seriesName) {
+    final trimmed = seriesName.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+
+    final normalizedSeries = trimmed.toLowerCase();
+    final tokens = _query
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((token) => token.isNotEmpty)
+        .toList(growable: false);
+
+    final nextTokens = <String>[];
+    String? currentSeries;
+    for (final token in tokens) {
+      final separator = token.indexOf(':');
+      if (separator > 0 && separator < token.length - 1) {
+        final key = token.substring(0, separator).toLowerCase();
+        if (key == 'series') {
+          currentSeries = token.substring(separator + 1).trim().toLowerCase();
+          continue;
+        }
+      }
+      nextTokens.add(token);
+    }
+
+    if (currentSeries != normalizedSeries) {
+      nextTokens.add('series:$trimmed');
+    }
+
+    _setGallerySearchQuery(
+      nextTokens.join(' '),
+      enableSuggestions: false,
+      syncController: true,
+    );
+  }
+
   Iterable<_GallerySearchSuggestion> _buildGallerySearchSuggestions(
     TextEditingValue value,
   ) {
-    if (!_searchFocusNode.hasFocus) {
+    if (!_searchFocusNode.hasFocus || !_gallerySearchSuggestionsEnabled) {
       return const <_GallerySearchSuggestion>[];
     }
 
@@ -1043,9 +1204,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     final items = _gallerySearchCorpusItems();
-    final uniqueNames = LinkedHashSet<String>();
-    final uniqueTagNames = LinkedHashSet<String>();
-    final uniqueCategoryTags = <TagCategory, LinkedHashSet<String>>{};
+    final uniqueNames = <String>{};
+    final uniqueTagNames = <String>{};
+    final uniqueCategoryTags = <TagCategory, Set<String>>{};
 
     for (final item in items) {
       uniqueNames.add(item.displayName);
@@ -1054,7 +1215,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
       for (final detail in _searchableTagDetailsFor(item)) {
         uniqueCategoryTags
-            .putIfAbsent(detail.tag.category, LinkedHashSet<String>.new)
+            .putIfAbsent(detail.tag.category, () => <String>{})
             .add(detail.tag.name);
       }
     }
@@ -1083,11 +1244,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       final valuePart = normalizedToken.substring(separator + 1);
       final category = _tagCategoryForSearchKey(key);
       if (category != null) {
-        final names = uniqueCategoryTags[category] ?? LinkedHashSet<String>();
+        final names = uniqueCategoryTags[category] ?? <String>{};
         for (final tagName in names) {
           final normalizedTag = tagName.toLowerCase();
-          if (valuePart.isNotEmpty && !normalizedTag.contains(valuePart))
+          if (valuePart.isNotEmpty && !normalizedTag.contains(valuePart)) {
             continue;
+          }
           addSuggestion(
             _GallerySearchSuggestion(
               query: _replaceActiveGallerySearchToken(
@@ -1151,17 +1313,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return suggestions.take(8);
   }
 
-  void _handleGallerySearchChanged(String value) {
-    if (!mounted) return;
-    setState(() => _query = value);
-    if (value.trim().isNotEmpty || _searchFocusNode.hasFocus) {
-      unawaited(_ensureGallerySearchCacheLoaded());
-    }
+  void _handleGallerySearchChanged(
+    String value, {
+    bool keepSuggestionsVisible = true,
+  }) {
+    _setGallerySearchQuery(value, enableSuggestions: keepSuggestionsVisible);
   }
 
   void _clearGallerySearchQuery() {
-    _searchCtrl.clear();
-    _handleGallerySearchChanged('');
+    _setGallerySearchQuery(
+      '',
+      enableSuggestions: _searchFocusNode.hasFocus,
+      syncController: true,
+    );
   }
 
   Widget? _buildGallerySearchSuffix() {
@@ -1197,7 +1361,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       focusNode: _searchFocusNode,
       displayStringForOption: (option) => option.query,
       optionsBuilder: _buildGallerySearchSuggestions,
-      onSelected: (option) => _handleGallerySearchChanged(option.query),
+      onSelected: (option) => _handleGallerySearchChanged(
+        option.query,
+        keepSuggestionsVisible: false,
+      ),
       fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
         return TextField(
           controller: controller,
@@ -1212,9 +1379,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             suffixIconConstraints: const BoxConstraints(minWidth: 0),
             suffixIcon: _buildGallerySearchSuffix(),
           ),
-          onTap: () => unawaited(_ensureGallerySearchCacheLoaded()),
-          onChanged: _handleGallerySearchChanged,
-          onSubmitted: (_) => onFieldSubmitted(),
+          onTap: () {
+            if (!_gallerySearchSuggestionsEnabled && mounted) {
+              setState(() => _gallerySearchSuggestionsEnabled = true);
+            }
+            unawaited(_ensureGallerySearchCacheLoaded());
+          },
+          onTapOutside: (_) => focusNode.unfocus(),
+          onChanged: (value) =>
+              _handleGallerySearchChanged(value, keepSuggestionsVisible: true),
+          onSubmitted: (_) {
+            _handleGallerySearchChanged(
+              controller.text,
+              keepSuggestionsVisible: false,
+            );
+            onFieldSubmitted();
+          },
         );
       },
       optionsViewBuilder: (context, onSelected, options) {
@@ -4838,8 +5018,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _folderItemsCache[folder.raw] = _items;
       await _refreshAllFavoritesItems();
       unawaited(_refreshHomeShowcases());
+      unawaited(_ensureGallerySearchCacheLoaded());
       if (_query.trim().isNotEmpty) {
-        unawaited(_ensureGallerySearchCacheLoaded());
+        _setGallerySearchQuery(
+          _query,
+          enableSuggestions: _gallerySearchSuggestionsEnabled,
+        );
       }
     } catch (e, st) {
       _logUiError('load-folder', e, st);
@@ -4969,22 +5153,21 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    final selection = await _pickHostImportSelection();
-    if (selection == null || selection.items.isEmpty) {
-      return;
-    }
-
-    final request = await ImportToHostDialog.show(
+    final result = await ImportToHostDialog.show(
       context,
       tagService: widget.tagService,
-      sourceKind: selection.sourceKind,
-      selectedItems: selection.items,
+      initialSelection: const ImportToHostSelection(
+        sourceKind: ImportSourceKind.files,
+        items: <MediaItem>[],
+      ),
+      onPickSelection: _pickHostImportSelectionForDialog,
       supportsHostPdfConversion: true,
     );
-    if (request == null) {
-      await _cleanupPreparedImportSelection(selection);
+    if (result == null) {
       return;
     }
+    final selection = result.selection;
+    final request = result.request;
 
     if (request.metadata.convertToPdfOnHost &&
         !_shouldUseRawHostImportSelection()) {
@@ -4994,7 +5177,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           content: Text('ホスト側PDF化APIはまだ未実装です。画像のまま取り込むを選択してください。'),
         ),
       );
-      await _cleanupPreparedImportSelection(selection);
+      await _cleanupImportSelectionPaths(selection.cleanupPaths);
       return;
     }
 
@@ -5114,7 +5297,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ).showSnackBar(SnackBar(content: Text('ホスト取り込みに失敗しました: $e')));
     } finally {
       progress.dispose();
-      await _cleanupPreparedImportSelection(selection);
+      await _cleanupImportSelectionPaths(selection.cleanupPaths);
       if (dialogShown) {
         dialogHandle.close();
       }
@@ -5148,12 +5331,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
-  Future<_PreparedImportSelection?> _pickHostImportSelection() async {
-    final sourceKind = await _pickImportSourceKind();
-    if (sourceKind == null) {
-      return null;
-    }
-
+  Future<_PreparedImportSelection?> _pickHostImportSelection(
+    ImportSourceKind sourceKind,
+  ) async {
     switch (sourceKind) {
       case ImportSourceKind.files:
         final items = await widget.repo.pickExternalMediaFiles(
@@ -5280,6 +5460,69 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
+  Future<ImportToHostSelection?> _pickHostImportSelectionForDialog(
+    ImportSourceKind sourceKind,
+  ) async {
+    final selection = await _pickHostImportSelection(sourceKind);
+    if (selection == null) {
+      return null;
+    }
+    return ImportToHostSelection(
+      sourceKind: selection.sourceKind,
+      items: selection.items,
+      cleanupPaths: selection.cleanupPaths,
+    );
+  }
+
+  Widget _buildGallerySeriesFilterRow(List<_FolderSeriesFilterChip> chips) {
+    if (chips.isEmpty) {
+      return SizedBox(
+        height: 36,
+        child: Row(
+          children: const [
+            Text('シリーズ'),
+            SizedBox(width: 8),
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final activeSeriesKey = _activeGallerySeriesFilterKey();
+    return SizedBox(
+      height: 36,
+      child: Row(
+        children: [
+          const Text('シリーズ'),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: chips.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final chip = chips[index];
+                final selected = activeSeriesKey == chip.name.toLowerCase();
+                final label = chip.count > 1
+                    ? '${chip.name} (${chip.count})'
+                    : chip.name;
+                return ChoiceChip(
+                  label: Text(label),
+                  selected: selected,
+                  onSelected: (_) => _toggleGallerySeriesFilter(chip.name),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // Keep the original file selection so the host can optionally convert the
   // uploaded images into a PDF after transfer.
   bool _shouldUseRawHostImportSelection() => true;
@@ -5399,10 +5642,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return out;
   }
 
-  Future<void> _cleanupPreparedImportSelection(
-    _PreparedImportSelection selection,
+  Future<void> _cleanupImportSelectionPaths(
+    Iterable<String> cleanupPaths,
   ) async {
-    for (final path in selection.cleanupPaths) {
+    for (final path in cleanupPaths) {
       final trimmed = path.trim();
       if (trimmed.isEmpty || trimmed.startsWith('content://')) {
         continue;
@@ -5418,6 +5661,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         );
       }
     }
+  }
+
+  Future<void> _cleanupPreparedImportSelection(
+    _PreparedImportSelection selection,
+  ) async {
+    await _cleanupImportSelectionPaths(selection.cleanupPaths);
   }
 
   Future<void> _switchFolder(String raw) async {
@@ -9106,6 +9355,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               });
             }
 
+            final seriesFilterChips = _currentFolderSeriesFilterChips();
+            final showSeriesFilterRow =
+                _gallerySearchLoading ||
+                _gallerySearchLoadingTags ||
+                seriesFilterChips.isNotEmpty;
+
             return Scaffold(
               drawer: _isWideLayout(context) ? null : _buildSidebar(),
               appBar: AppBar(
@@ -9128,7 +9383,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 ),
                 actions: _buildGalleryAppBarActions(tabController),
                 bottom: PreferredSize(
-                  preferredSize: const Size.fromHeight(160),
+                  preferredSize: Size.fromHeight(
+                    showSeriesFilterRow ? 206 : 160,
+                  ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -9139,6 +9396,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           child: _buildGallerySearchField(),
                         ),
                       ),
+                      if (showSeriesFilterRow)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                          child: _buildGallerySeriesFilterRow(
+                            seriesFilterChips,
+                          ),
+                        ),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         child: SizedBox(

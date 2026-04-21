@@ -16,6 +16,7 @@ import '../services/app_reading_progress_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/item_name_service.dart';
 import '../widgets/controller_focusable.dart';
+import 'widgets/scene_ui.dart';
 import 'rename_item_dialog.dart';
 
 enum ReaderFitMode { vertical, horizontal, contain }
@@ -68,8 +69,7 @@ class ImageDetailPage extends StatefulWidget {
 }
 
 class _ImageDetailPageState extends State<ImageDetailPage>
-    with TickerProviderStateMixin
-    , WidgetsBindingObserver {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final AppReadingProgressService _readingProgressService =
       AppReadingProgressService();
   FolderHandle? _folder;
@@ -1062,8 +1062,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           progressTotalPages != null && progressTotalPages > 0
           ? progressTotalPages
           : _totalPages;
-      final nextPage =
-          entry != null && !_hasMovedPdfPageSinceLoad
+      final nextPage = entry != null && !_hasMovedPdfPageSinceLoad
           ? entry.currentPage
           : _page;
 
@@ -1261,9 +1260,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (item.kind != MediaKind.pdf) {
       return;
     }
-    if (!force &&
-        !_canPersistReadingProgress &&
-        !_hasMovedPdfPageSinceLoad) {
+    if (!force && !_canPersistReadingProgress && !_hasMovedPdfPageSinceLoad) {
       return;
     }
     final page = _page < 1 ? 1 : _page;
@@ -2638,25 +2635,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }) {
     return SizedBox(
       height: 44,
-      child: TextField(
+      child: SceneSearchField(
         controller: controller,
+        hintText: hintText,
         onChanged: onChanged,
-        decoration: InputDecoration(
-          prefixIcon: const Icon(Icons.search),
-          hintText: hintText,
-          border: const OutlineInputBorder(),
-          isDense: true,
-          suffixIcon: controller.text.trim().isEmpty
-              ? null
-              : IconButton(
-                  tooltip: 'クリア',
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    controller.clear();
-                    onChanged('');
-                  },
-                ),
-        ),
+        onClear: () {
+          controller.clear();
+          onChanged('');
+        },
       ),
     );
   }

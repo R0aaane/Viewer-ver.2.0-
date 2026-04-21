@@ -19,9 +19,7 @@ class SceneSectionHeader extends StatelessWidget {
       padding: padding,
       child: Row(
         children: [
-          Expanded(
-            child: Text(title, style: textTheme.titleMedium),
-          ),
+          Expanded(child: Text(title, style: textTheme.titleMedium)),
           if (trailing != null) trailing!,
         ],
       ),
@@ -42,10 +40,7 @@ class SceneSurfaceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      child: Padding(
-        padding: padding,
-        child: child,
-      ),
+      child: Padding(padding: padding, child: child),
     );
   }
 }
@@ -80,9 +75,13 @@ class SceneSearchField extends StatelessWidget {
       decoration: InputDecoration(
         prefixIcon: const Icon(Icons.search),
         hintText: hintText,
+        border: const OutlineInputBorder(),
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        suffixIconConstraints: const BoxConstraints(minWidth: 0),
         suffixIcon: hasText
             ? IconButton(
-                tooltip: 'Clear',
+                tooltip: 'クリア',
                 onPressed: onClear,
                 icon: const Icon(Icons.clear),
               )
@@ -144,11 +143,7 @@ class SceneSidebarHeader extends StatelessWidget {
   final String title;
   final String? subtitle;
 
-  const SceneSidebarHeader({
-    super.key,
-    required this.title,
-    this.subtitle,
-  });
+  const SceneSidebarHeader({super.key, required this.title, this.subtitle});
 
   @override
   Widget build(BuildContext context) {

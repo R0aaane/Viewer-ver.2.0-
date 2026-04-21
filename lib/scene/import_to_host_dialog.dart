@@ -10,45 +10,74 @@ import '../services/controller_navigation_service.dart';
 class ImportToHostDialog {
   const ImportToHostDialog._();
 
-  static Future<ImportRequest?> show(
+  static Future<ImportToHostResult?> show(
     BuildContext context, {
     required TagService tagService,
-    required ImportSourceKind sourceKind,
-    required List<MediaItem> selectedItems,
+    required ImportToHostSelection initialSelection,
+    required Future<ImportToHostSelection?> Function(
+      ImportSourceKind sourceKind,
+    )
+    onPickSelection,
     bool supportsHostPdfConversion = false,
   }) {
     return ImportToHostSheet.show(
       context,
       tagService: tagService,
-      sourceKind: sourceKind,
-      selectedItems: selectedItems,
+      initialSelection: initialSelection,
+      onPickSelection: onPickSelection,
       supportsHostPdfConversion: supportsHostPdfConversion,
     );
   }
 }
 
+class ImportToHostSelection {
+  final ImportSourceKind sourceKind;
+  final List<MediaItem> items;
+  final List<String> cleanupPaths;
+
+  const ImportToHostSelection({
+    required this.sourceKind,
+    required this.items,
+    this.cleanupPaths = const <String>[],
+  });
+}
+
+class ImportToHostResult {
+  final ImportToHostSelection selection;
+  final ImportRequest request;
+
+  const ImportToHostResult({
+    required this.selection,
+    required this.request,
+  });
+}
+
 class ImportToHostSheet extends StatefulWidget {
   final TagService tagService;
-  final ImportSourceKind sourceKind;
-  final List<MediaItem> selectedItems;
+  final ImportToHostSelection initialSelection;
+  final Future<ImportToHostSelection?> Function(ImportSourceKind sourceKind)
+  onPickSelection;
   final bool supportsHostPdfConversion;
 
   const ImportToHostSheet({
     super.key,
     required this.tagService,
-    required this.sourceKind,
-    required this.selectedItems,
+    required this.initialSelection,
+    required this.onPickSelection,
     required this.supportsHostPdfConversion,
   });
 
-  static Future<ImportRequest?> show(
+  static Future<ImportToHostResult?> show(
     BuildContext context, {
     required TagService tagService,
-    required ImportSourceKind sourceKind,
-    required List<MediaItem> selectedItems,
+    required ImportToHostSelection initialSelection,
+    required Future<ImportToHostSelection?> Function(
+      ImportSourceKind sourceKind,
+    )
+    onPickSelection,
     bool supportsHostPdfConversion = false,
   }) {
-    return showControllerModalBottomSheet<ImportRequest>(
+    return showControllerModalBottomSheet<ImportToHostResult>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -56,8 +85,8 @@ class ImportToHostSheet extends StatefulWidget {
         heightFactor: 0.97,
         child: ImportToHostSheet(
           tagService: tagService,
-          sourceKind: sourceKind,
-          selectedItems: selectedItems,
+          initialSelection: initialSelection,
+          onPickSelection: onPickSelection,
           supportsHostPdfConversion: supportsHostPdfConversion,
         ),
       ),
@@ -71,13 +100,15 @@ class ImportToHostSheet extends StatefulWidget {
 enum _HostImportMode { keepFiles, convertToPdfOnHost }
 
 class _ImportToHostSheetState extends State<ImportToHostSheet> {
-  late final ImportSourceKind _sourceKind;
+  late ImportSourceKind _sourceKind;
   var _importMode = _HostImportMode.keepFiles;
   final TextEditingController _hostPdfNameController = TextEditingController();
   final TextEditingController _artistController = TextEditingController();
   final TextEditingController _seriesController = TextEditingController();
   final TextEditingController _characterController = TextEditingController();
   final TextEditingController _freeTagsController = TextEditingController();
+  var _selectedItems = const <MediaItem>[];
+  var _cleanupPaths = const <String>[];
   final List<String> _artistTags = <String>[];
   final List<String> _seriesTags = <String>[];
   final List<String> _characterTags = <String>[];
@@ -86,11 +117,14 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
   List<String> _seriesMaster = const <String>[];
   List<String> _characterMaster = const <String>[];
   bool _loadingSuggestions = false;
+  bool _pickingSelection = false;
 
   @override
   void initState() {
     super.initState();
-    _sourceKind = widget.sourceKind;
+    _sourceKind = widget.initialSelection.sourceKind;
+    _selectedItems = List<MediaItem>.unmodifiable(widget.initialSelection.items);
+    _cleanupPaths = List<String>.unmodifiable(widget.initialSelection.cleanupPaths);
     _hostPdfNameController.text = _defaultHostPdfFileNameHint();
     _loadSuggestions();
   }
@@ -264,7 +298,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     return merged;
   }
 
-  List<MediaItem> get _selectedMediaItems => widget.selectedItems
+  List<MediaItem> get _selectedMediaItems => _selectedItems
       .where((item) => item.kind != MediaKind.folder)
       .toList(growable: false);
 
@@ -527,12 +561,81 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     return '${parts.join(' / ')} を送信';
   }
 
+  String _executionSummaryForDisplay() {
+    if (_sourceKind == ImportSourceKind.folder) {
+      return _executionSummary();
+    }
+    final parts = <String>[];
+    if (_selectedImageCount > 0) {
+      parts.add('画像 $_selectedImageCount枚');
+    }
+    if (_selectedPdfCount > 0) {
+      parts.add('PDF $_selectedPdfCount件');
+    }
+    if (parts.isEmpty) {
+      parts.add('${_selectedMediaItems.length}件');
+    }
+    parts.add('タグ ${_resolvedTagCount()}件');
+    return '${parts.join(' / ')} を送信';
+  }
+
   void _selectImportMode(_HostImportMode mode) {
     if (mode == _HostImportMode.convertToPdfOnHost &&
         _hostPdfModeDisabledReason() != null) {
       return;
     }
     setState(() => _importMode = mode);
+  }
+
+  String? _submitBlockingMessage() {
+    if (_selectedMediaItems.isEmpty) {
+      return '取り込み対象を選択してください。';
+    }
+    return _hostPdfExecutionWarning();
+  }
+
+  String _sourceKindStatusLabel(ImportSourceKind kind) {
+    if (_pickingSelection && kind == _sourceKind) {
+      return '選択中';
+    }
+    if (kind == _sourceKind && _selectedMediaItems.isNotEmpty) {
+      return '選択済み';
+    }
+    if (kind == _sourceKind) {
+      return '未選択';
+    }
+    return '切り替え';
+  }
+
+  Future<void> _pickSelection(ImportSourceKind sourceKind) async {
+    if (_pickingSelection) {
+      return;
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _pickingSelection = true);
+    try {
+      final selection = await widget.onPickSelection(sourceKind);
+      if (!mounted || selection == null) {
+        return;
+      }
+      final nextSourceKind = selection.sourceKind;
+      final nextItems = List<MediaItem>.unmodifiable(selection.items);
+      final nextCleanupPaths = List<String>.unmodifiable(selection.cleanupPaths);
+      setState(() {
+        _sourceKind = nextSourceKind;
+        _selectedItems = nextItems;
+        _cleanupPaths = nextCleanupPaths;
+        _hostPdfNameController.text = _defaultHostPdfFileNameHint();
+        if (_sourceKind != ImportSourceKind.folder ||
+            _hostPdfModeDisabledReason() != null) {
+          _importMode = _HostImportMode.keepFiles;
+        }
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _pickingSelection = false);
+      }
+    }
   }
 
   ImportRequest _buildRequest() {
@@ -551,8 +654,19 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     );
   }
 
+  ImportToHostResult _buildResult() {
+    return ImportToHostResult(
+      selection: ImportToHostSelection(
+        sourceKind: _sourceKind,
+        items: _selectedItems,
+        cleanupPaths: _cleanupPaths,
+      ),
+      request: _buildRequest(),
+    );
+  }
+
   void _submit() {
-    final warning = _hostPdfExecutionWarning();
+    final warning = _submitBlockingMessage();
     if (warning != null) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -560,7 +674,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
       return;
     }
     FocusManager.instance.primaryFocus?.unfocus();
-    Navigator.of(context).pop(_buildRequest());
+    Navigator.of(context).pop(_buildResult());
   }
 
   @override
@@ -615,8 +729,8 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
                   ),
                   _BottomActionBar(
                     onCancel: () => Navigator.of(context).pop(),
-                    onSubmit: _hostPdfExecutionWarning() == null ? _submit : null,
-                    helperText: _hostPdfExecutionWarning(),
+                    onSubmit: _submitBlockingMessage() == null ? _submit : null,
+                    helperText: _submitBlockingMessage(),
                   ),
                 ],
               ),
@@ -631,9 +745,14 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildSelectionSection(context),
+        _buildSourceKindSection(context),
         const SizedBox(height: 16),
-        _buildImportMethodSection(context),
+        _buildSelectionSection(context),
+        if (_sourceKind == ImportSourceKind.folder &&
+            _selectedMediaItems.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _buildImportMethodSection(context),
+        ],
         const SizedBox(height: 16),
         _buildTagSection(context),
         const SizedBox(height: 16),
@@ -642,11 +761,52 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     );
   }
 
+  Widget _buildSourceKindSection(BuildContext context) {
+    return _SectionCard(
+      title: '選択方法',
+      description: '最初に取り込み元を選びます。後からここで切り替えできます。',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _ImportModeCard(
+            title: 'PDF / 複数ファイル',
+            description: 'PDF 単体や複数ファイルを選んで、そのままホストへ送ります。',
+            icon: Icons.upload_file_outlined,
+            selected: _sourceKind == ImportSourceKind.files,
+            onTap: _pickingSelection
+                ? null
+                : () => _pickSelection(ImportSourceKind.files),
+            statusLabel: _sourceKindStatusLabel(ImportSourceKind.files),
+          ),
+          const SizedBox(height: 12),
+          _ImportModeCard(
+            title: '画像フォルダ',
+            description: '画像フォルダを選びます。ホスト側PDF化が必要な場合はこちらです。',
+            icon: Icons.folder_open_outlined,
+            selected: _sourceKind == ImportSourceKind.folder,
+            onTap: _pickingSelection
+                ? null
+                : () => _pickSelection(ImportSourceKind.folder),
+            statusLabel: _sourceKindStatusLabel(ImportSourceKind.folder),
+          ),
+          if (_pickingSelection) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildSelectionSection(BuildContext context) {
     final previewItems = _selectedMediaItems.take(8).toList(growable: false);
     final remainingCount = _selectedMediaItems.length - previewItems.length;
     final sourceRoot = _selectedSourceRootRaw();
     final sourceLocations = _sourceLocations();
+    final hasSelection = _selectedMediaItems.isNotEmpty;
+    final reselectionLabel = _sourceKind == ImportSourceKind.folder
+        ? 'フォルダを選択'
+        : 'ファイルを選択';
 
     return _SectionCard(
       title: '選択内容',
@@ -680,6 +840,16 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
             ],
           ),
           const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed:
+                  _pickingSelection ? null : () => _pickSelection(_sourceKind),
+              icon: const Icon(Icons.refresh),
+              label: Text(hasSelection ? '再選択' : reselectionLabel),
+            ),
+          ),
+          const SizedBox(height: 16),
           _SummaryField(label: '選択元種別', value: _sourceKindLabel()),
           const SizedBox(height: 12),
           _SummaryField(label: '選択名', value: _selectionName()),
@@ -704,16 +874,20 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
           Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
-              initiallyExpanded: true,
+              initiallyExpanded: hasSelection,
               tilePadding: EdgeInsets.zero,
               childrenPadding: const EdgeInsets.only(top: 8),
               title: const Text('選択したファイルを確認'),
               subtitle: Text(
-                remainingCount > 0
+                !hasSelection
+                    ? 'まだ選択されていません'
+                    : remainingCount > 0
                     ? '先頭 ${previewItems.length}件を表示 / 残り $remainingCount 件'
                     : '${previewItems.length}件を表示',
               ),
               children: [
+                if (!hasSelection)
+                  const _TagPlaceholder('上の選択方法から取り込み対象を選んでください。'),
                 for (final item in previewItems)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
@@ -726,7 +900,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
                       ),
                     ),
                   ),
-                if (remainingCount > 0)
+                if (hasSelection && remainingCount > 0)
                   _TagPlaceholder('ほか $remainingCount 件あります。'),
               ],
             ),
@@ -934,7 +1108,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
         children: [
           _SummaryField(label: '送信先', value: 'ホストPC / library'),
           const SizedBox(height: 12),
-          _SummaryField(label: '実行内容', value: _executionSummary()),
+          _SummaryField(label: '実行内容', value: _executionSummaryForDisplay()),
           if (_hostPdfExecutionWarning() != null) ...[
             const SizedBox(height: 12),
             _InlineNotice(
