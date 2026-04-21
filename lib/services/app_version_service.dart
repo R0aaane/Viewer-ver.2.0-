@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/metadata_settings.dart';
 
@@ -11,12 +12,19 @@ const String _fallbackAppVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
   defaultValue: '1.0.1+2',
 );
+const String defaultAppUpdateVersion = String.fromEnvironment(
+  'PDF_VIEWER_UPDATE_VERSION',
+);
+const String defaultAppUpdateUrl = String.fromEnvironment(
+  'PDF_VIEWER_UPDATE_URL',
+);
 
 class AppVersionMismatch {
   final String localVersion;
   final String hostVersion;
   final String latestVersion;
   final String hostUrl;
+  final String? updateUrl;
   final List<String> knownVersions;
 
   const AppVersionMismatch({
@@ -24,23 +32,28 @@ class AppVersionMismatch {
     required this.hostVersion,
     required this.latestVersion,
     required this.hostUrl,
+    this.updateUrl,
     this.knownVersions = const <String>[],
   });
 
   bool get isLocalOlder => compareAppVersions(localVersion, latestVersion) < 0;
 
   bool get isHostOlder => compareAppVersions(hostVersion, latestVersion) < 0;
+
+  bool get hasUpdateUrl => updateUrl?.trim().isNotEmpty == true;
 }
 
 class _HostVersionInfo {
   final String version;
   final String? latestKnownVersion;
   final List<String> clientVersions;
+  final String? updateUrl;
 
   const _HostVersionInfo({
     required this.version,
     required this.latestKnownVersion,
     required this.clientVersions,
+    required this.updateUrl,
   });
 }
 
@@ -108,8 +121,21 @@ class AppVersionService {
       hostVersion: hostInfo.version,
       latestVersion: latestVersion,
       hostUrl: baseUrl,
+      updateUrl: _resolveUpdateUrl(baseUrl, hostInfo.updateUrl),
       knownVersions: knownVersions,
     );
+  }
+
+  Future<bool> openUpdate(AppVersionMismatch mismatch) async {
+    final updateUrl = mismatch.updateUrl?.trim();
+    if (updateUrl == null || updateUrl.isEmpty) {
+      return false;
+    }
+    final uri = Uri.tryParse(updateUrl);
+    if (uri == null || !uri.hasScheme) {
+      return false;
+    }
+    return launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Future<_HostVersionInfo?> _fetchHostVersion({
@@ -158,6 +184,7 @@ class AppVersionService {
         version: version,
         latestKnownVersion: decoded['latestKnownVersion']?.toString().trim(),
         clientVersions: clientVersions,
+        updateUrl: decoded['updateUrl']?.toString().trim(),
       );
     } on FormatException {
       return null;
@@ -178,6 +205,25 @@ class AppVersionService {
     final right = childPath.startsWith('/') ? childPath : '/$childPath';
     return baseUri.replace(path: '$left$right');
   }
+}
+
+String? _resolveUpdateUrl(String baseUrl, String? rawUpdateUrl) {
+  final trimmed = rawUpdateUrl?.trim();
+  if (trimmed == null || trimmed.isEmpty) {
+    return null;
+  }
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null) {
+    return null;
+  }
+  if (uri.hasScheme) {
+    return uri.toString();
+  }
+  final baseUri = Uri.tryParse(baseUrl.trim());
+  if (baseUri == null || !baseUri.hasScheme) {
+    return null;
+  }
+  return baseUri.resolveUri(uri).toString();
 }
 
 String? _latestVersion(List<String> versions) {

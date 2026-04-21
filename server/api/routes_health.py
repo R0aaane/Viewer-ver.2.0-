@@ -15,12 +15,15 @@ router = APIRouter(tags=["health"])
 def health(request: Request) -> HealthResponse:
     settings = request.app.state.settings
     client_versions = sorted(getattr(request.app.state, "client_app_versions", set()))
-    latest_known_version = _latest_version([settings.version, *client_versions])
+    update_version = getattr(settings, "update_version", None)
+    latest_known_version = _latest_version([settings.version, update_version, *client_versions])
     return HealthResponse(
         service=settings.service_name,
         version=settings.version,
         latestKnownVersion=latest_known_version,
         clientVersions=client_versions,
+        updateVersion=update_version,
+        updateUrl=getattr(settings, "update_url", None),
     )
 
 

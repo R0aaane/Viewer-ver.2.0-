@@ -33,6 +33,8 @@ class Settings:
     log_level: str
     startup_rescan: bool
     stream_chunk_size: int
+    update_version: str | None
+    update_url: str | None
 
 
 def load_settings() -> Settings:
@@ -61,4 +63,6 @@ def load_settings() -> Settings:
         log_level=os.getenv("MEDIA_SERVER_LOG_LEVEL", "INFO"),
         startup_rescan=_parse_bool(os.getenv("MEDIA_SERVER_STARTUP_RESCAN"), True),
         stream_chunk_size=int(os.getenv("MEDIA_SERVER_STREAM_CHUNK_SIZE", str(1024 * 1024))),
+        update_version=(os.getenv("MEDIA_SERVER_UPDATE_VERSION") or "").strip() or None,
+        update_url=(os.getenv("MEDIA_SERVER_UPDATE_URL") or "").strip() or None,
     )

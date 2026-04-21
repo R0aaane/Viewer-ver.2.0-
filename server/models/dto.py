@@ -15,6 +15,8 @@ class HealthResponse(BaseModel):
     version: str
     latestKnownVersion: str | None = None
     clientVersions: list[str] = Field(default_factory=list)
+    updateVersion: str | None = None
+    updateUrl: str | None = None
 
 
 class TagDto(BaseModel):

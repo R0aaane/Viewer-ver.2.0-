@@ -716,9 +716,18 @@ class HostApiServerService extends ChangeNotifier {
     env['MEDIA_SERVER_DATA_DIR'] = dataDir.path;
     env['MEDIA_SERVER_VERSION'] = await AppVersionService()
         .currentVersionLabel();
+    _setDefaultEnv(env, 'MEDIA_SERVER_UPDATE_VERSION', defaultAppUpdateVersion);
+    _setDefaultEnv(env, 'MEDIA_SERVER_UPDATE_URL', defaultAppUpdateUrl);
     env['MEDIA_SERVER_STARTUP_RESCAN'] = 'true';
     env['MEDIA_SERVER_CORS_ORIGINS'] = '*';
     return env;
+  }
+
+  void _setDefaultEnv(Map<String, String> env, String key, String value) {
+    if (value.trim().isEmpty || (env[key]?.trim().isNotEmpty ?? false)) {
+      return;
+    }
+    env[key] = value.trim();
   }
 
   Future<List<String>> _loadMediaRoots() async {

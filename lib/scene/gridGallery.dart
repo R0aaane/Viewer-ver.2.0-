@@ -797,7 +797,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       final olderTarget = olderTargets.isEmpty
           ? '古い側のアプリ'
           : '${olderTargets.join('と')}のアプリ';
-      await showDialog<void>(
+      final openUpdate = await showDialog<bool>(
         context: context,
         builder: (dialogContext) {
           return AlertDialog(
@@ -814,13 +814,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 child: const Text('後で'),
               ),
               FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('確認'),
+                onPressed: () => Navigator.of(dialogContext).pop(
+                  mismatch.hasUpdateUrl,
+                ),
+                child: Text(mismatch.hasUpdateUrl ? 'アップデート' : '確認'),
               ),
             ],
           );
         },
       );
+      if (openUpdate == true) {
+        final opened = await _appVersionService.openUpdate(mismatch);
+        if (!opened && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('更新先を開けませんでした')),
+          );
+        }
+      }
     } catch (error, stackTrace) {
       _logUiError('checkAppVersionCompatibility', error, stackTrace);
     }
