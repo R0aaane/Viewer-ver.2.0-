@@ -42,6 +42,29 @@ class MediaIndexServiceTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_scan_folder_skips_hidden_media_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'metadata.db'
+            library_dir = Path(temp_dir) / 'library'
+            library_dir.mkdir()
+            visible = library_dir / 'visible.pdf'
+            hidden = library_dir / '.hidden.pdf'
+            visible.write_bytes(b'visible')
+            hidden.write_bytes(b'hidden')
+
+            store = SqliteStore(db_path)
+            try:
+                store.init_schema()
+                service = MediaIndexService(store)
+
+                scanned = service.scan_folder(str(library_dir))
+
+                self.assertEqual(scanned, 1)
+                self.assertIsNotNone(store.get_media_record_by_path(str(visible)))
+                self.assertIsNone(store.get_media_record_by_path(str(hidden)))
+            finally:
+                store.close()
+
 
 if __name__ == '__main__':
     unittest.main()

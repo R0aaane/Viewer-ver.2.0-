@@ -662,6 +662,8 @@ Future<T?> showControllerDialog<T>({
   Offset? anchorPoint,
   TraversalEdgeBehavior? traversalEdgeBehavior,
   bool? requestFocus,
+  bool autofocusBoundary = true,
+  bool autofocusFirstFocusable = true,
 }) {
   return showDialog<T>(
     context: context,
@@ -676,7 +678,8 @@ Future<T?> showControllerDialog<T>({
     requestFocus: requestFocus,
     builder: (dialogContext) => ControllerNavigationRegion(
       debugLabel: 'controller-dialog',
-      autofocusFirstFocusable: true,
+      autofocusBoundary: autofocusBoundary,
+      autofocusFirstFocusable: autofocusFirstFocusable,
       child: builder(dialogContext),
     ),
   );

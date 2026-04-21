@@ -513,7 +513,8 @@ class ActionsRoutesTest(unittest.TestCase):
             self.assertEqual(response['importedCount'], 1)
             self.assertEqual(response['skippedCount'], 0)
             self.assertEqual(response['taggedCount'], 1)
-            self.assertEqual(response['rescannedCount'], 1)
+            self.assertEqual(response['organizedCount'], 1)
+            self.assertEqual(response['rescannedCount'], 2)
             self.assertTrue(os.path.exists(expected_pdf))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, '001.png')))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, '002.png')))
@@ -779,7 +780,12 @@ class ActionsRoutesTest(unittest.TestCase):
             self.assertEqual(index_service.scan_calls, [temp_dir, temp_dir])
             self.assertEqual(len(downloader.calls), 1)
             self.assertEqual(downloader.calls[0]['source_url'], 'https://kemono.su/patreon/user/123/post/456')
-            self.assertEqual(downloader.calls[0]['destination_folder'], temp_dir)
+            self.assertTrue(downloader.calls[0]['destination_folder'].startswith(temp_dir))
+            self.assertTrue(
+                os.path.basename(downloader.calls[0]['destination_folder']).startswith(
+                    '.download-url-stage-'
+                )
+            )
             self.assertEqual(len(metadata_store.add_tag_calls), 1)
             self.assertEqual(
                 metadata_store.add_tag_calls[0]['tags'],
@@ -842,9 +848,9 @@ class ActionsRoutesTest(unittest.TestCase):
 
             self.assertEqual(response.importedCount, 1)
             self.assertEqual(response.taggedCount, 1)
-            self.assertEqual(response.organizedCount, 0)
-            self.assertEqual(response.rescannedCount, 1)
-            self.assertEqual(index_service.scan_calls, [temp_dir])
+            self.assertEqual(response.organizedCount, 1)
+            self.assertEqual(response.rescannedCount, 2)
+            self.assertEqual(index_service.scan_calls, [temp_dir, temp_dir])
             self.assertTrue(os.path.exists(os.path.join(temp_dir, 'Sample Title.pdf')))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, '[20241105] [3114110] Sample Title', '001.jpg')))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, 'hitomi')))
@@ -893,9 +899,9 @@ class ActionsRoutesTest(unittest.TestCase):
 
             self.assertEqual(response.importedCount, 1)
             self.assertEqual(response.taggedCount, 1)
-            self.assertEqual(response.organizedCount, 0)
-            self.assertEqual(response.rescannedCount, 1)
-            self.assertEqual(index_service.scan_calls, [temp_dir])
+            self.assertEqual(response.organizedCount, 1)
+            self.assertEqual(response.rescannedCount, 2)
+            self.assertEqual(index_service.scan_calls, [temp_dir, temp_dir])
             self.assertEqual(len(metadata_store.add_tag_calls), 1)
             self.assertEqual(
                 metadata_store.add_tag_calls[0]['tags'],

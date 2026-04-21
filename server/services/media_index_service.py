@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +25,22 @@ def _normalize_path(raw: str) -> str:
 
 def _media_kind(path: str) -> str | None:
     return media_kind_for_extension(Path(path).suffix.lower())
+
+
+def _is_hidden_entry(path: str) -> bool:
+    name = os.path.basename(os.path.normpath(path))
+    if name.startswith('.') and name not in {'.', '..'}:
+        return True
+
+    hidden_flag = int(getattr(stat, 'FILE_ATTRIBUTE_HIDDEN', 0) or 0)
+    if hidden_flag == 0:
+        return False
+
+    try:
+        file_attributes = int(getattr(os.stat(path), 'st_file_attributes', 0) or 0)
+    except OSError:
+        return False
+    return (file_attributes & hidden_flag) != 0
 
 
 def _etag_for_file(path: str, size_bytes: int, modified_epoch_ms: int) -> str:
@@ -84,8 +101,15 @@ class MediaIndexService:
         scanned = 0
         indexed_media_ids: list[str] = []
         try:
-            for base, _, files in os.walk(target, onerror=lambda error: logger.warning('scan walk warning: %s (%s)', target, error)):
+            for base, dirs, files in os.walk(target, onerror=lambda error: logger.warning('scan walk warning: %s (%s)', target, error)):
+                dirs[:] = [
+                    directory_name
+                    for directory_name in dirs
+                    if not _is_hidden_entry(os.path.join(base, directory_name))
+                ]
                 for file_name in files:
+                    if _is_hidden_entry(os.path.join(base, file_name)):
+                        continue
                     full_path = os.path.normpath(os.path.join(base, file_name))
                     record = self._build_record_for_path(full_path)
                     if record is None:
@@ -153,6 +177,8 @@ class MediaIndexService:
     def _build_record_for_path(self, raw_path: str) -> dict[str, object] | None:
         full_path = os.path.normpath(raw_path)
         if not os.path.isfile(full_path):
+            return None
+        if _is_hidden_entry(full_path):
             return None
 
         ext = Path(full_path).suffix.lower()

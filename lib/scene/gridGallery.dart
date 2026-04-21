@@ -4250,6 +4250,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
     final result = await showControllerDialog<String>(
       context: context,
+      autofocusBoundary: false,
+      autofocusFirstFocusable: false,
+      requestFocus: false,
       builder: (ctx) {
         return AlertDialog(
           title: const Text('フォルダ名を変更'),

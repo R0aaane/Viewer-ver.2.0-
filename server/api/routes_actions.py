@@ -35,6 +35,7 @@ from server.services.import_tag_rule_service import (
     filter_supported_url_import_image_tags,
 )
 from server.services.url_download_service import UrlDownloadError, UrlDownloadOptions
+from server.vendor.kemono_dl.hitomi import strip_hitomi_download_prefix
 
 
 router = APIRouter(tags=["actions"], dependencies=[Depends(require_bearer_token)])
@@ -376,6 +377,7 @@ async def upload_files(
     if imported_count > 0:
         index_service = request.app.state.index_service
         metadata_store = request.app.state.metadata_store
+        should_organize_after_import = True
         rescanned_count = index_service.index_files([saved_path for saved_path, _, _ in saved_entries])
 
         try:
@@ -434,7 +436,7 @@ async def upload_files(
             imported_media_ids.append(media_id)
             resolved_entries.append((media_id, merged_tags))
 
-        if unresolved_paths and (has_any_tags or organizeAfterImport):
+        if unresolved_paths and (has_any_tags or should_organize_after_import):
             failed_name = os.path.basename(unresolved_paths[0])
             raise bad_request(f"Failed to resolve media identity after save: {failed_name}")
 
@@ -467,7 +469,7 @@ async def upload_files(
                 )
                 raise
 
-        if organizeAfterImport and imported_media_ids:
+        if should_organize_after_import and imported_media_ids:
             organized = metadata_store.organize_media_by_tags(
                 library_root=folder_path,
                 media_ids=imported_media_ids,
@@ -536,22 +538,31 @@ async def download_url(
     if settings.media_roots and not any(_is_inside_root(folder_path, root) for root in settings.media_roots):
         raise bad_request("folderRaw must be inside configured media roots")
 
-    before_paths = _collect_media_paths(folder_path)
+    staged_entries: list[tuple[str, str]] = []
+    staging_dir = _create_hidden_download_staging_dir(folder_path)
 
     try:
         download_result = await request.app.state.url_download_service.download_url(
             source_url=source_url,
-            destination_folder=folder_path,
+            destination_folder=staging_dir,
             options=options,
         )
+        if download_result.imported_count > 0:
+            staged_entries = _stage_download_url_imports(
+                folder_path=folder_path,
+                staging_dir=staging_dir,
+                overwrite_existing=payload.overwrite,
+            )
     except UrlDownloadError as error:
         raise bad_request(str(error)) from error
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
     tagged_count = 0
     organized_count = 0
     rescanned_count = 0
 
-    if download_result.imported_count > 0:
+    if staged_entries:
         index_service = request.app.state.index_service
         metadata_store = request.app.state.metadata_store
         common_tags = _build_import_tags(
@@ -561,20 +572,14 @@ async def download_url(
             character_tags=payload.characterTags,
         )
         source_urls = _collect_source_urls(payload.url, payload.urls)
-
-        after_paths = _collect_media_paths(folder_path)
-        imported_paths = _prefer_generated_pdf_import_paths(
-            folder_path,
-            sorted(after_paths.difference(before_paths)),
-        )
-        flattened_entries = _flatten_imported_media_paths(folder_path, imported_paths)
         rescanned_count = index_service.scan_folder(folder_path)
 
         resolved_entries: list[tuple[str, list[dict[str, str]]]] = []
         imported_media_ids: list[str] = []
         unresolved_paths: list[str] = []
         has_any_tags = bool(common_tags)
-        for saved_path, relative_path_hint in flattened_entries:
+        should_organize_after_import = True
+        for saved_path, relative_path_hint in staged_entries:
             inferred_tags = []
             hitomi_metadata = _lookup_hitomi_metadata_for_relative_path(
                 relative_path_hint,
@@ -605,7 +610,7 @@ async def download_url(
             imported_media_ids.append(media_id)
             resolved_entries.append((media_id, merged_tags))
 
-        if unresolved_paths and (has_any_tags or payload.organizeAfterImport):
+        if unresolved_paths and (has_any_tags or should_organize_after_import):
             failed_name = os.path.basename(unresolved_paths[0])
             raise bad_request(f"Failed to resolve media identity after save: {failed_name}")
 
@@ -615,7 +620,7 @@ async def download_url(
             metadata_store.add_tags_to_media(media_id, merged_tags)
             tagged_count += 1
 
-        if payload.organizeAfterImport and imported_media_ids:
+        if should_organize_after_import and imported_media_ids:
             organized = metadata_store.organize_media_by_tags(
                 library_root=folder_path,
                 media_ids=imported_media_ids,
@@ -1034,10 +1039,144 @@ async def _save_upload_file_atomic(
                 )
         raise
 
-def _collect_media_paths(folder_path: str) -> set[str]:
+def _is_hidden_temp_name(name: str) -> bool:
+    value = str(name or "").strip()
+    return bool(value) and value not in {".", ".."} and value.startswith(".")
+
+
+def _create_hidden_download_staging_dir(folder_path: str) -> str:
+    return tempfile.mkdtemp(prefix=".download-url-stage-", dir=folder_path)
+
+
+def _stage_download_url_imports(
+    *,
+    folder_path: str,
+    staging_dir: str,
+    overwrite_existing: bool,
+) -> list[tuple[str, str]]:
+    staged_media_paths = _collect_media_paths(staging_dir, include_hidden=True)
+    preferred_paths = _prefer_generated_pdf_import_paths(
+        staging_dir,
+        sorted(staged_media_paths),
+    )
+    flattened_entries = _flatten_imported_media_paths(staging_dir, preferred_paths)
+    saved_entries = _move_staged_media_entries_to_library(
+        folder_path=folder_path,
+        flattened_entries=flattened_entries,
+    )
+    _move_remaining_stage_items_to_folder(
+        staging_dir=staging_dir,
+        folder_path=folder_path,
+        overwrite_existing=overwrite_existing,
+    )
+    return saved_entries
+
+
+def _move_staged_media_entries_to_library(
+    *,
+    folder_path: str,
+    flattened_entries: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    saved_entries: list[tuple[str, str]] = []
+
+    for source_path, relative_hint in flattened_entries:
+        file_name = os.path.basename(source_path)
+        target_path = os.path.normpath(os.path.join(folder_path, file_name))
+        if os.path.exists(target_path):
+            if _same_file(source_path, target_path):
+                logger.info('[MOVE] skipped same-file old=%s new=%s', source_path, target_path)
+                try:
+                    os.remove(source_path)
+                except OSError:
+                    pass
+                saved_entries.append((os.path.normpath(target_path), relative_hint))
+                continue
+            logger.warning('[COPY] blocked duplicate-name source=%s target=%s', source_path, target_path)
+            raise bad_request('Duplicate file or folder name already exists')
+
+        shutil.move(source_path, target_path)
+        saved_entries.append((os.path.normpath(target_path), relative_hint))
+
+    return saved_entries
+
+
+def _move_remaining_stage_items_to_folder(
+    *,
+    staging_dir: str,
+    folder_path: str,
+    overwrite_existing: bool,
+) -> None:
+    for child_name in os.listdir(staging_dir):
+        source_path = os.path.join(staging_dir, child_name)
+        target_path = os.path.join(folder_path, child_name)
+        _merge_staged_path(
+            source_path=source_path,
+            target_path=target_path,
+            overwrite_existing=overwrite_existing,
+        )
+
+
+def _merge_staged_path(
+    *,
+    source_path: str,
+    target_path: str,
+    overwrite_existing: bool,
+) -> None:
+    if not os.path.exists(source_path):
+        return
+
+    if not os.path.exists(target_path):
+        shutil.move(source_path, target_path)
+        return
+
+    if os.path.isdir(source_path):
+        if not os.path.isdir(target_path):
+            raise bad_request('Duplicate file or folder name already exists')
+        for child_name in os.listdir(source_path):
+            _merge_staged_path(
+                source_path=os.path.join(source_path, child_name),
+                target_path=os.path.join(target_path, child_name),
+                overwrite_existing=overwrite_existing,
+            )
+        try:
+            if not os.listdir(source_path):
+                os.rmdir(source_path)
+        except OSError:
+            pass
+        return
+
+    if os.path.isdir(target_path):
+        raise bad_request('Duplicate file or folder name already exists')
+
+    if _same_file(source_path, target_path):
+        try:
+            os.remove(source_path)
+        except OSError:
+            pass
+        return
+
+    if overwrite_existing:
+        os.replace(source_path, target_path)
+        return
+
+    try:
+        os.remove(source_path)
+    except OSError:
+        pass
+
+
+def _collect_media_paths(folder_path: str, *, include_hidden: bool = False) -> set[str]:
     found: set[str] = set()
-    for base, _, files in os.walk(folder_path):
+    for base, dirs, files in os.walk(folder_path):
+        if not include_hidden:
+            dirs[:] = [
+                directory_name
+                for directory_name in dirs
+                if not _is_hidden_temp_name(directory_name)
+            ]
         for file_name in files:
+            if not include_hidden and _is_hidden_temp_name(file_name):
+                continue
             if not is_supported_media_extension(normalized_extension(file_name)):
                 continue
             found.add(os.path.normpath(os.path.join(base, file_name)))
@@ -1193,10 +1332,16 @@ def _is_generated_pdf_source_image(
     if not gallery_folder or gallery_folder == "." or creator_dir in {"", "."}:
         return False
 
-    candidate_pdf = posixpath.normpath(
-        posixpath.join(creator_dir, f"{gallery_folder}.pdf")
+    candidate_names = {gallery_folder}
+    stripped_gallery_folder = strip_hitomi_download_prefix(gallery_folder)
+    if stripped_gallery_folder:
+        candidate_names.add(stripped_gallery_folder)
+
+    return any(
+        posixpath.normpath(posixpath.join(creator_dir, f"{candidate_name}.pdf"))
+        in pdf_relative_paths
+        for candidate_name in candidate_names
     )
-    return candidate_pdf in pdf_relative_paths
 
 
 def _normalized_relative_path(path: str, folder_path: str) -> str:

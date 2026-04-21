@@ -632,7 +632,10 @@ class WebRemoteApiClient {
     }
   }
 
-  Future<List<WebRemoteFolder>> listFolders() async {
+  Future<List<WebRemoteFolder>> listFolders({bool refresh = false}) async {
+    if (refresh) {
+      _foldersFuture = null;
+    }
     final existing = _foldersFuture;
     if (existing != null) {
       return existing;
@@ -919,7 +922,9 @@ class WebRemoteApiClient {
     }
     return items
         .whereType<Map>()
-        .map((raw) => _parseReadingProgressEntry(Map<String, dynamic>.from(raw)))
+        .map(
+          (raw) => _parseReadingProgressEntry(Map<String, dynamic>.from(raw)),
+        )
         .toList(growable: false);
   }
 
@@ -938,7 +943,8 @@ class WebRemoteApiClient {
         'currentPage': currentPage,
         if (totalPages != null) 'totalPages': totalPages,
         if (progress != null) 'progress': progress,
-        if (lastReadAt != null) 'lastReadAt': lastReadAt.toUtc().toIso8601String(),
+        if (lastReadAt != null)
+          'lastReadAt': lastReadAt.toUtc().toIso8601String(),
         if (updatedAt != null) 'updatedAt': updatedAt.toUtc().toIso8601String(),
         if (identity != null) 'identity': identity,
       },

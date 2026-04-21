@@ -73,6 +73,7 @@ class WebRemoteViewerPage extends StatefulWidget {
 
 class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   static const int _threeUpPageSize = 30;
+  static const Duration _remoteRefreshInterval = Duration(seconds: 15);
 
   late MetadataSettings _settings;
   late final TextEditingController _apiController;
@@ -101,6 +102,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   _WebBrowserSortMode _browserSortMode = _WebBrowserSortMode.newest;
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
   int _threeUpPage = 1;
+  Timer? _remoteRefreshTimer;
+  DateTime? _latestObservedLibraryScanAt;
 
   @override
   void initState() {
@@ -118,6 +121,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   @override
   void dispose() {
+    _remoteRefreshTimer?.cancel();
     _apiController.dispose();
     _tokenController.dispose();
     _searchController.dispose();
@@ -237,10 +241,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
+        _latestObservedLibraryScanAt = null;
         _isConnecting = false;
         _homeErrorMessage = null;
         _statusMessage = 'API URL を入力すると Web から閲覧できます';
       });
+      _remoteRefreshTimer?.cancel();
+      _remoteRefreshTimer = null;
       return;
     }
 
@@ -257,10 +264,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _libraryRoot = null;
         _selectedEntry = null;
         _selectedFolderRaw = null;
+        _latestObservedLibraryScanAt = null;
         _isConnecting = false;
         _errorMessage = compatibilityError;
         _homeErrorMessage = compatibilityError;
       });
+      _remoteRefreshTimer?.cancel();
+      _remoteRefreshTimer = null;
       return;
     }
 
@@ -284,9 +294,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             : <WebRemoteFolder>[libraryRoot];
         _libraryRoot = libraryRoot;
         _selectedFolderRaw = selectedFolder;
+        _latestObservedLibraryScanAt = libraryRoot?.lastScannedAt;
         _surface = _WebRemoteSurface.home;
         _statusMessage = '接続済み: ${_settings.clientApiBaseUrl}';
       });
+      _restartRemoteRefreshTimer();
       if (selectedFolder != null) {
         await _refreshHomeEntries(force: true);
         await _loadEntries();
@@ -306,9 +318,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _homeRecentActivityById = const <String, ReadingProgressEntry>{};
         _libraryRoot = null;
         _selectedEntry = null;
+        _latestObservedLibraryScanAt = null;
         _errorMessage = error.toString();
         _homeErrorMessage = error.toString();
       });
+      _remoteRefreshTimer?.cancel();
+      _remoteRefreshTimer = null;
     } finally {
       if (mounted) {
         setState(() {
@@ -416,9 +431,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     switch (_browserSortMode) {
       case _WebBrowserSortMode.newest:
         sorted.sort((left, right) {
-          final addedCompare = _addedAtForEntry(right).compareTo(
-            _addedAtForEntry(left),
-          );
+          final addedCompare = _addedAtForEntry(
+            right,
+          ).compareTo(_addedAtForEntry(left));
           if (addedCompare != 0) {
             return addedCompare;
           }
@@ -432,9 +447,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           if (leftUnread != rightUnread) {
             return rightUnread ? 1 : -1;
           }
-          final addedCompare = _addedAtForEntry(right).compareTo(
-            _addedAtForEntry(left),
-          );
+          final addedCompare = _addedAtForEntry(
+            right,
+          ).compareTo(_addedAtForEntry(left));
           if (addedCompare != 0) {
             return addedCompare;
           }
@@ -456,9 +471,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               return viewedCompare;
             }
           }
-          final addedCompare = _addedAtForEntry(right).compareTo(
-            _addedAtForEntry(left),
-          );
+          final addedCompare = _addedAtForEntry(
+            right,
+          ).compareTo(_addedAtForEntry(left));
           if (addedCompare != 0) {
             return addedCompare;
           }
@@ -879,6 +894,60 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       }
     }
     return best;
+  }
+
+  void _restartRemoteRefreshTimer() {
+    _remoteRefreshTimer?.cancel();
+    if (_client == null || _libraryRoot == null) {
+      _remoteRefreshTimer = null;
+      return;
+    }
+    _remoteRefreshTimer = Timer.periodic(_remoteRefreshInterval, (_) {
+      unawaited(_pollForRemoteLibraryChanges());
+    });
+  }
+
+  Future<void> _pollForRemoteLibraryChanges() async {
+    final client = _client;
+    final currentRoot = _libraryRoot;
+    if (!mounted ||
+        client == null ||
+        currentRoot == null ||
+        _isConnecting ||
+        _isLoading ||
+        _homeLoading ||
+        _actionBusy) {
+      return;
+    }
+
+    try {
+      final folders = await client.listFolders(refresh: true);
+      final nextRoot = _resolveLibraryRoot(folders);
+      if (!mounted || nextRoot == null) {
+        return;
+      }
+
+      final previousScanAt = _latestObservedLibraryScanAt;
+      final nextScanAt = nextRoot.lastScannedAt;
+      final hasNewScan =
+          nextScanAt != null &&
+          (previousScanAt == null || nextScanAt.isAfter(previousScanAt));
+
+      setState(() {
+        _folders = <WebRemoteFolder>[nextRoot];
+        _libraryRoot = nextRoot;
+        _latestObservedLibraryScanAt = nextScanAt ?? previousScanAt;
+      });
+
+      if (!hasNewScan) {
+        return;
+      }
+
+      await _refreshHomeEntries(force: true);
+      await _loadEntries();
+    } catch (_) {
+      return;
+    }
   }
 
   String _normalizePathForContext(String raw, p.Context context) {
@@ -1512,7 +1581,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     final recentlyViewed = _recentlyViewedEntries(entries);
     for (final entry in recentlyViewed) {
       final activity = _recentActivityForEntry(entry);
-      if (activity == null || !ReadingProgressService.shouldShowContinueCard(activity)) {
+      if (activity == null ||
+          !ReadingProgressService.shouldShowContinueCard(activity)) {
         continue;
       }
       return _WebHomeResumeData(entry: entry, activity: activity);
@@ -2483,8 +2553,7 @@ class _WebHomeContinueReadingCard extends StatelessWidget {
                   final pageText = totalPages != null
                       ? 'p.$page / $totalPages'
                       : 'p.$page';
-                  final progressText =
-                      '${(activity.progress * 100).round()}%';
+                  final progressText = '${(activity.progress * 100).round()}%';
                   final narrow = constraints.maxWidth < 640;
                   final thumb = SizedBox(
                     width: narrow ? 120 : 144,
@@ -5686,8 +5755,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         pageCountInfo.count.clamp(1, 1 << 30),
         if (savedTotalPages != null && savedTotalPages > 0) savedTotalPages,
       ].reduce((left, right) => left > right ? left : right);
-      final effectivePage =
-          !_hasMovedPageSinceLoad && progress != null
+      final effectivePage = !_hasMovedPageSinceLoad && progress != null
           ? progress.currentPage
           : _page;
       setState(() {
