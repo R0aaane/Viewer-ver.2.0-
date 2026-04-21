@@ -1,0 +1,215 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/metadata_settings.dart';
+
+const String _fallbackAppVersion = String.fromEnvironment(
+  'PDF_VIEWER_APP_VERSION',
+  defaultValue: '1.0.1+2',
+);
+
+class AppVersionMismatch {
+  final String localVersion;
+  final String hostVersion;
+  final String latestVersion;
+  final String hostUrl;
+  final List<String> knownVersions;
+
+  const AppVersionMismatch({
+    required this.localVersion,
+    required this.hostVersion,
+    required this.latestVersion,
+    required this.hostUrl,
+    this.knownVersions = const <String>[],
+  });
+
+  bool get isLocalOlder => compareAppVersions(localVersion, latestVersion) < 0;
+
+  bool get isHostOlder => compareAppVersions(hostVersion, latestVersion) < 0;
+}
+
+class _HostVersionInfo {
+  final String version;
+  final String? latestKnownVersion;
+  final List<String> clientVersions;
+
+  const _HostVersionInfo({
+    required this.version,
+    required this.latestKnownVersion,
+    required this.clientVersions,
+  });
+}
+
+class AppVersionService {
+  static const String _lastStartedVersionKey = 'prefs.app.lastStartedVersion';
+
+  Future<String> currentVersionLabel() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final version = info.version.trim();
+      final build = info.buildNumber.trim();
+      if (version.isEmpty) {
+        return _fallbackAppVersion;
+      }
+      return build.isEmpty ? version : '$version+$build';
+    } catch (_) {
+      return _fallbackAppVersion;
+    }
+  }
+
+  Future<void> recordCurrentVersion() async {
+    final version = await currentVersionLabel();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastStartedVersionKey, version);
+  }
+
+  Future<AppVersionMismatch?> findHostVersionMismatch(
+    MetadataSettings settings,
+  ) async {
+    await recordCurrentVersion();
+
+    final baseUrl = switch (settings.appMode) {
+      AppMode.standalone => '',
+      AppMode.host => settings.hostLoopbackApiBaseUrl,
+      AppMode.client => settings.remoteApiBaseUrl,
+    }.trim();
+    if (baseUrl.isEmpty) {
+      return null;
+    }
+
+    final localVersion = await currentVersionLabel();
+    final hostInfo = await _fetchHostVersion(
+      baseUrl: baseUrl,
+      authToken: settings.authToken,
+      localVersion: localVersion,
+    );
+    if (hostInfo == null) {
+      return null;
+    }
+
+    final knownVersions = <String>{
+      localVersion,
+      hostInfo.version,
+      if (hostInfo.latestKnownVersion != null) hostInfo.latestKnownVersion!,
+      ...hostInfo.clientVersions,
+    }.where((version) => version.trim().isNotEmpty).toList(growable: false);
+    final latestVersion = _latestVersion(knownVersions);
+    if (latestVersion == null ||
+        (hostInfo.version == localVersion && latestVersion == localVersion)) {
+      return null;
+    }
+
+    return AppVersionMismatch(
+      localVersion: localVersion,
+      hostVersion: hostInfo.version,
+      latestVersion: latestVersion,
+      hostUrl: baseUrl,
+      knownVersions: knownVersions,
+    );
+  }
+
+  Future<_HostVersionInfo?> _fetchHostVersion({
+    required String baseUrl,
+    required String? authToken,
+    required String localVersion,
+  }) async {
+    final uri = _buildUri(baseUrl, '/health');
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6)
+      ..idleTimeout = const Duration(seconds: 6);
+
+    try {
+      final request = await client.getUrl(uri);
+      final token = authToken?.trim();
+      if (token != null && token.isNotEmpty) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
+      request.headers.set('X-Pdf-Viewer-App-Version', localVersion);
+
+      final response = await request.close().timeout(
+        const Duration(seconds: 6),
+      );
+      final payload = await response
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map) {
+        return null;
+      }
+      final version = decoded['version']?.toString().trim();
+      if (version == null || version.isEmpty) {
+        return null;
+      }
+      final clientVersions = decoded['clientVersions'] is List
+          ? (decoded['clientVersions'] as List)
+                .map((entry) => entry.toString().trim())
+                .where((entry) => entry.isNotEmpty)
+                .toList(growable: false)
+          : const <String>[];
+      return _HostVersionInfo(
+        version: version,
+        latestKnownVersion: decoded['latestKnownVersion']?.toString().trim(),
+        clientVersions: clientVersions,
+      );
+    } on FormatException {
+      return null;
+    } on SocketException {
+      return null;
+    } on TimeoutException {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Uri _buildUri(String baseUrl, String childPath) {
+    final baseUri = Uri.parse(baseUrl);
+    final left = baseUri.path.endsWith('/')
+        ? baseUri.path.substring(0, baseUri.path.length - 1)
+        : baseUri.path;
+    final right = childPath.startsWith('/') ? childPath : '/$childPath';
+    return baseUri.replace(path: '$left$right');
+  }
+}
+
+String? _latestVersion(List<String> versions) {
+  if (versions.isEmpty) {
+    return null;
+  }
+  return versions.reduce(
+    (latest, current) =>
+        compareAppVersions(latest, current) >= 0 ? latest : current,
+  );
+}
+
+int compareAppVersions(String left, String right) {
+  final leftParts = _numericVersionParts(left);
+  final rightParts = _numericVersionParts(right);
+  final maxLength = leftParts.length > rightParts.length
+      ? leftParts.length
+      : rightParts.length;
+
+  for (var i = 0; i < maxLength; i += 1) {
+    final leftValue = i < leftParts.length ? leftParts[i] : 0;
+    final rightValue = i < rightParts.length ? rightParts[i] : 0;
+    if (leftValue != rightValue) {
+      return leftValue.compareTo(rightValue);
+    }
+  }
+  return left.compareTo(right);
+}
+
+List<int> _numericVersionParts(String version) {
+  return RegExp(r'\d+')
+      .allMatches(version)
+      .map((match) => int.tryParse(match.group(0) ?? '') ?? 0)
+      .toList(growable: false);
+}

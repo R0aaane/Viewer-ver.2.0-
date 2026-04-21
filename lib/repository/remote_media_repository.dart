@@ -1339,7 +1339,7 @@ class RemoteMediaRepository implements MediaRepository {
     final mediaId = await _remoteMediaIdForItem(item);
     final cacheDir = await _ensureCacheSubdir('thumbs');
     final cacheName =
-        '${_cacheHash('$mediaId|${item.modified?.millisecondsSinceEpoch ?? 0}|${item.sizeBytes ?? 0}|thumb-remote-v5|$maxWidth')}.bin';
+        '${_cacheHash('$mediaId|${item.modified?.millisecondsSinceEpoch ?? 0}|${item.sizeBytes ?? 0}|thumb-remote-v6|$maxWidth')}.bin';
     final cacheFile = File(p.join(cacheDir.path, cacheName));
 
     final cached = await cacheFile.exists();
@@ -1353,9 +1353,37 @@ class RemoteMediaRepository implements MediaRepository {
     }
 
     final future = (() async {
-      final remoteBytes = await _client.fetchThumbnail(mediaId, width: maxWidth);
-      await _persistThumbBytes(cacheFile, cacheDir, remoteBytes);
-      return ThumbPair(front: remoteBytes, back: null);
+      try {
+        final remoteBytes = await _client.fetchThumbnail(
+          mediaId,
+          width: maxWidth,
+        );
+        await _persistThumbBytes(cacheFile, cacheDir, remoteBytes);
+        return ThumbPair(front: remoteBytes, back: null);
+      } catch (error, stackTrace) {
+        if (item.kind != MediaKind.pdf) {
+          rethrow;
+        }
+        debugPrint(
+          '[remote-media] server PDF thumbnail failed, rendering locally: '
+          'mediaId=$mediaId item=${item.id} error=$error',
+        );
+        debugPrintStack(
+          label: '[remote-media] server PDF thumbnail fallback',
+          stackTrace: stackTrace,
+        );
+        await _acquirePdfThumbFallbackSlot();
+        try {
+          final fallbackBytes = await _renderRemotePdfThumbnailLocally(
+            item,
+            maxWidth: maxWidth,
+          );
+          await _persistThumbBytes(cacheFile, cacheDir, fallbackBytes);
+          return ThumbPair(front: fallbackBytes, back: null);
+        } finally {
+          _releasePdfThumbFallbackSlot();
+        }
+      }
     })();
     _thumbInFlight[cacheFile.path] = future;
     try {

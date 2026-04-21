@@ -464,6 +464,7 @@ class RemoteMediaApiClient {
         if (height != null) 'height': '$height',
         if (page != null) 'page': '$page',
       },
+      rejectThumbnailPlaceholder: true,
     );
   }
 
@@ -475,6 +476,7 @@ class RemoteMediaApiClient {
     return _getBytes(
       '/media/${Uri.encodeComponent(mediaId)}/page/$pageNo',
       queryParameters: <String, String>{if (width != null) 'width': '$width'},
+      rejectThumbnailPlaceholder: true,
     );
   }
 
@@ -971,6 +973,7 @@ class RemoteMediaApiClient {
   Future<Uint8List> _getBytes(
     String path, {
     Map<String, String>? queryParameters,
+    bool rejectThumbnailPlaceholder = false,
   }) async {
     final uri = _buildUri(path, queryParameters: queryParameters);
     final client = HttpClient()
@@ -993,6 +996,20 @@ class RemoteMediaApiClient {
           _extractErrorMessage(jsonBody) ??
               _messageForStatus(response.statusCode),
           statusCode: response.statusCode,
+        );
+      }
+
+      final thumbnailStatus = response.headers
+          .value('x-thumbnail-status')
+          ?.trim()
+          .toLowerCase();
+      if (rejectThumbnailPlaceholder && thumbnailStatus == 'placeholder') {
+        final detail = response.headers.value('x-thumbnail-detail')?.trim();
+        throw RemoteMediaException(
+          detail == null || detail.isEmpty
+              ? 'Thumbnail placeholder returned'
+              : detail,
+          statusCode: 503,
         );
       }
 

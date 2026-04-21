@@ -1126,7 +1126,10 @@ class WebRemoteApiClient {
   }
 
   Future<Uint8List> fetchImageDownload(String mediaId) {
-    return _getBytes('/media/${Uri.encodeComponent(mediaId)}/download');
+    return _getBytes(
+      '/media/${Uri.encodeComponent(mediaId)}/download',
+      requestTimeout: actionTimeout,
+    );
   }
 
   Uri buildMediaDownloadUri(String mediaId) {
@@ -1291,16 +1294,23 @@ class WebRemoteApiClient {
   Future<Uint8List> _getBytes(
     String path, {
     Map<String, String>? queryParameters,
+    Duration? requestTimeout,
   }) async {
+    final effectiveTimeout = requestTimeout ?? timeout;
     return _runGetWithRetry(
       'GET',
-      () => _getBytesOnce(path, queryParameters: queryParameters),
+      () => _getBytesOnce(
+        path,
+        queryParameters: queryParameters,
+        requestTimeout: effectiveTimeout,
+      ),
     );
   }
 
   Future<Uint8List> _getBytesOnce(
     String path, {
     Map<String, String>? queryParameters,
+    required Duration requestTimeout,
   }) async {
     try {
       final request = await html.HttpRequest.request(
@@ -1308,7 +1318,7 @@ class WebRemoteApiClient {
         method: 'GET',
         responseType: 'arraybuffer',
         requestHeaders: _buildHeaders(),
-      ).timeout(timeout);
+      ).timeout(requestTimeout);
 
       final status = request.status ?? 0;
       final bytes = _responseBytes(request.response);

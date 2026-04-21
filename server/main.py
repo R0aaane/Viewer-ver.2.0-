@@ -25,6 +25,17 @@ from server.services.url_download_service import UrlDownloadService
 from server.web_static import mount_web_build
 
 
+CLIENT_APP_VERSION_HEADER = "x-pdf-viewer-app-version"
+EXPOSED_RESPONSE_HEADERS = [
+    "Accept-Ranges",
+    "Content-Length",
+    "Content-Range",
+    "ETag",
+    "Last-Modified",
+    "X-Thumbnail-Detail",
+    "X-Thumbnail-Status",
+]
+
 settings = load_settings()
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -55,6 +66,7 @@ async def lifespan(app: FastAPI):
     app.state.stream_service = stream_service
     app.state.thumbnail_service = thumbnail_service
     app.state.url_download_service = url_download_service
+    app.state.client_app_versions = set()
 
     if settings.startup_rescan and settings.media_roots:
         index_service.rescan_configured_roots(settings.media_roots)
@@ -89,7 +101,19 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=EXPOSED_RESPONSE_HEADERS,
 )
+
+
+@app.middleware("http")
+async def record_client_app_version(request, call_next):
+    version = (request.headers.get(CLIENT_APP_VERSION_HEADER) or "").strip()
+    if version:
+        client_versions = getattr(request.app.state, "client_app_versions", set())
+        client_versions.add(version[:80])
+        request.app.state.client_app_versions = client_versions
+    return await call_next(request)
+
 
 app.include_router(health_router)
 app.include_router(tags_router)

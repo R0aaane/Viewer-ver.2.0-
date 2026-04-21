@@ -15,6 +15,7 @@ import '../models/reading_progress.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
 import '../services/app_reading_progress_service.dart';
+import '../services/app_version_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
 import '../services/import_pdf_conversion_service.dart';
@@ -233,6 +234,7 @@ class GalleryGridPage extends StatefulWidget {
 
 class _GalleryGridPageState extends State<GalleryGridPage> {
   final ExternalShareService _externalShareService = ExternalShareService();
+  final AppVersionService _appVersionService = AppVersionService();
   final MediaIdResolver _homeMediaIdResolver = MediaIdResolver();
   final AppReadingProgressService _readingProgressService =
       AppReadingProgressService();
@@ -256,6 +258,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   final List<_PendingSharedImport> _pendingSharedImports =
       <_PendingSharedImport>[];
   final Set<String> _handledSharedPayloadKeys = <String>{};
+  final Set<String> _shownVersionMismatchKeys = <String>{};
   bool _processingSharedImport = false;
 
   final LinkedHashMap<String, Uint8List?> _folderPreviewCache = LinkedHashMap();
@@ -305,8 +308,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             _folderPreviewCacheBytes > _folderPreviewCacheMaxBytes)) {
       final oldestKey = _folderPreviewCache.keys.first;
       final oldestVal = _folderPreviewCache.remove(oldestKey);
-      if (oldestVal != null)
+      if (oldestVal != null) {
         _folderPreviewCacheBytes -= oldestVal.lengthInBytes;
+      }
     }
   }
 
@@ -622,7 +626,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     super.initState();
     _searchFocusNode.addListener(_handleGallerySearchFocusChange);
     _loadPrefsAndAutoOpenFolder();
-    unawaited(_initializeHostServerIfNeeded());
+    unawaited(_initializeHostServerAndCheckVersion());
     _bindExternalSharePayloads();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reloadArtistTagMasters();
@@ -756,7 +760,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-  Future<void> _initializeHostServerIfNeeded() async {
+  Future<void> _initializeHostServerAndCheckVersion() async {
     await widget.hostServerService.refresh();
     final settings = widget.tagService.settings;
     if (settings.isHostMode && settings.autoStartHostServer) {
@@ -767,6 +771,58 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       } catch (error, stackTrace) {
         _logUiError('initializeHostServerIfNeeded', error, stackTrace);
       }
+    }
+    await _checkAppVersionCompatibility();
+  }
+
+  Future<void> _checkAppVersionCompatibility() async {
+    try {
+      final mismatch = await _appVersionService.findHostVersionMismatch(
+        widget.tagService.settings,
+      );
+      if (mismatch == null || !mounted) {
+        return;
+      }
+
+      final mismatchKey =
+          '${mismatch.hostUrl}|${mismatch.localVersion}|${mismatch.hostVersion}';
+      if (!_shownVersionMismatchKeys.add(mismatchKey)) {
+        return;
+      }
+
+      final olderTargets = <String>[
+        if (mismatch.isLocalOlder) 'この端末',
+        if (mismatch.isHostOlder) 'ホスト側',
+      ];
+      final olderTarget = olderTargets.isEmpty
+          ? '古い側のアプリ'
+          : '${olderTargets.join('と')}のアプリ';
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('アプリのバージョンが違います'),
+            content: Text(
+              'この端末: ${mismatch.localVersion}\n'
+              'ホスト: ${mismatch.hostVersion}\n'
+              '最新: ${mismatch.latestVersion}\n\n'
+              '不具合防止のため、$olderTargetをアップデートしてから利用してください。',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('後で'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('確認'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (error, stackTrace) {
+      _logUiError('checkAppVersionCompatibility', error, stackTrace);
     }
   }
 
@@ -2015,9 +2071,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   // ----------------
   // Tags (SharedPreferences萓晏ｭ・
 
-  List<String> _tagsFor(MediaItem item) =>
-      _tagsById[item.id] ?? const <String>[];
-
   Future<void> _refreshCurrentPageTags([List<MediaItem>? source]) async {
     final targets = (source ?? _items)
         .where((item) => item.kind != MediaKind.folder)
@@ -2055,10 +2108,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
       _currentPageMetadataAvailable = true;
     });
-  }
-
-  Future<void> _reloadTags() async {
-    await _refreshCurrentPageTags();
   }
 
   List<String> _homeSearchTagsFor(MediaItem item) {
@@ -2372,92 +2421,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return values.take(maxValues).join(' / ');
   }
 
-  String _homeSearchMediaTypeLabel(MediaItem item) {
-    final values = _homeSearchValuesForCategory(item, TagCategory.mediaType);
-    if (values.isNotEmpty) {
-      return values.join(' / ');
-    }
-    return item.kind == MediaKind.pdf ? 'PDF' : '画像';
-  }
-
-  List<Tag> _homeSearchDisplayTags(MediaItem item, {int maxTags = 12}) {
-    final details = _homeSearchTagDetailsFor(item);
-    final out = <Tag>[];
-    final seen = <String>{};
-
-    if (details.isNotEmpty) {
-      for (final entry in details) {
-        if (entry.tag.category == TagCategory.artist ||
-            entry.tag.category == TagCategory.series ||
-            entry.tag.category == TagCategory.mediaType) {
-          continue;
-        }
-        final trimmed = entry.tag.name.trim();
-        if (trimmed.isEmpty) {
-          continue;
-        }
-        final key = trimmed.toLowerCase();
-        if (seen.add(key)) {
-          out.add(Tag(name: trimmed, category: entry.tag.category));
-        }
-        if (out.length >= maxTags) {
-          return out;
-        }
-      }
-    }
-
-    for (final raw in _homeSearchTagsFor(item)) {
-      final trimmed = raw.trim();
-      if (trimmed.isEmpty) {
-        continue;
-      }
-      final key = trimmed.toLowerCase();
-      if (seen.add(key)) {
-        out.add(Tag(name: trimmed, category: TagCategory.free));
-      }
-      if (out.length >= maxTags) {
-        break;
-      }
-    }
-    return out;
-  }
-
-  String _detailedBrowseQueryForTag(Tag tag) {
-    final normalized = tag.name.trim();
-    if (normalized.isEmpty) {
-      return '';
-    }
-    switch (tag.category) {
-      case TagCategory.artist:
-        return 'artist:$normalized';
-      case TagCategory.series:
-        return 'series:$normalized';
-      case TagCategory.mediaType:
-        return 'type:$normalized';
-      case TagCategory.character:
-        return 'character:$normalized';
-      case TagCategory.free:
-        return '#$normalized';
-    }
-  }
-
-  Future<void> _searchDetailedBrowseByTag(Tag tag) async {
-    final query = _detailedBrowseQueryForTag(tag);
-    if (query.isEmpty) {
-      return;
-    }
-    _homeSearchCtrl.value = TextEditingValue(
-      text: query,
-      selection: TextSelection.collapsed(offset: query.length),
-    );
-    if (mounted) {
-      setState(() => _homeQuery = query);
-    } else {
-      _homeQuery = query;
-    }
-    await _runHomeSearch(includeAllWhenEmpty: true);
-  }
-
   String _formatDetailedBrowseDate(DateTime? value) {
     if (value == null) {
       return '不明';
@@ -2468,21 +2431,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final hour = local.hour.toString().padLeft(2, '0');
     final minute = local.minute.toString().padLeft(2, '0');
     return '${local.year}/$month/$day $hour:$minute';
-  }
-
-  String? _formatDetailedBrowseFileSize(int? sizeBytes) {
-    if (sizeBytes == null || sizeBytes <= 0) {
-      return null;
-    }
-    const units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
-    var value = sizeBytes.toDouble();
-    var unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-      value /= 1024;
-      unitIndex++;
-    }
-    final decimals = value >= 10 || unitIndex == 0 ? 0 : 1;
-    return '${value.toStringAsFixed(decimals)} ${units[unitIndex]}';
   }
 
   Color _detailedBrowseAccentColor(BuildContext context, MediaItem item) {
@@ -2564,238 +2512,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return _folderLabelForItem(item);
   }
 
-  Widget _buildDetailedBrowseMetaRow(
-    BuildContext context,
-    String label,
-    String value,
-  ) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 72,
-            child: Text(
-              label,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(child: Text(value, style: theme.textTheme.bodyMedium)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDetailedBrowseCard(MediaItem item) {
-    final artists = _homeSearchPrimaryValueForCategory(
-      item,
-      TagCategory.artist,
-    );
-    final series = _homeSearchPrimaryValueForCategory(item, TagCategory.series);
-    final mediaType = _homeSearchMediaTypeLabel(item);
-    final folderLabel = _folderLabelForItem(item);
-    final tags = _homeSearchDisplayTags(item);
-    final updatedAt = _formatDetailedBrowseDate(
-      item.modified ?? _getUpdatedAt(item),
-    );
-    final fileSize = _formatDetailedBrowseFileSize(item.sizeBytes);
-    final isSelected = _selectedIds.contains(item.id);
-    final isFavorite = _favorites.contains(item.id);
-
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      clipBehavior: Clip.antiAlias,
-      elevation: isSelected ? 3 : 1,
-      child: ControllerFocusable(
-        debugLabel: 'browse-card-${item.id}',
-        borderRadius: BorderRadius.circular(18),
-        onLongPress: () {
-          if (!_selectMode) {
-            _enterSelectMode(item);
-          } else {
-            _toggleSelect(item);
-          }
-        },
-        onPressed: () async {
-          if (_selectMode) {
-            _toggleSelect(item);
-            return;
-          }
-          await _openDetailFromHome(item);
-        },
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final narrow = constraints.maxWidth < 760;
-            final accent = _detailedBrowseAccentColor(context, item);
-            final thumb = SizedBox(
-              width: narrow ? double.infinity : 148,
-              height: narrow ? 208 : 208,
-              child: _buildDetailedBrowseThumb(item),
-            );
-            final metadata = Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  color: accent,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _displayTitleForItem(item),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            avatar: Icon(
-                              item.kind == MediaKind.pdf
-                                  ? Icons.picture_as_pdf_outlined
-                                  : Icons.image_outlined,
-                              size: 16,
-                            ),
-                            label: Text(
-                              item.kind == MediaKind.pdf ? 'PDF' : '画像',
-                            ),
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          Chip(
-                            avatar: const Icon(Icons.folder_outlined, size: 16),
-                            label: Text(
-                              folderLabel,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          if (isFavorite)
-                            const Chip(
-                              avatar: Icon(Icons.star, size: 16),
-                              label: Text('お気に入り'),
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                            ),
-                          if (isSelected)
-                            const Chip(
-                              avatar: Icon(Icons.check_circle, size: 16),
-                              label: Text('選択中'),
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildDetailedBrowseMetaRow(context, '作家', artists),
-                      _buildDetailedBrowseMetaRow(context, 'シリーズ', series),
-                      _buildDetailedBrowseMetaRow(context, '種別', mediaType),
-                      const SizedBox(height: 8),
-                      Text(
-                        'タグ',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (tags.isEmpty)
-                        Text(
-                          'タグなし',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        )
-                      else
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final tag in tags)
-                              ActionChip(
-                                label: Text(tag.name),
-                                onPressed: () =>
-                                    _searchDetailedBrowseByTag(tag),
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                              ),
-                          ],
-                        ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '更新: $updatedAt',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                          if (fileSize != null)
-                            Text(
-                              fileSize,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          const SizedBox(width: 8),
-                          const Icon(Icons.chevron_right),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            );
-
-            return DecoratedBox(
-              decoration: BoxDecoration(
-                border: isSelected
-                    ? Border.all(
-                        color: Theme.of(context).colorScheme.primary,
-                        width: 1.5,
-                      )
-                    : null,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: narrow
-                    ? Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [thumb, const SizedBox(height: 12), metadata],
-                      )
-                    : Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          thumb,
-                          const SizedBox(width: 14),
-                          Expanded(child: metadata),
-                        ],
-                      ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
   Widget _buildDetailedBrowseGridTile(MediaItem item) {
     final theme = Theme.of(context);
     final subtitle = _detailedBrowseTileSubtitle(item);
@@ -2834,7 +2550,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               ? Border.all(color: theme.colorScheme.primary, width: 2)
               : null,
           color: isSelected
-              ? theme.colorScheme.primary.withOpacity(0.04)
+              ? theme.colorScheme.primary.withValues(alpha: 0.04)
               : Colors.transparent,
         ),
         child: Column(
@@ -2865,7 +2581,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     bottom: 8,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        color: accent.withOpacity(0.88),
+                        color: accent.withValues(alpha: 0.88),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Padding(
@@ -2889,7 +2605,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                     Positioned.fill(
                       child: Container(
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.18),
+                          color: Colors.black.withValues(alpha: 0.18),
                           borderRadius: BorderRadius.circular(14),
                         ),
                         padding: const EdgeInsets.all(8),
@@ -2929,7 +2645,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.labelSmall?.copyWith(
-                color: accent.withOpacity(0.95),
+                color: accent.withValues(alpha: 0.95),
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -3223,6 +2939,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (_currentFolderRaw != null && _currentFolderRaw!.startsWith(lib.raw)) {
         await _loadFolder(FolderHandle(_currentFolderRaw!), saveAsLast: false);
       }
+
+      if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('ライブラリ整理完了: 移動 ${moved.length} 件')),
@@ -3729,7 +3447,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount: items.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 10),
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
                   itemBuilder: (context, index) => itemBuilder(items[index]),
                 ),
               ),
@@ -4355,8 +4073,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final sanitized = a == null
         ? null
         : _sanitizeFolderAlias(a, fallbackRaw: raw);
-    if (sanitized != null && sanitized.trim().isNotEmpty)
+    if (sanitized != null && sanitized.trim().isNotEmpty) {
       return sanitized.trim();
+    }
     return _basename(raw);
   }
 
@@ -4562,6 +4281,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
       return;
     }
+
+    if (!mounted) return;
 
     final changed = await Navigator.push<bool>(
       context,
@@ -4868,7 +4589,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           content: Text(
             targets.length == 1
                 ? '「${targets.first.displayName}」を削除しました'
-                : '${deletedCount}件を削除しました',
+                : '$deletedCount件を削除しました',
           ),
         ),
       );
@@ -5194,6 +4915,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         });
       }
 
+      if (!mounted) return;
+
       dialogShown = true;
       unawaited(
         showControllerDialog<void>(
@@ -5503,7 +5226,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: chips.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (context, index) {
                 final chip = chips[index];
                 final selected = activeSeriesKey == chip.name.toLowerCase();
@@ -6027,6 +5750,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     var dialogShown = false;
     final dialogHandle = _RouteBoundDialogHandle();
     try {
+      if (!mounted) return null;
+
       dialogShown = true;
       unawaited(
         showControllerDialog<void>(
@@ -6137,6 +5862,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     var dialogShown = false;
     final dialogHandle = _RouteBoundDialogHandle();
     try {
+      if (!mounted) return;
+
       dialogShown = true;
       unawaited(
         showControllerDialog<void>(
@@ -6252,6 +5979,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
       }
 
+      if (!mounted) return;
+
       dialogShown = true;
       unawaited(
         showControllerDialog<void>(
@@ -6353,6 +6082,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _refreshDetailedBrowseIfNeeded();
       await _refreshCurrentPageTags();
       await _refreshArtistTagCounts();
+
+      if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -6529,6 +6260,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _refreshDetailedBrowseIfNeeded();
       await _refreshCurrentPageTags();
       await _refreshArtistTagCounts();
+
+      if (!mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('蜈ｱ譛峨＆繧後◆繝輔ぃ繧､繝ｫ蜿悶ｊ霎ｼ縺ｿ: $importedCount 莉ｶ')),
@@ -7024,6 +6759,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _refreshCurrentPageTags();
       await _refreshArtistTagCounts();
 
+      if (!mounted) {
+        return;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Imported shared files: $importedCount')),
       );
@@ -7252,6 +6991,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         folder: folder,
         beforeItemIds: beforeItemIds,
       );
+      if (!mounted) return;
+
       final afterItemsSnapshot = observedImport.afterItemsSnapshot;
       var effectiveImportedCount = result.importedCount;
       if (observedImport.observedImportedCount > effectiveImportedCount) {
@@ -7313,9 +7054,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _refreshCurrentPageTags();
       await _refreshArtistTagCounts();
 
+      if (!mounted) return;
+
       final parts = <String>[
         '$effectiveImportedCount 件',
-        if (inferredTaggedCount > 0) 'タグ ${inferredTaggedCount} 件',
+        if (inferredTaggedCount > 0) 'タグ $inferredTaggedCount 件',
         if (result.skippedCount > 0) 'スキップ ${result.skippedCount} 件',
         if (result.failedCount > 0) '失敗 ${result.failedCount} 件',
       ];
@@ -7366,12 +7109,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         await _refreshCurrentPageTags();
         await _refreshArtistTagCounts();
 
+        if (!mounted) return;
+
         final recoveryNote = _isLikelyTimeoutImportError(e)
             ? 'ホスト応答はタイムアウトしましたが、取り込み結果を確認できました'
             : 'エラー後に取り込み結果を確認できました';
         final parts = <String>[
           '${observedImport.observedImportedCount} 件',
-          if (inferredTaggedCount > 0) 'タグ ${inferredTaggedCount} 件',
+          if (inferredTaggedCount > 0) 'タグ $inferredTaggedCount 件',
           recoveryNote,
         ];
         final message = '$successLabel: ${parts.join(' / ')}';
@@ -7811,6 +7556,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await _refreshCurrentPageTags();
     await _refreshDetailedBrowseIfNeeded();
     await _reloadArtistTagMasters();
+    await _checkAppVersionCompatibility();
     if (mounted) {
       setState(() {});
     }
@@ -8536,7 +8282,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           Text('メディアビューア', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 4),
           Text(
-            '現在のフォルダ: ${currentLabel}',
+            '現在のフォルダ: $currentLabel',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -9763,45 +9509,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
-  Widget _buildGridFromList(
-    List<MediaItem> items, {
-    bool showFolderLabel = false,
-    required Future<void> Function() onRefresh,
-  }) {
-    if (items.isEmpty) {
-      return _buildRefreshableStatusBody(
-        onRefresh: onRefresh,
-        child: _buildEmptyBody(
-          title: '該当するアイテムがありません',
-          message: '引っ張って更新するか、別の条件を試してください。',
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: onRefresh,
-      child: GridView.builder(
-        physics: _refreshScrollPhysics,
-        cacheExtent: 200,
-        padding: const EdgeInsets.all(12),
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 220,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 0.75,
-        ),
-        itemCount: items.length,
-        itemBuilder: (context, index) {
-          final item = items[index];
-          return _buildGridTile(
-            item,
-            showFolderLabel: showFolderLabel,
-            detailItemsSource: items,
-          );
-        },
-      ),
-    );
-  }
 }
 
 class _ThumbTile extends StatelessWidget {
@@ -10039,7 +9746,7 @@ class _ThumbTile extends StatelessWidget {
   Widget _buildSelectionOverlay() {
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withOpacity(0.35),
+        color: Colors.black.withValues(alpha: 0.35),
         alignment: Alignment.topRight,
         padding: const EdgeInsets.all(8),
         child: const Icon(Icons.check_circle, size: 26),
@@ -10057,7 +9764,7 @@ class _FavButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.black.withOpacity(0.55),
+      color: Colors.black.withValues(alpha: 0.55),
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -10082,7 +9789,7 @@ class _PdfBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.65),
+        color: Colors.black.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(8),
       ),
       child: const Padding(
@@ -10107,7 +9814,7 @@ class _FolderBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.65),
+        color: Colors.black.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(8),
       ),
       child: const Padding(
@@ -10131,7 +9838,7 @@ class _TitleChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.65),
+        color: Colors.black.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Padding(

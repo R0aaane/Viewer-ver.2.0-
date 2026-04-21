@@ -5,6 +5,7 @@ import '../database/tag_service.dart';
 import '../repository/mediaRepository.dart';
 import '../repository/repositoryFactory.dart';
 import '../scene/gridGallery.dart';
+import '../services/app_version_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/host_api_server_service.dart';
 import 'app_bootstrap_shared.dart';
@@ -16,6 +17,7 @@ Future<void> bootstrapApp() async {
 
   final appDb = AppDb();
   final tagService = TagService(appDb);
+  await AppVersionService().recordCurrentVersion();
   await tagService.initialize();
   final hostServerService = HostApiServerService();
   await hostServerService.refresh();

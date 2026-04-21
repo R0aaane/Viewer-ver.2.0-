@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/tag_service.dart';
 import '../models/metadata_settings.dart';
+import 'app_version_service.dart';
 import 'app_storage_paths.dart';
 import 'app_settings_service.dart';
 import 'remote_tag_api_client.dart';
@@ -713,6 +714,8 @@ class HostApiServerService extends ChangeNotifier {
     env['MEDIA_SERVER_MEDIA_ROOTS'] = roots.join(';');
     env['MEDIA_SERVER_AUTH_TOKEN'] = settings.authToken?.trim() ?? '';
     env['MEDIA_SERVER_DATA_DIR'] = dataDir.path;
+    env['MEDIA_SERVER_VERSION'] = await AppVersionService()
+        .currentVersionLabel();
     env['MEDIA_SERVER_STARTUP_RESCAN'] = 'true';
     env['MEDIA_SERVER_CORS_ORIGINS'] = '*';
     return env;
@@ -721,10 +724,10 @@ class HostApiServerService extends ChangeNotifier {
   Future<List<String>> _loadMediaRoots() async {
     final prefs = await SharedPreferences.getInstance();
     final settings = await _settingsService.loadMetadataSettings();
-    final roots = <String>[
+    final roots = <String>{
       ...(prefs.getStringList(_foldersPrefsKey) ?? const <String>[])
           .where((entry) => entry.trim().isNotEmpty && !entry.startsWith('content://')),
-    ].toSet().toList(growable: true);
+    }.toList(growable: true);
 
     final libraryPath = await resolveLibraryPath(settings);
     final libraryDir = Directory(libraryPath);

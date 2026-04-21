@@ -227,7 +227,7 @@ class ThumbnailService:
 
         pdf: pdfium.PdfDocument | None = None
         try:
-            pdf = pdfium.PdfDocument(path)
+            pdf = self._open_pdf_document(path)
             return len(pdf)
         except pdfium.PdfiumError:
             logger.exception(
@@ -261,7 +261,7 @@ class ThumbnailService:
         page: pdfium.PdfPage | None = None
         rendered = None
         try:
-            pdf = pdfium.PdfDocument(path)
+            pdf = self._open_pdf_document(path)
             if page_no < 1 or page_no > len(pdf):
                 raise bad_request("pageNo is out of range")
             page = pdf[page_no - 1]
@@ -361,6 +361,14 @@ class ThumbnailService:
             is_file,
             size_bytes,
         )
+
+    def _open_pdf_document(self, path: str) -> pdfium.PdfDocument:
+        handle = open(path, "rb")
+        try:
+            return pdfium.PdfDocument(handle, autoclose=True)
+        except Exception:
+            handle.close()
+            raise
 
     def _log_pdf_probe(self, media_id: str, path: str, *, context: str) -> None:
         exists = os.path.exists(path)

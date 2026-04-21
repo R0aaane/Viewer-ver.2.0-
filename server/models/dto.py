@@ -13,6 +13,8 @@ class HealthResponse(BaseModel):
     ok: bool = True
     service: str
     version: str
+    latestKnownVersion: str | None = None
+    clientVersions: list[str] = Field(default_factory=list)
 
 
 class TagDto(BaseModel):
