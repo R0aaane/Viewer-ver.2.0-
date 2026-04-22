@@ -81,12 +81,6 @@ class UrlImportDownloaderService {
     final prepared = await _prepareImportSources(sourceUrl, effectiveOptions);
 
     if (prepared.isEmpty && !effectiveOptions.hasFavoriteTargets) {
-      /* throw const UrlImportDownloaderException(
-        '逶ｴ謗･繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨〒縺阪ｋ URL 縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ縺ｧ縺励◆',
-      ); */
-      /* throw const UrlImportDownloaderException(
-        'Direct download does not support favorites import',
-      ); */
       throw const UrlImportDownloaderException(
         'No downloadable URLs were found',
       );
@@ -164,7 +158,7 @@ class UrlImportDownloaderService {
     if (effectiveOptions.hasFavoriteTargets) {
       throw lastLauncherMissingError ??
           const UrlImportDownloaderException(
-            'favorites 蜿門ｾ励↓縺ｯ Python 繝ｩ繝ｳ繝√Ε繝ｼ繧帝K霈峨〒縺阪∪縺帙ｓ',
+            'favorites 取得には Python ランチャーが必要です',
           );
     }
 
@@ -391,7 +385,7 @@ class UrlImportDownloaderService {
             /*
             statusLabel: 'URL からダウンロードしています',
             */
-            statusLabel: 'Downloading URL',
+            statusLabel: 'URL からダウンロードしています',
           ),
         );
 
@@ -486,7 +480,7 @@ class UrlImportDownloaderService {
             /*
             statusLabel: 'URL ダウンロードを処理しています',
             */
-            statusLabel: 'Saved URL file',
+            statusLabel: 'URL ダウンロードを処理しています',
           ),
         );
       }
@@ -512,17 +506,14 @@ class UrlImportDownloaderService {
     void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     if (options.hasFavoriteTargets) {
-      /* throw const UrlImportDownloaderException(
-        '縺薙・迺ｰ蠅・・繧ｹ繧ｿ繝ｳ繝峨い繝ｭ繝ｳ URL 蜿悶ｊ霎ｼ縺ｿ縺ｧ縺ｯ favorites 蜿門ｾ励・譛ｪ蟇ｾ蠢懊〒縺吶・
-        '逶ｴ謗･繝｡繝・ぅ繧｢ URL 繧貞・蜉帙＠縺ｦ縺上□縺輔＞縲・,
-      ); */
       throw const UrlImportDownloaderException(
-        'Direct download does not support favorites import',
+        'この環境のスタンドアロン URL 取り込みでは favorites 取得は未対応です。'
+        '直接メディア URL を入力してください。',
       );
     }
     if (urls.isEmpty) {
       throw const UrlImportDownloaderException(
-        '逶ｴ謗･繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨〒縺阪ｋ URL 縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ縺ｧ縺励◆',
+        '直接ダウンロードできる URL が見つかりませんでした',
       );
     }
 
@@ -562,10 +553,7 @@ class UrlImportDownloaderService {
             completedFiles: importedCount + skippedCount + failedCount,
             totalFiles: urls.length,
             currentFileName: rawUrl,
-            /*
-            statusLabel: 'URL 縺九ｉ繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨＠縺ｦ縺・∪縺・,
-            */
-            statusLabel: 'Downloading URL',
+            statusLabel: 'URL からダウンロードしています',
           ),
         );
 
@@ -657,10 +645,7 @@ class UrlImportDownloaderService {
             completedFiles: completed,
             totalFiles: urls.length,
             currentFileName: fileName,
-            /*
-            statusLabel: 'URL 繝繧ｦ繝ｳ繝ｭ繝ｼ繝峨ｒ蜃ｦ逅・＠縺ｦ縺・∪縺・,
-            */
-            statusLabel: 'Saved URL file',
+            statusLabel: 'URL ダウンロードを処理しています',
           ),
         );
       }

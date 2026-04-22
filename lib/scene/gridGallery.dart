@@ -4900,18 +4900,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final selection = result.selection;
     final request = result.request;
 
-    if (request.metadata.convertToPdfOnHost &&
-        !_shouldUseRawHostImportSelection()) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('ホスト側PDF化APIはまだ未実装です。画像のまま取り込むを選択してください。'),
-        ),
-      );
-      await _cleanupImportSelectionPaths(selection.cleanupPaths);
-      return;
-    }
-
     final progress = ValueNotifier<MediaTransferProgress?>(null);
     var dialogShown = false;
     final dialogHandle = _RouteBoundDialogHandle();
@@ -5152,37 +5140,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           if (pickedItems.isEmpty) {
             return null;
           }
-          if (_shouldUseRawHostImportSelection()) {
-            return _PreparedImportSelection(
-              sourceKind: sourceKind,
-              items: pickedItems,
-            );
-          }
-          ensureDialogShown();
-          progress.value = const MediaTransferProgress(
-            sentBytes: 0,
-            totalBytes: 0,
-            completedFiles: 0,
-            totalFiles: 0,
-            statusLabel: '画像フォルダを PDF に変換しています',
-          );
-          final converted = await _convertHostFolderSelectionToPdf(
-            pickedItems,
-            onProgress: (done, total) {
-              ensureDialogShown();
-              progress.value = MediaTransferProgress(
-                sentBytes: 0,
-                totalBytes: 0,
-                completedFiles: done,
-                totalFiles: total,
-                statusLabel: '画像フォルダを PDF に変換しています',
-              );
-            },
-          );
           return _PreparedImportSelection(
             sourceKind: sourceKind,
-            items: converted.items,
-            cleanupPaths: converted.cleanupPaths,
+            items: pickedItems,
           );
         } finally {
           progress.dispose();
@@ -5254,125 +5214,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ],
       ),
     );
-  }
-
-  // Keep the original file selection so the host can optionally convert the
-  // uploaded images into a PDF after transfer.
-  bool _shouldUseRawHostImportSelection() => true;
-
-  Future<_PreparedImportSelection> _convertHostFolderSelectionToPdf(
-    List<MediaItem> items, {
-    void Function(int done, int total)? onProgress,
-  }) async {
-    final pdfItems = items
-        .where((item) => item.kind == MediaKind.pdf)
-        .toList(growable: false);
-    final imageItems = items
-        .where((item) => item.kind == MediaKind.image)
-        .toList(growable: false);
-    if (imageItems.isEmpty || pdfItems.isNotEmpty) {
-      return _PreparedImportSelection(
-        sourceKind: ImportSourceKind.folder,
-        items: items,
-      );
-    }
-
-    final folderLabel = _hostImportFolderLabel(imageItems);
-    final created = await PdfExportService.exportFolderToTemporaryPdf(
-      widget.repo,
-      imageItems,
-      folderLabel,
-      onProgress: onProgress,
-    );
-    final generatedItem = await _buildGeneratedPdfItem(created);
-    if (generatedItem == null) {
-      throw Exception('画像フォルダの PDF 変換結果を読み込めませんでした');
-    }
-
-    final sourceFolderRaw = _hostImportSourceFolderRaw(imageItems);
-    final inferred = ImportTagRuleService.inferForGeneratedPdf(
-      sourceFolderRaw: sourceFolderRaw,
-      sourceFolderLabel: folderLabel,
-      generatedFileName: created.savedName,
-    );
-    final mergedTags = _mergeDistinctTags(inferred.tags);
-    final taggedItem = MediaItem(
-      id: generatedItem.id,
-      displayName: generatedItem.displayName,
-      kind: generatedItem.kind,
-      folderRaw: generatedItem.folderRaw,
-      modified: generatedItem.modified,
-      sizeBytes: generatedItem.sizeBytes,
-      tags: mergedTags,
-    );
-
-    return _PreparedImportSelection(
-      sourceKind: ImportSourceKind.folder,
-      items: <MediaItem>[taggedItem],
-      cleanupPaths: <String>[
-        if (created.savedPath?.trim().isNotEmpty ?? false)
-          created.savedPath!.trim(),
-      ],
-    );
-  }
-
-  String _hostImportFolderLabel(List<MediaItem> items) {
-    if (items.isEmpty) {
-      return 'import_folder';
-    }
-    final rawFolder = _hostImportSourceFolderRaw(items);
-    if (rawFolder.isNotEmpty && !rawFolder.startsWith('content://')) {
-      final normalized = rawFolder.replaceAll('\\', '/');
-      final parts = normalized
-          .split('/')
-          .map((part) => part.trim())
-          .where((part) => part.isNotEmpty)
-          .toList(growable: false);
-      if (parts.isNotEmpty) {
-        return parts.last;
-      }
-    }
-    final folderRaw = items.first.folderRaw.trim();
-    if (folderRaw.isNotEmpty && !folderRaw.startsWith('content://')) {
-      final name = p.basename(folderRaw);
-      if (name.trim().isNotEmpty) {
-        return name.trim();
-      }
-    }
-    return 'import_folder_${DateTime.now().millisecondsSinceEpoch}';
-  }
-
-  String _hostImportSourceFolderRaw(List<MediaItem> items) {
-    final candidates = items
-        .map((item) => item.folderRaw.trim())
-        .where((raw) => raw.isNotEmpty)
-        .toList(growable: false);
-    if (candidates.isEmpty) {
-      return '';
-    }
-    final first = candidates.first;
-    final allSame = candidates.every((raw) => raw == first);
-    if (allSame) {
-      return first;
-    }
-    return first;
-  }
-
-  List<Tag> _mergeDistinctTags(Iterable<Tag> tags) {
-    final out = <Tag>[];
-    final seen = <String>{};
-    for (final tag in tags) {
-      final name = tag.name.trim();
-      if (name.isEmpty) {
-        continue;
-      }
-      final key = '${tag.category.name}\u0000${name.toLowerCase()}';
-      if (!seen.add(key)) {
-        continue;
-      }
-      out.add(Tag(name: name, category: tag.category));
-    }
-    return out;
   }
 
   Future<void> _cleanupImportSelectionPaths(
@@ -6154,487 +5995,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-  /*
-  Future<void> _handlePendingSharedMediaImport(List<MediaItem> mediaItems) async {
-    if (!_repoCapabilities.canUpload) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('縺薙・繝｢繝ｼ繝峨〒縺ｯ蜈ｱ譛峨＆繧後◆繝輔ぃ繧､繝ｫ縺ｮ蜿悶ｊ霎ｼ縺ｿ縺ｯ譛ｪ蟇ｾ蠢懊〒縺・)),
-      );
-      return;
-    }
-
-    final target = await _pickSharedImportTarget(
-      itemCount: mediaItems.length,
-      title: '蜈ｱ譛峨＆繧後◆繝輔ぃ繧､繝ｫ繧貞叙繧願ｾｼ繧',
-      subtitle: '${mediaItems.length} 莉ｶ縺ｮ PDF / 逕ｻ蜒上・菫晏ｭ倥ｒ驕ｸ繧薙〒縺上□縺輔＞',
-      currentFolderSubtitle: '迴ｾ蝨ｨ陦ｨ遉ｺ荳ｭ縺ｮ繝輔か繝ｫ繝縺ｸ蜿悶ｊ霎ｼ縺ｿ縺ｾ縺・,
-      librarySubtitle: '繝ｩ繧､繝悶Λ繝ｪ縺ｸ蜿悶ｊ霎ｼ縺ｿ縺ｾ縺・,
-    );
-    if (target == null) {
-      return;
-    }
-
-    await _runSharedMediaImport(items: mediaItems, target: target);
-  }
-
-  Future<void> _runSharedMediaImport({
-    required List<MediaItem> items,
-    required _SharedUrlImportTarget target,
-  }) async {
-    final progress = ValueNotifier<MediaTransferProgress?>(
-      MediaTransferProgress(
-        sentBytes: 0,
-        totalBytes: 0,
-        completedFiles: 0,
-        totalFiles: items.length,
-        statusLabel: '蜈ｱ譛峨＆繧後◆繝輔ぃ繧､繝ｫ繧貞叙繧願ｾｼ縺ｿ荳ｭ...',
-      ),
-    );
-    var dialogShown = false;
-    final dialogHandle = _RouteBoundDialogHandle();
-    try {
-      dialogShown = true;
-      unawaited(
-        showControllerDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogContext) => dialogHandle.bind(
-            dialogContext,
-            AlertDialog(
-              title: const Text('蜈ｱ譛峨＆繧後◆繝輔ぃ繧､繝ｫ繧定ｪｭ縺ｿ霎ｼ縺ｿ荳ｭ...'),
-              content: ValueListenableBuilder<MediaTransferProgress?>(
-                valueListenable: progress,
-                builder: (context, value, _) {
-                  final fraction = value?.fraction;
-                  final completed = value?.completedFiles ?? 0;
-                  final total = value?.totalFiles ?? items.length;
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      LinearProgressIndicator(
-                        value: fraction == null || total == 0 ? null : fraction,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(total == 0 ? '貅門ｙ荳ｭ...' : '$completed / $total'),
-                      if (value?.currentFileName != null) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          value!.currentFileName!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        ),
-      );
-
-      final importedCount = await widget.repo.importItemsIntoFolder(
-        target.folder,
-        items,
-        skipIfExists: true,
-        onProgress: (next) => progress.value = next,
-      );
-      if (!mounted) {
-        return;
-      }
-
-      if (importedCount <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('蜿悶ｊ霎ｼ縺ｿ蟇ｾ雎｡縺後≠繧翫∪縺帙ｓ縺ｧ縺励◆')),
-        );
-        return;
-      }
-
-      _folderItemsCache.clear();
-      _folderItemsCacheRecursive.clear();
-      _dirStack.clear();
-
-      if (target.activateFolder) {
-        await _activateImportedFolder(target.folder);
-      }
-
-      await _loadFolder(target.folder, saveAsLast: false);
-      if (!mounted) {
-        return;
-      }
-
-      await _refreshDetailedBrowseIfNeeded();
-      await _refreshCurrentPageTags();
-      await _refreshArtistTagCounts();
-
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('蜈ｱ譛峨＆繧後◆繝輔ぃ繧､繝ｫ蜿悶ｊ霎ｼ縺ｿ: $importedCount 莉ｶ')),
-      );
-    } catch (error, stackTrace) {
-      _logUiError('shared-media-import', error, stackTrace);
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('蜈ｱ譛峨＆繧後◆繝輔ぃ繧､繝ｫ蜿悶ｊ霎ｼ縺ｿ縺ｫ螟ｱ謨励＠縺ｾ縺励◆: $error')),
-      );
-    } finally {
-      progress.dispose();
-      if (dialogShown) {
-        dialogHandle.close();
-      }
-    }
-  }
-
-  Future<void> _handlePendingSharedUrlImport(
-    List<String> urls,
-  ) async {
-    if (!widget.repo.canImportFromUrl) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('このモードでは共有 URL の取り込みは未対応です')),
-      );
-      return;
-    }
-
-    final target = await _pickSharedUrlImportTarget(
-      urlCount: pending.urls.length,
-    );
-    if (target == null) {
-      return;
-    }
-
-    await _runUrlImport(
-      folder: target.folder,
-      dialogTitle: '共有された URL を取り込む',
-      dialogDescription:
-          '共有された URL を確認して取り込みます。必要に応じて Cookie / favorites を調整してください。',
-      progressTitle: '共有 URL を取り込み中...',
-      successLabel: '共有 URL 取り込み',
-      activateFolder: target.activateFolder,
-      initialSourceText: pending.urls.join('\n'),
-    );
-  }
-
-  Future<_SharedUrlImportTarget?> _pickSharedUrlImportTarget({
-    required int urlCount,
-  }) async {
-    final libraryFolder = await widget.repo.getAppLibraryFolder();
-    if (!mounted) {
-      return null;
-    }
-
-    final currentFolderRaw = _currentFolderRaw?.trim();
-    final targets = <_SharedUrlImportTarget>[
-      if (currentFolderRaw != null && currentFolderRaw.isNotEmpty)
-        _SharedUrlImportTarget(
-          kind: _SharedUrlImportTargetKind.currentFolder,
-          folder: FolderHandle(currentFolderRaw),
-          activateFolder: true,
-          folderLabel: _folderLabel(currentFolderRaw),
-        ),
-      if (currentFolderRaw == null || currentFolderRaw != libraryFolder.raw)
-        _SharedUrlImportTarget(
-          kind: _SharedUrlImportTargetKind.library,
-          folder: libraryFolder,
-          activateFolder: true,
-          folderLabel: _folderLabel(libraryFolder.raw),
-        ),
-    ];
-
-    if (targets.isEmpty) {
-      return null;
-    }
-    if (targets.length == 1) {
-      return targets.first;
-    }
-
-    return showControllerModalBottomSheet<_SharedUrlImportTarget>(
-      context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                title: const Text('共有された URL を取り込む'),
-                subtitle: Text('$urlCount 件の URL を受け取りました。保存先を選んでください。'),
-              ),
-              for (final target in targets)
-                ListTile(
-                  leading: Icon(
-                    target.kind == _SharedUrlImportTargetKind.currentFolder
-                        ? Icons.folder_open_outlined
-                        : Icons.library_books_outlined,
-                  ),
-                  title: Text(target.folderLabel),
-                  subtitle: Text(
-                    target.kind == _SharedUrlImportTargetKind.currentFolder
-                        ? '現在のフォルダへ取り込みます'
-                        : 'ライブラリへ取り込みます',
-                  ),
-                  onTap: () => Navigator.of(context).pop(target),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  */
-
-  /*
-  Future<void> _handlePendingSharedMediaImport(
-    List<MediaItem> mediaItems,
-  ) async {
-    if (!_repoCapabilities.canUpload) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('このモードでは共有ファイルの取り込みは未対応です')),
-      );
-      return;
-    }
-
-    final target = await _pickSharedImportTarget(
-      itemCount: mediaItems.length,
-      title: '共有されたファイルを取り込む',
-      subtitle: '${mediaItems.length} 件の PDF / 画像の保存先を選んでください。',
-      currentFolderSubtitle: '表示中のフォルダへ取り込みます',
-      librarySubtitle: 'ライブラリへ取り込みます',
-    );
-    if (target == null) {
-      return;
-    }
-
-    await _runSharedMediaImport(items: mediaItems, target: target);
-  }
-
-  Future<void> _runSharedMediaImport({
-    required List<MediaItem> items,
-    required _SharedUrlImportTarget target,
-  }) async {
-    final progress = ValueNotifier<MediaTransferProgress?>(
-      MediaTransferProgress(
-        sentBytes: 0,
-        totalBytes: 0,
-        completedFiles: 0,
-        totalFiles: items.length,
-        statusLabel: '共有ファイルを取り込み中...',
-      ),
-    );
-    var dialogShown = false;
-    final dialogHandle = _RouteBoundDialogHandle();
-    try {
-      dialogShown = true;
-      unawaited(
-        showControllerDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogContext) => dialogHandle.bind(
-            dialogContext,
-            AlertDialog(
-              title: const Text('共有ファイルを取り込み中...'),
-              content: ValueListenableBuilder<MediaTransferProgress?>(
-                valueListenable: progress,
-                builder: (context, value, _) {
-                  final fraction = value?.fraction;
-                  final completed = value?.completedFiles ?? 0;
-                  final total = value?.totalFiles ?? items.length;
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      LinearProgressIndicator(
-                        value: fraction == null || total == 0 ? null : fraction,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(total == 0 ? '読み込み中...' : '$completed / $total'),
-                      if (value?.currentFileName != null) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          value!.currentFileName!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        ),
-      );
-
-      final importedCount = await widget.repo.importItemsIntoFolder(
-        target.folder,
-        items,
-        skipIfExists: true,
-        onProgress: (next) => progress.value = next,
-      );
-      if (!mounted) {
-        return;
-      }
-
-      if (importedCount <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('取り込み対象がありませんでした')),
-        );
-        return;
-      }
-
-      _folderItemsCache.clear();
-      _folderItemsCacheRecursive.clear();
-      _dirStack.clear();
-
-      if (target.activateFolder) {
-        await _activateImportedFolder(target.folder);
-      }
-
-      await _loadFolder(target.folder, saveAsLast: false);
-      if (!mounted) {
-        return;
-      }
-
-      await _refreshDetailedBrowseIfNeeded();
-      await _refreshCurrentPageTags();
-      await _refreshArtistTagCounts();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('共有ファイルを取り込みました: $importedCount 件')),
-      );
-    } catch (error, stackTrace) {
-      _logUiError('shared-media-import', error, stackTrace);
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('共有ファイルの取り込みに失敗しました: $error')),
-      );
-    } finally {
-      progress.dispose();
-      if (dialogShown) {
-        dialogHandle.close();
-      }
-    }
-  }
-
-  Future<void> _handlePendingSharedUrlImport(List<String> urls) async {
-    if (!widget.repo.canImportFromUrl) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('このモードでは共有 URL の取り込みは未対応です')),
-      );
-      return;
-    }
-
-    final target = await _pickSharedImportTarget(
-      itemCount: urls.length,
-      title: '共有された URL を取り込む',
-      subtitle: '${urls.length} 件の URL の保存先を選んでください。',
-      currentFolderSubtitle: '表示中のフォルダへ取り込みます',
-      librarySubtitle: 'ライブラリへ取り込みます',
-    );
-    if (target == null) {
-      return;
-    }
-
-    await _runUrlImport(
-      folder: target.folder,
-      dialogTitle: '共有された URL を取り込む',
-      dialogDescription:
-          '共有された URL を確認して取り込みます。必要に応じて Cookie / favorites を調整してください。',
-      progressTitle: '共有 URL を取り込み中...',
-      successLabel: '共有 URL を取り込みました',
-      activateFolder: target.activateFolder,
-      initialSourceText: urls.join('\n'),
-    );
-  }
-
-  Future<_SharedUrlImportTarget?> _pickSharedImportTarget({
-    required int itemCount,
-    required String title,
-    required String subtitle,
-    required String currentFolderSubtitle,
-    required String librarySubtitle,
-  }) async {
-    final libraryFolder = await widget.repo.getAppLibraryFolder();
-    if (!mounted) {
-      return null;
-    }
-
-    final currentFolder = _activeImportFolder();
-    final currentFolderRaw = currentFolder?.raw.trim();
-    final targets = <_SharedUrlImportTarget>[
-      if (currentFolderRaw != null && currentFolderRaw.isNotEmpty)
-        _SharedUrlImportTarget(
-          kind: _SharedUrlImportTargetKind.currentFolder,
-          folder: currentFolder!,
-          activateFolder: true,
-          folderLabel: _folderLabel(currentFolderRaw),
-        ),
-      if (currentFolderRaw == null || currentFolderRaw != libraryFolder.raw)
-        _SharedUrlImportTarget(
-          kind: _SharedUrlImportTargetKind.library,
-          folder: libraryFolder,
-          activateFolder: true,
-          folderLabel: _folderLabel(libraryFolder.raw),
-        ),
-    ];
-
-    if (targets.isEmpty) {
-      return null;
-    }
-    if (targets.length == 1) {
-      return targets.first;
-    }
-
-    return showControllerModalBottomSheet<_SharedUrlImportTarget>(
-      context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(title: Text(title), subtitle: Text(subtitle)),
-              for (final target in targets)
-                ListTile(
-                  leading: Icon(
-                    target.kind == _SharedUrlImportTargetKind.currentFolder
-                        ? Icons.folder_open_outlined
-                        : Icons.library_books_outlined,
-                  ),
-                  title: Text(target.folderLabel),
-                  subtitle: Text(
-                    target.kind == _SharedUrlImportTargetKind.currentFolder
-                        ? currentFolderSubtitle
-                        : librarySubtitle,
-                  ),
-                  onTap: () => Navigator.of(context).pop(target),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  */
 
   Future<void> _handlePendingSharedMediaImport(
     List<MediaItem> mediaItems,
@@ -6645,18 +6005,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Shared file import is not available in this mode.'),
+          content: Text('このモードでは共有ファイルの取り込みは未対応です'),
         ),
       );
       return;
     }
 
     final target = await _pickSharedImportTarget(
-      title: 'Import Shared Files',
-      subtitle:
-          'Choose where to save ${mediaItems.length} shared PDF/image files.',
-      currentFolderSubtitle: 'Import into the folder currently being viewed.',
-      librarySubtitle: 'Import into the library.',
+      title: '共有されたファイルを取り込む',
+      subtitle: '${mediaItems.length} 件の PDF / 画像の保存先を選んでください。',
+      currentFolderSubtitle: '表示中のフォルダへ取り込みます',
+      librarySubtitle: 'ライブラリへ取り込みます',
     );
     if (target == null) {
       return;
@@ -6688,7 +6047,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         totalBytes: 0,
         completedFiles: 0,
         totalFiles: selection.items.length,
-        statusLabel: 'Importing shared files...',
+        statusLabel: '共有ファイルを取り込み中...',
       ),
     );
     var dialogShown = false;
@@ -6702,7 +6061,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           builder: (dialogContext) => dialogHandle.bind(
             dialogContext,
             AlertDialog(
-              title: const Text('Importing Shared Files...'),
+              title: const Text('共有ファイルを取り込み中...'),
               content: ValueListenableBuilder<MediaTransferProgress?>(
                 valueListenable: progress,
                 builder: (context, value, _) {
@@ -6717,7 +6076,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                         value: fraction == null || total == 0 ? null : fraction,
                       ),
                       const SizedBox(height: 12),
-                      Text(total == 0 ? 'Loading...' : '$completed / $total'),
+                      Text(total == 0 ? '準備中...' : '$completed / $total'),
                       if (value?.currentFileName != null) ...[
                         const SizedBox(height: 8),
                         Text(
@@ -6747,7 +6106,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       if (importedCount <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No files were imported.')),
+          const SnackBar(content: Text('取り込み対象がありませんでした')),
         );
         return;
       }
@@ -6774,7 +6133,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imported shared files: $importedCount')),
+        SnackBar(content: Text('共有ファイルを取り込みました: $importedCount 件')),
       );
     } catch (error, stackTrace) {
       _logUiError('shared-media-import', error, stackTrace);
@@ -6782,7 +6141,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to import shared files: $error')),
+        SnackBar(content: Text('共有ファイルの取り込みに失敗しました: $error')),
       );
     } finally {
       progress.dispose();
@@ -6800,17 +6159,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Shared URL import is not available in this mode.'),
+          content: Text('このモードでは共有 URL の取り込みは未対応です'),
         ),
       );
       return;
     }
 
     final target = await _pickSharedImportTarget(
-      title: 'Import Shared URLs',
-      subtitle: 'Choose where to save ${urls.length} shared URLs.',
-      currentFolderSubtitle: 'Import into the folder currently being viewed.',
-      librarySubtitle: 'Import into the library.',
+      title: '共有された URL を取り込む',
+      subtitle: '${urls.length} 件の URL の保存先を選んでください。',
+      currentFolderSubtitle: '表示中のフォルダへ取り込みます',
+      librarySubtitle: 'ライブラリへ取り込みます',
     );
     if (target == null) {
       return;
@@ -6818,11 +6177,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     await _runUrlImport(
       folder: target.folder,
-      dialogTitle: 'Import Shared URLs',
+      dialogTitle: '共有された URL を取り込む',
       dialogDescription:
-          'Review the shared URLs and adjust cookie or favorites options if needed.',
-      progressTitle: 'Importing shared URLs...',
-      successLabel: 'Imported shared URLs',
+          '共有された URL を確認して取り込みます。必要に応じて Cookie / favorites を調整してください。',
+      progressTitle: '共有 URL を取り込み中...',
+      successLabel: '共有 URL を取り込みました',
       activateFolder: target.activateFolder,
       initialSourceText: urls.join('\n'),
     );
