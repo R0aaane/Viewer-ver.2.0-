@@ -431,7 +431,7 @@ class LocalTagStore {
 
       final sourcePath = item.id;
       final fileName = p.basename(sourcePath);
-      final targetPath = p.join(destinationDir, fileName);
+      var targetPath = p.join(destinationDir, fileName);
 
       if (p.equals(p.normalize(sourcePath), p.normalize(targetPath))) {
         debugPrint('[TAG-ORGANIZE] no file move required; db only path=$sourcePath');
@@ -446,6 +446,23 @@ class LocalTagStore {
           continue;
         }
 
+        final conflict = await LocalPathOperationService.checkNameConflict(
+          sourcePath: sourcePath,
+          targetPath: targetPath,
+        );
+        if (conflict == LocalPathConflictResult.sameFile) {
+          debugPrint('[TAG-ORGANIZE] no file move required; db only path=$sourcePath');
+          continue;
+        }
+        if (conflict == LocalPathConflictResult.duplicateName) {
+          final replacementPath = _resolveAvailableFilePath(targetPath);
+          debugPrint(
+            '[TAG-ORGANIZE] renamed duplicate target source=$sourcePath '
+            'target=$targetPath replacement=$replacementPath',
+          );
+          targetPath = replacementPath;
+        }
+
         final movedFile = await LocalPathOperationService.moveItem(
           sourcePath: sourcePath,
           targetPath: targetPath,
@@ -456,12 +473,13 @@ class LocalTagStore {
         }
 
         await _db.transaction(() async {
+          final targetFileName = p.basename(targetPath);
           await _moveMediaItemRecord(
             beforeId: sourcePath,
             after: media.MediaItem(
               id: targetPath,
               folderRaw: p.dirname(targetPath),
-              displayName: fileName,
+              displayName: targetFileName,
               kind: item.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
               modified: item.modifiedEpochMs == null
                   ? null
@@ -543,6 +561,23 @@ class LocalTagStore {
     value = value.replaceAll(RegExp(r'[\x00-\x1F]'), '_');
     value = value.replaceAll(RegExp(r'[\. ]+$'), '');
     return value.isEmpty ? '_' : value;
+  }
+
+  String _resolveAvailableFilePath(String targetPath) {
+    final normalizedTarget = p.normalize(targetPath);
+    final parentDir = p.dirname(normalizedTarget);
+    final extension = p.extension(normalizedTarget);
+    final stem = p.basenameWithoutExtension(normalizedTarget);
+
+    var candidate = normalizedTarget;
+    var counter = 2;
+    while (FileSystemEntity.typeSync(candidate) !=
+        FileSystemEntityType.notFound) {
+      candidate = p.join(parentDir, '$stem ($counter)$extension');
+      counter++;
+    }
+
+    return p.normalize(candidate);
   }
 
   Future<void> _removeEmptyAncestorDirs({
@@ -654,4 +689,3 @@ class LocalTagStore {
     await (_db.delete(_db.mediaItems)..where((table) => table.id.equals(beforeId))).go();
   }
 }
-

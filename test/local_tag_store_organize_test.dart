@@ -434,7 +434,7 @@ void main() {
     expect(taggedItems.map((entry) => entry.id), isNot(contains(beforePath)));
   });
 
-  test('organizeAppLibrary blocks duplicate target names instead of creating suffix copies', () async {
+  test('organizeAppLibrary suffixes duplicate target names', () async {
     final docsDir = await Directory.systemTemp.createTemp('local-tag-store-conflict');
     addTearDown(() async {
       if (await docsDir.exists()) {
@@ -473,11 +473,13 @@ void main() {
 
     final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
 
-    expect(moved, isEmpty);
-    expect(await File(sourcePath).exists(), isTrue);
+    final suffixPath = p.join(conflictDir.path, 'sample (2).pdf');
+    expect(moved, {sourcePath: suffixPath});
+    expect(await File(sourcePath).exists(), isFalse);
     expect(await File(conflictPath).exists(), isTrue);
-    expect(await File(p.join(conflictDir.path, 'sample (1).pdf')).exists(), isFalse);
-    expect(await store.listTagsForItem(sourcePath), isNotEmpty);
+    expect(await File(suffixPath).exists(), isTrue);
+    expect(await store.listTagsForItem(sourcePath), isEmpty);
+    expect(await store.listTagsForItem(suffixPath), isNotEmpty);
   });
 }
 

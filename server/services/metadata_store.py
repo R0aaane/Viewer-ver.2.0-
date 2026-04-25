@@ -162,6 +162,20 @@ def _same_file(source_path: str, target_path: str) -> bool:
     )
 
 
+def _resolve_available_file_path(target_path: str) -> str:
+    normalized_target = os.path.normpath(target_path)
+    parent_dir = os.path.dirname(normalized_target)
+    stem, suffix = os.path.splitext(os.path.basename(normalized_target))
+
+    candidate = normalized_target
+    counter = 2
+    while os.path.exists(candidate):
+        candidate = os.path.join(parent_dir, f"{stem} ({counter}){suffix}")
+        counter += 1
+
+    return os.path.normpath(candidate)
+
+
 def _pick_first_tag_name(tags: list[dict[str, Any]], category: str) -> str | None:
     for tag in tags:
         if tag.get("category") != category:
@@ -1166,8 +1180,13 @@ class MetadataStore:
                 if _same_file(source_path, candidate_path):
                     logger.info("[MOVE] skipped same-file old=%s new=%s", source_path, candidate_path)
                     continue
-                logger.warning("[TAG-ORGANIZE] conflict source=%s target=%s", source_path, candidate_path)
-                continue
+                target_path = _resolve_available_file_path(candidate_path)
+                logger.info(
+                    "[TAG-ORGANIZE] renamed duplicate target source=%s target=%s replacement=%s",
+                    source_path,
+                    candidate_path,
+                    target_path,
+                )
 
             updated = self.apply_rename(
                 old_media_id=current["media_id"],

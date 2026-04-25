@@ -538,7 +538,7 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertEqual(moved, {str(source): str(target)})
         self.assertTrue(target.exists())
 
-    def test_organize_media_by_tags_skips_duplicate_target_without_suffix_copy(self) -> None:
+    def test_organize_media_by_tags_suffixes_duplicate_target_name(self) -> None:
         source = self.library_dir / 'sample.pdf'
         source.write_bytes(b'source')
         source_media_id = build_media_id(
@@ -581,13 +581,14 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
             media_ids=[source_media_id],
         )
 
-        self.assertEqual(moved, {})
-        self.assertTrue(source.exists())
+        suffix_path = conflict_dir / 'sample (2).pdf'
+        self.assertEqual(moved, {str(source): str(suffix_path)})
+        self.assertFalse(source.exists())
         self.assertTrue(conflict_path.exists())
-        self.assertFalse((conflict_dir / 'sample (1).pdf').exists())
-        record = self.sqlite.get_media_record(source_media_id)
+        self.assertTrue(suffix_path.exists())
+        record = self.sqlite.get_media_record_by_path(str(suffix_path))
         self.assertIsNotNone(record)
-        self.assertEqual(record['full_path'], str(source))
+        self.assertEqual(record['display_name'], 'sample (2).pdf')
 
 if __name__ == '__main__':
     unittest.main()
