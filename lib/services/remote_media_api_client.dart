@@ -872,6 +872,7 @@ class RemoteMediaApiClient {
     final jsonBody = await _sendJsonRequest(
       'POST',
       '/download-url',
+      requestTimeout: uploadTimeout,
       body: <String, dynamic>{
         'folderRaw': folderRaw,
         'url': sourceUrl,
@@ -932,11 +933,13 @@ class RemoteMediaApiClient {
     String path, {
     Map<String, String>? queryParameters,
     Map<String, dynamic>? body,
+    Duration? requestTimeout,
   }) async {
     final uri = _buildUri(path, queryParameters: queryParameters);
+    final effectiveTimeout = requestTimeout ?? timeout;
     final client = HttpClient()
-      ..connectionTimeout = timeout
-      ..idleTimeout = timeout;
+      ..connectionTimeout = effectiveTimeout
+      ..idleTimeout = effectiveTimeout;
 
     try {
       final request = await _openRequest(client, method, uri);
@@ -946,10 +949,11 @@ class RemoteMediaApiClient {
         request.write(jsonEncode(body));
       }
 
-      final response = await request.close().timeout(timeout);
+      final response = await request.close().timeout(effectiveTimeout);
       final payload = await response
           .transform(const Utf8Decoder(allowMalformed: true))
-          .join();
+          .join()
+          .timeout(effectiveTimeout);
       final jsonBody = payload.trim().isEmpty ? null : _tryDecodeJson(payload);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
