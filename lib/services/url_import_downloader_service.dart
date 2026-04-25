@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
@@ -55,12 +56,83 @@ class _ResolvedDirectUrl {
   const _ResolvedDirectUrl({required this.url, this.metadata});
 }
 
+class _HitomiSearchState {
+  final String area;
+  final String tag;
+  final String language;
+  final String orderBy;
+  final String? orderByKey;
+  final String orderByDirection;
+
+  const _HitomiSearchState({
+    this.area = 'all',
+    this.tag = 'index',
+    this.language = 'all',
+    this.orderBy = 'date',
+    this.orderByKey,
+    this.orderByDirection = 'desc',
+  });
+
+  _HitomiSearchState copyWith({
+    String? area,
+    String? tag,
+    String? language,
+    String? orderBy,
+    String? orderByKey,
+    String? orderByDirection,
+  }) {
+    return _HitomiSearchState(
+      area: area ?? this.area,
+      tag: tag ?? this.tag,
+      language: language ?? this.language,
+      orderBy: orderBy ?? this.orderBy,
+      orderByKey: orderByKey ?? this.orderByKey,
+      orderByDirection: orderByDirection ?? this.orderByDirection,
+    );
+  }
+
+  _HitomiSearchState normalized() {
+    return copyWith(
+      orderByKey: orderByKey ?? (orderBy == 'popular' ? 'year' : 'added'),
+    );
+  }
+}
+
+class _HitomiParsedSearchQuery {
+  final _HitomiSearchState state;
+  final List<String> positiveTerms;
+  final List<String> negativeTerms;
+  final List<List<String>> orTerms;
+
+  const _HitomiParsedSearchQuery({
+    required this.state,
+    required this.positiveTerms,
+    required this.negativeTerms,
+    required this.orTerms,
+  });
+}
+
 class UrlImportDownloaderService {
   static const String _uiEventPrefix = '__KEMONO_DL_UI__';
   static const String _contentDispositionHeader = 'content-disposition';
   static const String _standaloneUserAgent = 'pdf_viewer/standalone';
   static const String _dddSmartHost = 'ddd-smart.net';
   static const String _dddSmartCdnHost = 'cdn.ddd-smart.net';
+  static const List<String> _hitomiNozomiHosts = <String>[
+    'ltn.gold-usergeneratedcontent.net',
+    'ltn.hitomi.la',
+  ];
+  static const Set<String> _supportedHitomiSearchNamespaces = <String>{
+    'artist',
+    'group',
+    'series',
+    'character',
+    'tag',
+    'type',
+    'language',
+    'male',
+    'female',
+  };
   static const Set<String> _launcherSupportedHitomiSegments = <String>{
     'manga',
     'doujinshi',
@@ -182,6 +254,16 @@ class UrlImportDownloaderService {
     final directSeen = <String>{};
 
     for (final rawUrl in await _collectInputUrls(sourceUrl, options)) {
+      final expandedLauncherUrls = await _resolveExpandedLauncherUrls(rawUrl);
+      if (expandedLauncherUrls != null) {
+        for (final launcherUrl in expandedLauncherUrls) {
+          if (launcherSeen.add(launcherUrl)) {
+            launcherUrls.add(launcherUrl);
+          }
+        }
+        continue;
+      }
+
       final resolvedDirectUrl = await _resolveSpecialDirectUrl(rawUrl);
       if (resolvedDirectUrl != null) {
         if (directSeen.add(resolvedDirectUrl.url)) {
@@ -194,11 +276,7 @@ class UrlImportDownloaderService {
         continue;
       }
 
-      if (_supportsLauncherUrl(rawUrl)) {
-        if (launcherSeen.add(rawUrl)) {
-          launcherUrls.add(rawUrl);
-        }
-      } else if (directSeen.add(rawUrl)) {
+      if (directSeen.add(rawUrl)) {
         directUrls.add(rawUrl);
       }
     }
@@ -208,6 +286,303 @@ class UrlImportDownloaderService {
       directUrls: directUrls,
       metadataByDirectUrl: metadataByDirectUrl,
     );
+  }
+
+  Future<List<String>?> _resolveExpandedLauncherUrls(String rawUrl) async {
+    if (_supportsLauncherUrl(rawUrl)) {
+      return <String>[rawUrl.trim()];
+    }
+
+    final uri = Uri.tryParse(rawUrl.trim());
+    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+      return null;
+    }
+    if (uri.host.toLowerCase() != 'hitomi.la' || !_isHitomiSearchUrl(uri)) {
+      return null;
+    }
+
+    return _resolveHitomiSearchLauncherUrls(uri);
+  }
+
+  bool _isHitomiSearchUrl(Uri uri) {
+    final path = uri.path.toLowerCase();
+    return path == '/search.html' || path.endsWith('/search.html');
+  }
+
+  Future<List<String>> _resolveHitomiSearchLauncherUrls(Uri uri) async {
+    final queryText = Uri.decodeQueryComponent(uri.query).trim();
+    if (queryText.isEmpty) {
+      return const <String>[];
+    }
+
+    final galleryIds = await _resolveHitomiSearchGalleryIds(queryText);
+    return galleryIds
+        .map((galleryId) => 'https://hitomi.la/galleries/$galleryId.html')
+        .toList(growable: false);
+  }
+
+  Future<List<int>> _resolveHitomiSearchGalleryIds(String queryText) async {
+    final parsed = _parseHitomiSearchQuery(queryText);
+    final state = parsed.state.normalized();
+    final remainingPositiveTerms = <String>[...parsed.positiveTerms];
+
+    late List<int> results;
+    if (remainingPositiveTerms.isEmpty ||
+        (!_isHitomiNamespacedTerm(remainingPositiveTerms.first) &&
+            state.orderByKey != 'added')) {
+      _assertSupportedHitomiSearchTerms(remainingPositiveTerms);
+      results = await _downloadHitomiNozomiGalleryIds(state);
+    } else {
+      final firstTerm = remainingPositiveTerms.removeAt(0);
+      results = await _resolveHitomiGalleryIdsForTerm(firstTerm, state);
+    }
+
+    for (final terms in parsed.orTerms) {
+      if (terms.isEmpty) {
+        continue;
+      }
+      final matchedIds = <int>{};
+      for (final term in terms) {
+        matchedIds.addAll(await _resolveHitomiGalleryIdsForTerm(term, state));
+      }
+      results = results.where(matchedIds.contains).toList(growable: false);
+    }
+
+    for (final term in remainingPositiveTerms) {
+      final matchedIds = (await _resolveHitomiGalleryIdsForTerm(
+        term,
+        state,
+      )).toSet();
+      results = results.where(matchedIds.contains).toList(growable: false);
+    }
+
+    for (final term in parsed.negativeTerms) {
+      final matchedIds = (await _resolveHitomiGalleryIdsForTerm(
+        term,
+        state,
+      )).toSet();
+      results = results
+          .where((id) => !matchedIds.contains(id))
+          .toList(growable: false);
+    }
+
+    if (state.orderByDirection == 'asc' ||
+        state.orderByDirection == 'ascending') {
+      return results.reversed.toList(growable: false);
+    }
+    return results;
+  }
+
+  _HitomiParsedSearchQuery _parseHitomiSearchQuery(String queryText) {
+    var state = const _HitomiSearchState();
+    final rawTerms = queryText.toLowerCase().trim().split(RegExp(r'\s+'));
+    final terms = rawTerms
+        .where((term) => term.trim().isNotEmpty)
+        .map((term) => term.replaceAll('_', ' '))
+        .toList(growable: false);
+    final positiveTerms = <String>[];
+    final negativeTerms = <String>[];
+    var orTerms = <List<String>>[<String>[]];
+
+    for (var index = 0; index < terms.length; index += 1) {
+      final term = terms[index];
+      final nextState = _nextHitomiSearchStateForOrderingTerm(term, state);
+      if (nextState != null) {
+        state = nextState;
+        continue;
+      }
+      if (term == 'or') {
+        continue;
+      }
+
+      final orPrevious = index > 0 && terms[index - 1] == 'or';
+      final orNext = index + 1 < terms.length && terms[index + 1] == 'or';
+      if (orPrevious || orNext) {
+        orTerms.last.add(term);
+        if (!orNext) {
+          orTerms = <List<String>>[...orTerms, <String>[]];
+        }
+        continue;
+      }
+
+      if (term.startsWith('-')) {
+        final negativeTerm = term.substring(1).trim();
+        if (negativeTerm.isNotEmpty) {
+          negativeTerms.add(negativeTerm);
+        }
+        continue;
+      }
+      positiveTerms.add(term);
+    }
+
+    positiveTerms.sort((left, right) {
+      final leftNamespaced = _isHitomiNamespacedTerm(left);
+      final rightNamespaced = _isHitomiNamespacedTerm(right);
+      if (leftNamespaced == rightNamespaced) {
+        return 0;
+      }
+      return leftNamespaced ? -1 : 1;
+    });
+
+    return _HitomiParsedSearchQuery(
+      state: state,
+      positiveTerms: positiveTerms,
+      negativeTerms: negativeTerms,
+      orTerms: orTerms
+          .where((terms) => terms.isNotEmpty)
+          .toList(growable: false),
+    );
+  }
+
+  _HitomiSearchState? _nextHitomiSearchStateForOrderingTerm(
+    String term,
+    _HitomiSearchState current,
+  ) {
+    final separatorIndex = term.indexOf(':');
+    if (separatorIndex <= 0) {
+      return null;
+    }
+    final leftSide = term.substring(0, separatorIndex);
+    final rightSide = term.substring(separatorIndex + 1);
+    if (!RegExp(
+      r'^(?:sort|order)(?:by)?(?:key|direction)?$',
+    ).hasMatch(leftSide)) {
+      return null;
+    }
+
+    applySwitch:
+    switch (leftSide) {
+      case 'orderbykey':
+      case 'sortbykey':
+      case 'orderkey':
+      case 'sortkey':
+        return current.copyWith(
+          orderByKey: rightSide.replaceAll(RegExp(r'[^0-9a-z]'), ''),
+        );
+      case 'orderby':
+      case 'sortby':
+        if (rightSide == 'popular' || rightSide == 'popularity') {
+          return current.copyWith(orderBy: 'popular');
+        }
+        if (rightSide == 'date') {
+          return current.copyWith(orderBy: 'date');
+        }
+        if (rightSide == 'datepublished') {
+          return current.copyWith(orderBy: 'date', orderByKey: 'published');
+        }
+        if (rightSide == 'random' || rightSide == 'rand') {
+          return current.copyWith(orderByDirection: 'random');
+        }
+        break applySwitch;
+      case 'orderbydirection':
+      case 'sortbydirection':
+        return current.copyWith(
+          orderByDirection: rightSide.replaceAll(RegExp(r'[^0-9a-z]'), ''),
+        );
+    }
+
+    return null;
+  }
+
+  bool _isHitomiNamespacedTerm(String term) {
+    final separatorIndex = term.indexOf(':');
+    if (separatorIndex <= 0) {
+      return false;
+    }
+    return _supportedHitomiSearchNamespaces.contains(
+      term.substring(0, separatorIndex),
+    );
+  }
+
+  void _assertSupportedHitomiSearchTerms(Iterable<String> terms) {
+    for (final term in terms) {
+      if (_isHitomiNamespacedTerm(term)) {
+        continue;
+      }
+      throw UrlImportDownloaderException('Hitomi 検索 URL はタグ条件のみ対応しています: $term');
+    }
+  }
+
+  Future<List<int>> _resolveHitomiGalleryIdsForTerm(
+    String term,
+    _HitomiSearchState state,
+  ) async {
+    _assertSupportedHitomiSearchTerms(<String>[term]);
+    final separatorIndex = term.indexOf(':');
+    final leftSide = term.substring(0, separatorIndex);
+    final rightSide = term.substring(separatorIndex + 1);
+
+    switch (leftSide) {
+      case 'female':
+      case 'male':
+        return _downloadHitomiNozomiGalleryIds(
+          state.copyWith(area: 'tag', tag: term).normalized(),
+        );
+      case 'language':
+        return _downloadHitomiNozomiGalleryIds(
+          state.copyWith(language: rightSide).normalized(),
+        );
+      default:
+        return _downloadHitomiNozomiGalleryIds(
+          state.copyWith(area: leftSide, tag: rightSide).normalized(),
+        );
+    }
+  }
+
+  Future<List<int>> _downloadHitomiNozomiGalleryIds(
+    _HitomiSearchState state,
+  ) async {
+    Object? lastError;
+    for (final host in _hitomiNozomiHosts) {
+      final uri = _buildHitomiNozomiUri(state, host: host);
+      try {
+        final bytes = await _downloadBytes(uri);
+        final byteData = ByteData.sublistView(bytes);
+        final galleryIds = <int>[];
+        for (
+          var offset = 0;
+          offset + 4 <= byteData.lengthInBytes;
+          offset += 4
+        ) {
+          galleryIds.add(byteData.getInt32(offset, Endian.big));
+        }
+        return galleryIds;
+      } on UrlImportDownloaderException catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw UrlImportDownloaderException(
+      'Hitomi 検索 URL の解決に失敗しました: ${lastError ?? 'nozomi unavailable'}',
+    );
+  }
+
+  Uri _buildHitomiNozomiUri(_HitomiSearchState state, {required String host}) {
+    final normalized = state.normalized();
+    final pathSegments = <String>['n'];
+    if (normalized.orderBy != 'date' || normalized.orderByKey == 'published') {
+      if (normalized.area == 'all') {
+        pathSegments.addAll(<String>[
+          normalized.orderBy,
+          '${normalized.orderByKey}-${normalized.language}.nozomi',
+        ]);
+      } else {
+        pathSegments.addAll(<String>[
+          normalized.area,
+          normalized.orderBy,
+          normalized.orderByKey!,
+          '${normalized.tag}-${normalized.language}.nozomi',
+        ]);
+      }
+    } else if (normalized.area == 'all') {
+      pathSegments.add('${normalized.tag}-${normalized.language}.nozomi');
+    } else {
+      pathSegments.addAll(<String>[
+        normalized.area,
+        '${normalized.tag}-${normalized.language}.nozomi',
+      ]);
+    }
+    return Uri(scheme: 'https', host: host, pathSegments: pathSegments);
   }
 
   Future<LocalUrlDownloadResult> _runWithLauncher({
@@ -512,9 +887,7 @@ class UrlImportDownloaderService {
       );
     }
     if (urls.isEmpty) {
-      throw const UrlImportDownloaderException(
-        '直接ダウンロードできる URL が見つかりませんでした',
-      );
+      throw const UrlImportDownloaderException('直接ダウンロードできる URL が見つかりませんでした');
     }
 
     final destinationDir = Directory(destinationFolder);
@@ -1008,16 +1381,13 @@ class UrlImportDownloaderService {
     return _decodeHtmlEntities(href);
   }
 
-  Future<String> _downloadHtml(Uri uri) async {
+  Future<Uint8List> _downloadBytes(Uri uri, {String accept = '*/*'}) async {
     final client = HttpClient()..connectionTimeout = const Duration(minutes: 2);
     try {
       final request = await client.getUrl(uri);
       request.followRedirects = true;
       request.headers.set(HttpHeaders.userAgentHeader, _standaloneUserAgent);
-      request.headers.set(
-        HttpHeaders.acceptHeader,
-        'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      );
+      request.headers.set(HttpHeaders.acceptHeader, accept);
       final response = await request.close();
       if (response.statusCode < 200 || response.statusCode >= 300) {
         await response.drain<void>();
@@ -1025,17 +1395,30 @@ class UrlImportDownloaderService {
           'HTTP ${response.statusCode} while resolving $uri',
         );
       }
-      return await response
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .join();
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response) {
+        builder.add(chunk);
+      }
+      return builder.takeBytes();
     } on UrlImportDownloaderException {
       rethrow;
     } on Exception catch (error) {
-      throw UrlImportDownloaderException(
-        'ddd-smart URL resolving failed: $uri ($error)',
-      );
+      throw UrlImportDownloaderException('URL resolving failed: $uri ($error)');
     } finally {
       client.close(force: true);
+    }
+  }
+
+  Future<String> _downloadHtml(Uri uri) async {
+    try {
+      final bytes = await _downloadBytes(
+        uri,
+        accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      );
+      return const Utf8Decoder(allowMalformed: true).convert(bytes);
+    } on UrlImportDownloaderException {
+      rethrow;
     }
   }
 

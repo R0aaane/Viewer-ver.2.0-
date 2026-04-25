@@ -83,6 +83,8 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   bool _overwriteExistingFiles = false;
   bool _verbose = false;
   bool _convertHitomiToPdf = true;
+  bool _favoriteSitesCustomized = false;
+  bool _hitomiPdfCustomized = false;
   bool _organizeAfterImport = false;
   bool _detailsExpanded = false;
   bool _loadingClipboard = false;
@@ -121,6 +123,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       ).validUrls,
     );
     _urlController = TextEditingController();
+    _applySuggestedUrlDefaults(force: true);
     if (!_useSafariPastePrompt) {
       unawaited(_refreshClipboardCandidate());
     }
@@ -177,6 +180,19 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       invalidCount: draft.invalidCount,
       hadRawInput: draft.hadRawInput,
     );
+  }
+
+  void _applySuggestedUrlDefaults({bool force = false}) {
+    final suggested = const UrlImportOptions().suggestedUiState(
+      _allSourceUrls.join('\n'),
+    );
+    if (force || !_favoriteSitesCustomized) {
+      _siteKemono = suggested.siteKemono;
+      _siteCoomer = suggested.siteCoomer;
+    }
+    if (force || !_hitomiPdfCustomized) {
+      _convertHitomiToPdf = suggested.convertHitomiToPdf;
+    }
   }
 
   List<String> _splitCommaSeparated(String raw) {
@@ -286,13 +302,16 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   }
 
   void _appendConfirmedUrls(List<String> incomingUrls) {
-    final mergedUrls = _mergeUniqueUrls(
-      <String>[..._confirmedUrls, ..._urlDraft.validUrls, ...incomingUrls],
-    );
+    final mergedUrls = _mergeUniqueUrls(<String>[
+      ..._confirmedUrls,
+      ..._urlDraft.validUrls,
+      ...incomingUrls,
+    ]);
     _confirmedUrls
       ..clear()
       ..addAll(mergedUrls);
     _clearUrlInput();
+    _applySuggestedUrlDefaults();
   }
 
   bool _shouldAutoCommitInput(
@@ -344,7 +363,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
       });
       return;
     }
-    setState(() {});
+    setState(_applySuggestedUrlDefaults);
   }
 
   String _safariPastePromptInitialText() {
@@ -368,9 +387,9 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
     }
     final draft = _analyzeSourceUrls(pastedText);
     if (draft.validUrls.isEmpty) {
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(const SnackBar(content: Text('貼り付けた内容に URL が見つかりませんでした')));
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('貼り付けた内容に URL が見つかりませんでした')),
+      );
       return;
     }
     setState(() {
@@ -440,11 +459,14 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   }
 
   void _removeUrl(String url) {
-    final remainingUrls = _confirmedUrls.where((entry) => entry != url).toList();
+    final remainingUrls = _confirmedUrls
+        .where((entry) => entry != url)
+        .toList();
     setState(() {
       _confirmedUrls
         ..clear()
         ..addAll(remainingUrls);
+      _applySuggestedUrlDefaults();
     });
   }
 
@@ -453,9 +475,10 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
     if (candidate == null) {
       return const <String>[];
     }
-    final currentUrls = _mergeUniqueUrls(
-      <String>[..._confirmedUrls, ...currentDraft.validUrls],
-    ).toSet();
+    final currentUrls = _mergeUniqueUrls(<String>[
+      ..._confirmedUrls,
+      ...currentDraft.validUrls,
+    ]).toSet();
     return candidate.draft.validUrls
         .where((url) => !currentUrls.contains(url))
         .toList(growable: false);
@@ -766,15 +789,14 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
             context: context,
             labelText: 'Cookie モード',
           ),
-          items:
-              _supportedCookieModes
-                  .map(
-                    (mode) => DropdownMenuItem<UrlImportCookieMode>(
-                      value: mode,
-                      child: Text(_cookieModeLabel(mode)),
-                    ),
-                  )
-                  .toList(growable: false),
+          items: _supportedCookieModes
+              .map(
+                (mode) => DropdownMenuItem<UrlImportCookieMode>(
+                  value: mode,
+                  child: Text(_cookieModeLabel(mode)),
+                ),
+              )
+              .toList(growable: false),
           onChanged: (value) {
             if (value == null) {
               return;
@@ -801,6 +823,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
               selected: _siteKemono,
               onSelected: (selected) {
                 setState(() {
+                  _favoriteSitesCustomized = true;
                   _siteKemono = selected;
                 });
               },
@@ -810,6 +833,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
               selected: _siteCoomer,
               onSelected: (selected) {
                 setState(() {
+                  _favoriteSitesCustomized = true;
                   _siteCoomer = selected;
                 });
               },
@@ -890,6 +914,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
               selected: _convertHitomiToPdf,
               onSelected: (selected) {
                 setState(() {
+                  _hitomiPdfCustomized = true;
                   _convertHitomiToPdf = selected;
                 });
               },
@@ -1066,9 +1091,10 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
                                       const SizedBox(height: 8),
                                       TextField(
                                         controller: _urlController,
-                                        autofocus: widget.initialSourceText
-                                            .trim()
-                                            .isEmpty &&
+                                        autofocus:
+                                            widget.initialSourceText
+                                                .trim()
+                                                .isEmpty &&
                                             !_useSafariPastePrompt,
                                         keyboardType: TextInputType.url,
                                         textInputAction: TextInputAction.done,

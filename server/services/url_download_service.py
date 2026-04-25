@@ -22,6 +22,21 @@ _CONTENT_DISPOSITION_HEADER = "Content-Disposition"
 _STANDALONE_USER_AGENT = "pdf_viewer/standalone"
 _DDD_SMART_HOST = "ddd-smart.net"
 _DDD_SMART_CDN_HOST = "cdn.ddd-smart.net"
+_HITOMI_NOZOMI_HOSTS = (
+    "ltn.gold-usergeneratedcontent.net",
+    "ltn.hitomi.la",
+)
+_SUPPORTED_HITOMI_SEARCH_NAMESPACES = {
+    "artist",
+    "group",
+    "series",
+    "character",
+    "tag",
+    "type",
+    "language",
+    "male",
+    "female",
+}
 _LAUNCHER_SUPPORTED_HITOMI_SEGMENTS = {
     "manga",
     "doujinshi",
@@ -155,6 +170,32 @@ class _PreparedUrlImportSources:
 class _ResolvedDirectUrl:
     url: str
     metadata: dict[str, object] | None = None
+
+
+@dataclass(slots=True)
+class _HitomiSearchState:
+    area: str = "all"
+    tag: str = "index"
+    language: str = "all"
+    order_by: str = "date"
+    order_by_key: str | None = None
+    order_by_direction: str = "desc"
+
+    def normalized(self) -> "_HitomiSearchState":
+        return replace(
+            self,
+            order_by_key=self.order_by_key
+            if self.order_by_key is not None
+            else ("year" if self.order_by == "popular" else "added"),
+        )
+
+
+@dataclass(slots=True)
+class _HitomiParsedSearchQuery:
+    state: _HitomiSearchState
+    positive_terms: list[str] = field(default_factory=list)
+    negative_terms: list[str] = field(default_factory=list)
+    or_terms: list[list[str]] = field(default_factory=list)
 
 
 class UrlDownloadError(RuntimeError):
@@ -315,6 +356,16 @@ class UrlDownloadService:
         direct_seen: set[str] = set()
 
         for raw_url in await self._collect_input_urls(source_url, options):
+            expanded_launcher_urls = await self._resolve_expanded_launcher_urls(
+                raw_url
+            )
+            if expanded_launcher_urls is not None:
+                for launcher_url in expanded_launcher_urls:
+                    if launcher_url not in launcher_seen:
+                        launcher_seen.add(launcher_url)
+                        launcher_urls.append(launcher_url)
+                continue
+
             resolved_direct_url = await asyncio.to_thread(
                 self._resolve_special_direct_url,
                 raw_url,
@@ -329,11 +380,7 @@ class UrlDownloadService:
                     )
                 continue
 
-            if self._supports_launcher_url(raw_url):
-                if raw_url not in launcher_seen:
-                    launcher_seen.add(raw_url)
-                    launcher_urls.append(raw_url)
-            elif raw_url not in direct_seen:
+            if raw_url not in direct_seen:
                 direct_seen.add(raw_url)
                 direct_urls.append(raw_url)
 
@@ -342,6 +389,261 @@ class UrlDownloadService:
             direct_urls=direct_urls,
             metadata_by_direct_url=metadata_by_direct_url,
         )
+
+    async def _resolve_expanded_launcher_urls(
+        self,
+        raw_url: str,
+    ) -> list[str] | None:
+        if self._supports_launcher_url(raw_url):
+            return [raw_url.strip()]
+
+        parsed = urllib.parse.urlparse(raw_url.strip())
+        if parsed.scheme not in {"http", "https"}:
+            return None
+        if parsed.netloc.lower() != "hitomi.la" or not self._is_hitomi_search_url(
+            parsed
+        ):
+            return None
+
+        return await asyncio.to_thread(
+            self._resolve_hitomi_search_launcher_urls,
+            parsed,
+        )
+
+    def _is_hitomi_search_url(
+        self,
+        parsed: urllib.parse.ParseResult,
+    ) -> bool:
+        path = parsed.path.lower()
+        return path == "/search.html" or path.endswith("/search.html")
+
+    def _resolve_hitomi_search_launcher_urls(
+        self,
+        parsed: urllib.parse.ParseResult,
+    ) -> list[str]:
+        query_text = urllib.parse.unquote(parsed.query or "").strip()
+        if not query_text:
+            return []
+
+        gallery_ids = self._resolve_hitomi_search_gallery_ids(query_text)
+        return [f"https://hitomi.la/galleries/{gallery_id}.html" for gallery_id in gallery_ids]
+
+    def _resolve_hitomi_search_gallery_ids(self, query_text: str) -> list[int]:
+        parsed = self._parse_hitomi_search_query(query_text)
+        state = parsed.state.normalized()
+        remaining_positive_terms = list(parsed.positive_terms)
+
+        if not remaining_positive_terms or (
+            not self._is_hitomi_namespaced_term(remaining_positive_terms[0])
+            and state.order_by_key != "added"
+        ):
+            self._assert_supported_hitomi_search_terms(remaining_positive_terms)
+            results = self._download_hitomi_nozomi_gallery_ids(state)
+        else:
+            first_term = remaining_positive_terms.pop(0)
+            results = self._resolve_hitomi_gallery_ids_for_term(first_term, state)
+
+        for terms in parsed.or_terms:
+            if not terms:
+                continue
+            matched_ids: set[int] = set()
+            for term in terms:
+                matched_ids.update(self._resolve_hitomi_gallery_ids_for_term(term, state))
+            results = [gallery_id for gallery_id in results if gallery_id in matched_ids]
+
+        for term in remaining_positive_terms:
+            matched_ids = set(self._resolve_hitomi_gallery_ids_for_term(term, state))
+            results = [gallery_id for gallery_id in results if gallery_id in matched_ids]
+
+        for term in parsed.negative_terms:
+            matched_ids = set(self._resolve_hitomi_gallery_ids_for_term(term, state))
+            results = [gallery_id for gallery_id in results if gallery_id not in matched_ids]
+
+        if state.order_by_direction in {"asc", "ascending"}:
+            results.reverse()
+        return results
+
+    def _parse_hitomi_search_query(
+        self,
+        query_text: str,
+    ) -> _HitomiParsedSearchQuery:
+        state = _HitomiSearchState()
+        terms = [
+            term.replace("_", " ")
+            for term in re.split(r"\s+", query_text.lower().strip())
+            if term.strip()
+        ]
+        positive_terms: list[str] = []
+        negative_terms: list[str] = []
+        or_terms: list[list[str]] = [[]]
+
+        for index, term in enumerate(terms):
+            next_state = self._next_hitomi_search_state_for_ordering_term(term, state)
+            if next_state is not None:
+                state = next_state
+                continue
+            if term == "or":
+                continue
+
+            or_previous = index > 0 and terms[index - 1] == "or"
+            or_next = index + 1 < len(terms) and terms[index + 1] == "or"
+            if or_previous or or_next:
+                or_terms[-1].append(term)
+                if not or_next:
+                    or_terms.append([])
+                continue
+
+            if term.startswith("-"):
+                negative_term = term[1:].strip()
+                if negative_term:
+                    negative_terms.append(negative_term)
+                continue
+            positive_terms.append(term)
+
+        positive_terms.sort(
+            key=lambda term: 0 if self._is_hitomi_namespaced_term(term) else 1
+        )
+        return _HitomiParsedSearchQuery(
+            state=state,
+            positive_terms=positive_terms,
+            negative_terms=negative_terms,
+            or_terms=[terms for terms in or_terms if terms],
+        )
+
+    def _next_hitomi_search_state_for_ordering_term(
+        self,
+        term: str,
+        current: _HitomiSearchState,
+    ) -> _HitomiSearchState | None:
+        separator_index = term.find(":")
+        if separator_index <= 0:
+            return None
+        left_side = term[:separator_index]
+        right_side = term[separator_index + 1 :]
+        if not re.match(r"^(?:sort|order)(?:by)?(?:key|direction)?$", left_side):
+            return None
+
+        if left_side in {"orderbykey", "sortbykey", "orderkey", "sortkey"}:
+            return replace(
+                current,
+                order_by_key=re.sub(r"[^0-9a-z]", "", right_side),
+            )
+        if left_side in {"orderby", "sortby"}:
+            if right_side in {"popular", "popularity"}:
+                return replace(current, order_by="popular")
+            if right_side == "date":
+                return replace(current, order_by="date")
+            if right_side == "datepublished":
+                return replace(current, order_by="date", order_by_key="published")
+            if right_side in {"random", "rand"}:
+                return replace(current, order_by_direction="random")
+            return None
+        if left_side in {"orderbydirection", "sortbydirection"}:
+            return replace(
+                current,
+                order_by_direction=re.sub(r"[^0-9a-z]", "", right_side),
+            )
+        return None
+
+    def _is_hitomi_namespaced_term(self, term: str) -> bool:
+        separator_index = term.find(":")
+        if separator_index <= 0:
+            return False
+        return term[:separator_index] in _SUPPORTED_HITOMI_SEARCH_NAMESPACES
+
+    def _assert_supported_hitomi_search_terms(self, terms: list[str]) -> None:
+        for term in terms:
+            if self._is_hitomi_namespaced_term(term):
+                continue
+            raise UrlDownloadError(
+                f"Hitomi search URLs currently support tag-based terms only: {term}"
+            )
+
+    def _resolve_hitomi_gallery_ids_for_term(
+        self,
+        term: str,
+        state: _HitomiSearchState,
+    ) -> list[int]:
+        self._assert_supported_hitomi_search_terms([term])
+        separator_index = term.find(":")
+        left_side = term[:separator_index]
+        right_side = term[separator_index + 1 :]
+
+        if left_side in {"female", "male"}:
+            return self._download_hitomi_nozomi_gallery_ids(
+                replace(state, area="tag", tag=term).normalized()
+            )
+        if left_side == "language":
+            return self._download_hitomi_nozomi_gallery_ids(
+                replace(state, language=right_side).normalized()
+            )
+        return self._download_hitomi_nozomi_gallery_ids(
+            replace(state, area=left_side, tag=right_side).normalized()
+        )
+
+    def _download_hitomi_nozomi_gallery_ids(
+        self,
+        state: _HitomiSearchState,
+    ) -> list[int]:
+        last_error: Exception | None = None
+        for host in _HITOMI_NOZOMI_HOSTS:
+            url = self._build_hitomi_nozomi_url(state, host=host)
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": _STANDALONE_USER_AGENT},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    status_code = getattr(response, "status", response.getcode())
+                    if status_code < 200 or status_code >= 300:
+                        raise UrlDownloadError(f"HTTP {status_code} while resolving {url}")
+                    payload = response.read()
+                return [
+                    int.from_bytes(payload[offset : offset + 4], "big", signed=True)
+                    for offset in range(0, len(payload) - len(payload) % 4, 4)
+                ]
+            except Exception as error:
+                last_error = error
+        raise UrlDownloadError(
+            f"Hitomi search URL resolving failed: {last_error or 'nozomi unavailable'}"
+        )
+
+    def _build_hitomi_nozomi_url(
+        self,
+        state: _HitomiSearchState,
+        *,
+        host: str,
+    ) -> str:
+        normalized = state.normalized()
+        segments = ["n"]
+        if normalized.order_by != "date" or normalized.order_by_key == "published":
+            if normalized.area == "all":
+                segments.extend(
+                    [
+                        normalized.order_by,
+                        f"{normalized.order_by_key}-{normalized.language}.nozomi",
+                    ]
+                )
+            else:
+                segments.extend(
+                    [
+                        normalized.area,
+                        normalized.order_by,
+                        str(normalized.order_by_key),
+                        f"{normalized.tag}-{normalized.language}.nozomi",
+                    ]
+                )
+        elif normalized.area == "all":
+            segments.append(f"{normalized.tag}-{normalized.language}.nozomi")
+        else:
+            segments.extend(
+                [
+                    normalized.area,
+                    f"{normalized.tag}-{normalized.language}.nozomi",
+                ]
+            )
+        encoded_segments = [urllib.parse.quote(segment, safe=".:-_") for segment in segments]
+        return f"https://{host}/{'/'.join(encoded_segments)}"
 
     def _build_task_args(self, source_url: str, options: UrlDownloadOptions) -> list[str]:
         args: list[str] = []

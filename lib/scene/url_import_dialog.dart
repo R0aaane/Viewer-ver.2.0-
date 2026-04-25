@@ -71,6 +71,8 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
   bool _overwriteExistingFiles = false;
   bool _verbose = false;
   bool _convertHitomiToPdf = true;
+  bool _favoriteSitesCustomized = false;
+  bool _hitomiPdfCustomized = false;
   UrlImportMediaType _mediaType = UrlImportMediaType.all;
   UrlImportCookieMode _cookieMode = UrlImportCookieMode.auto;
   String? _validationMessage;
@@ -82,6 +84,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
     if (initialSourceText.isNotEmpty) {
       _urlController.text = initialSourceText;
     }
+    _applySuggestedUrlDefaults(force: true);
     _loadProjectCookieSlots();
   }
 
@@ -235,6 +238,19 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
     return const UrlImportOptions().collectSourceUrls(raw);
   }
 
+  void _applySuggestedUrlDefaults({bool force = false}) {
+    final suggested = const UrlImportOptions().suggestedUiState(
+      _urlController.text,
+    );
+    if (force || !_favoriteSitesCustomized) {
+      _siteKemono = suggested.siteKemono;
+      _siteCoomer = suggested.siteCoomer;
+    }
+    if (force || !_hitomiPdfCustomized) {
+      _convertHitomiToPdf = suggested.convertHitomiToPdf;
+    }
+  }
+
   void _mergeSourceUrls(Iterable<String> incomingUrls) {
     final merged = <String>[];
     final seen = <String>{};
@@ -255,6 +271,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
       text: nextText,
       selection: TextSelection.collapsed(offset: nextText.length),
     );
+    _applySuggestedUrlDefaults();
   }
 
   Future<void> _openInAppBrowser() async {
@@ -360,7 +377,10 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
                 autofocus: widget.initialSourceText.trim().isEmpty,
                 minLines: 4,
                 maxLines: 8,
-                onChanged: (_) => setState(() => _validationMessage = null),
+                onChanged: (_) => setState(() {
+                  _validationMessage = null;
+                  _applySuggestedUrlDefaults();
+                }),
                 decoration: const InputDecoration(
                   labelText: 'URL 一覧',
                   alignLabelWithHint: true,
@@ -456,6 +476,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
                     selected: _siteKemono,
                     onSelected: (selected) {
                       setState(() {
+                        _favoriteSitesCustomized = true;
                         _siteKemono = selected;
                         _validationMessage = null;
                       });
@@ -466,6 +487,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
                     selected: _siteCoomer,
                     onSelected: (selected) {
                       setState(() {
+                        _favoriteSitesCustomized = true;
                         _siteCoomer = selected;
                         _validationMessage = null;
                       });
@@ -543,6 +565,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
                     label: const Text('Hitomi を PDF 化'),
                     selected: _convertHitomiToPdf,
                     onSelected: (selected) => setState(() {
+                      _hitomiPdfCustomized = true;
                       _convertHitomiToPdf = selected;
                     }),
                   ),

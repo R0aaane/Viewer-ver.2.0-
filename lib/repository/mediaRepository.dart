@@ -193,6 +193,18 @@ extension UrlImportCookieModeValue on UrlImportCookieMode {
   };
 }
 
+class UrlImportSuggestedUiState {
+  final bool siteKemono;
+  final bool siteCoomer;
+  final bool convertHitomiToPdf;
+
+  const UrlImportSuggestedUiState({
+    required this.siteKemono,
+    required this.siteCoomer,
+    required this.convertHitomiToPdf,
+  });
+}
+
 class UrlImportOptions {
   final UrlImportCookieMode cookieMode;
   final String? cookieFilePath;
@@ -231,15 +243,13 @@ class UrlImportOptions {
   List<String> collectSourceUrls(String sourceUrl) {
     final urls = <String>[];
     final seen = <String>{};
-    final matchedUrls =
-        RegExp(
-          r'https?://[^\s,]+',
-          caseSensitive: false,
-        ).allMatches(sourceUrl).map((match) => match.group(0) ?? '');
-    final segments =
-        matchedUrls.isNotEmpty
-            ? matchedUrls
-            : sourceUrl.split(RegExp(r'[\s,]+'));
+    final matchedUrls = RegExp(
+      r'https?://[^\s,]+',
+      caseSensitive: false,
+    ).allMatches(sourceUrl).map((match) => match.group(0) ?? '');
+    final segments = matchedUrls.isNotEmpty
+        ? matchedUrls
+        : sourceUrl.split(RegExp(r'[\s,]+'));
     for (final segment in segments) {
       final trimmed = segment.trim();
       if (trimmed.isEmpty) continue;
@@ -308,6 +318,27 @@ class UrlImportOptions {
       parallelDownloads < 1 ? 1 : parallelDownloads;
 
   List<String> inferCookieSites(String sourceUrl) {
+    final sourceSites = inferSourceSites(sourceUrl);
+    final sites = <String>[];
+    final seen = <String>{};
+
+    void addSite(String site) {
+      if (site != 'kemono' && site != 'coomer') {
+        return;
+      }
+      if (seen.add(site)) {
+        sites.add(site);
+      }
+    }
+
+    for (final site in sourceSites) {
+      addSite(site);
+    }
+
+    return sites;
+  }
+
+  List<String> inferSourceSites(String sourceUrl) {
     final sites = <String>[];
     final seen = <String>{};
 
@@ -324,15 +355,37 @@ class UrlImportOptions {
     }
 
     for (final url in collectSourceUrls(sourceUrl)) {
+      final uri = Uri.tryParse(url);
+      final host = uri?.host.toLowerCase() ?? '';
       final lower = url.toLowerCase();
-      if (lower.contains('kemono.')) {
+      if (lower.contains('kemono.') || host.startsWith('kemono.')) {
         addSite('kemono');
-      } else if (lower.contains('coomer.')) {
+      } else if (lower.contains('coomer.') || host.startsWith('coomer.')) {
         addSite('coomer');
+      } else if (host == 'hitomi.la') {
+        addSite('hitomi');
+      } else if (lower.contains('ddd-smart.')) {
+        addSite('ddd-smart');
       }
     }
 
     return sites;
+  }
+
+  UrlImportSuggestedUiState suggestedUiState(String sourceUrl) {
+    final sites = inferSourceSites(sourceUrl);
+    if (sites.isEmpty) {
+      return const UrlImportSuggestedUiState(
+        siteKemono: true,
+        siteCoomer: false,
+        convertHitomiToPdf: true,
+      );
+    }
+    return UrlImportSuggestedUiState(
+      siteKemono: sites.contains('kemono'),
+      siteCoomer: sites.contains('coomer'),
+      convertHitomiToPdf: sites.contains('hitomi'),
+    );
   }
 
   String? resolveProjectCookieProfile(String sourceUrl) {
@@ -462,10 +515,7 @@ abstract class MediaRepository {
 
   Future<Uint8List> readBytes(MediaItem item);
 
-  Future<Uint8List> readPdfSourceBytes(
-    MediaItem item, {
-    int maxWidth = 2800,
-  });
+  Future<Uint8List> readPdfSourceBytes(MediaItem item, {int maxWidth = 2800});
 
   Future<int> getPageCount(MediaItem item);
 

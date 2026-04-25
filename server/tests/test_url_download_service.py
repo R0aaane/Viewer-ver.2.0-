@@ -69,6 +69,22 @@ class _RecordingUrlDownloadService(UrlDownloadService):
         )
 
 
+class _HitomiSearchRecordingUrlDownloadService(_RecordingUrlDownloadService):
+    def _download_hitomi_nozomi_gallery_ids(self, state) -> list[int]:
+        key = (
+            state.area,
+            state.tag,
+            state.language,
+            state.order_by,
+            state.order_by_key,
+        )
+        return {
+            ("artist", "chilt", "all", "date", "added"): [400, 300, 200, 100],
+            ("all", "index", "japanese", "date", "added"): [300, 250, 200],
+            ("type", "doujinshi", "all", "date", "added"): [500, 300, 200],
+        }.get(key, [])
+
+
 class UrlDownloadServiceTest(unittest.TestCase):
     def test_uses_metadata_title_when_download_name_is_all(self) -> None:
         service = UrlDownloadService()
@@ -134,6 +150,29 @@ class UrlDownloadServiceTest(unittest.TestCase):
         self.assertEqual(result.imported_count, 3)
         self.assertEqual(len(service.launcher_calls), 1)
         self.assertEqual(len(service.direct_calls), 1)
+
+    def test_expands_hitomi_search_url_into_gallery_urls(self) -> None:
+        service = _HitomiSearchRecordingUrlDownloadService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service_loop(
+                service.download_url(
+                    source_url=(
+                        "https://hitomi.la/search.html?"
+                        "artist%3Achilt%20language%3Ajapanese%20type%3Adoujinshi"
+                    ),
+                    destination_folder=temp_dir,
+                    options=UrlDownloadOptions(),
+                )
+            )
+
+        self.assertEqual(result.imported_count, 2)
+        self.assertEqual(len(service.launcher_calls), 1)
+        self.assertEqual(len(service.direct_calls), 0)
+        self.assertEqual(
+            service.launcher_calls[0]["source_url"],
+            "https://hitomi.la/galleries/300.html\n"
+            "https://hitomi.la/galleries/200.html",
+        )
 
 
 def service_loop(awaitable):
