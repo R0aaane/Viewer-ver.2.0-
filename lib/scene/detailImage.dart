@@ -1195,6 +1195,31 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
+  KeyEventResult _handleReaderNavigationKeyEvent(
+    FocusNode node,
+    KeyEvent event,
+  ) {
+    if (_tab.index != 0 ||
+        (event is! KeyDownEvent && event is! KeyRepeatEvent)) {
+      return KeyEventResult.ignored;
+    }
+
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.pageUp ||
+        key == LogicalKeyboardKey.gameButtonLeft1) {
+      _prev();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.pageDown ||
+        key == LogicalKeyboardKey.gameButtonRight1) {
+      _next();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   Future<void> _renameCurrentItem() async {
     final item = _item;
     final newBase = await showRenameItemDialog(context, item: item);
@@ -1509,6 +1534,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     return ControllerNavigationRegion(
       debugLabel: 'detail-page',
       autofocusFirstFocusable: true,
+      onKeyEvent: _handleReaderNavigationKeyEvent,
       child: WillPopScope(
         onWillPop: () async {
           _popWithResult();

@@ -38,19 +38,80 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
   ];
   static const String _defaultTitle = 'URL ブラウザ';
   static const List<String> _blockedHostSuffixes = <String>[
+    '2mdn.net',
+    'ad.gt',
+    'adform.net',
+    'adition.com',
+    'adnxs.com',
+    'adroll.com',
+    'adsafeprotected.com',
+    'adservice.google.com',
+    'adsterra.com',
+    'ads-twitter.com',
+    'adskeeper.com',
+    'advertising.com',
+    'analytics.google.com',
+    'appier.net',
+    'bidr.io',
+    'casalemedia.com',
+    'contextweb.com',
+    'creativecdn.com',
+    'criteo.com',
     'doubleclick.net',
+    'ero-advertising.com',
+    'exoclick.com',
+    'exosrv.com',
+    'google-analytics.com',
     'googlesyndication.com',
     'googleadservices.com',
     'googletagmanager.com',
-    'adnxs.com',
+    'googletagservices.com',
+    'hilltopads.net',
+    'imrworldwide.com',
+    'juicyads.com',
+    'lijit.com',
+    'mgid.com',
+    'moatads.com',
+    'openx.net',
+    'openx.com',
+    'popads.net',
+    'propellerads.com',
+    'pubmatic.com',
+    'quantserve.com',
+    'revcontent.com',
+    'rubiconproject.com',
+    'sharethrough.com',
+    'smartadserver.com',
+    'serving-sys.com',
     'amazon-adsystem.com',
-    'criteo.com',
     'taboola.com',
+    'trafficjunky.net',
+    'yieldmo.com',
     'outbrain.com',
     'adsrvr.org',
     'scorecardresearch.com',
     'yieldmanager.com',
     'zedo.com',
+  ];
+  static const List<String> _blockedUrlFragments = <String>[
+    '/ad-delivery/',
+    '/adserver/',
+    '/adservice/',
+    '/adsystem/',
+    '/advert/',
+    '/analytics.js',
+    '/banner-ad',
+    '/banners/',
+    '/bidder/',
+    '/pagead/',
+    '/popads/',
+    '/popunder',
+    '/prebid',
+    '/sponsor/',
+    '?ad_id=',
+    '&ad_id=',
+    'adunit=',
+    'adzone=',
   ];
   static const String _adBlockScript = r'''
 (() => {
@@ -60,25 +121,94 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
   window.__pdfViewerAdBlockInstalled = true;
 
   const blockedHosts = [
+    '2mdn.net',
+    'ad.gt',
+    'adform.net',
+    'adition.com',
+    'adnxs.com',
+    'adroll.com',
+    'adsafeprotected.com',
+    'adservice.google.com',
+    'adsterra.com',
+    'ads-twitter.com',
+    'adskeeper.com',
+    'advertising.com',
+    'analytics.google.com',
+    'appier.net',
+    'bidr.io',
+    'casalemedia.com',
+    'contextweb.com',
+    'creativecdn.com',
+    'criteo.com',
     'doubleclick.net',
+    'ero-advertising.com',
+    'exoclick.com',
+    'exosrv.com',
+    'google-analytics.com',
     'googlesyndication.com',
     'googleadservices.com',
     'googletagmanager.com',
-    'adnxs.com',
+    'googletagservices.com',
+    'hilltopads.net',
+    'imrworldwide.com',
+    'juicyads.com',
+    'lijit.com',
+    'mgid.com',
+    'moatads.com',
+    'openx.net',
+    'openx.com',
+    'popads.net',
+    'propellerads.com',
+    'pubmatic.com',
+    'quantserve.com',
+    'revcontent.com',
+    'rubiconproject.com',
+    'sharethrough.com',
+    'smartadserver.com',
+    'serving-sys.com',
     'amazon-adsystem.com',
-    'criteo.com',
     'taboola.com',
+    'trafficjunky.net',
+    'yieldmo.com',
     'outbrain.com',
     'adsrvr.org',
     'scorecardresearch.com',
     'yieldmanager.com',
     'zedo.com',
   ];
+  const blockedUrlFragments = [
+    '/ad-delivery/',
+    '/adserver/',
+    '/adservice/',
+    '/adsystem/',
+    '/advert/',
+    '/analytics.js',
+    '/banner-ad',
+    '/banners/',
+    '/bidder/',
+    '/pagead/',
+    '/popads/',
+    '/popunder',
+    '/prebid',
+    '/sponsor/',
+    '?ad_id=',
+    '&ad_id=',
+    'adunit=',
+    'adzone=',
+  ];
   const cosmeticSelectors = [
     'ins.adsbygoogle',
     '[data-ad-client]',
     '[data-ad-slot]',
+    '[aria-label*="advertisement" i]',
+    '[id^="ad_"]',
+    '[id^="ad-"]',
+    '[id*="-ad-" i]',
     '[id*="google_ads" i]',
+    '[class^="ad_"]',
+    '[class^="ad-"]',
+    '[class*=" ad-" i]',
+    '[class*="-ad-" i]',
     '[class*="adsbygoogle" i]',
     '[class*="advert" i]',
     '[id*="advert" i]',
@@ -106,10 +236,13 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     try {
       const parsed = new URL(String(value), location.href);
       const host = parsed.hostname.toLowerCase();
-      return blockedHosts.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+      const text = parsed.href.toLowerCase();
+      return blockedHosts.some((suffix) => host === suffix || host.endsWith(`.${suffix}`)) ||
+        blockedUrlFragments.some((fragment) => text.includes(fragment));
     } catch (_) {
       const text = String(value).toLowerCase();
-      return blockedHosts.some((suffix) => text.includes(suffix));
+      return blockedHosts.some((suffix) => text.includes(suffix)) ||
+        blockedUrlFragments.some((fragment) => text.includes(fragment));
     }
   };
 
@@ -123,16 +256,25 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     node.setAttribute('aria-hidden', 'true');
   };
 
+  const blockNode = (node) => {
+    const tagName = (node.tagName || '').toUpperCase();
+    if (tagName === 'SCRIPT' || tagName === 'IFRAME' || tagName === 'LINK') {
+      node.remove();
+      return;
+    }
+    hideNode(node);
+  };
+
   const removeAds = () => {
     for (const selector of cosmeticSelectors) {
       for (const node of document.querySelectorAll(selector)) {
         hideNode(node);
       }
     }
-    for (const node of document.querySelectorAll('iframe[src], img[src], script[src], a[href]')) {
+    for (const node of document.querySelectorAll('iframe[src], img[src], script[src], link[href], a[href]')) {
       const source = node.getAttribute('src') || node.getAttribute('href') || '';
       if (shouldBlock(source)) {
-        hideNode(node);
+        blockNode(node);
       }
     }
   };
@@ -213,24 +355,20 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
 })();
 ''';
 
-  final List<StreamSubscription<dynamic>> _windowsSubscriptions =
-      <StreamSubscription<dynamic>>[];
-  late final TextEditingController _addressController;
-
-  mobile_webview.WebViewController? _mobileController;
-  windows_webview.WebviewController? _windowsController;
-  String? _windowsAdBlockScriptId;
-
-  String _currentUrl = '';
-  String _pageTitle = _defaultTitle;
-  String? _windowsUnavailableReason;
-  bool _loading = true;
-  int _progress = 0;
-  bool _canGoBack = false;
-  bool _canGoForward = false;
+  final List<_BrowserTabState> _tabs = <_BrowserTabState>[];
+  int _activeTabIndex = 0;
+  int _nextTabId = 1;
   bool _adBlockEnabled = true;
 
   bool get _usesWindowsWebView => Platform.isWindows;
+  _BrowserTabState get _activeTab => _tabs[_activeTabIndex];
+  TextEditingController get _addressController => _activeTab.addressController;
+  String get _currentUrl => _activeTab.currentUrl;
+  String get _pageTitle => _activeTab.pageTitle;
+  bool get _loading => _activeTab.loading;
+  int get _progress => _activeTab.progress;
+  bool get _canGoBack => _activeTab.canGoBack;
+  bool get _canGoForward => _activeTab.canGoForward;
   bool get _canUseCurrentUrl => _isHttpUrl(_currentUrl);
 
   @override
@@ -238,17 +376,26 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     super.initState();
     final initialUrl =
         _normalizeInputToUrl(widget.initialUrl) ?? _quickLinks[0];
-    _currentUrl = initialUrl;
-    _addressController = TextEditingController(text: initialUrl);
-
-    if (_usesWindowsWebView) {
-      unawaited(_initializeWindowsWebview(initialUrl));
-      return;
-    }
-    _initializeMobileWebview(initialUrl);
+    _createTab(initialUrl);
   }
 
-  void _initializeMobileWebview(String initialUrl) {
+  _BrowserTabState _createTab(String initialUrl) {
+    final tab = _BrowserTabState(
+      id: _nextTabId++,
+      initialUrl: initialUrl,
+      defaultTitle: _defaultTitle,
+    );
+    _tabs.add(tab);
+
+    if (_usesWindowsWebView) {
+      unawaited(_initializeWindowsWebview(tab, initialUrl));
+    } else {
+      _initializeMobileWebview(tab, initialUrl);
+    }
+    return tab;
+  }
+
+  void _initializeMobileWebview(_BrowserTabState tab, String initialUrl) {
     final controller = mobile_webview.WebViewController()
       ..setJavaScriptMode(mobile_webview.JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
@@ -258,29 +405,30 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
               _showSnackBar('広告またはトラッカーへの移動をブロックしました');
               return mobile_webview.NavigationDecision.prevent;
             }
-            _setCurrentUrl(request.url);
+            _setCurrentUrl(request.url, tab: tab);
             return mobile_webview.NavigationDecision.navigate;
           },
           onPageStarted: (url) {
-            _setCurrentUrl(url);
+            _setCurrentUrl(url, tab: tab);
+            _scheduleMobileAdBlock(tab);
             if (!mounted) {
               return;
             }
             setState(() {
-              _loading = true;
-              _progress = 0;
+              tab.loading = true;
+              tab.progress = 0;
             });
           },
           onPageFinished: (url) async {
-            _setCurrentUrl(url);
-            await _applyMobileAdBlockIfNeeded();
-            await _refreshMobileNavigationState();
+            _setCurrentUrl(url, tab: tab);
+            await _applyMobileAdBlockIfNeeded(tab);
+            await _refreshMobileNavigationState(tab);
             if (!mounted) {
               return;
             }
             setState(() {
-              _loading = false;
-              _progress = 100;
+              tab.loading = false;
+              tab.progress = 100;
             });
           },
           onProgress: (progress) {
@@ -288,7 +436,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
               return;
             }
             setState(() {
-              _progress = progress;
+              tab.progress = progress;
             });
           },
           onUrlChange: (change) {
@@ -297,11 +445,11 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
               return;
             }
             if (!mounted) {
-              _setCurrentUrl(url);
+              _setCurrentUrl(url, tab: tab);
               return;
             }
             setState(() {
-              _setCurrentUrl(url);
+              _setCurrentUrl(url, tab: tab);
             });
           },
           onWebResourceError: (error) {
@@ -309,17 +457,21 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
               return;
             }
             setState(() {
-              _loading = false;
+              tab.loading = false;
             });
             _showSnackBar('ページを開けませんでした: ${error.description}');
           },
         ),
       )
       ..loadRequest(Uri.parse(initialUrl));
-    _mobileController = controller;
+    tab.mobileController = controller;
+    _scheduleMobileAdBlock(tab);
   }
 
-  Future<void> _initializeWindowsWebview(String initialUrl) async {
+  Future<void> _initializeWindowsWebview(
+    _BrowserTabState tab,
+    String initialUrl,
+  ) async {
     final String? version;
     try {
       version = await windows_webview.WebviewController.getWebViewVersion();
@@ -328,8 +480,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         return;
       }
       setState(() {
-        _loading = false;
-        _windowsUnavailableReason =
+        tab.loading = false;
+        tab.windowsUnavailableReason =
             'Windows 用の内蔵ブラウザプラグインがまだ読み込まれていません。'
             '\nプラグイン追加後はホットリロードではなく、アプリを完全終了して再起動してください。';
       });
@@ -339,9 +491,9 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         return;
       }
       setState(() {
-        _loading = false;
+        tab.loading = false;
         final message = error.message?.trim();
-        _windowsUnavailableReason = message == null || message.isEmpty
+        tab.windowsUnavailableReason = message == null || message.isEmpty
             ? 'Windows 内蔵ブラウザの確認に失敗しました: ${error.code}'
             : 'Windows 内蔵ブラウザの確認に失敗しました: $message';
       });
@@ -353,8 +505,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     }
     if (version == null) {
       setState(() {
-        _loading = false;
-        _windowsUnavailableReason =
+        tab.loading = false;
+        tab.windowsUnavailableReason =
             'Windows では Microsoft Edge WebView2 Runtime が必要です。'
             '\nWebView2 をインストールしてからもう一度お試しください。';
       });
@@ -362,7 +514,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     }
 
     final controller = windows_webview.WebviewController();
-    _windowsController = controller;
+    tab.windowsController = controller;
 
     try {
       await controller.initialize();
@@ -370,62 +522,63 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       await controller.setPopupWindowPolicy(
         windows_webview.WebviewPopupWindowPolicy.sameWindow,
       );
-      await _syncWindowsAdBlockScript(force: true);
+      await _syncWindowsAdBlockScript(tab, force: true);
 
-      _windowsSubscriptions.add(
+      tab.windowsSubscriptions.add(
         controller.url.listen((url) {
           if (!mounted) {
-            _setCurrentUrl(url);
+            _setCurrentUrl(url, tab: tab);
             return;
           }
           setState(() {
-            _setCurrentUrl(url);
+            _setCurrentUrl(url, tab: tab);
           });
         }),
       );
-      _windowsSubscriptions.add(
+      tab.windowsSubscriptions.add(
         controller.title.listen((title) {
           if (!mounted) {
             return;
           }
           setState(() {
-            _pageTitle = title.trim().isEmpty ? _defaultTitle : title.trim();
+            tab.pageTitle = title.trim().isEmpty ? _defaultTitle : title.trim();
           });
         }),
       );
-      _windowsSubscriptions.add(
+      tab.windowsSubscriptions.add(
         controller.loadingState.listen((state) {
           if (!mounted) {
             return;
           }
           setState(() {
-            _loading = state == windows_webview.LoadingState.loading;
-            if (_loading) {
-              _progress = 0;
+            tab.loading = state == windows_webview.LoadingState.loading;
+            if (tab.loading) {
+              tab.progress = 0;
             } else {
-              _progress = 100;
+              tab.progress = 100;
+              unawaited(_syncWindowsAdBlockScript(tab));
             }
           });
         }),
       );
-      _windowsSubscriptions.add(
+      tab.windowsSubscriptions.add(
         controller.historyChanged.listen((history) {
           if (!mounted) {
             return;
           }
           setState(() {
-            _canGoBack = history.canGoBack;
-            _canGoForward = history.canGoForward;
+            tab.canGoBack = history.canGoBack;
+            tab.canGoForward = history.canGoForward;
           });
         }),
       );
-      _windowsSubscriptions.add(
+      tab.windowsSubscriptions.add(
         controller.onLoadError.listen((status) {
           if (!mounted) {
             return;
           }
           setState(() {
-            _loading = false;
+            tab.loading = false;
           });
           _showSnackBar('ページを開けませんでした: $status');
         }),
@@ -441,8 +594,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         return;
       }
       setState(() {
-        _loading = false;
-        _windowsUnavailableReason =
+        tab.loading = false;
+        tab.windowsUnavailableReason =
             'Windows 用の内蔵ブラウザプラグインがまだ読み込まれていません。'
             '\nアプリを完全終了して再起動すると解消することがあります。';
       });
@@ -451,9 +604,9 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         return;
       }
       setState(() {
-        _loading = false;
+        tab.loading = false;
         final message = error.message?.trim();
-        _windowsUnavailableReason = message == null || message.isEmpty
+        tab.windowsUnavailableReason = message == null || message.isEmpty
             ? '内蔵ブラウザの初期化に失敗しました: ${error.code}'
             : '内蔵ブラウザの初期化に失敗しました: $message';
       });
@@ -462,13 +615,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
 
   @override
   void dispose() {
-    _addressController.dispose();
-    for (final subscription in _windowsSubscriptions) {
-      unawaited(subscription.cancel());
-    }
-    final controller = _windowsController;
-    if (controller != null) {
-      unawaited(controller.dispose());
+    for (final tab in _tabs) {
+      tab.dispose();
     }
     super.dispose();
   }
@@ -488,14 +636,36 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       }
     }
     final lowered = trimmed.toLowerCase();
-    return _blockedHostSuffixes.any(lowered.contains);
+    return _blockedHostSuffixes.any(lowered.contains) ||
+        _blockedUrlFragments.any(lowered.contains);
   }
 
-  Future<void> _applyMobileAdBlockIfNeeded() async {
+  void _scheduleMobileAdBlock(_BrowserTabState tab) {
+    if (_adBlockEnabled) {
+      unawaited(_runScheduledMobileAdBlock(tab));
+    }
+  }
+
+  Future<void> _runScheduledMobileAdBlock(_BrowserTabState tab) async {
+    const delays = <Duration>[
+      Duration(milliseconds: 150),
+      Duration(milliseconds: 500),
+      Duration(milliseconds: 1100),
+    ];
+    for (final delay in delays) {
+      await Future<void>.delayed(delay);
+      if (!mounted || !_adBlockEnabled || tab.mobileController == null) {
+        return;
+      }
+      await _applyMobileAdBlockIfNeeded(tab);
+    }
+  }
+
+  Future<void> _applyMobileAdBlockIfNeeded(_BrowserTabState tab) async {
     if (!_adBlockEnabled) {
       return;
     }
-    final controller = _mobileController;
+    final controller = tab.mobileController;
     if (controller == null) {
       return;
     }
@@ -506,23 +676,26 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     }
   }
 
-  Future<void> _syncWindowsAdBlockScript({bool force = false}) async {
-    final controller = _windowsController;
+  Future<void> _syncWindowsAdBlockScript(
+    _BrowserTabState tab, {
+    bool force = false,
+  }) async {
+    final controller = tab.windowsController;
     if (controller == null || !controller.value.isInitialized) {
       return;
     }
     if (_adBlockEnabled) {
-      if (_windowsAdBlockScriptId == null || force) {
-        if (_windowsAdBlockScriptId != null) {
+      if (tab.windowsAdBlockScriptId == null || force) {
+        if (tab.windowsAdBlockScriptId != null) {
           try {
             await controller.removeScriptToExecuteOnDocumentCreated(
-              _windowsAdBlockScriptId!,
+              tab.windowsAdBlockScriptId!,
             );
           } on PlatformException {
             // Ignore cleanup failure and overwrite with a fresh registration.
           }
         }
-        _windowsAdBlockScriptId = await controller
+        tab.windowsAdBlockScriptId = await controller
             .addScriptToExecuteOnDocumentCreated(_adBlockScript);
       }
       try {
@@ -533,8 +706,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       return;
     }
 
-    final scriptId = _windowsAdBlockScriptId;
-    _windowsAdBlockScriptId = null;
+    final scriptId = tab.windowsAdBlockScriptId;
+    tab.windowsAdBlockScriptId = null;
     if (scriptId == null) {
       return;
     }
@@ -551,7 +724,9 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     });
 
     if (_usesWindowsWebView) {
-      await _syncWindowsAdBlockScript(force: true);
+      for (final tab in _tabs) {
+        await _syncWindowsAdBlockScript(tab, force: true);
+      }
     }
     await _reload();
     _showSnackBar(_adBlockEnabled ? '簡易広告ブロックを有効にしました' : '簡易広告ブロックを無効にしました');
@@ -566,13 +741,14 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _setCurrentUrl(String url) {
+  void _setCurrentUrl(String url, {_BrowserTabState? tab}) {
     if (!_isHttpUrl(url)) {
       return;
     }
-    _currentUrl = url;
-    if (_addressController.text.trim() != url.trim()) {
-      _addressController.value = TextEditingValue(
+    final target = tab ?? _activeTab;
+    target.currentUrl = url;
+    if (target.addressController.text.trim() != url.trim()) {
+      target.addressController.value = TextEditingValue(
         text: url,
         selection: TextSelection.collapsed(offset: url.length),
       );
@@ -606,14 +782,15 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     }
 
     FocusManager.instance.primaryFocus?.unfocus();
+    final tab = _activeTab;
     setState(() {
-      _setCurrentUrl(normalized);
-      _loading = true;
-      _progress = 0;
+      _setCurrentUrl(normalized, tab: tab);
+      tab.loading = true;
+      tab.progress = 0;
     });
 
     if (_usesWindowsWebView) {
-      final controller = _windowsController;
+      final controller = tab.windowsController;
       if (controller == null || !controller.value.isInitialized) {
         _showSnackBar('内蔵ブラウザを初期化中です');
         return;
@@ -622,7 +799,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       return;
     }
 
-    final controller = _mobileController;
+    final controller = tab.mobileController;
     if (controller == null) {
       _showSnackBar('内蔵ブラウザを初期化中です');
       return;
@@ -630,8 +807,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     await controller.loadRequest(Uri.parse(normalized));
   }
 
-  Future<void> _refreshMobileNavigationState() async {
-    final controller = _mobileController;
+  Future<void> _refreshMobileNavigationState(_BrowserTabState tab) async {
+    final controller = tab.mobileController;
     if (controller == null) {
       return;
     }
@@ -643,14 +820,14 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       return;
     }
     setState(() {
-      _pageTitle = title?.trim().isNotEmpty == true
+      tab.pageTitle = title?.trim().isNotEmpty == true
           ? title!.trim()
           : _defaultTitle;
       if (currentUrl != null && currentUrl.trim().isNotEmpty) {
-        _setCurrentUrl(currentUrl);
+        _setCurrentUrl(currentUrl, tab: tab);
       }
-      _canGoBack = canGoBack;
-      _canGoForward = canGoForward;
+      tab.canGoBack = canGoBack;
+      tab.canGoForward = canGoForward;
     });
   }
 
@@ -658,89 +835,213 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     if (!_canGoBack) {
       return;
     }
+    final tab = _activeTab;
     if (_usesWindowsWebView) {
-      final controller = _windowsController;
+      final controller = tab.windowsController;
       if (controller == null || !controller.value.isInitialized) {
         return;
       }
       await controller.goBack();
       return;
     }
-    final controller = _mobileController;
+    final controller = tab.mobileController;
     if (controller == null) {
       return;
     }
     await controller.goBack();
-    await _refreshMobileNavigationState();
+    await _refreshMobileNavigationState(tab);
   }
 
   Future<void> _goForward() async {
     if (!_canGoForward) {
       return;
     }
+    final tab = _activeTab;
     if (_usesWindowsWebView) {
-      final controller = _windowsController;
+      final controller = tab.windowsController;
       if (controller == null || !controller.value.isInitialized) {
         return;
       }
       await controller.goForward();
       return;
     }
-    final controller = _mobileController;
+    final controller = tab.mobileController;
     if (controller == null) {
       return;
     }
     await controller.goForward();
-    await _refreshMobileNavigationState();
+    await _refreshMobileNavigationState(tab);
   }
 
   Future<void> _reload() async {
+    final tab = _activeTab;
     if (_usesWindowsWebView) {
-      final controller = _windowsController;
+      final controller = tab.windowsController;
       if (controller == null || !controller.value.isInitialized) {
         return;
       }
       setState(() {
-        _loading = true;
-        _progress = 0;
+        tab.loading = true;
+        tab.progress = 0;
       });
       await controller.reload();
       return;
     }
-    final controller = _mobileController;
+    final controller = tab.mobileController;
     if (controller == null) {
       return;
     }
     setState(() {
-      _loading = true;
-      _progress = 0;
+      tab.loading = true;
+      tab.progress = 0;
     });
     await controller.reload();
-    await _refreshMobileNavigationState();
+    await _refreshMobileNavigationState(tab);
+  }
+
+  void _openNewTab() {
+    final tab = _createTab(_quickLinks[0]);
+    setState(() {
+      _activeTabIndex = _tabs.indexOf(tab);
+    });
+  }
+
+  void _selectTab(int index) {
+    if (index == _activeTabIndex || index < 0 || index >= _tabs.length) {
+      return;
+    }
+    setState(() {
+      _activeTabIndex = index;
+    });
+  }
+
+  void _closeTab(int index) {
+    if (_tabs.length <= 1 || index < 0 || index >= _tabs.length) {
+      return;
+    }
+    final removed = _tabs[index];
+    setState(() {
+      _tabs.removeAt(index);
+      if (_activeTabIndex >= _tabs.length) {
+        _activeTabIndex = _tabs.length - 1;
+      } else if (index < _activeTabIndex) {
+        _activeTabIndex -= 1;
+      }
+    });
+    removed.dispose();
+  }
+
+  String _tabLabel(_BrowserTabState tab) {
+    final title = tab.pageTitle.trim();
+    if (title.isNotEmpty && title != _defaultTitle) {
+      return title;
+    }
+    final host = Uri.tryParse(tab.currentUrl)?.host.trim();
+    if (host != null && host.isNotEmpty) {
+      return host;
+    }
+    return '新しいタブ';
+  }
+
+  Widget _buildTabStrip() {
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemBuilder: (context, index) {
+                final tab = _tabs[index];
+                final selected = index == _activeTabIndex;
+                return InputChip(
+                  selected: selected,
+                  showCheckmark: false,
+                  avatar: Icon(
+                    selected ? Icons.radio_button_checked : Icons.public,
+                    size: 18,
+                  ),
+                  label: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 180),
+                    child: Text(
+                      _tabLabel(tab),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  onPressed: () => _selectTab(index),
+                  onDeleted: _tabs.length > 1 ? () => _closeTab(index) : null,
+                  deleteIcon: const Icon(Icons.close, size: 18),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                );
+              },
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemCount: _tabs.length,
+            ),
+          ),
+          IconButton(
+            onPressed: _openNewTab,
+            icon: const Icon(Icons.add),
+            tooltip: '新しいタブ',
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+    );
   }
 
   Widget _buildBrowserSurface() {
+    final tab = _activeTab;
     if (_usesWindowsWebView) {
-      if (_windowsUnavailableReason != null) {
+      if (tab.windowsUnavailableReason != null) {
         return Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text(
-              _windowsUnavailableReason!,
+              tab.windowsUnavailableReason!,
               textAlign: TextAlign.center,
             ),
           ),
         );
       }
 
-      final controller = _windowsController;
+      final controller = tab.windowsController;
       if (controller == null || !controller.value.isInitialized) {
         return const Center(child: CircularProgressIndicator());
       }
 
-      return Stack(
+      return KeyedSubtree(
+        key: ValueKey<int>(tab.id),
+        child: Stack(
+          children: [
+            windows_webview.Webview(controller),
+            if (_loading)
+              Align(
+                alignment: Alignment.topCenter,
+                child: LinearProgressIndicator(
+                  value: _progress <= 0 || _progress >= 100
+                      ? null
+                      : _progress / 100,
+                  minHeight: 3,
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    final controller = tab.mobileController;
+    if (controller == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return KeyedSubtree(
+      key: ValueKey<int>(tab.id),
+      child: Stack(
         children: [
-          windows_webview.Webview(controller),
+          mobile_webview.WebViewWidget(controller: controller),
           if (_loading)
             Align(
               alignment: Alignment.topCenter,
@@ -752,28 +1053,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
               ),
             ),
         ],
-      );
-    }
-
-    final controller = _mobileController;
-    if (controller == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    return Stack(
-      children: [
-        mobile_webview.WebViewWidget(controller: controller),
-        if (_loading)
-          Align(
-            alignment: Alignment.topCenter,
-            child: LinearProgressIndicator(
-              value: _progress <= 0 || _progress >= 100
-                  ? null
-                  : _progress / 100,
-              minHeight: 3,
-            ),
-          ),
-      ],
+      ),
     );
   }
 
@@ -818,6 +1098,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       body: SafeArea(
         child: Column(
           children: [
+            _buildTabStrip(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Row(
@@ -929,5 +1210,43 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         ),
       ),
     );
+  }
+}
+
+class _BrowserTabState {
+  final int id;
+  final TextEditingController addressController;
+  final List<StreamSubscription<dynamic>> windowsSubscriptions =
+      <StreamSubscription<dynamic>>[];
+
+  mobile_webview.WebViewController? mobileController;
+  windows_webview.WebviewController? windowsController;
+  String? windowsAdBlockScriptId;
+
+  String currentUrl;
+  String pageTitle;
+  String? windowsUnavailableReason;
+  bool loading = true;
+  int progress = 0;
+  bool canGoBack = false;
+  bool canGoForward = false;
+
+  _BrowserTabState({
+    required this.id,
+    required String initialUrl,
+    required String defaultTitle,
+  }) : currentUrl = initialUrl,
+       pageTitle = defaultTitle,
+       addressController = TextEditingController(text: initialUrl);
+
+  void dispose() {
+    addressController.dispose();
+    for (final subscription in windowsSubscriptions) {
+      unawaited(subscription.cancel());
+    }
+    final controller = windowsController;
+    if (controller != null) {
+      unawaited(controller.dispose());
+    }
   }
 }

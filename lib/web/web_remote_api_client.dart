@@ -6,7 +6,7 @@ import 'dart:html' as html;
 import 'dart:js_interop';
 import 'dart:typed_data';
 
-import 'package:pdfx/src/renderer/web/pdfjs.dart';
+import 'package:pdfx/pdfx.dart';
 
 import '../repository/mediaRepository.dart';
 import '../models/tag.dart';
@@ -540,6 +540,8 @@ class WebRemoteApiClient {
       <String, Future<WebRemoteMediaMeta>>{};
   final Map<String, Future<WebRemotePdfPageCountInfo>> _pdfPageCountCache =
       <String, Future<WebRemotePdfPageCountInfo>>{};
+  final Map<String, Future<Uint8List>> _pdfBytesCache =
+      <String, Future<Uint8List>>{};
 
   WebRemoteApiClient({
     required this.baseUrl,
@@ -555,6 +557,7 @@ class WebRemoteApiClient {
     _itemTagsCache.clear();
     _mediaMetaCache.clear();
     _pdfPageCountCache.clear();
+    _pdfBytesCache.clear();
   }
 
   Future<T> _memoize<T>(
@@ -979,16 +982,23 @@ class WebRemoteApiClient {
     int? height,
     int? page,
     bool refresh = false,
-  }) {
-    return _getBytes(
-      '/media/${Uri.encodeComponent(mediaId)}/thumb',
-      queryParameters: <String, String>{
-        if (width != null) 'width': '$width',
-        if (height != null) 'height': '$height',
-        if (page != null) 'page': '$page',
-        if (refresh) 'refresh': '${DateTime.now().microsecondsSinceEpoch}',
-      },
-    );
+  }) async {
+    try {
+      return await _getBytes(
+        '/media/${Uri.encodeComponent(mediaId)}/thumb',
+        queryParameters: <String, String>{
+          if (width != null) 'width': '$width',
+          if (height != null) 'height': '$height',
+          if (page != null) 'page': '$page',
+          if (refresh) 'refresh': '${DateTime.now().microsecondsSinceEpoch}',
+        },
+      );
+    } on WebRemoteException catch (error) {
+      if (page == null || error.statusCode == 401 || error.statusCode == 403) {
+        rethrow;
+      }
+      return _renderPdfPageLocally(mediaId, page, width: width);
+    }
   }
 
   Future<Uint8List> fetchPdfPage(String mediaId, int pageNo, {int? width}) {
@@ -1055,6 +1065,59 @@ class WebRemoteApiClient {
     }
 
     throw lastError ?? const WebRemoteException('PDF ページ画像の取得に失敗しました');
+  }
+
+  Future<Uint8List> _fetchPdfBytesForLocalRender(String mediaId) {
+    return _memoize(_pdfBytesCache, mediaId, () => fetchImageDownload(mediaId));
+  }
+
+  Future<Uint8List> _renderPdfPageLocally(
+    String mediaId,
+    int pageNo, {
+    int? width,
+  }) async {
+    if (pageNo < 1) {
+      throw const WebRemoteException(
+        'pageNo must be greater than or equal to 1',
+        statusCode: 400,
+      );
+    }
+
+    PdfDocument? document;
+    PdfPage? page;
+    try {
+      await _ensurePdfJsReady();
+      final pdfBytes = await _fetchPdfBytesForLocalRender(mediaId);
+      document = await PdfDocument.openData(pdfBytes);
+      if (pageNo > document.pagesCount) {
+        throw const WebRemoteException(
+          'pageNo is out of range',
+          statusCode: 400,
+        );
+      }
+
+      page = await document.getPage(pageNo);
+      final targetWidth = ((width ?? 1200).clamp(128, 2400) as num).toDouble();
+      final pageWidth = page.width <= 0 ? 1.0 : page.width;
+      final targetHeight = page.height * (targetWidth / pageWidth);
+      final image = await page.render(
+        width: targetWidth,
+        height: targetHeight,
+        format: PdfPageImageFormat.png,
+        backgroundColor: '#FFFFFF',
+      );
+      if (image == null) {
+        throw const WebRemoteException('PDF render failed');
+      }
+      return image.bytes;
+    } on WebRemoteException {
+      rethrow;
+    } catch (error) {
+      throw WebRemoteException('PDF.js render failed: $error');
+    } finally {
+      await page?.close();
+      await document?.close();
+    }
   }
 
   Future<WebRemotePdfPageCountInfo> resolvePdfPageCountInfo(

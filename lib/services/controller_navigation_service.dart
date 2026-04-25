@@ -594,6 +594,7 @@ class ControllerNavigationRegion extends StatefulWidget {
   final bool autofocusBoundary;
   final bool autofocusFirstFocusable;
   final FocusTraversalPolicy? policy;
+  final FocusOnKeyEventCallback? onKeyEvent;
 
   const ControllerNavigationRegion({
     super.key,
@@ -602,6 +603,7 @@ class ControllerNavigationRegion extends StatefulWidget {
     this.autofocusBoundary = true,
     this.autofocusFirstFocusable = false,
     this.policy,
+    this.onKeyEvent,
   });
 
   @override
@@ -643,6 +645,7 @@ class _ControllerNavigationRegionState
         autofocus: widget.autofocusBoundary,
         canRequestFocus: true,
         skipTraversal: true,
+        onKeyEvent: widget.onKeyEvent,
         onFocusChange: _handleFocusChange,
         child: widget.child,
       ),
