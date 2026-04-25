@@ -107,12 +107,18 @@ class UrlImportResult {
   final int importedCount;
   final int skippedCount;
   final int failedCount;
+  final int taggedCount;
+  final int organizedCount;
+  final int rescannedCount;
   final Map<String, HitomiGalleryMetadata> hitomiMetadataByRelativePath;
 
   const UrlImportResult({
     required this.importedCount,
     this.skippedCount = 0,
     this.failedCount = 0,
+    this.taggedCount = 0,
+    this.organizedCount = 0,
+    this.rescannedCount = 0,
     this.hitomiMetadataByRelativePath = const <String, HitomiGalleryMetadata>{},
   });
 

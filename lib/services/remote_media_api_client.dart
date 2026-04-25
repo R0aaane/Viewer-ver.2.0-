@@ -170,7 +170,7 @@ class RemoteMediaApiClient {
     required this.baseUrl,
     this.authToken,
     this.timeout = const Duration(seconds: 15),
-    this.uploadTimeout = const Duration(minutes: 10),
+    this.uploadTimeout = const Duration(minutes: 30),
   });
 
   bool get isConfigured => baseUrl.trim().isNotEmpty;
@@ -289,7 +289,9 @@ class RemoteMediaApiClient {
     final rows = _unwrapList(json, preferredKeys: const ['items', 'results']);
     return rows
         .whereType<Map>()
-        .map((row) => _parseReadingProgressEntry(Map<String, dynamic>.from(row)))
+        .map(
+          (row) => _parseReadingProgressEntry(Map<String, dynamic>.from(row)),
+        )
         .toList(growable: false);
   }
 
@@ -309,7 +311,8 @@ class RemoteMediaApiClient {
         'currentPage': currentPage,
         if (totalPages != null) 'totalPages': totalPages,
         if (progress != null) 'progress': progress,
-        if (lastReadAt != null) 'lastReadAt': lastReadAt.toUtc().toIso8601String(),
+        if (lastReadAt != null)
+          'lastReadAt': lastReadAt.toUtc().toIso8601String(),
         if (updatedAt != null) 'updatedAt': updatedAt.toUtc().toIso8601String(),
         if (identity != null) 'identity': identity,
       },
@@ -514,8 +517,8 @@ class RemoteMediaApiClient {
     final trimmedArtistTag = importMetadata?.artistTag?.trim();
     final trimmedSeriesTag = importMetadata?.seriesTag?.trim();
     final trimmedTargetCollection = importMetadata?.targetCollection?.trim();
-    final trimmedHostPdfFileNameHint =
-        importMetadata?.hostPdfFileNameHint?.trim();
+    final trimmedHostPdfFileNameHint = importMetadata?.hostPdfFileNameHint
+        ?.trim();
     final artistTag = trimmedArtistTag != null && trimmedArtistTag.isNotEmpty
         ? trimmedArtistTag
         : null;
@@ -658,10 +661,7 @@ class RemoteMediaApiClient {
         writeField('targetCollection', targetCollection);
       }
       if (importMetadata != null) {
-        writeField(
-          'convertToPdfOnHost',
-          convertToPdfOnHost ? 'true' : 'false',
-        );
+        writeField('convertToPdfOnHost', convertToPdfOnHost ? 'true' : 'false');
         if (hostPdfFileNameHint != null) {
           writeField('hostPdfNameHint', hostPdfFileNameHint);
         }
@@ -913,6 +913,9 @@ class RemoteMediaApiClient {
       importedCount: _asInt(jsonBody['importedCount']) ?? 0,
       skippedCount: _asInt(jsonBody['skippedCount']) ?? 0,
       failedCount: _asInt(jsonBody['failedCount']) ?? 0,
+      taggedCount: _asInt(jsonBody['taggedCount']) ?? 0,
+      organizedCount: _asInt(jsonBody['organizedCount']) ?? 0,
+      rescannedCount: _asInt(jsonBody['rescannedCount']) ?? 0,
     );
   }
 

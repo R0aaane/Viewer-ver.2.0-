@@ -137,7 +137,14 @@ class _GeneratedPdfPostProcessResult {
   bool get organized => organizedPath != null;
 }
 
-enum _UrlImportQueueStatus { queued, running, completed, empty, failed }
+enum _UrlImportQueueStatus {
+  queued,
+  running,
+  waiting,
+  completed,
+  empty,
+  failed,
+}
 
 enum _SharedUrlImportTargetKind { currentFolder, library }
 
@@ -814,9 +821,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 child: const Text('後で'),
               ),
               FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(
-                  mismatch.hasUpdateUrl,
-                ),
+                onPressed: () =>
+                    Navigator.of(dialogContext).pop(mismatch.hasUpdateUrl),
                 child: Text(mismatch.hasUpdateUrl ? 'アップデート' : '確認'),
               ),
             ],
@@ -826,9 +832,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (openUpdate == true) {
         final opened = await _appVersionService.openUpdate(mismatch);
         if (!opened && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('更新先を開けませんでした')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('更新先を開けませんでした')));
         }
       }
     } catch (error, stackTrace) {
@@ -5995,7 +6001,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
-
   Future<void> _handlePendingSharedMediaImport(
     List<MediaItem> mediaItems,
   ) async {
@@ -6003,11 +6008,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('このモードでは共有ファイルの取り込みは未対応です'),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('このモードでは共有ファイルの取り込みは未対応です')));
       return;
     }
 
@@ -6105,9 +6108,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       if (importedCount <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('取り込み対象がありませんでした')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('取り込み対象がありませんでした')));
         return;
       }
 
@@ -6140,9 +6143,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('共有ファイルの取り込みに失敗しました: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('共有ファイルの取り込みに失敗しました: $error')));
     } finally {
       progress.dispose();
       await _cleanupPreparedImportSelection(selection);
@@ -6158,9 +6161,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('このモードでは共有 URL の取り込みは未対応です'),
-        ),
+        const SnackBar(content: Text('このモードでは共有 URL の取り込みは未対応です')),
       );
       return;
     }
@@ -6407,6 +6408,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           hitomiMetadataByRelativePath: result.hitomiMetadataByRelativePath,
         );
       }
+      if (widget.repo.isRemoteMode && result.taggedCount > 0) {
+        inferredTaggedCount = result.taggedCount;
+      }
+      if (widget.repo.isRemoteMode && result.taggedCount > 0) {
+        inferredTaggedCount = result.taggedCount;
+      }
 
       _folderItemsCache.clear();
       _folderItemsCacheRecursive.clear();
@@ -6431,7 +6438,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         if (result.skippedCount > 0) 'スキップ ${result.skippedCount} 件',
         if (result.failedCount > 0) '失敗 ${result.failedCount} 件',
       ];
-      final message = '$successLabel: ${parts.join(' / ')}';
+      final organizedSummary = result.organizedCount > 0
+          ? ' / 整理 ${result.organizedCount} 件'
+          : '';
+      final message = '$successLabel: ${parts.join(' / ')}$organizedSummary';
       _updateUrlImportQueueEntry(
         queueId,
         (current) => current.copyWith(
@@ -6445,9 +6455,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
+      final isTimeoutImportError = _isLikelyTimeoutImportError(e);
+      if (isTimeoutImportError) {
+        _updateUrlImportQueueEntry(
+          queueId,
+          (current) => current.copyWith(
+            status: _UrlImportQueueStatus.running,
+            clearProgress: true,
+            message: 'サーバー応答がタイムアウトしました。ホスト側の結果を確認中です...',
+          ),
+        );
+      }
       final observedImport = await _observeUrlImportChanges(
         folder: folder,
         beforeItemIds: beforeItemIds,
+        attemptCount: isTimeoutImportError ? 30 : 3,
+        retryDelay: isTimeoutImportError
+            ? const Duration(seconds: 2)
+            : const Duration(milliseconds: 600),
       );
       if (observedImport.observedImportedCount > 0) {
         if (!mounted) return;
@@ -6480,7 +6505,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
         if (!mounted) return;
 
-        final recoveryNote = _isLikelyTimeoutImportError(e)
+        final recoveryNote = isTimeoutImportError
             ? 'ホスト応答はタイムアウトしましたが、取り込み結果を確認できました'
             : 'エラー後に取り込み結果を確認できました';
         final parts = <String>[
@@ -6492,7 +6517,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _updateUrlImportQueueEntry(
           queueId,
           (current) => current.copyWith(
-            status: _UrlImportQueueStatus.completed,
+            status: isTimeoutImportError
+                ? _UrlImportQueueStatus.waiting
+                : _UrlImportQueueStatus.completed,
             clearProgress: true,
             message: message,
             finishedAt: DateTime.now(),
@@ -6505,6 +6532,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       if (!mounted) return;
+      if (isTimeoutImportError) {
+        final message =
+            'サーバー応答がタイムアウトしました。ホスト側で処理が継続している可能性があります。しばらく待ってから再読み込みして結果を確認してください。';
+        _updateUrlImportQueueEntry(
+          queueId,
+          (current) => current.copyWith(
+            status: _UrlImportQueueStatus.waiting,
+            clearProgress: true,
+            message: message,
+            finishedAt: DateTime.now(),
+          ),
+        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+        return;
+      }
       final message = 'URL取り込みに失敗しました: $e';
       _updateUrlImportQueueEntry(
         queueId,
@@ -6525,12 +6569,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   _observeUrlImportChanges({
     required FolderHandle folder,
     required Set<String>? beforeItemIds,
+    int attemptCount = 3,
+    Duration retryDelay = const Duration(milliseconds: 600),
   }) async {
     if (beforeItemIds == null) {
       return (afterItemsSnapshot: null, observedImportedCount: 0);
     }
     Object? lastError;
-    for (var attempt = 0; attempt < 3; attempt++) {
+    for (var attempt = 0; attempt < attemptCount; attempt++) {
       try {
         final afterItemsSnapshot = await widget.repo.listMediaRecursiveFiles(
           folder,
@@ -6542,7 +6588,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         final observedImportedCount = afterItemIds
             .difference(beforeItemIds)
             .length;
-        if (observedImportedCount > 0 || attempt == 2) {
+        if (observedImportedCount > 0 || attempt == attemptCount - 1) {
           return (
             afterItemsSnapshot: afterItemsSnapshot,
             observedImportedCount: observedImportedCount,
@@ -6550,11 +6596,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
       } catch (error) {
         lastError = error;
-        if (attempt == 2) {
+        if (attempt == attemptCount - 1) {
           break;
         }
       }
-      await Future<void>.delayed(const Duration(milliseconds: 600));
+      await Future<void>.delayed(retryDelay);
     }
     if (lastError != null) {
       debugPrint(
@@ -7952,6 +7998,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return '待機中';
       case _UrlImportQueueStatus.running:
         return entry.progress?.statusLabel ?? 'ダウンロード中';
+      case _UrlImportQueueStatus.waiting:
+        return '確認待ち';
       case _UrlImportQueueStatus.completed:
         return '完了';
       case _UrlImportQueueStatus.empty:
@@ -7963,6 +8011,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Color _queueStatusColor(BuildContext context, _UrlImportQueueEntry entry) {
     switch (entry.status) {
+      case _UrlImportQueueStatus.waiting:
+        return Colors.orange.shade400;
       case _UrlImportQueueStatus.completed:
         return Colors.green.shade400;
       case _UrlImportQueueStatus.empty:
@@ -8877,7 +8927,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ),
     );
   }
-
 }
 
 class _ThumbTile extends StatelessWidget {
