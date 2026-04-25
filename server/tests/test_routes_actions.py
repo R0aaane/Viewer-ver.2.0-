@@ -867,6 +867,75 @@ class ActionsRoutesTest(unittest.TestCase):
                 ],
             )
 
+    def test_download_url_renames_duplicate_hitomi_pdf_names_in_same_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            index_service = _RecordingIndexService()
+
+            def _create_downloaded_file(_: str, destination_folder: str) -> None:
+                first_artist_dir = os.path.join(destination_folder, 'hitomi', '[11111] ArtistOne')
+                first_gallery_dir = os.path.join(first_artist_dir, '[20241105] [3114110] Same Title')
+                os.makedirs(first_gallery_dir, exist_ok=True)
+                with open(os.path.join(first_gallery_dir, '001.jpg'), 'wb') as handle:
+                    handle.write(b'jpg')
+                with open(os.path.join(first_artist_dir, 'Same Title.pdf'), 'wb') as handle:
+                    handle.write(b'%PDF-1.4 first')
+
+                second_artist_dir = os.path.join(destination_folder, 'hitomi', '[22222] ArtistTwo')
+                second_gallery_dir = os.path.join(second_artist_dir, '[20241106] [3114111] Same Title')
+                os.makedirs(second_gallery_dir, exist_ok=True)
+                with open(os.path.join(second_gallery_dir, '001.jpg'), 'wb') as handle:
+                    handle.write(b'jpg')
+                with open(os.path.join(second_artist_dir, 'Same Title.pdf'), 'wb') as handle:
+                    handle.write(b'%PDF-1.4 second')
+
+            downloader = _FakeUrlDownloadService(
+                result=UrlDownloadResult(
+                    imported_count=2,
+                    skipped_count=0,
+                    failed_count=0,
+                    hitomi_metadata_by_relative_path={
+                        'hitomi/[11111] artistone/same title.pdf': {
+                            'artists': ['ArtistOne'],
+                            'series': ['Series One'],
+                        },
+                        'hitomi/[22222] artisttwo/same title.pdf': {
+                            'artists': ['ArtistTwo'],
+                            'series': ['Series Two'],
+                        },
+                    },
+                ),
+                on_call=_create_downloaded_file,
+            )
+            request = _request(
+                metadata_store,
+                index_service=index_service,
+                media_roots=[temp_dir],
+                url_download_service=downloader,
+            )
+
+            response = asyncio.run(
+                download_url(
+                    request,
+                    DownloadUrlRequest(
+                        folderRaw=temp_dir,
+                        url=(
+                            'https://hitomi.la/search.html?'
+                            'artist%3Aexample%20language%3Ajapanese%20type%3Adoujinshi'
+                        ),
+                    ),
+                )
+            )
+
+            self.assertEqual(response.importedCount, 2)
+            self.assertEqual(response.taggedCount, 2)
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, 'Same Title.pdf')))
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, 'Same Title (2).pdf')))
+            self.assertEqual(
+                {call['media_id'] for call in metadata_store.add_tag_calls},
+                {'mid:Same Title.pdf', 'mid:Same Title (2).pdf'},
+            )
+
     def test_download_url_applies_ddd_smart_media_type_to_images(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             metadata_store = _UploadMetadataStore()

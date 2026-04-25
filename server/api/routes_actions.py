@@ -1116,8 +1116,14 @@ def _move_staged_media_entries_to_library(
                     pass
                 saved_entries.append((os.path.normpath(target_path), relative_hint))
                 continue
-            logger.warning('[COPY] blocked duplicate-name source=%s target=%s', source_path, target_path)
-            raise bad_request('Duplicate file or folder name already exists')
+            replacement_path = _resolve_available_import_target_path(target_path)
+            logger.info(
+                '[MOVE] renamed duplicate import source=%s target=%s replacement=%s',
+                source_path,
+                target_path,
+                replacement_path,
+            )
+            target_path = replacement_path
 
         shutil.move(source_path, target_path)
         saved_entries.append((os.path.normpath(target_path), relative_hint))
@@ -1403,6 +1409,20 @@ def _normalized_import_file_name(file_name: str) -> str:
     return f"{collapsed_stem}{path.suffix}"
 
 
+def _resolve_available_import_target_path(target_path: str) -> str:
+    normalized_target = os.path.normpath(target_path)
+    parent_dir = os.path.dirname(normalized_target)
+    stem, suffix = os.path.splitext(os.path.basename(normalized_target))
+
+    candidate = normalized_target
+    counter = 2
+    while os.path.exists(candidate):
+        candidate = os.path.join(parent_dir, f"{stem} ({counter}){suffix}")
+        counter += 1
+
+    return os.path.normpath(candidate)
+
+
 def _replace_relative_basename(relative_path: str, file_name: str) -> str:
     normalized = str(relative_path or "").replace("\\", "/")
     parent = posixpath.dirname(normalized)
@@ -1459,8 +1479,14 @@ def _flatten_imported_media_paths(
                     pass
                 flattened.append((os.path.normpath(target_path), relative_hint))
                 continue
-            logger.warning('[COPY] blocked duplicate-name source=%s target=%s', source_path, target_path)
-            raise bad_request('Duplicate file or folder name already exists')
+            replacement_path = _resolve_available_import_target_path(target_path)
+            logger.info(
+                '[MOVE] renamed duplicate flattened import source=%s target=%s replacement=%s',
+                source_path,
+                target_path,
+                replacement_path,
+            )
+            target_path = replacement_path
 
         shutil.move(source_path, target_path)
         flattened.append((os.path.normpath(target_path), relative_hint))
