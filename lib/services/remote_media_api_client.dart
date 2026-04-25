@@ -232,8 +232,14 @@ class RemoteMediaApiClient {
     );
   }
 
-  Future<RemoteMediaMeta> fetchMediaMeta(String mediaId) async {
-    final json = await _getJson('/media/${Uri.encodeComponent(mediaId)}/meta');
+  Future<RemoteMediaMeta> fetchMediaMeta(
+    String mediaId, {
+    ResolvedMediaIdentity? identity,
+  }) async {
+    final json = await _getJson(
+      '/media/${Uri.encodeComponent(mediaId)}/meta',
+      queryParameters: _identityQueryParameters(identity),
+    );
     if (json is! Map<String, dynamic>) {
       throw const RemoteMediaException('メディア情報の形式が不正です');
     }
@@ -264,9 +270,15 @@ class RemoteMediaApiClient {
         .toList(growable: false);
   }
 
-  Future<ReadingProgressEntry?> fetchReadingProgress(String mediaId) async {
+  Future<ReadingProgressEntry?> fetchReadingProgress(
+    String mediaId, {
+    ResolvedMediaIdentity? identity,
+  }) async {
     try {
-      final json = await _getJson('/progress/${Uri.encodeComponent(mediaId)}');
+      final json = await _getJson(
+        '/progress/${Uri.encodeComponent(mediaId)}',
+        queryParameters: _identityQueryParameters(identity),
+      );
       if (json is! Map<String, dynamic>) {
         throw const RemoteMediaException('読書進捗の形式が不正です');
       }
@@ -1137,6 +1149,32 @@ class RemoteMediaApiClient {
       hash = (hash * prime) & 0xFFFFFFFF;
     }
     return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  Map<String, String>? _identityQueryParameters(ResolvedMediaIdentity? identity) {
+    if (identity == null) {
+      return null;
+    }
+
+    final queryParameters = <String, String>{
+      if (identity.normalizedPath.trim().isNotEmpty)
+        'normalizedPath': identity.normalizedPath.trim(),
+      if (identity.relativePathHint.trim().isNotEmpty)
+        'relativePathHint': identity.relativePathHint.trim(),
+      if (identity.sizeBytes != null) 'sizeBytes': '${identity.sizeBytes}',
+      if (identity.modifiedEpochMs != null)
+        'modifiedEpochMs': '${identity.modifiedEpochMs}',
+    };
+
+    for (var index = 0; index < identity.aliases.length; index++) {
+      final alias = identity.aliases[index].trim();
+      if (alias.isEmpty) {
+        continue;
+      }
+      queryParameters['alias$index'] = alias;
+    }
+
+    return queryParameters.isEmpty ? null : queryParameters;
   }
 
   Map<String, dynamic> _tagToJson(Tag tag) {

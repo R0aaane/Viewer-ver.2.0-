@@ -22,19 +22,66 @@ router = APIRouter(tags=["media"], dependencies=[Depends(require_bearer_token)])
 logger = logging.getLogger(__name__)
 
 
+def _identity_from_query(request: Request) -> dict[str, object] | None:
+    aliases = [
+        value.strip()
+        for key, value in sorted(request.query_params.items())
+        if key.startswith("alias") and value.strip()
+    ]
+
+    size_bytes_raw = request.query_params.get("sizeBytes")
+    modified_epoch_ms_raw = request.query_params.get("modifiedEpochMs")
+    identity: dict[str, object] = {
+        "aliases": aliases,
+    }
+
+    normalized_path = request.query_params.get("normalizedPath")
+    if normalized_path:
+        identity["normalizedPath"] = normalized_path
+
+    relative_path_hint = request.query_params.get("relativePathHint")
+    if relative_path_hint:
+        identity["relativePathHint"] = relative_path_hint
+
+    if size_bytes_raw:
+        try:
+            identity["sizeBytes"] = int(size_bytes_raw)
+        except ValueError:
+            pass
+
+    if modified_epoch_ms_raw:
+        try:
+            identity["modifiedEpochMs"] = int(modified_epoch_ms_raw)
+        except ValueError:
+            pass
+
+    return identity if any(identity.values()) else None
+
+
 @router.get("/media/{media_id}/meta", response_model=MediaMetaResponse)
 @router.get("/items/{media_id}", response_model=MediaMetaResponse)
 def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
-    meta = request.app.state.stream_service.get_media_meta(media_id)
+    identity = _identity_from_query(request)
+    resolved_media_id = request.app.state.metadata_store.resolve_media_id(
+        media_id,
+        identity=identity,
+    )
+    meta = request.app.state.stream_service.get_media_meta(resolved_media_id)
     meta["stats"] = None
     if meta["kind"] == "pdf":
-        meta["stats"] = request.app.state.metadata_store.get_media_stats(media_id)
+        meta["stats"] = request.app.state.metadata_store.get_media_stats(
+            resolved_media_id,
+            identity=identity,
+        )
         try:
             meta["pageCount"] = request.app.state.thumbnail_service.get_pdf_page_count(
-                media_id
+                resolved_media_id
             )
         except Exception:
-            logger.exception("[media][meta_page_count_failed] media_id=%s", media_id)
+            logger.exception(
+                "[media][meta_page_count_failed] media_id=%s",
+                resolved_media_id,
+            )
             meta["pageCount"] = None
     return MediaMetaResponse(**meta)
 
@@ -42,7 +89,11 @@ def get_media_meta(request: Request, media_id: str) -> MediaMetaResponse:
 @router.post("/media/{media_id}/view", response_model=MediaStatsDto)
 @router.post("/items/{media_id}/view", response_model=MediaStatsDto)
 def record_media_view(request: Request, media_id: str) -> MediaStatsDto:
-    stats = request.app.state.metadata_store.record_media_view(media_id)
+    identity = _identity_from_query(request)
+    stats = request.app.state.metadata_store.record_media_view(
+        media_id,
+        identity=identity,
+    )
     return MediaStatsDto(**stats)
 
 
@@ -57,7 +108,11 @@ def list_recent_reading_progress(
 
 @router.get("/progress/{media_id}", response_model=ReadingProgressDto)
 def get_reading_progress(request: Request, media_id: str) -> ReadingProgressDto:
-    item = request.app.state.metadata_store.get_reading_progress(media_id)
+    identity = _identity_from_query(request)
+    item = request.app.state.metadata_store.get_reading_progress(
+        media_id,
+        identity=identity,
+    )
     return ReadingProgressDto(**item)
 
 

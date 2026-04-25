@@ -151,6 +151,7 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<RemoteMediaMeta> _metaForItem(MediaItem item) async {
+    final identity = await _idResolver.resolve(item);
     final mediaId = await _remoteMediaIdForItem(item);
     final cached = _metaCache[mediaId];
     if (cached != null) {
@@ -163,7 +164,7 @@ class RemoteMediaRepository implements MediaRepository {
     final future = () async {
       try {
         try {
-          final meta = await _client.fetchMediaMeta(mediaId);
+          final meta = await _client.fetchMediaMeta(mediaId, identity: identity);
           _metaCache[meta.mediaId] = meta;
           if (meta.mediaId != mediaId) {
             _metaCache[mediaId] = meta;
@@ -184,7 +185,10 @@ class RemoteMediaRepository implements MediaRepository {
             rethrow;
           }
 
-          final meta = await _client.fetchMediaMeta(refreshedId);
+          final meta = await _client.fetchMediaMeta(
+            refreshedId,
+            identity: identity,
+          );
           _metaCache[meta.mediaId] = meta;
           if (meta.mediaId != refreshedId) {
             _metaCache[refreshedId] = meta;
@@ -403,8 +407,9 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<RemoteMediaMeta> _refreshMetaForItem(MediaItem item) async {
+    final identity = await _idResolver.resolve(item);
     if (_looksLikeRemoteMediaId(item.id)) {
-      final meta = await _client.fetchMediaMeta(item.id);
+      final meta = await _client.fetchMediaMeta(item.id, identity: identity);
       _metaCache[meta.mediaId] = meta;
       if (meta.mediaId != item.id) {
         _metaCache[item.id] = meta;
@@ -419,7 +424,7 @@ class RemoteMediaRepository implements MediaRepository {
     _forgetRemoteMediaId(item.id);
 
     final refreshedId = await _remoteMediaIdForItem(item, refresh: true);
-    final meta = await _client.fetchMediaMeta(refreshedId);
+    final meta = await _client.fetchMediaMeta(refreshedId, identity: identity);
     _metaCache[meta.mediaId] = meta;
     if (meta.mediaId != refreshedId) {
       _metaCache[refreshedId] = meta;

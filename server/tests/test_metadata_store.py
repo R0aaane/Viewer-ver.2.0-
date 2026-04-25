@@ -321,6 +321,58 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertEqual(moved, {str(source): str(target)})
         self.assertTrue(target.exists())
 
+    def test_resolve_media_id_falls_back_to_identity_hints_after_move(self) -> None:
+        source = self.library_dir / "identity-source.pdf"
+        source.write_bytes(b"source")
+        source_media_id = build_media_id(
+            kind="pdf",
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name="identity-source.pdf",
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": source_media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": "identity-source.pdf",
+                "display_name": "identity-source.pdf",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 6,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+
+        moved_dir = self.library_dir / "作者" / "Resolved Artist"
+        moved_path = moved_dir / "identity-source.pdf"
+        self.store.apply_rename(
+            old_media_id=source_media_id,
+            new_media_id=None,
+            old_path=str(source),
+            new_path=str(moved_path),
+        )
+
+        resolved_media_id = self.store.resolve_media_id(
+            source_media_id,
+            identity={
+                "aliases": [str(source)],
+                "relativePathHint": "identity-source.pdf",
+                "sizeBytes": 6,
+                "modifiedEpochMs": 1,
+            },
+        )
+
+        updated = self.sqlite.get_media_record_by_path(str(moved_path))
+        self.assertIsNotNone(updated)
+        self.assertEqual(resolved_media_id, str(updated["media_id"]))
+
     def test_organize_media_by_tags_migrates_legacy_author_dir(self) -> None:
         legacy_dir = self.library_dir / "作者別" / "Legacy Artist"
         legacy_dir.mkdir(parents=True)

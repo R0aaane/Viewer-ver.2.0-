@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 from dataclasses import dataclass
@@ -201,6 +202,13 @@ def _tag_names_for_category(tags: list[dict[str, Any]], category: str) -> list[s
     return names
 
 
+def _basename_from_pathish(raw: Any) -> str:
+    normalized = str(raw or "").strip().replace("\\", "/").rstrip("/")
+    if not normalized:
+        return ""
+    return posixpath.basename(normalized).strip()
+
+
 def _remove_empty_ancestor_dirs(*, start_dir: str, stop_at: str) -> None:
     normalized_stop = os.path.normcase(os.path.normpath(stop_at))
     current = os.path.normcase(os.path.normpath(start_dir))
@@ -269,8 +277,14 @@ class MetadataStore:
             for row in rows
         ]
 
-    def get_media(self, media_id: str) -> dict[str, Any]:
-        row = self._db.get_media_record(media_id)
+    def get_media(
+        self,
+        media_id: str,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
+        row = self._db.get_media_record(resolved_media_id)
         if row is None:
             raise not_found("Media was not found")
         return self._row_to_media_dict(row)
@@ -288,16 +302,26 @@ class MetadataStore:
         self._db.ensure_media_stats(unique_ids, added_at=_utcnow_iso())
         return max(0, len(unique_ids) - len(existing))
 
-    def get_media_stats(self, media_id: str) -> dict[str, Any]:
-        resolved_media_id = self.resolve_media_id(media_id)
+    def get_media_stats(
+        self,
+        media_id: str,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
         stats_map = self._ensure_stats_for_media_ids([resolved_media_id])
         stats = stats_map.get(resolved_media_id)
         if stats is None:
             raise not_found("Media stats were not found")
         return stats
 
-    def record_media_view(self, media_id: str) -> dict[str, Any]:
-        media = self.get_media(media_id)
+    def record_media_view(
+        self,
+        media_id: str,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        media = self.get_media(media_id, identity=identity)
         if media["kind"] != "pdf":
             raise bad_request("Viewer stats are only available for PDF media")
         resolved_media_id = str(media["mediaId"])
@@ -605,7 +629,88 @@ class MetadataStore:
             if record is not None:
                 return record
 
+        hinted = self._resolve_media_record_from_identity_hints(identity)
+        if hinted is not None:
+            return hinted
+
         raise not_found("Media was not found")
+
+    def _resolve_media_record_from_identity_hints(
+        self,
+        identity: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not identity:
+            return None
+
+        candidate_names: list[str] = []
+        seen_names: set[str] = set()
+
+        def add_candidate(raw: Any) -> None:
+            candidate = _basename_from_pathish(raw)
+            normalized = _normalize_name(candidate)
+            if not normalized or normalized in seen_names:
+                return
+            seen_names.add(normalized)
+            candidate_names.append(candidate)
+
+        add_candidate(identity.get("relativePathHint") or identity.get("relative_path_hint"))
+        for alias in identity.get("aliases") or []:
+            add_candidate(alias)
+
+        if not candidate_names:
+            return None
+
+        size_bytes = _parse_epoch(identity.get("sizeBytes"))
+        modified_epoch_ms = _parse_epoch(identity.get("modifiedEpochMs"))
+        rows = self._db.list_media_records(include_deleted=False)
+
+        def matches_for_name(display_name: str) -> list[dict[str, Any]]:
+            return [
+                row
+                for row in rows
+                if not bool(row.get("is_deleted"))
+                and str(row.get("display_name") or "").strip() == display_name
+            ]
+
+        for candidate_name in candidate_names:
+            matches = matches_for_name(candidate_name)
+            if not matches:
+                continue
+
+            exact_matches = [
+                row
+                for row in matches
+                if (size_bytes is None or _parse_epoch(row.get("size_bytes")) == size_bytes)
+                and (
+                    modified_epoch_ms is None
+                    or _parse_epoch(row.get("modified_epoch_ms")) == modified_epoch_ms
+                )
+            ]
+            if len(exact_matches) == 1:
+                return exact_matches[0]
+
+            if size_bytes is not None:
+                size_matches = [
+                    row
+                    for row in matches
+                    if _parse_epoch(row.get("size_bytes")) == size_bytes
+                ]
+                if len(size_matches) == 1:
+                    return size_matches[0]
+
+            if modified_epoch_ms is not None:
+                modified_matches = [
+                    row
+                    for row in matches
+                    if _parse_epoch(row.get("modified_epoch_ms")) == modified_epoch_ms
+                ]
+                if len(modified_matches) == 1:
+                    return modified_matches[0]
+
+            if len(matches) == 1:
+                return matches[0]
+
+        return None
 
     def resolve_media_id(
         self,
