@@ -11,6 +11,8 @@ class UrlImportBrowserPage extends StatefulWidget {
 
   const UrlImportBrowserPage({super.key, this.initialUrl});
 
+  static _BrowserSessionSnapshot? _lastSessionSnapshot;
+
   static bool get isSupported =>
       Platform.isAndroid ||
       Platform.isIOS ||
@@ -26,6 +28,10 @@ class UrlImportBrowserPage extends StatefulWidget {
     );
   }
 
+  static void clearSession() {
+    _lastSessionSnapshot = null;
+  }
+
   @override
   State<UrlImportBrowserPage> createState() => _UrlImportBrowserPageState();
 }
@@ -39,33 +45,48 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
   static const String _defaultTitle = 'URL ブラウザ';
   static const List<String> _blockedHostSuffixes = <String>[
     '2mdn.net',
+    'a-ads.com',
+    'ad.plus',
+    'ad-delivery.net',
+    'adcash.com',
     'ad.gt',
     'adform.net',
     'adition.com',
+    'adkernel.com',
+    'admaven.com',
+    'adnium.com',
     'adnxs.com',
     'adroll.com',
     'adsafeprotected.com',
     'adservice.google.com',
+    'adsco.re',
     'adsterra.com',
     'ads-twitter.com',
     'adskeeper.com',
+    'adultadworld.com',
     'advertising.com',
     'analytics.google.com',
     'appier.net',
     'bidr.io',
     'casalemedia.com',
+    'clickadu.com',
+    'clickadilla.com',
     'contextweb.com',
     'creativecdn.com',
     'criteo.com',
     'doubleclick.net',
     'ero-advertising.com',
     'exoclick.com',
+    'exdynsrv.com',
     'exosrv.com',
+    'galaksion.com',
     'google-analytics.com',
     'googlesyndication.com',
     'googleadservices.com',
     'googletagmanager.com',
     'googletagservices.com',
+    'highperformancecpmgate.com',
+    'highperformanceformat.com',
     'hilltopads.net',
     'imrworldwide.com',
     'juicyads.com',
@@ -74,44 +95,73 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     'moatads.com',
     'openx.net',
     'openx.com',
+    'onclickalgo.com',
+    'onclickmega.com',
     'popads.net',
+    'popcash.net',
+    'popcashjs.b-cdn.net',
+    'popmarker.com',
+    'popmyads.com',
     'propellerads.com',
     'pubmatic.com',
+    'pushads.biz',
     'quantserve.com',
+    'realsrv.com',
     'revcontent.com',
+    'revenuehits.com',
+    'richaudience.com',
     'rubiconproject.com',
+    'runative-syndicate.com',
+    'runative.com',
     'sharethrough.com',
     'smartadserver.com',
     'serving-sys.com',
     'amazon-adsystem.com',
     'taboola.com',
+    'trafficfactory.biz',
     'trafficjunky.net',
+    'trafficstars.com',
+    'tsyndicate.com',
     'yieldmo.com',
     'outbrain.com',
     'adsrvr.org',
     'scorecardresearch.com',
+    'yllix.com',
     'yieldmanager.com',
+    'yadro.ru',
     'zedo.com',
   ];
   static const List<String> _blockedUrlFragments = <String>[
+    '/ad-banner',
     '/ad-delivery/',
     '/adserver/',
     '/adservice/',
     '/adsystem/',
     '/advert/',
+    '/advertising/',
     '/analytics.js',
     '/banner-ad',
     '/banners/',
     '/bidder/',
+    '/clickad',
     '/pagead/',
+    '/pop.js',
     '/popads/',
     '/popunder',
+    '/popup',
     '/prebid',
     '/sponsor/',
+    '/vast.',
+    '/vast?',
     '?ad_id=',
+    '?adid=',
     '&ad_id=',
+    '&adid=',
     'adunit=',
     'adzone=',
+    'bannerid=',
+    'popunder=',
+    'zoneid=',
   ];
   static const String _adBlockScript = r'''
 (() => {
@@ -122,33 +172,48 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
 
   const blockedHosts = [
     '2mdn.net',
+    'a-ads.com',
+    'ad.plus',
+    'ad-delivery.net',
+    'adcash.com',
     'ad.gt',
     'adform.net',
     'adition.com',
+    'adkernel.com',
+    'admaven.com',
+    'adnium.com',
     'adnxs.com',
     'adroll.com',
     'adsafeprotected.com',
     'adservice.google.com',
+    'adsco.re',
     'adsterra.com',
     'ads-twitter.com',
     'adskeeper.com',
+    'adultadworld.com',
     'advertising.com',
     'analytics.google.com',
     'appier.net',
     'bidr.io',
     'casalemedia.com',
+    'clickadu.com',
+    'clickadilla.com',
     'contextweb.com',
     'creativecdn.com',
     'criteo.com',
     'doubleclick.net',
     'ero-advertising.com',
     'exoclick.com',
+    'exdynsrv.com',
     'exosrv.com',
+    'galaksion.com',
     'google-analytics.com',
     'googlesyndication.com',
     'googleadservices.com',
     'googletagmanager.com',
     'googletagservices.com',
+    'highperformancecpmgate.com',
+    'highperformanceformat.com',
     'hilltopads.net',
     'imrworldwide.com',
     'juicyads.com',
@@ -157,63 +222,101 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     'moatads.com',
     'openx.net',
     'openx.com',
+    'onclickalgo.com',
+    'onclickmega.com',
     'popads.net',
+    'popcash.net',
+    'popcashjs.b-cdn.net',
+    'popmarker.com',
+    'popmyads.com',
     'propellerads.com',
     'pubmatic.com',
+    'pushads.biz',
     'quantserve.com',
+    'realsrv.com',
     'revcontent.com',
+    'revenuehits.com',
+    'richaudience.com',
     'rubiconproject.com',
+    'runative-syndicate.com',
+    'runative.com',
     'sharethrough.com',
     'smartadserver.com',
     'serving-sys.com',
     'amazon-adsystem.com',
     'taboola.com',
+    'trafficfactory.biz',
     'trafficjunky.net',
+    'trafficstars.com',
+    'tsyndicate.com',
     'yieldmo.com',
     'outbrain.com',
     'adsrvr.org',
     'scorecardresearch.com',
+    'yllix.com',
     'yieldmanager.com',
+    'yadro.ru',
     'zedo.com',
   ];
   const blockedUrlFragments = [
+    '/ad-banner',
     '/ad-delivery/',
     '/adserver/',
     '/adservice/',
     '/adsystem/',
     '/advert/',
+    '/advertising/',
     '/analytics.js',
     '/banner-ad',
     '/banners/',
     '/bidder/',
+    '/clickad',
     '/pagead/',
+    '/pop.js',
     '/popads/',
     '/popunder',
+    '/popup',
     '/prebid',
     '/sponsor/',
+    '/vast.',
+    '/vast?',
     '?ad_id=',
+    '?adid=',
     '&ad_id=',
+    '&adid=',
     'adunit=',
     'adzone=',
+    'bannerid=',
+    'popunder=',
+    'zoneid=',
   ];
   const cosmeticSelectors = [
     'ins.adsbygoogle',
+    '[data-ad]',
     '[data-ad-client]',
     '[data-ad-slot]',
+    '[data-ads]',
+    '[data-advertiser]',
     '[aria-label*="advertisement" i]',
     '[id^="ad_"]',
     '[id^="ad-"]',
     '[id*="-ad-" i]',
     '[id*="google_ads" i]',
+    '[id*="banner" i]',
     '[class^="ad_"]',
     '[class^="ad-"]',
     '[class*=" ad-" i]',
     '[class*="-ad-" i]',
     '[class*="adsbygoogle" i]',
     '[class*="advert" i]',
+    '[class*="banner" i]',
     '[id*="advert" i]',
     '[class*="sponsor" i]',
     '[id*="sponsor" i]',
+    '[class*="popunder" i]',
+    '[id*="popunder" i]',
+    '[class*="popup-ad" i]',
+    '[id*="popup-ad" i]',
     '.advertisement',
     '.ad-banner',
     '.ad-container',
@@ -227,6 +330,11 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     'script[src*="doubleclick" i]',
     'script[src*="googlesyndication" i]',
     'script[src*="googletagmanager" i]',
+    'a[href*="exoclick" i]',
+    'a[href*="exdynsrv" i]',
+    'a[href*="popcash" i]',
+    'a[href*="trafficstars" i]',
+    'a[href*="tsyndicate" i]',
   ];
 
   const shouldBlock = (value) => {
@@ -253,6 +361,10 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     node.style.setProperty('display', 'none', 'important');
     node.style.setProperty('visibility', 'hidden', 'important');
     node.style.setProperty('pointer-events', 'none', 'important');
+    node.style.setProperty('height', '0', 'important');
+    node.style.setProperty('min-height', '0', 'important');
+    node.style.setProperty('max-height', '0', 'important');
+    node.style.setProperty('overflow', 'hidden', 'important');
     node.setAttribute('aria-hidden', 'true');
   };
 
@@ -265,15 +377,69 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     hideNode(node);
   };
 
+  const nodeSource = (node) => {
+    if (!node || !node.getAttribute) {
+      return '';
+    }
+    return node.getAttribute('src') ||
+      node.getAttribute('href') ||
+      node.getAttribute('data-src') ||
+      node.getAttribute('data-href') ||
+      '';
+  };
+
+  const matchesCosmetic = (node) => {
+    if (!node || !node.matches) {
+      return false;
+    }
+    for (const selector of cosmeticSelectors) {
+      try {
+        if (node.matches(selector)) {
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
+  };
+
+  const shouldBlockNode = (node) => {
+    if (!node || node.nodeType !== 1) {
+      return false;
+    }
+    const tagName = (node.tagName || '').toUpperCase();
+    if (tagName === 'IFRAME' && node.hasAttribute('srcdoc')) {
+      return true;
+    }
+    return matchesCosmetic(node) || shouldBlock(nodeSource(node));
+  };
+
+  const sanitizeNodeTree = (node) => {
+    if (!node || node.nodeType !== 1) {
+      return false;
+    }
+    if (shouldBlockNode(node)) {
+      blockNode(node);
+      return true;
+    }
+    if (!node.querySelectorAll) {
+      return false;
+    }
+    for (const child of node.querySelectorAll('iframe, img, script, link, a, div, section, aside')) {
+      if (shouldBlockNode(child)) {
+        blockNode(child);
+      }
+    }
+    return false;
+  };
+
   const removeAds = () => {
     for (const selector of cosmeticSelectors) {
       for (const node of document.querySelectorAll(selector)) {
         hideNode(node);
       }
     }
-    for (const node of document.querySelectorAll('iframe[src], img[src], script[src], link[href], a[href]')) {
-      const source = node.getAttribute('src') || node.getAttribute('href') || '';
-      if (shouldBlock(source)) {
+    for (const node of document.querySelectorAll('iframe, img, script, link, a, div, section, aside')) {
+      if (shouldBlockNode(node)) {
         blockNode(node);
       }
     }
@@ -283,6 +449,59 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
   style.id = 'pdf-viewer-adblock-style';
   style.textContent = `${cosmeticSelectors.join(',')} { display: none !important; visibility: hidden !important; }`;
   (document.head || document.documentElement).appendChild(style);
+
+  const originalSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function(name, value) {
+    const attrName = String(name || '').toLowerCase();
+    if ((attrName === 'src' || attrName === 'href' || attrName === 'data-src' || attrName === 'data-href') &&
+        shouldBlock(value)) {
+      blockNode(this);
+      return;
+    }
+    if (attrName === 'srcdoc' && (this.tagName || '').toUpperCase() === 'IFRAME') {
+      blockNode(this);
+      return;
+    }
+    return originalSetAttribute.call(this, name, value);
+  };
+
+  const originalAppendChild = Node.prototype.appendChild;
+  Node.prototype.appendChild = function(node) {
+    if (sanitizeNodeTree(node)) {
+      return node;
+    }
+    return originalAppendChild.call(this, node);
+  };
+
+  const originalInsertBefore = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function(node, child) {
+    if (sanitizeNodeTree(node)) {
+      return node;
+    }
+    return originalInsertBefore.call(this, node, child);
+  };
+
+  const originalReplaceChild = Node.prototype.replaceChild;
+  Node.prototype.replaceChild = function(node, child) {
+    if (sanitizeNodeTree(node)) {
+      return child;
+    }
+    return originalReplaceChild.call(this, node, child);
+  };
+
+  const originalDocumentWrite = document.write;
+  document.write = function(...chunks) {
+    if (chunks.some((chunk) => shouldBlock(chunk))) {
+      return;
+    }
+    return originalDocumentWrite.apply(document, chunks);
+  };
+  document.writeln = function(...chunks) {
+    if (chunks.some((chunk) => shouldBlock(chunk))) {
+      return;
+    }
+    return originalDocumentWrite.apply(document, [`${chunks.join('')}\n`]);
+  };
 
   const originalFetch = window.fetch;
   if (typeof originalFetch === 'function') {
@@ -320,7 +539,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
 
   const originalWindowOpen = window.open;
   window.open = function(url, ...rest) {
-    if (shouldBlock(url)) {
+    if (!url || shouldBlock(url)) {
       return null;
     }
     return typeof originalWindowOpen === 'function'
@@ -334,6 +553,10 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     if (anchor && shouldBlock(anchor.href)) {
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+    if (anchor && anchor.target && anchor.target !== '_self') {
+      anchor.target = '_self';
     }
   }, true);
 
@@ -351,6 +574,14 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     document.addEventListener('DOMContentLoaded', removeAds, { once: true });
   }
   window.addEventListener('load', removeAds, { once: true });
+  let cleanupCount = 0;
+  const cleanupTimer = window.setInterval(() => {
+    removeAds();
+    cleanupCount += 1;
+    if (cleanupCount >= 60) {
+      window.clearInterval(cleanupTimer);
+    }
+  }, 1000);
   removeAds();
 })();
 ''';
@@ -374,17 +605,57 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
   @override
   void initState() {
     super.initState();
-    final initialUrl =
-        _normalizeInputToUrl(widget.initialUrl) ?? _quickLinks[0];
-    _createTab(initialUrl);
+    final requestedInitialUrl = _normalizeInputToUrl(widget.initialUrl);
+    final initialUrl = requestedInitialUrl ?? _quickLinks[0];
+    if (!_restoreBrowserSession(
+      initialUrl,
+      addInitialUrl: requestedInitialUrl != null,
+    )) {
+      _createTab(initialUrl);
+    }
   }
 
-  _BrowserTabState _createTab(String initialUrl) {
+  bool _restoreBrowserSession(
+    String initialUrl, {
+    required bool addInitialUrl,
+  }) {
+    final snapshot = UrlImportBrowserPage._lastSessionSnapshot;
+    if (snapshot == null || snapshot.tabs.isEmpty) {
+      return false;
+    }
+
+    _adBlockEnabled = snapshot.adBlockEnabled;
+    for (final tabSnapshot in snapshot.tabs) {
+      _createTab(tabSnapshot.currentUrl, initialTitle: tabSnapshot.pageTitle);
+    }
+    _activeTabIndex = snapshot.activeTabIndex
+        .clamp(0, _tabs.length - 1)
+        .toInt();
+
+    if (addInitialUrl && !_tabs.any((tab) => tab.currentUrl == initialUrl)) {
+      final tab = _createTab(initialUrl);
+      _activeTabIndex = _tabs.indexOf(tab);
+    }
+    return true;
+  }
+
+  _BrowserTabState _createTab(String initialUrl, {String? initialTitle}) {
     final tab = _BrowserTabState(
       id: _nextTabId++,
       initialUrl: initialUrl,
       defaultTitle: _defaultTitle,
+      initialTitle: initialTitle,
     );
+    tab.addressFocusNode.addListener(() {
+      if (!tab.addressFocusNode.hasFocus) {
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && tab.addressFocusNode.hasFocus) {
+          _selectAddressText(tab);
+        }
+      });
+    });
     _tabs.add(tab);
 
     if (_usesWindowsWebView) {
@@ -615,10 +886,31 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
 
   @override
   void dispose() {
+    _saveBrowserSession();
     for (final tab in _tabs) {
       tab.dispose();
     }
     super.dispose();
+  }
+
+  void _saveBrowserSession() {
+    final tabs = _tabs
+        .where((tab) => _isHttpUrl(tab.currentUrl))
+        .map(
+          (tab) => _BrowserTabSnapshot(
+            currentUrl: tab.currentUrl,
+            pageTitle: tab.pageTitle,
+          ),
+        )
+        .toList(growable: false);
+    if (tabs.isEmpty) {
+      return;
+    }
+    UrlImportBrowserPage._lastSessionSnapshot = _BrowserSessionSnapshot(
+      tabs: tabs,
+      activeTabIndex: _activeTabIndex.clamp(0, tabs.length - 1).toInt(),
+      adBlockEnabled: _adBlockEnabled,
+    );
   }
 
   bool _shouldBlockUrl(String value) {
@@ -750,9 +1042,23 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     if (target.addressController.text.trim() != url.trim()) {
       target.addressController.value = TextEditingValue(
         text: url,
-        selection: TextSelection.collapsed(offset: url.length),
+        selection: target.addressFocusNode.hasFocus
+            ? TextSelection(baseOffset: 0, extentOffset: url.length)
+            : TextSelection.collapsed(offset: url.length),
       );
     }
+  }
+
+  void _selectAddressText(_BrowserTabState tab) {
+    final text = tab.addressController.text;
+    tab.addressController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: text.length,
+    );
+  }
+
+  void _selectActiveAddressText() {
+    _selectAddressText(_activeTab);
   }
 
   bool _isHttpUrl(String value) {
@@ -931,6 +1237,11 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     removed.dispose();
   }
 
+  void _useCurrentUrl() {
+    _saveBrowserSession();
+    Navigator.of(context).pop(_currentUrl);
+  }
+
   String _tabLabel(_BrowserTabState tab) {
     final title = tab.pageTitle.trim();
     if (title.isNotEmpty && title != _defaultTitle) {
@@ -1087,9 +1398,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
             tooltip: _adBlockEnabled ? '広告ブロック: ON' : '広告ブロック: OFF',
           ),
           IconButton(
-            onPressed: _canUseCurrentUrl
-                ? () => Navigator.of(context).pop(_currentUrl)
-                : null,
+            onPressed: _canUseCurrentUrl ? _useCurrentUrl : null,
             icon: const Icon(Icons.check_circle_outline),
             tooltip: 'このページを使う',
           ),
@@ -1108,6 +1417,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
                       controller: _addressController,
                       keyboardType: TextInputType.url,
                       textInputAction: TextInputAction.go,
+                      focusNode: _activeTab.addressFocusNode,
+                      onTap: _selectActiveAddressText,
                       onSubmitted: _loadAddress,
                       decoration: const InputDecoration(
                         labelText: 'URL',
@@ -1195,9 +1506,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton.icon(
-                        onPressed: _canUseCurrentUrl
-                            ? () => Navigator.of(context).pop(_currentUrl)
-                            : null,
+                        onPressed: _canUseCurrentUrl ? _useCurrentUrl : null,
                         icon: const Icon(Icons.download_outlined),
                         label: const Text('このページを取り込みに使う'),
                       ),
@@ -1213,9 +1522,32 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
   }
 }
 
+class _BrowserSessionSnapshot {
+  final List<_BrowserTabSnapshot> tabs;
+  final int activeTabIndex;
+  final bool adBlockEnabled;
+
+  const _BrowserSessionSnapshot({
+    required this.tabs,
+    required this.activeTabIndex,
+    required this.adBlockEnabled,
+  });
+}
+
+class _BrowserTabSnapshot {
+  final String currentUrl;
+  final String pageTitle;
+
+  const _BrowserTabSnapshot({
+    required this.currentUrl,
+    required this.pageTitle,
+  });
+}
+
 class _BrowserTabState {
   final int id;
   final TextEditingController addressController;
+  final FocusNode addressFocusNode = FocusNode();
   final List<StreamSubscription<dynamic>> windowsSubscriptions =
       <StreamSubscription<dynamic>>[];
 
@@ -1235,11 +1567,15 @@ class _BrowserTabState {
     required this.id,
     required String initialUrl,
     required String defaultTitle,
+    String? initialTitle,
   }) : currentUrl = initialUrl,
-       pageTitle = defaultTitle,
+       pageTitle = initialTitle?.trim().isNotEmpty == true
+           ? initialTitle!.trim()
+           : defaultTitle,
        addressController = TextEditingController(text: initialUrl);
 
   void dispose() {
+    addressFocusNode.dispose();
     addressController.dispose();
     for (final subscription in windowsSubscriptions) {
       unawaited(subscription.cancel());

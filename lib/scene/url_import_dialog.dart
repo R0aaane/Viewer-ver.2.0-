@@ -43,6 +43,10 @@ class UrlImportDialog extends StatefulWidget {
     );
   }
 
+  static void clearBrowserSession() {
+    UrlImportBrowserPage.clearSession();
+  }
+
   @override
   State<UrlImportDialog> createState() => _UrlImportDialogState();
 }

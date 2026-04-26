@@ -6442,6 +6442,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           ? ' / 整理 ${result.organizedCount} 件'
           : '';
       final message = '$successLabel: ${parts.join(' / ')}$organizedSummary';
+      UrlImportDialog.clearBrowserSession();
       _updateUrlImportQueueEntry(
         queueId,
         (current) => current.copyWith(
@@ -6514,6 +6515,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           recoveryNote,
         ];
         final message = '$successLabel: ${parts.join(' / ')}';
+        UrlImportDialog.clearBrowserSession();
         _updateUrlImportQueueEntry(
           queueId,
           (current) => current.copyWith(
