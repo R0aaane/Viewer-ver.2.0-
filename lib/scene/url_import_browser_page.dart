@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -163,6 +164,44 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     'popunder=',
     'zoneid=',
   ];
+  static const String _browserBridgeScript = r'''
+(() => {
+  if (window.__pdfViewerBrowserBridgeInstalled) {
+    return;
+  }
+  window.__pdfViewerBrowserBridgeInstalled = true;
+
+  const postBrowserMessage = (message) => {
+    const payload = JSON.stringify(message);
+    try {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(message);
+        return;
+      }
+    } catch (_) {}
+    try {
+      if (window.PdfViewerBrowser && window.PdfViewerBrowser.postMessage) {
+        window.PdfViewerBrowser.postMessage(payload);
+      }
+    } catch (_) {}
+  };
+
+  document.addEventListener('contextmenu', (event) => {
+    const target = event.target;
+    const anchor = target && target.closest ? target.closest('a[href]') : null;
+    if (!anchor || !anchor.href || !/^https?:\/\//i.test(anchor.href)) {
+      return;
+    }
+    const shouldBlock = typeof window.__pdfViewerShouldBlockUrl === 'function' &&
+      window.__pdfViewerShouldBlockUrl(anchor.href);
+    event.preventDefault();
+    event.stopPropagation();
+    if (!shouldBlock) {
+      postBrowserMessage({ type: 'openInNewTab', url: anchor.href });
+    }
+  }, true);
+})();
+''';
   static const String _adBlockScript = r'''
 (() => {
   if (window.__pdfViewerAdBlockInstalled) {
@@ -336,6 +375,34 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     'a[href*="trafficstars" i]',
     'a[href*="tsyndicate" i]',
   ];
+  const firstPartyRoots = [
+    'hitomi.la',
+    'kemono.su',
+    'coomer.su',
+  ];
+
+  const hostMatchesRoot = (host, root) => host === root || host.endsWith(`.${root}`);
+  const currentFirstPartyRoot = () => {
+    const host = location.hostname.toLowerCase();
+    return firstPartyRoots.find((root) => hostMatchesRoot(host, root)) || '';
+  };
+  const isThirdPartyOnKnownSite = (value) => {
+    const root = currentFirstPartyRoot();
+    if (!root || !value) {
+      return false;
+    }
+    try {
+      const parsed = new URL(String(value), location.href);
+      const protocol = parsed.protocol.toLowerCase();
+      if (protocol !== 'http:' && protocol !== 'https:') {
+        return false;
+      }
+      const host = parsed.hostname.toLowerCase();
+      return Boolean(host) && !hostMatchesRoot(host, root);
+    } catch (_) {
+      return false;
+    }
+  };
 
   const shouldBlock = (value) => {
     if (!value) {
@@ -353,6 +420,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         blockedUrlFragments.some((fragment) => text.includes(fragment));
     }
   };
+  window.__pdfViewerShouldBlockUrl = shouldBlock;
 
   const hideNode = (node) => {
     if (!node || !node.style) {
@@ -402,6 +470,52 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     return false;
   };
 
+  const hasThirdPartyAdChild = (node) => {
+    if (!node || !node.querySelectorAll) {
+      return false;
+    }
+    for (const child of node.querySelectorAll('iframe, img, script, a')) {
+      if (isThirdPartyOnKnownSite(nodeSource(child)) || shouldBlock(nodeSource(child))) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const hasAdLikeText = (node) => {
+    const text = String(node && node.innerText || '').toLowerCase();
+    return text.includes('advertisement') ||
+      text.includes('sponsored') ||
+      text.includes('blonde beauty') ||
+      text.includes('the girl knows what she wants');
+  };
+
+  const isLikelyAdOverlay = (node) => {
+    if (!node || !node.style || !node.getBoundingClientRect) {
+      return false;
+    }
+    const style = window.getComputedStyle(node);
+    const position = style.position;
+    if (position !== 'fixed' && position !== 'sticky' && position !== 'absolute') {
+      return false;
+    }
+    const rect = node.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 40) {
+      return false;
+    }
+    const zIndex = Number.parseInt(style.zIndex || '0', 10);
+    const largeOverlay = rect.width >= window.innerWidth * 0.35 ||
+      rect.height >= window.innerHeight * 0.25 ||
+      (rect.width * rect.height) >= (window.innerWidth * window.innerHeight * 0.12);
+    if (zIndex < 10 && !largeOverlay) {
+      return false;
+    }
+    if (node.querySelector('input, textarea, select')) {
+      return false;
+    }
+    return hasThirdPartyAdChild(node) || hasAdLikeText(node) || largeOverlay && style.backgroundColor !== 'rgba(0, 0, 0, 0)';
+  };
+
   const shouldBlockNode = (node) => {
     if (!node || node.nodeType !== 1) {
       return false;
@@ -410,7 +524,15 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     if (tagName === 'IFRAME' && node.hasAttribute('srcdoc')) {
       return true;
     }
-    return matchesCosmetic(node) || shouldBlock(nodeSource(node));
+    const source = nodeSource(node);
+    if (matchesCosmetic(node) || shouldBlock(source)) {
+      return true;
+    }
+    if ((tagName === 'IFRAME' || tagName === 'SCRIPT' || tagName === 'IMG' || tagName === 'A') &&
+        isThirdPartyOnKnownSite(source)) {
+      return true;
+    }
+    return isLikelyAdOverlay(node);
   };
 
   const sanitizeNodeTree = (node) => {
@@ -424,7 +546,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     if (!node.querySelectorAll) {
       return false;
     }
-    for (const child of node.querySelectorAll('iframe, img, script, link, a, div, section, aside')) {
+    for (const child of node.querySelectorAll('iframe, img, script, link, a, div, section, aside, dialog')) {
       if (shouldBlockNode(child)) {
         blockNode(child);
       }
@@ -438,7 +560,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         hideNode(node);
       }
     }
-    for (const node of document.querySelectorAll('iframe, img, script, link, a, div, section, aside')) {
+    for (const node of document.querySelectorAll('iframe, img, script, link, a, div, section, aside, dialog')) {
       if (shouldBlockNode(node)) {
         blockNode(node);
       }
@@ -626,7 +748,12 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
 
     _adBlockEnabled = snapshot.adBlockEnabled;
     for (final tabSnapshot in snapshot.tabs) {
-      _createTab(tabSnapshot.currentUrl, initialTitle: tabSnapshot.pageTitle);
+      _createTab(
+        tabSnapshot.currentUrl,
+        initialTitle: tabSnapshot.pageTitle,
+        initialHistory: tabSnapshot.history,
+        initialHistoryIndex: tabSnapshot.historyIndex,
+      );
     }
     _activeTabIndex = snapshot.activeTabIndex
         .clamp(0, _tabs.length - 1)
@@ -639,12 +766,19 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     return true;
   }
 
-  _BrowserTabState _createTab(String initialUrl, {String? initialTitle}) {
+  _BrowserTabState _createTab(
+    String initialUrl, {
+    String? initialTitle,
+    List<String>? initialHistory,
+    int? initialHistoryIndex,
+  }) {
     final tab = _BrowserTabState(
       id: _nextTabId++,
       initialUrl: initialUrl,
       defaultTitle: _defaultTitle,
       initialTitle: initialTitle,
+      initialHistory: initialHistory,
+      initialHistoryIndex: initialHistoryIndex,
     );
     tab.addressFocusNode.addListener(() {
       if (!tab.addressFocusNode.hasFocus) {
@@ -656,6 +790,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
         }
       });
     });
+    _syncTabNavigationState(tab);
     _tabs.add(tab);
 
     if (_usesWindowsWebView) {
@@ -669,6 +804,11 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
   void _initializeMobileWebview(_BrowserTabState tab, String initialUrl) {
     final controller = mobile_webview.WebViewController()
       ..setJavaScriptMode(mobile_webview.JavaScriptMode.unrestricted)
+      ..addJavaScriptChannel(
+        'PdfViewerBrowser',
+        onMessageReceived: (message) =>
+            _handleBrowserMessage(message.message, tab: tab),
+      )
       ..setNavigationDelegate(
         mobile_webview.NavigationDelegate(
           onNavigationRequest: (request) {
@@ -681,6 +821,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
           },
           onPageStarted: (url) {
             _setCurrentUrl(url, tab: tab);
+            _scheduleMobileBrowserBridge(tab);
             _scheduleMobileAdBlock(tab);
             if (!mounted) {
               return;
@@ -692,6 +833,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
           },
           onPageFinished: (url) async {
             _setCurrentUrl(url, tab: tab);
+            await _applyMobileBrowserBridgeIfNeeded(tab);
             await _applyMobileAdBlockIfNeeded(tab);
             await _refreshMobileNavigationState(tab);
             if (!mounted) {
@@ -736,6 +878,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       )
       ..loadRequest(Uri.parse(initialUrl));
     tab.mobileController = controller;
+    _scheduleMobileBrowserBridge(tab);
     _scheduleMobileAdBlock(tab);
   }
 
@@ -793,8 +936,14 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       await controller.setPopupWindowPolicy(
         windows_webview.WebviewPopupWindowPolicy.sameWindow,
       );
+      await _syncWindowsBrowserBridgeScript(tab, force: true);
       await _syncWindowsAdBlockScript(tab, force: true);
 
+      tab.windowsSubscriptions.add(
+        controller.webMessage.listen((message) {
+          _handleBrowserMessage(message, tab: tab);
+        }),
+      );
       tab.windowsSubscriptions.add(
         controller.url.listen((url) {
           if (!mounted) {
@@ -827,6 +976,7 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
               tab.progress = 0;
             } else {
               tab.progress = 100;
+              unawaited(_syncWindowsBrowserBridgeScript(tab));
               unawaited(_syncWindowsAdBlockScript(tab));
             }
           });
@@ -838,8 +988,11 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
             return;
           }
           setState(() {
-            tab.canGoBack = history.canGoBack;
-            tab.canGoForward = history.canGoForward;
+            _syncTabNavigationState(
+              tab,
+              nativeCanGoBack: history.canGoBack,
+              nativeCanGoForward: history.canGoForward,
+            );
           });
         }),
       );
@@ -900,6 +1053,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
           (tab) => _BrowserTabSnapshot(
             currentUrl: tab.currentUrl,
             pageTitle: tab.pageTitle,
+            history: tab.browserHistory,
+            historyIndex: tab.browserHistoryIndex,
           ),
         )
         .toList(growable: false);
@@ -968,6 +1123,34 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     }
   }
 
+  Future<void> _syncWindowsBrowserBridgeScript(
+    _BrowserTabState tab, {
+    bool force = false,
+  }) async {
+    final controller = tab.windowsController;
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+    if (tab.windowsBrowserBridgeScriptId == null || force) {
+      if (tab.windowsBrowserBridgeScriptId != null) {
+        try {
+          await controller.removeScriptToExecuteOnDocumentCreated(
+            tab.windowsBrowserBridgeScriptId!,
+          );
+        } on PlatformException {
+          // Ignore cleanup failure and overwrite with a fresh registration.
+        }
+      }
+      tab.windowsBrowserBridgeScriptId = await controller
+          .addScriptToExecuteOnDocumentCreated(_browserBridgeScript);
+    }
+    try {
+      await controller.executeScript(_browserBridgeScript);
+    } on PlatformException {
+      // Ignore injection failure for the current page.
+    }
+  }
+
   Future<void> _syncWindowsAdBlockScript(
     _BrowserTabState tab, {
     bool force = false,
@@ -1033,20 +1216,126 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  void _handleBrowserMessage(dynamic rawMessage, {_BrowserTabState? tab}) {
+    Object? decoded = rawMessage;
+    if (rawMessage is String) {
+      try {
+        decoded = jsonDecode(rawMessage);
+      } on FormatException {
+        return;
+      }
+    }
+    if (decoded is! Map) {
+      return;
+    }
+    final type = decoded['type']?.toString();
+    final url = decoded['url']?.toString().trim();
+    if (type != 'openInNewTab' || url == null || !_isHttpUrl(url)) {
+      return;
+    }
+    if (_adBlockEnabled && _shouldBlockUrl(url)) {
+      return;
+    }
+    _openNewTab(url);
+  }
+
+  void _scheduleMobileBrowserBridge(_BrowserTabState tab) {
+    unawaited(_runScheduledMobileBrowserBridge(tab));
+  }
+
+  Future<void> _runScheduledMobileBrowserBridge(_BrowserTabState tab) async {
+    const delays = <Duration>[
+      Duration(milliseconds: 150),
+      Duration(milliseconds: 500),
+      Duration(milliseconds: 1100),
+    ];
+    for (final delay in delays) {
+      await Future<void>.delayed(delay);
+      if (!mounted || tab.mobileController == null) {
+        return;
+      }
+      await _applyMobileBrowserBridgeIfNeeded(tab);
+    }
+  }
+
+  Future<void> _applyMobileBrowserBridgeIfNeeded(_BrowserTabState tab) async {
+    final controller = tab.mobileController;
+    if (controller == null) {
+      return;
+    }
+    try {
+      await controller.runJavaScript(_browserBridgeScript);
+    } on PlatformException {
+      // Ignore bridge injection failures; normal browsing still works.
+    }
+  }
+
   void _setCurrentUrl(String url, {_BrowserTabState? tab}) {
     if (!_isHttpUrl(url)) {
       return;
     }
     final target = tab ?? _activeTab;
-    target.currentUrl = url;
-    if (target.addressController.text.trim() != url.trim()) {
+    final trimmedUrl = url.trim();
+    target.currentUrl = trimmedUrl;
+    _recordBrowserHistory(target, trimmedUrl);
+    if (target.addressController.text.trim() != trimmedUrl) {
       target.addressController.value = TextEditingValue(
-        text: url,
+        text: trimmedUrl,
         selection: target.addressFocusNode.hasFocus
-            ? TextSelection(baseOffset: 0, extentOffset: url.length)
-            : TextSelection.collapsed(offset: url.length),
+            ? TextSelection(baseOffset: 0, extentOffset: trimmedUrl.length)
+            : TextSelection.collapsed(offset: trimmedUrl.length),
       );
     }
+  }
+
+  void _recordBrowserHistory(_BrowserTabState tab, String url) {
+    final pendingUrl = tab.pendingHistoryNavigationUrl;
+    if (pendingUrl != null) {
+      tab.pendingHistoryNavigationUrl = null;
+      if (pendingUrl == url) {
+        _syncTabNavigationState(tab);
+        return;
+      }
+    }
+
+    if (tab.browserHistory.isNotEmpty &&
+        tab.browserHistoryIndex >= 0 &&
+        tab.browserHistoryIndex < tab.browserHistory.length &&
+        tab.browserHistory[tab.browserHistoryIndex] == url) {
+      _syncTabNavigationState(tab);
+      return;
+    }
+
+    if (tab.browserHistoryIndex < tab.browserHistory.length - 1) {
+      tab.browserHistory.removeRange(
+        tab.browserHistoryIndex + 1,
+        tab.browserHistory.length,
+      );
+    }
+    tab.browserHistory.add(url);
+    const maxHistoryLength = 80;
+    while (tab.browserHistory.length > maxHistoryLength) {
+      tab.browserHistory.removeAt(0);
+    }
+    tab.browserHistoryIndex = tab.browserHistory.length - 1;
+    _syncTabNavigationState(tab);
+  }
+
+  void _syncTabNavigationState(
+    _BrowserTabState tab, {
+    bool? nativeCanGoBack,
+    bool? nativeCanGoForward,
+  }) {
+    if (nativeCanGoBack != null) {
+      tab.nativeCanGoBack = nativeCanGoBack;
+    }
+    if (nativeCanGoForward != null) {
+      tab.nativeCanGoForward = nativeCanGoForward;
+    }
+    tab.canGoBack = tab.nativeCanGoBack || tab.browserHistoryIndex > 0;
+    tab.canGoForward =
+        tab.nativeCanGoForward ||
+        tab.browserHistoryIndex < tab.browserHistory.length - 1;
   }
 
   void _selectAddressText(_BrowserTabState tab) {
@@ -1132,9 +1421,54 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       if (currentUrl != null && currentUrl.trim().isNotEmpty) {
         _setCurrentUrl(currentUrl, tab: tab);
       }
-      tab.canGoBack = canGoBack;
-      tab.canGoForward = canGoForward;
+      _syncTabNavigationState(
+        tab,
+        nativeCanGoBack: canGoBack,
+        nativeCanGoForward: canGoForward,
+      );
     });
+  }
+
+  String? _prepareSavedHistoryNavigation(_BrowserTabState tab, int nextIndex) {
+    if (nextIndex < 0 || nextIndex >= tab.browserHistory.length) {
+      return null;
+    }
+    final url = tab.browserHistory[nextIndex];
+    tab.browserHistoryIndex = nextIndex;
+    tab.pendingHistoryNavigationUrl = url;
+    _syncTabNavigationState(tab);
+    return url;
+  }
+
+  Future<void> _loadSavedHistoryEntry(
+    _BrowserTabState tab,
+    int nextIndex,
+  ) async {
+    final url = _prepareSavedHistoryNavigation(tab, nextIndex);
+    if (url == null) {
+      return;
+    }
+    setState(() {
+      _setCurrentUrl(url, tab: tab);
+      tab.loading = true;
+      tab.progress = 0;
+    });
+
+    if (_usesWindowsWebView) {
+      final controller = tab.windowsController;
+      if (controller == null || !controller.value.isInitialized) {
+        return;
+      }
+      await controller.loadUrl(url);
+      return;
+    }
+
+    final controller = tab.mobileController;
+    if (controller == null) {
+      return;
+    }
+    await controller.loadRequest(Uri.parse(url));
+    await _refreshMobileNavigationState(tab);
   }
 
   Future<void> _goBack() async {
@@ -1147,12 +1481,26 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       if (controller == null || !controller.value.isInitialized) {
         return;
       }
+      if (!tab.nativeCanGoBack && tab.browserHistoryIndex > 0) {
+        await _loadSavedHistoryEntry(tab, tab.browserHistoryIndex - 1);
+        return;
+      }
+      if (tab.browserHistoryIndex > 0) {
+        _prepareSavedHistoryNavigation(tab, tab.browserHistoryIndex - 1);
+      }
       await controller.goBack();
       return;
     }
     final controller = tab.mobileController;
     if (controller == null) {
       return;
+    }
+    if (!tab.nativeCanGoBack && tab.browserHistoryIndex > 0) {
+      await _loadSavedHistoryEntry(tab, tab.browserHistoryIndex - 1);
+      return;
+    }
+    if (tab.browserHistoryIndex > 0) {
+      _prepareSavedHistoryNavigation(tab, tab.browserHistoryIndex - 1);
     }
     await controller.goBack();
     await _refreshMobileNavigationState(tab);
@@ -1168,12 +1516,28 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
       if (controller == null || !controller.value.isInitialized) {
         return;
       }
+      if (!tab.nativeCanGoForward &&
+          tab.browserHistoryIndex < tab.browserHistory.length - 1) {
+        await _loadSavedHistoryEntry(tab, tab.browserHistoryIndex + 1);
+        return;
+      }
+      if (tab.browserHistoryIndex < tab.browserHistory.length - 1) {
+        _prepareSavedHistoryNavigation(tab, tab.browserHistoryIndex + 1);
+      }
       await controller.goForward();
       return;
     }
     final controller = tab.mobileController;
     if (controller == null) {
       return;
+    }
+    if (!tab.nativeCanGoForward &&
+        tab.browserHistoryIndex < tab.browserHistory.length - 1) {
+      await _loadSavedHistoryEntry(tab, tab.browserHistoryIndex + 1);
+      return;
+    }
+    if (tab.browserHistoryIndex < tab.browserHistory.length - 1) {
+      _prepareSavedHistoryNavigation(tab, tab.browserHistoryIndex + 1);
     }
     await controller.goForward();
     await _refreshMobileNavigationState(tab);
@@ -1205,8 +1569,8 @@ class _UrlImportBrowserPageState extends State<UrlImportBrowserPage> {
     await _refreshMobileNavigationState(tab);
   }
 
-  void _openNewTab() {
-    final tab = _createTab(_quickLinks[0]);
+  void _openNewTab([String? initialUrl]) {
+    final tab = _createTab(_normalizeInputToUrl(initialUrl) ?? _quickLinks[0]);
     setState(() {
       _activeTabIndex = _tabs.indexOf(tab);
     });
@@ -1537,10 +1901,14 @@ class _BrowserSessionSnapshot {
 class _BrowserTabSnapshot {
   final String currentUrl;
   final String pageTitle;
+  final List<String> history;
+  final int historyIndex;
 
   const _BrowserTabSnapshot({
     required this.currentUrl,
     required this.pageTitle,
+    required this.history,
+    required this.historyIndex,
   });
 }
 
@@ -1550,14 +1918,20 @@ class _BrowserTabState {
   final FocusNode addressFocusNode = FocusNode();
   final List<StreamSubscription<dynamic>> windowsSubscriptions =
       <StreamSubscription<dynamic>>[];
+  final List<String> browserHistory;
 
   mobile_webview.WebViewController? mobileController;
   windows_webview.WebviewController? windowsController;
+  String? windowsBrowserBridgeScriptId;
   String? windowsAdBlockScriptId;
 
   String currentUrl;
   String pageTitle;
+  String? pendingHistoryNavigationUrl;
   String? windowsUnavailableReason;
+  int browserHistoryIndex;
+  bool nativeCanGoBack = false;
+  bool nativeCanGoForward = false;
   bool loading = true;
   int progress = 0;
   bool canGoBack = false;
@@ -1568,11 +1942,54 @@ class _BrowserTabState {
     required String initialUrl,
     required String defaultTitle,
     String? initialTitle,
+    List<String>? initialHistory,
+    int? initialHistoryIndex,
   }) : currentUrl = initialUrl,
        pageTitle = initialTitle?.trim().isNotEmpty == true
            ? initialTitle!.trim()
            : defaultTitle,
+       browserHistory = _normalizedInitialHistory(initialUrl, initialHistory),
+       browserHistoryIndex = _normalizedInitialHistoryIndex(
+         initialUrl,
+         initialHistory,
+         initialHistoryIndex,
+       ),
        addressController = TextEditingController(text: initialUrl);
+
+  static List<String> _normalizedInitialHistory(
+    String initialUrl,
+    List<String>? initialHistory,
+  ) {
+    final history =
+        initialHistory
+            ?.map((url) => url.trim())
+            .where((url) => url.isNotEmpty)
+            .toList(growable: true) ??
+        <String>[];
+    if (history.isEmpty) {
+      history.add(initialUrl);
+    }
+    if (!history.contains(initialUrl)) {
+      history.add(initialUrl);
+    }
+    return history;
+  }
+
+  static int _normalizedInitialHistoryIndex(
+    String initialUrl,
+    List<String>? initialHistory,
+    int? initialHistoryIndex,
+  ) {
+    final history = _normalizedInitialHistory(initialUrl, initialHistory);
+    final requestedIndex = initialHistoryIndex;
+    if (requestedIndex != null &&
+        requestedIndex >= 0 &&
+        requestedIndex < history.length) {
+      return requestedIndex;
+    }
+    final currentIndex = history.lastIndexOf(initialUrl);
+    return currentIndex < 0 ? history.length - 1 : currentIndex;
+  }
 
   void dispose() {
     addressFocusNode.dispose();
