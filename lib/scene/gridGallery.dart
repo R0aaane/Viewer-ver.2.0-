@@ -414,6 +414,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _homeShowcaseLoading = false;
   String? _homeShowcaseErrorMessage;
   List<MediaItem> _homeRecentAddedItems = const [];
+  List<MediaItem> _homeUnreadItems = const [];
   List<MediaItem> _homeFavoriteShowcaseItems = const [];
   List<MediaItem> _homeRecentViewedItems = const [];
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
@@ -3118,6 +3119,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
         setState(() {
           _homeRecentAddedItems = const <MediaItem>[];
+          _homeUnreadItems = const <MediaItem>[];
           _homeFavoriteShowcaseItems = const <MediaItem>[];
           _homeRecentViewedItems = const <MediaItem>[];
           _homeRecentViewEntriesByItemId = <String, ReadingProgressEntry>{};
@@ -3176,6 +3178,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         ..sort(
           (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
         );
+      final unreadItems = recentAdded
+          .where(
+            (item) =>
+                item.kind == MediaKind.pdf &&
+                !recentViewEntriesByItemId.containsKey(item.id),
+          )
+          .toList(growable: false);
 
       if (!mounted || loadVersion != _homeShowcaseLoadVersion) {
         return;
@@ -3183,6 +3192,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       setState(() {
         _homeRecentAddedItems = recentAdded.take(10).toList(growable: false);
+        _homeUnreadItems = unreadItems.take(10).toList(growable: false);
         _homeFavoriteShowcaseItems = favorites.take(10).toList(growable: false);
         _homeRecentViewedItems = recentViewedItems
             .take(10)
@@ -3458,14 +3468,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 message: emptyMessage,
               )
             else
-              SizedBox(
-                height: 358,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: items.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 10),
-                  itemBuilder: (context, index) => itemBuilder(items[index]),
-                ),
+              _HomeShelfScroller(
+                itemCount: items.length,
+                itemBuilder: (context, index) => itemBuilder(items[index]),
               ),
           ],
         ),
@@ -3833,6 +3838,29 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               footerText:
                   '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
               footerIcon: Icons.schedule_outlined,
+              onTap: () => _openDetailFromHome(item),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildHomeMediaShelf(
+            title: '未読',
+            subtitle: 'まだ開いていない PDF を最近追加の順に表示します。',
+            items: _homeUnreadItems,
+            emptyTitle: '未読の PDF はありません',
+            emptyMessage: '未読の PDF があると、ここに表示されます。',
+            itemBuilder: (item) => _buildHomeMediaShelfCard(
+              item: item,
+              footerText:
+                  '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
+              footerIcon: Icons.mark_email_unread_outlined,
+              badgeText: '未読',
+              badgeIcon: Icons.mark_email_unread_outlined,
+              badgeBackgroundColor: Theme.of(
+                context,
+              ).colorScheme.tertiaryContainer,
+              badgeForegroundColor: Theme.of(
+                context,
+              ).colorScheme.onTertiaryContainer,
               onTap: () => _openDetailFromHome(item),
             ),
           ),
@@ -9343,6 +9371,50 @@ class _ThumbImage extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _HomeShelfScroller extends StatefulWidget {
+  final int itemCount;
+  final IndexedWidgetBuilder itemBuilder;
+
+  const _HomeShelfScroller({
+    required this.itemCount,
+    required this.itemBuilder,
+  });
+
+  @override
+  State<_HomeShelfScroller> createState() => _HomeShelfScrollerState();
+}
+
+class _HomeShelfScrollerState extends State<_HomeShelfScroller> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 382,
+      child: Scrollbar(
+        controller: _controller,
+        thumbVisibility: true,
+        interactive: true,
+        child: ListView.separated(
+          controller: _controller,
+          padding: const EdgeInsets.only(bottom: 14),
+          scrollDirection: Axis.horizontal,
+          physics: const AlwaysScrollableScrollPhysics(),
+          itemCount: widget.itemCount,
+          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          itemBuilder: widget.itemBuilder,
+        ),
       ),
     );
   }
