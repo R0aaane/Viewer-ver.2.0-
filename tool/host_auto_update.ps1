@@ -207,6 +207,11 @@ function Start-HostApp {
 function Start-HostServer {
     New-Item -ItemType Directory -Force -Path 'data' | Out-Null
     Import-DotEnv -Path $EnvFile
+    $version = Get-PubspecVersion
+    [Environment]::SetEnvironmentVariable('MEDIA_SERVER_VERSION', $version, 'Process')
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MEDIA_SERVER_UPDATE_VERSION', 'Process'))) {
+        [Environment]::SetEnvironmentVariable('MEDIA_SERVER_UPDATE_VERSION', $version, 'Process')
+    }
 
     Stop-HostServer
 
@@ -225,7 +230,7 @@ function Start-HostServer {
         -PassThru
 
     Set-Content -LiteralPath (Join-Path 'data' 'host_server.pid') -Value $process.Id
-    Write-Host "server: started pid=$($process.Id)"
+    Write-Host "server: started pid=$($process.Id) version=$version"
 }
 
 function Build-And-Restart {
