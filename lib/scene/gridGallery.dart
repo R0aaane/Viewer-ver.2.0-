@@ -3828,6 +3828,35 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             ),
           if (_homeShowcaseErrorMessage != null) const SizedBox(height: 12),
           _buildHomeMediaShelf(
+            title: 'お気に入り',
+            subtitle: 'お気に入り登録した作品をすぐ開けます。',
+            items: _homeFavoriteShowcaseItems,
+            emptyTitle: 'お気に入りはまだありません',
+            emptyMessage: '作品をお気に入りにすると、ここへ表紙つきで並びます。',
+            itemBuilder: (item) {
+              final activity = _homeRecentViewEntryForItem(item);
+              return _buildHomeMediaShelfCard(
+                item: item,
+                footerText: activity == null
+                    ? '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}'
+                    : '最終閲覧 ${_formatHomeDateTime(activity.lastReadAt)}',
+                footerIcon: activity == null
+                    ? Icons.schedule_outlined
+                    : Icons.history,
+                badgeText: 'お気に入り',
+                badgeIcon: Icons.star_rounded,
+                badgeBackgroundColor: Theme.of(
+                  context,
+                ).colorScheme.primaryContainer,
+                badgeForegroundColor: Theme.of(
+                  context,
+                ).colorScheme.onPrimaryContainer,
+                onTap: () => _openDetailFromHome(item),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _buildHomeMediaShelf(
             title: '最近追加',
             subtitle: '追加された作品を表紙つきで一覧できます。',
             items: _homeRecentAddedItems,
@@ -3866,35 +3895,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           ),
           const SizedBox(height: 12),
           _buildContinueReadingCard(),
-          const SizedBox(height: 12),
-          _buildHomeMediaShelf(
-            title: 'お気に入り',
-            subtitle: 'お気に入り登録した作品をすぐ開けます。',
-            items: _homeFavoriteShowcaseItems,
-            emptyTitle: 'お気に入りはまだありません',
-            emptyMessage: '作品をお気に入りにすると、ここへ表紙つきで並びます。',
-            itemBuilder: (item) {
-              final activity = _homeRecentViewEntryForItem(item);
-              return _buildHomeMediaShelfCard(
-                item: item,
-                footerText: activity == null
-                    ? '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}'
-                    : '最終閲覧 ${_formatHomeDateTime(activity.lastReadAt)}',
-                footerIcon: activity == null
-                    ? Icons.schedule_outlined
-                    : Icons.history,
-                badgeText: 'お気に入り',
-                badgeIcon: Icons.star_rounded,
-                badgeBackgroundColor: Theme.of(
-                  context,
-                ).colorScheme.primaryContainer,
-                badgeForegroundColor: Theme.of(
-                  context,
-                ).colorScheme.onPrimaryContainer,
-                onTap: () => _openDetailFromHome(item),
-              );
-            },
-          ),
           const SizedBox(height: 12),
           _buildHomeMediaShelf(
             title: '最近閲覧',
