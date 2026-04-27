@@ -8,8 +8,11 @@ param(
     [int]$ServerPort = 8000,
     [string]$EnvFile = 'server\.env',
     [string]$ServerLog = 'data\host_server.log',
+    [string]$AppExePath = 'build\windows\x64\runner\Release\pdf_viewer.exe',
     [switch]$BuildAndroidApk,
     [switch]$SkipFlutterBuild,
+    [switch]$SkipWindowsBuild,
+    [switch]$SkipHostAppRestart,
     [switch]$Once
 )
 
@@ -60,20 +63,93 @@ function Import-DotEnv {
 
 function Stop-HostServer {
     $pidFile = Join-Path 'data' 'host_server.pid'
-    if (-not (Test-Path -LiteralPath $pidFile -PathType Leaf)) {
-        return
+    $processIds = @()
+
+    if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
+        $serverPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+        if ($serverPid -match '^\d+$') {
+            $processIds += [int]$serverPid
+        }
     }
 
-    $serverPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
-    if ($serverPid -match '^\d+$') {
-        $process = Get-Process -Id ([int]$serverPid) -ErrorAction SilentlyContinue
+    $listeners = Get-NetTCPConnection -LocalPort $ServerPort -State Listen -ErrorAction SilentlyContinue
+    foreach ($listener in $listeners) {
+        if ($listener.OwningProcess -gt 0) {
+            $processIds += [int]$listener.OwningProcess
+        }
+    }
+
+    foreach ($processId in ($processIds | Select-Object -Unique)) {
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
         if ($process) {
             Stop-Process -Id $process.Id -Force
             Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
+            Write-Host "server: stopped pid=$($process.Id)"
         }
     }
 
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+}
+
+function Resolve-AppExePath {
+    if ([System.IO.Path]::IsPathRooted($AppExePath)) {
+        return $AppExePath
+    }
+    return (Join-Path (Get-Location).Path $AppExePath)
+}
+
+function Stop-HostApp {
+    if ($SkipHostAppRestart) {
+        return
+    }
+
+    $pidFile = Join-Path 'data' 'host_app.pid'
+    $processIds = @()
+    if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
+        $appPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+        if ($appPid -match '^\d+$') {
+            $processIds += [int]$appPid
+        }
+    }
+
+    $resolvedAppExe = Resolve-AppExePath
+    $escapedAppExe = $resolvedAppExe.Replace('\', '\\').Replace("'", "''")
+    $matchingApps = Get-CimInstance Win32_Process -Filter "ExecutablePath = '$escapedAppExe'" -ErrorAction SilentlyContinue
+    foreach ($app in $matchingApps) {
+        $processIds += [int]$app.ProcessId
+    }
+
+    foreach ($processId in ($processIds | Select-Object -Unique)) {
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if ($process) {
+            Stop-Process -Id $process.Id -Force
+            Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
+            Write-Host "app: stopped pid=$($process.Id)"
+        }
+    }
+
+    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+}
+
+function Start-HostApp {
+    if ($SkipHostAppRestart) {
+        return
+    }
+
+    $resolvedAppExe = Resolve-AppExePath
+    if (-not (Test-Path -LiteralPath $resolvedAppExe -PathType Leaf)) {
+        Write-Warning "app: executable was not found: $resolvedAppExe"
+        return
+    }
+
+    Stop-HostApp
+    $process = Start-Process `
+        -FilePath $resolvedAppExe `
+        -WorkingDirectory (Split-Path -Parent $resolvedAppExe) `
+        -PassThru
+
+    Set-Content -LiteralPath (Join-Path 'data' 'host_app.pid') -Value $process.Id
+    Write-Host "app: started pid=$($process.Id)"
 }
 
 function Start-HostServer {
@@ -108,12 +184,19 @@ function Build-And-Restart {
         Write-Host "build: flutter build web"
         Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'web')
 
+        if (-not $SkipWindowsBuild) {
+            Stop-HostApp
+            Write-Host "build: flutter build windows"
+            Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'windows')
+        }
+
         if ($BuildAndroidApk) {
             Publish-AndroidApkUpdate
         }
     }
 
     Start-HostServer
+    Start-HostApp
 }
 
 function Get-PubspecVersion {
