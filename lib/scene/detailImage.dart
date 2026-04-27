@@ -1129,7 +1129,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   Widget _buildLoadError(String message, {required VoidCallback onRetry}) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1748,6 +1748,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             },
           ),
         ),
+        if (_isPdf) _readerPageDropdownOverlay(),
       ],
     );
   }
@@ -2790,6 +2791,64 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               child: child,
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _readerPageDropdownOverlay() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 12,
+      child: SafeArea(
+        minimum: const EdgeInsets.symmetric(horizontal: 12),
+        child: Center(child: _pdfPageDropdown()),
+      ),
+    );
+  }
+
+  Widget _pdfPageDropdown() {
+    final totalPages = _totalPages < 1 ? 1 : _totalPages;
+    final currentPage = _page.clamp(1, totalPages).toInt();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      decoration: BoxDecoration(
+        color: _uiChip,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<int>(
+          value: currentPage,
+          isDense: true,
+          menuMaxHeight: 360,
+          dropdownColor: _uiBar,
+          borderRadius: BorderRadius.circular(14),
+          iconEnabledColor: Colors.white,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+          selectedItemBuilder: (context) => [
+            for (var page = 1; page <= totalPages; page++)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'ページ $page',
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+          ],
+          items: [
+            for (var page = 1; page <= totalPages; page++)
+              DropdownMenuItem<int>(value: page, child: Text('ページ $page')),
+          ],
+          onChanged: totalPages <= 1
+              ? null
+              : (value) {
+                  if (value == null || value == _page) {
+                    return;
+                  }
+                  _setCurrentPdfPage(value);
+                },
+        ),
       ),
     );
   }
