@@ -39,6 +39,58 @@ function Invoke-Checked {
     }
 }
 
+function Add-ArgumentPair {
+    param(
+        [System.Collections.Generic.List[string]]$Arguments,
+        [string]$Name,
+        [string]$Value
+    )
+
+    $Arguments.Add($Name)
+    $Arguments.Add($Value)
+}
+
+function Invoke-ScriptRelaunch {
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    $arguments.Add('-NoProfile')
+    $arguments.Add('-ExecutionPolicy')
+    $arguments.Add('Bypass')
+    $arguments.Add('-File')
+    $arguments.Add($PSCommandPath)
+    Add-ArgumentPair -Arguments $arguments -Name '-ProjectRoot' -Value $ProjectRoot
+    Add-ArgumentPair -Arguments $arguments -Name '-Remote' -Value $Remote
+    Add-ArgumentPair -Arguments $arguments -Name '-Branch' -Value $Branch
+    Add-ArgumentPair -Arguments $arguments -Name '-PollSeconds' -Value ([string]$PollSeconds)
+    Add-ArgumentPair -Arguments $arguments -Name '-Python' -Value $Python
+    Add-ArgumentPair -Arguments $arguments -Name '-ServerHost' -Value $ServerHost
+    Add-ArgumentPair -Arguments $arguments -Name '-ServerPort' -Value ([string]$ServerPort)
+    Add-ArgumentPair -Arguments $arguments -Name '-EnvFile' -Value $EnvFile
+    Add-ArgumentPair -Arguments $arguments -Name '-ServerLog' -Value $ServerLog
+    Add-ArgumentPair -Arguments $arguments -Name '-AppExePath' -Value $AppExePath
+
+    if ($BuildAndroidApk) { $arguments.Add('-BuildAndroidApk') }
+    if ($SkipFlutterBuild) { $arguments.Add('-SkipFlutterBuild') }
+    if ($SkipWindowsBuild) { $arguments.Add('-SkipWindowsBuild') }
+    if ($SkipHostAppRestart) { $arguments.Add('-SkipHostAppRestart') }
+    if ($Once) { $arguments.Add('-Once') }
+
+    Write-Host "script: updated; relaunching"
+    & powershell.exe @arguments
+    exit $LASTEXITCODE
+}
+
+function Restart-IfUpdateScriptChanged {
+    param(
+        [string]$FromRevision,
+        [string]$ToRevision
+    )
+
+    $changedFiles = & git diff --name-only $FromRevision $ToRevision -- tool/host_auto_update.ps1 tool/install_host_auto_update_task.ps1
+    if ($changedFiles) {
+        Invoke-ScriptRelaunch
+    }
+}
+
 function Import-DotEnv {
     param([string]$Path)
 
@@ -261,6 +313,7 @@ $remoteRevision = Get-Revision -Ref $remoteRef
 if ($currentRevision -ne $remoteRevision) {
     Write-Host "update: $currentRevision -> $remoteRevision"
     Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
+    Restart-IfUpdateScriptChanged -FromRevision $currentRevision -ToRevision $remoteRevision
     Build-And-Restart
 } else {
     Write-Host "update: none"
@@ -277,6 +330,7 @@ while (-not $Once) {
 
     Write-Host "update: $remoteRevision -> $latestRevision"
     Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
+    Restart-IfUpdateScriptChanged -FromRevision $remoteRevision -ToRevision $latestRevision
     $remoteRevision = $latestRevision
     Build-And-Restart
 }
