@@ -124,7 +124,11 @@ class AppVersionService {
       hostVersion: hostInfo.version,
       latestVersion: latestVersion,
       hostUrl: baseUrl,
-      updateUrl: hostInfo.updateVersion == latestVersion
+      updateUrl: _canUseHostUpdate(
+        localVersion: localVersion,
+        updateVersion: hostInfo.updateVersion,
+        updateUrl: hostInfo.updateUrl,
+      )
           ? _resolveUpdateUrl(baseUrl, hostInfo.updateUrl)
           : null,
       knownVersions: knownVersions,
@@ -211,6 +215,19 @@ class AppVersionService {
     final right = childPath.startsWith('/') ? childPath : '/$childPath';
     return baseUri.replace(path: '$left$right');
   }
+}
+
+bool _canUseHostUpdate({
+  required String localVersion,
+  required String? updateVersion,
+  required String? updateUrl,
+}) {
+  final version = updateVersion?.trim();
+  final url = updateUrl?.trim();
+  if (version == null || version.isEmpty || url == null || url.isEmpty) {
+    return false;
+  }
+  return compareAppVersions(localVersion, version) < 0;
 }
 
 String? _resolveUpdateUrl(String baseUrl, String? rawUpdateUrl) {
