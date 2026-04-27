@@ -66,6 +66,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   bool _rescanning = false;
   bool _hostWorking = false;
   bool _publishingUpdate = false;
+  bool _checkingAppUpdate = false;
 
   @override
   void initState() {
@@ -595,6 +596,64 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     }
   }
 
+  Future<void> _checkAppUpdate() async {
+    final draft = _draftSettings();
+    if (draft.isStandaloneMode) {
+      _showSnackBar('ホストまたはクライアントモードで実行してください');
+      return;
+    }
+
+    setState(() => _checkingAppUpdate = true);
+    try {
+      final mismatch = await AppVersionService().findHostVersionMismatch(draft);
+      if (!mounted) return;
+      if (mismatch == null) {
+        _showSnackBar('アプリは最新です');
+        return;
+      }
+
+      final shouldOpen = await showControllerDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('アプリ更新'),
+            content: Text(
+              'この端末: ${mismatch.localVersion}\n'
+              'ホスト: ${mismatch.hostVersion}\n'
+              '最新: ${mismatch.latestVersion}\n\n'
+              '${mismatch.hasUpdateUrl ? '更新ファイルを開きますか？' : '更新ファイルがホストに登録されていません。'}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('閉じる'),
+              ),
+              FilledButton(
+                onPressed: mismatch.hasUpdateUrl
+                    ? () => Navigator.of(dialogContext).pop(true)
+                    : null,
+                child: const Text('更新を開く'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (shouldOpen == true) {
+        final opened = await AppVersionService().openUpdate(mismatch);
+        if (!opened) {
+          _showSnackBar('更新ファイルを開けませんでした');
+        }
+      }
+    } catch (error) {
+      _showSnackBar('更新確認に失敗しました: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _checkingAppUpdate = false);
+      }
+    }
+  }
+
   Future<void> _startHostServer() async {
     final draft = _draftSettings();
     if (_canOfferLibraryMigration(draft)) {
@@ -882,18 +941,37 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerLeft,
-            child: FilledButton.tonalIcon(
-              onPressed: (_saving || _publishingUpdate)
-                  ? null
-                  : _publishAppUpdate,
-              icon: _publishingUpdate
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.upload_file),
-              label: Text(_publishingUpdate ? '公開中...' : 'ファイルを公開'),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: (_saving || _publishingUpdate)
+                      ? null
+                      : _publishAppUpdate,
+                  icon: _publishingUpdate
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.upload_file),
+                  label: Text(_publishingUpdate ? '公開中...' : 'ファイルを公開'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: (_saving || _checkingAppUpdate)
+                      ? null
+                      : _checkAppUpdate,
+                  icon: _checkingAppUpdate
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.system_update_alt),
+                  label: Text(_checkingAppUpdate ? '確認中...' : 'アプリ更新確認'),
+                ),
+              ],
             ),
           ),
         ],

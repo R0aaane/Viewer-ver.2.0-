@@ -6,7 +6,8 @@ param(
     [int]$PollSeconds = 60,
     [string]$Python = 'python',
     [string]$ServerHost = '0.0.0.0',
-    [int]$ServerPort = 8000
+    [int]$ServerPort = 8000,
+    [switch]$BuildAndroidApk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +42,10 @@ $arguments = @(
     '-ServerHost', $ServerHost,
     '-ServerPort', [string]$ServerPort
 ) -join ' '
+
+if ($BuildAndroidApk) {
+    $arguments = "$arguments -BuildAndroidApk"
+}
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
 $trigger = New-ScheduledTaskTrigger -AtLogOn

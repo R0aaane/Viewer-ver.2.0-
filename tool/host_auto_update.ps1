@@ -8,6 +8,7 @@ param(
     [int]$ServerPort = 8000,
     [string]$EnvFile = 'server\.env',
     [string]$ServerLog = 'data\host_server.log',
+    [switch]$BuildAndroidApk,
     [switch]$SkipFlutterBuild,
     [switch]$Once
 )
@@ -106,9 +107,55 @@ function Build-And-Restart {
     if (-not $SkipFlutterBuild) {
         Write-Host "build: flutter build web"
         Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'web')
+
+        if ($BuildAndroidApk) {
+            Publish-AndroidApkUpdate
+        }
     }
 
     Start-HostServer
+}
+
+function Get-PubspecVersion {
+    $line = Get-Content -LiteralPath 'pubspec.yaml' |
+        Where-Object { $_ -match '^version:\s*(.+)$' } |
+        Select-Object -First 1
+    if (-not $line) {
+        throw "pubspec.yaml version was not found."
+    }
+    return ($line -replace '^version:\s*', '').Trim()
+}
+
+function Publish-AndroidApkUpdate {
+    $version = Get-PubspecVersion
+    Write-Host "build: flutter build apk"
+    Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'apk', '--release')
+
+    $source = Join-Path 'build' 'app\outputs\flutter-apk\app-release.apk'
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "APK was not found: $source"
+    }
+
+    $updatesDir = Join-Path 'data' 'app_updates'
+    New-Item -ItemType Directory -Force -Path $updatesDir | Out-Null
+
+    $safeVersion = $version -replace '[^0-9A-Za-z._+-]+', '_'
+    $fileName = "pdf_viewer_${safeVersion}_android.apk"
+    $target = Join-Path $updatesDir $fileName
+    Copy-Item -LiteralPath $source -Destination $target -Force
+
+    $item = Get-Item -LiteralPath $target
+    $manifest = [ordered]@{
+        version = $version
+        fileName = $fileName
+        originalFileName = 'pdf_viewer_android.apk'
+        sizeBytes = $item.Length
+        uploadedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+    $manifest |
+        ConvertTo-Json |
+        Set-Content -LiteralPath (Join-Path $updatesDir 'latest.json') -Encoding UTF8
+    Write-Host "app-update: published $fileName version=$version"
 }
 
 function Get-Revision {
