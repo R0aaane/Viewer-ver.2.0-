@@ -446,6 +446,8 @@ class UrlDownloadService:
             return []
 
         gallery_ids = self._resolve_hitomi_search_gallery_ids(query_text)
+        if not gallery_ids:
+            gallery_ids = self._resolve_hitomi_search_gallery_ids_from_html(parsed)
         return [f"https://hitomi.la/galleries/{gallery_id}.html" for gallery_id in gallery_ids]
 
     def _resolve_hitomi_search_gallery_ids(self, query_text: str) -> list[int]:
@@ -649,6 +651,46 @@ class UrlDownloadService:
         raise UrlDownloadError(
             f"Hitomi search URL resolving failed: {last_error or 'nozomi unavailable'}"
         )
+
+    def _resolve_hitomi_search_gallery_ids_from_html(
+        self,
+        parsed: urllib.parse.ParseResult,
+    ) -> list[int]:
+        url = urllib.parse.urlunparse(
+            (
+                "https",
+                "hitomi.la",
+                parsed.path or "/search.html",
+                "",
+                parsed.query,
+                "",
+            )
+        )
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": _STANDALONE_USER_AGENT},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                status_code = getattr(response, "status", response.getcode())
+                if status_code < 200 or status_code >= 300:
+                    return []
+                html_text = response.read().decode("utf-8", errors="ignore")
+        except Exception:
+            return []
+
+        results: list[int] = []
+        seen: set[int] = set()
+        for match in re.finditer(
+            r"""href=["'](?:https?://hitomi\.la)?/(?:galleries|reader)/(\d+)(?:\.html)?["']""",
+            html_text,
+            flags=re.IGNORECASE,
+        ):
+            gallery_id = int(match.group(1))
+            if gallery_id not in seen:
+                seen.add(gallery_id)
+                results.append(gallery_id)
+        return results
 
     def _build_hitomi_nozomi_url(
         self,
