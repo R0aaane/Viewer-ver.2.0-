@@ -120,6 +120,15 @@ class SqliteStore:
                     last_scanned_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS media_favorites (
+                    media_id TEXT PRIMARY KEY,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (media_id) REFERENCES media_records(media_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_media_favorites_updated_at
+                    ON media_favorites(updated_at);
+
                 INSERT INTO reading_progress (
                     media_id,
                     current_page,
@@ -672,6 +681,35 @@ class SqliteStore:
                 (media_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_favorite_media_ids(self) -> list[str]:
+        with self._cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT media_id
+                  FROM media_favorites
+              ORDER BY updated_at DESC, media_id COLLATE NOCASE
+                """
+            ).fetchall()
+        return [str(row["media_id"]) for row in rows]
+
+    def set_media_favorite(self, media_id: str, is_favorite: bool, updated_at: str) -> None:
+        with self._cursor() as cur:
+            if is_favorite:
+                cur.execute(
+                    """
+                    INSERT INTO media_favorites (media_id, updated_at)
+                    VALUES (?, ?)
+                    ON CONFLICT(media_id) DO UPDATE SET
+                        updated_at = excluded.updated_at
+                    """,
+                    (media_id, updated_at),
+                )
+            else:
+                cur.execute(
+                    "DELETE FROM media_favorites WHERE media_id = ?",
+                    (media_id,),
+                )
 
     def list_tag_links_for_media_ids(self, media_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         if not media_ids:

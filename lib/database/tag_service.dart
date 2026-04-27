@@ -117,6 +117,28 @@ class TagService {
     await _buildRemoteClient(draftSettings).requestRescan();
   }
 
+  Future<Set<String>?> listRemoteFavoriteIds() async {
+    await initialize();
+    if (!isRemoteMode && !isHostMode) {
+      return null;
+    }
+    return _requireApiClient().fetchFavoriteIds();
+  }
+
+  Future<String?> setRemoteFavorite(MediaItem item, bool isFavorite) async {
+    await initialize();
+    if (!isRemoteMode && !isHostMode) {
+      return null;
+    }
+    rememberItem(item);
+    final identity = await _idResolver.resolve(item);
+    return _requireApiClient().setFavorite(
+      identity.stableId,
+      isFavorite,
+      identity: identity,
+    );
+  }
+
   void rememberItem(MediaItem item) {
     for (final key in _itemLookupKeys(item.id)) {
       _knownItems[key] = item;

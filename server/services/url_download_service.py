@@ -37,6 +37,19 @@ _SUPPORTED_HITOMI_SEARCH_NAMESPACES = {
     "male",
     "female",
 }
+_HITOMI_BARE_TYPE_ALIASES = {
+    "manga": "manga",
+    "comic": "manga",
+    "comics": "manga",
+    "doujinshi": "doujinshi",
+    "doujin": "doujinshi",
+    "cg": "cg",
+    "gamecg": "gamecg",
+    "game": "gamecg",
+    "imageset": "imageset",
+    "image": "imageset",
+    "images": "imageset",
+}
 _LAUNCHER_SUPPORTED_HITOMI_SEGMENTS = {
     "manga",
     "doujinshi",
@@ -469,7 +482,7 @@ class UrlDownloadService:
     ) -> _HitomiParsedSearchQuery:
         state = _HitomiSearchState()
         terms = [
-            term.replace("_", " ")
+            self._normalize_hitomi_search_term(term)
             for term in re.split(r"\s+", query_text.lower().strip())
             if term.strip()
         ]
@@ -509,6 +522,10 @@ class UrlDownloadService:
             negative_terms=negative_terms,
             or_terms=[terms for terms in or_terms if terms],
         )
+
+    def _normalize_hitomi_search_term(self, term: str) -> str:
+        normalized = term.replace("_", " ").strip()
+        return f"type:{_HITOMI_BARE_TYPE_ALIASES[normalized]}" if normalized in _HITOMI_BARE_TYPE_ALIASES else normalized
 
     def _next_hitomi_search_state_for_ordering_term(
         self,

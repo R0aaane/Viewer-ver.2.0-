@@ -152,14 +152,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return apiFromQuery;
     }
 
+    final inferredApi = _inferApiBaseUrlFromCurrentLocation();
+    if (inferredApi != null && inferredApi.isNotEmpty) {
+      return inferredApi;
+    }
+
     final storedApi = settings.clientApiBaseUrl.trim();
     if (storedApi.isNotEmpty) {
       return storedApi;
-    }
-
-    final inferredApi = _inferApiBaseUrlFromCurrentLocation(settings.hostPort);
-    if (inferredApi != null && inferredApi.isNotEmpty) {
-      return inferredApi;
     }
 
     if (settings.isHostMode) {
@@ -169,16 +169,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return '';
   }
 
-  String? _inferApiBaseUrlFromCurrentLocation(int port) {
+  String? _inferApiBaseUrlFromCurrentLocation() {
     final currentUri = Uri.base;
     final host = currentUri.host.trim();
     if (host.isEmpty) {
       return null;
     }
 
-    final normalizedHost = _isLoopbackHost(host) ? '127.0.0.1' : host;
-    // Host API is served over plain HTTP today.
-    return Uri(scheme: 'http', host: normalizedHost, port: port).toString();
+    return currentUri.replace(path: '', query: '', fragment: '').toString();
   }
 
   bool _isLoopbackHost(String host) {
@@ -5833,7 +5831,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
           return bytes;
         });
     _pageFutureCache[pageNo] = future;
-    future.catchError((_) {
+    unawaited(future.catchError((_) {
       if (_isCurrentViewerRequest(
         generation: generation,
         mediaId: mediaId,
@@ -5845,7 +5843,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         _pageBytesCache.remove(pageNo);
         _evictPageImageProvider(pageNo);
       }
-    });
+      return Uint8List(0);
+    }));
     return future;
   }
 

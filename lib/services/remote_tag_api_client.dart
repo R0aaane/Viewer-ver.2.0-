@@ -176,6 +176,36 @@ class RemoteTagApiClient {
     await _postJson('/rescan', const <String, dynamic>{});
   }
 
+  Future<Set<String>> fetchFavoriteIds() async {
+    final json = await _getJson('/favorites');
+    final rows = json is Map ? json['items'] : json;
+    if (rows is! List) {
+      return const <String>{};
+    }
+    return rows
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toSet();
+  }
+
+  Future<String> setFavorite(
+    String mediaId,
+    bool isFavorite, {
+    ResolvedMediaIdentity? identity,
+  }) async {
+    final json = await _putJson(
+      '/favorites/${Uri.encodeComponent(mediaId)}',
+      <String, dynamic>{
+        'isFavorite': isFavorite,
+        if (identity != null) 'identity': identity.toJson(),
+      },
+    );
+    if (json is Map && json['mediaId'] != null) {
+      return json['mediaId'].toString();
+    }
+    return mediaId;
+  }
+
   Future<Map<String, String>> organizeLibrary(String folderRaw) async {
     final json = await _postJson(
       '/organize',

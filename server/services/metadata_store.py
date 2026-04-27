@@ -736,6 +736,20 @@ class MetadataStore:
             for row in self._db.list_tags_for_media(resolved_media_id)
         ]
 
+    def list_favorite_media_ids(self) -> list[str]:
+        return self._db.list_favorite_media_ids()
+
+    def set_media_favorite(
+        self,
+        media_id: str,
+        is_favorite: bool,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> str:
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
+        self._db.set_media_favorite(resolved_media_id, is_favorite, _utcnow_iso())
+        return resolved_media_id
+
     def ensure_exact_tag_id(
         self,
         *,

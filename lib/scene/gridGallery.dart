@@ -4253,8 +4253,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   // --------------------
   Future<void> _reloadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
-    final favList =
-        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    var favList = prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    final remoteFavorites = await widget.tagService
+        .listRemoteFavoriteIds()
+        .catchError((_) => null);
+    if (remoteFavorites != null) {
+      favList = remoteFavorites.toList(growable: false);
+      await prefs.setStringList(_PrefsKeys.favorites, favList);
+    }
     if (!mounted) return;
     setState(() => _favorites = favList.toSet());
   }
@@ -4270,6 +4276,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     setState(() => _favorites = next);
+
+    final remoteId = await widget.tagService
+        .setRemoteFavorite(item, next.contains(id))
+        .catchError((_) => null);
+    if (remoteId != null && remoteId != id) {
+      if (next.remove(id)) {
+        next.add(remoteId);
+      }
+      setState(() => _favorites = next);
+    }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(

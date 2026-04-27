@@ -24,6 +24,8 @@ DEFAULT_API_PREFIXES: tuple[str, ...] = (
     "/rename",
     "/delete",
     "/tags",
+    "/favorites",
+    "/app-updates",
 )
 
 NO_CACHE_WEB_FILES: frozenset[str] = frozenset(
@@ -90,6 +92,7 @@ class SpaStaticFiles(StaticFiles):
             response.headers["Cache-Control"] = NO_CACHE_HEADER_VALUE
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+            response.headers["Clear-Site-Data"] = '"cache"'
         return response
 
     async def get_response(self, path: str, scope) -> Response:

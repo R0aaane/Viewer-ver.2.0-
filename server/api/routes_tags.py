@@ -6,7 +6,9 @@ from server.models.dto import (
     AddItemTagsRequest,
     AddItemTagsResponse,
     DeleteItemTagsRequest,
+    FavoriteListResponse,
     ItemTagsResponse,
+    SetFavoriteRequest,
     TagListResponse,
 )
 from server.services.auth_service import require_bearer_token
@@ -79,6 +81,28 @@ def get_tags_for_item(request: Request, media_id: str) -> ItemTagsResponse:
         identity=identity,
     )
     return ItemTagsResponse(mediaId=resolved_media_id, items=items)
+
+
+@router.get("/favorites", response_model=FavoriteListResponse)
+def list_favorites(request: Request) -> FavoriteListResponse:
+    return FavoriteListResponse(
+        items=request.app.state.metadata_store.list_favorite_media_ids()
+    )
+
+
+@router.put("/favorites/{media_id}", response_model=AddItemTagsResponse)
+def set_favorite(
+    request: Request,
+    media_id: str,
+    payload: SetFavoriteRequest,
+) -> AddItemTagsResponse:
+    identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
+    resolved_media_id = request.app.state.metadata_store.set_media_favorite(
+        media_id,
+        payload.isFavorite,
+        identity=identity,
+    )
+    return AddItemTagsResponse(mediaId=resolved_media_id)
 
 
 @router.delete("/tags/master/{tag_id}")

@@ -63,6 +63,15 @@ class DeleteItemTagsRequest(BaseModel):
     tagIds: list[str] = Field(default_factory=list)
 
 
+class FavoriteListResponse(BaseModel):
+    items: list[str] = Field(default_factory=list)
+
+
+class SetFavoriteRequest(BaseModel):
+    isFavorite: bool
+    identity: ResolvedIdentityDto | None = None
+
+
 class MessageResponse(BaseModel):
     ok: bool = True
     message: str

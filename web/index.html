@@ -124,6 +124,14 @@
   </div>
   <script>
     (function () {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (registrations) {
+          registrations.forEach(function (registration) {
+            registration.unregister();
+          });
+        }).catch(function () {});
+      }
+
       var overlay = document.getElementById('boot-overlay');
       var help = document.getElementById('boot-help');
       var helpTimer = window.setTimeout(function () {

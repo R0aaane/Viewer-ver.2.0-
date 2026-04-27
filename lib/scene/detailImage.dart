@@ -332,8 +332,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final item = _item;
     final version = loadVersion ?? _detailLoadVersion;
     final prefs = await SharedPreferences.getInstance();
-    final favList =
-        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    var favList = prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    final remoteFavorites = await widget.tagService
+        .listRemoteFavoriteIds()
+        .catchError((_) => null);
+    if (remoteFavorites != null) {
+      favList = remoteFavorites.toList(growable: false);
+      await prefs.setStringList(_PrefsKeys.favorites, favList);
+    }
     final fav = favList.contains(item.id);
     if (!_isCurrentLoad(version, item)) return;
     setState(() => _isFavorite = fav);
@@ -354,6 +360,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
 
     _favChanged = true;
+    final remoteId = await widget.tagService
+        .setRemoteFavorite(_item, next.contains(_item.id))
+        .catchError((_) => null);
+    if (remoteId != null && remoteId != _item.id) {
+      if (next.remove(_item.id)) {
+        next.add(remoteId);
+      }
+    }
     await prefs.setStringList(
       _PrefsKeys.favorites,
       next.toList(growable: false),
