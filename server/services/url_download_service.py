@@ -50,6 +50,13 @@ _HITOMI_BARE_TYPE_ALIASES = {
     "image": "imageset",
     "images": "imageset",
 }
+_HITOMI_BARE_SEARCH_AREAS = (
+    "artist",
+    "group",
+    "series",
+    "character",
+    "tag",
+)
 _LAUNCHER_SUPPORTED_HITOMI_SEGMENTS = {
     "manga",
     "doujinshi",
@@ -446,11 +453,7 @@ class UrlDownloadService:
         state = parsed.state.normalized()
         remaining_positive_terms = list(parsed.positive_terms)
 
-        if not remaining_positive_terms or (
-            not self._is_hitomi_namespaced_term(remaining_positive_terms[0])
-            and state.order_by_key != "added"
-        ):
-            self._assert_supported_hitomi_search_terms(remaining_positive_terms)
+        if not remaining_positive_terms:
             results = self._download_hitomi_nozomi_gallery_ids(state)
         else:
             first_term = remaining_positive_terms.pop(0)
@@ -573,7 +576,7 @@ class UrlDownloadService:
             if self._is_hitomi_namespaced_term(term):
                 continue
             raise UrlDownloadError(
-                f"Hitomi search URLs currently support tag-based terms only: {term}"
+                f"Hitomi search term is not supported: {term}"
             )
 
     def _resolve_hitomi_gallery_ids_for_term(
@@ -581,7 +584,9 @@ class UrlDownloadService:
         term: str,
         state: _HitomiSearchState,
     ) -> list[int]:
-        self._assert_supported_hitomi_search_terms([term])
+        if not self._is_hitomi_namespaced_term(term):
+            return self._resolve_hitomi_gallery_ids_for_bare_term(term, state)
+
         separator_index = term.find(":")
         left_side = term[:separator_index]
         right_side = term[separator_index + 1 :]
@@ -597,6 +602,26 @@ class UrlDownloadService:
         return self._download_hitomi_nozomi_gallery_ids(
             replace(state, area=left_side, tag=right_side).normalized()
         )
+
+    def _resolve_hitomi_gallery_ids_for_bare_term(
+        self,
+        term: str,
+        state: _HitomiSearchState,
+    ) -> list[int]:
+        results: list[int] = []
+        seen: set[int] = set()
+        for area in _HITOMI_BARE_SEARCH_AREAS:
+            try:
+                ids = self._download_hitomi_nozomi_gallery_ids(
+                    replace(state, area=area, tag=term).normalized()
+                )
+            except UrlDownloadError:
+                continue
+            for gallery_id in ids:
+                if gallery_id not in seen:
+                    seen.add(gallery_id)
+                    results.append(gallery_id)
+        return results
 
     def _download_hitomi_nozomi_gallery_ids(
         self,
