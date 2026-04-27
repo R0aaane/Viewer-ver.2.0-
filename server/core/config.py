@@ -35,6 +35,10 @@ class Settings:
     stream_chunk_size: int
     update_version: str | None
     update_url: str | None
+    host_update_runner_path: Path
+    host_update_remote: str
+    host_update_branch: str | None
+    host_update_build_android_apk: bool
 
 
 def load_settings() -> Settings:
@@ -65,4 +69,16 @@ def load_settings() -> Settings:
         stream_chunk_size=int(os.getenv("MEDIA_SERVER_STREAM_CHUNK_SIZE", str(1024 * 1024))),
         update_version=(os.getenv("MEDIA_SERVER_UPDATE_VERSION") or "").strip() or None,
         update_url=(os.getenv("MEDIA_SERVER_UPDATE_URL") or "").strip() or None,
+        host_update_runner_path=Path(
+            os.getenv(
+                "MEDIA_SERVER_HOST_UPDATE_RUNNER",
+                project_root / "tool" / "host_update_runner.ps1",
+            ),
+        ).resolve(),
+        host_update_remote=os.getenv("MEDIA_SERVER_HOST_UPDATE_REMOTE", "origin"),
+        host_update_branch=(os.getenv("MEDIA_SERVER_HOST_UPDATE_BRANCH") or "").strip() or None,
+        host_update_build_android_apk=_parse_bool(
+            os.getenv("MEDIA_SERVER_HOST_UPDATE_BUILD_ANDROID_APK"),
+            True,
+        ),
     )

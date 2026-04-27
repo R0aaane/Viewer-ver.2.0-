@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from server.api.routes_actions import router as actions_router
 from server.api.routes_health import router as health_router
+from server.api.routes_host_update import router as host_update_router
 from server.api.routes_media import router as media_router
 from server.api.routes_search import router as search_router
 from server.api.routes_tags import router as tags_router
@@ -129,6 +130,7 @@ async def record_client_app_version(request, call_next):
 
 
 app.include_router(health_router)
+app.include_router(host_update_router)
 app.include_router(tags_router)
 app.include_router(search_router)
 app.include_router(actions_router)
