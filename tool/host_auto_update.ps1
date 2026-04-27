@@ -9,10 +9,13 @@ param(
     [string]$EnvFile = 'server\.env',
     [string]$ServerLog = 'data\host_server.log',
     [string]$AppExePath = 'build\windows\x64\runner\Release\pdf_viewer.exe',
+    [string]$AndroidPackage = 'com.example.pdf_viewer',
     [switch]$BuildAndroidApk,
     [switch]$SkipFlutterBuild,
     [switch]$SkipWindowsBuild,
     [switch]$SkipHostAppRestart,
+    [switch]$SkipCleanBuild,
+    [switch]$SkipAndroidDeviceStop,
     [switch]$Once
 )
 
@@ -67,11 +70,14 @@ function Invoke-ScriptRelaunch {
     Add-ArgumentPair -Arguments $arguments -Name '-EnvFile' -Value $EnvFile
     Add-ArgumentPair -Arguments $arguments -Name '-ServerLog' -Value $ServerLog
     Add-ArgumentPair -Arguments $arguments -Name '-AppExePath' -Value $AppExePath
+    Add-ArgumentPair -Arguments $arguments -Name '-AndroidPackage' -Value $AndroidPackage
 
     if ($BuildAndroidApk) { $arguments.Add('-BuildAndroidApk') }
     if ($SkipFlutterBuild) { $arguments.Add('-SkipFlutterBuild') }
     if ($SkipWindowsBuild) { $arguments.Add('-SkipWindowsBuild') }
     if ($SkipHostAppRestart) { $arguments.Add('-SkipHostAppRestart') }
+    if ($SkipCleanBuild) { $arguments.Add('-SkipCleanBuild') }
+    if ($SkipAndroidDeviceStop) { $arguments.Add('-SkipAndroidDeviceStop') }
     if ($Once) { $arguments.Add('-Once') }
 
     Write-Host "script: updated; relaunching"
@@ -204,6 +210,65 @@ function Start-HostApp {
     Write-Host "app: started pid=$($process.Id)"
 }
 
+function Stop-AndroidApp {
+    if ($SkipAndroidDeviceStop -or [string]::IsNullOrWhiteSpace($AndroidPackage)) {
+        return
+    }
+
+    $adb = Get-Command 'adb' -ErrorAction SilentlyContinue
+    if (-not $adb) {
+        Write-Host "android: adb not found; skipped device app stop"
+        return
+    }
+
+    & $adb.Source shell am force-stop $AndroidPackage 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "android: stopped package=$AndroidPackage"
+    } else {
+        Write-Host "android: device app stop skipped package=$AndroidPackage"
+    }
+}
+
+function Remove-ProjectPath {
+    param([string]$RelativePath)
+
+    $root = (Get-Location).Path
+    $target = Join-Path $root $RelativePath
+    if (-not (Test-Path -LiteralPath $target)) {
+        return
+    }
+
+    $resolved = (Resolve-Path -LiteralPath $target).Path
+    if (-not $resolved.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove path outside project root: $resolved"
+    }
+
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+    Write-Host "clean: removed $RelativePath"
+}
+
+function Clear-BuildOutputs {
+    if ($SkipCleanBuild) {
+        return
+    }
+
+    if (-not $SkipFlutterBuild) {
+        Remove-ProjectPath -RelativePath 'build\web'
+        Remove-ProjectPath -RelativePath 'build\app'
+        if (-not $SkipWindowsBuild) {
+            Remove-ProjectPath -RelativePath 'build\windows'
+        }
+    }
+
+    if ($BuildAndroidApk) {
+        $updatesDir = Join-Path 'data' 'app_updates'
+        Remove-Item -LiteralPath (Join-Path $updatesDir 'latest.json') -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $updatesDir -Filter 'pdf_viewer_*_android.apk' -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force
+        Write-Host "clean: replaced android app update artifacts"
+    }
+}
+
 function Start-HostServer {
     New-Item -ItemType Directory -Force -Path 'data' | Out-Null
     Import-DotEnv -Path $EnvFile
@@ -234,15 +299,22 @@ function Start-HostServer {
 }
 
 function Build-And-Restart {
+    Stop-HostApp
+    Stop-HostServer
+    Stop-AndroidApp
+    Clear-BuildOutputs
+
     Write-Host "dependencies: pip install -r requirements.txt"
     Invoke-Checked -FilePath $Python -Arguments @('-m', 'pip', 'install', '-r', 'requirements.txt')
 
     if (-not $SkipFlutterBuild) {
+        Write-Host "dependencies: flutter pub get"
+        Invoke-Checked -FilePath 'flutter' -Arguments @('pub', 'get')
+
         Write-Host "build: flutter build web"
         Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'web')
 
         if (-not $SkipWindowsBuild) {
-            Stop-HostApp
             Write-Host "build: flutter build windows"
             Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'windows')
         }
@@ -278,6 +350,8 @@ function Publish-AndroidApkUpdate {
 
     $updatesDir = Join-Path 'data' 'app_updates'
     New-Item -ItemType Directory -Force -Path $updatesDir | Out-Null
+    Get-ChildItem -LiteralPath $updatesDir -Filter 'pdf_viewer_*_android.apk' -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force
 
     $safeVersion = $version -replace '[^0-9A-Za-z._+-]+', '_'
     $fileName = "pdf_viewer_${safeVersion}_android.apk"

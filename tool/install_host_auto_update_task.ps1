@@ -8,8 +8,11 @@ param(
     [string]$ServerHost = '0.0.0.0',
     [int]$ServerPort = 8000,
     [string]$AppExePath = 'build\windows\x64\runner\Release\pdf_viewer.exe',
+    [string]$AndroidPackage = 'com.example.pdf_viewer',
     [switch]$SkipWindowsBuild,
     [switch]$SkipHostAppRestart,
+    [switch]$SkipCleanBuild,
+    [switch]$SkipAndroidDeviceStop,
     [switch]$BuildAndroidApk
 )
 
@@ -44,7 +47,8 @@ $arguments = @(
     '-Python', "`"$Python`"",
     '-ServerHost', $ServerHost,
     '-ServerPort', [string]$ServerPort,
-    '-AppExePath', "`"$AppExePath`""
+    '-AppExePath', "`"$AppExePath`"",
+    '-AndroidPackage', $AndroidPackage
 ) -join ' '
 
 if ($SkipWindowsBuild) {
@@ -53,6 +57,14 @@ if ($SkipWindowsBuild) {
 
 if ($SkipHostAppRestart) {
     $arguments = "$arguments -SkipHostAppRestart"
+}
+
+if ($SkipCleanBuild) {
+    $arguments = "$arguments -SkipCleanBuild"
+}
+
+if ($SkipAndroidDeviceStop) {
+    $arguments = "$arguments -SkipAndroidDeviceStop"
 }
 
 if ($BuildAndroidApk) {
