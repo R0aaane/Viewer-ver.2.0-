@@ -138,6 +138,10 @@ class MediaItemDto(BaseModel):
     stats: MediaStatsDto | None = None
 
 
+class FavoriteMediaListResponse(BaseModel):
+    items: list[MediaItemDto] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     items: list[MediaItemDto]
     total: int

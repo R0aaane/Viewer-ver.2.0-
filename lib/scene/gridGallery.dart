@@ -4282,7 +4282,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       next.add(id);
     }
 
-    setState(() => _favorites = next);
+    setState(() {
+      _favorites = next;
+      if (wasFavorite) {
+        _favoriteResolvedIds.removeAll(lookupIds);
+      } else {
+        _favoriteResolvedIds.addAll(lookupIds);
+      }
+    });
 
     final remoteId = await widget.tagService
         .setRemoteFavorite(item, !wasFavorite)
@@ -6810,9 +6817,32 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _refreshAllFavoritesItems() async {
     if (_loadingFavAll) return;
+    final remoteItems = await widget.tagService
+        .listRemoteFavoriteItems()
+        .catchError((_) => null);
+    if (remoteItems != null) {
+      if (!mounted) return;
+      final resolvedFavoriteIds = <String>{};
+      for (final item in remoteItems) {
+        resolvedFavoriteIds.add(item.id);
+        resolvedFavoriteIds.addAll(
+          await widget.tagService.favoriteLookupIdsForItem(item),
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _favoriteItemsAll = remoteItems;
+        _favoriteResolvedIds = resolvedFavoriteIds;
+      });
+      return;
+    }
+
     if (_foldersRaw.isEmpty) {
       if (!mounted) return;
-      setState(() => _favoriteItemsAll = const []);
+      setState(() {
+        _favoriteItemsAll = const [];
+        _favoriteResolvedIds = <String>{};
+      });
       return;
     }
 

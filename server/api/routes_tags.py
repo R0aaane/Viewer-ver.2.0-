@@ -7,6 +7,7 @@ from server.models.dto import (
     AddItemTagsResponse,
     DeleteItemTagsRequest,
     FavoriteListResponse,
+    FavoriteMediaListResponse,
     ItemTagsResponse,
     SetFavoriteRequest,
     TagListResponse,
@@ -87,6 +88,13 @@ def get_tags_for_item(request: Request, media_id: str) -> ItemTagsResponse:
 def list_favorites(request: Request) -> FavoriteListResponse:
     return FavoriteListResponse(
         items=request.app.state.metadata_store.list_favorite_media_ids()
+    )
+
+
+@router.get("/favorites/media", response_model=FavoriteMediaListResponse)
+def list_favorite_media(request: Request) -> FavoriteMediaListResponse:
+    return FavoriteMediaListResponse(
+        items=request.app.state.metadata_store.list_favorite_media_items()
     )
 
 

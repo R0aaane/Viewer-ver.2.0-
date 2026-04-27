@@ -125,6 +125,16 @@ class TagService {
     return _requireApiClient().fetchFavoriteIds();
   }
 
+  Future<List<MediaItem>?> listRemoteFavoriteItems() async {
+    await initialize();
+    if (!isRemoteMode && !isHostMode) {
+      return null;
+    }
+    final items = await _requireApiClient().fetchFavoriteMediaItems();
+    rememberItems(items);
+    return items;
+  }
+
   Future<String?> setRemoteFavorite(MediaItem item, bool isFavorite) async {
     await initialize();
     if (!isRemoteMode && !isHostMode) {

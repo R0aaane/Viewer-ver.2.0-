@@ -188,6 +188,16 @@ class RemoteTagApiClient {
         .toSet();
   }
 
+  Future<List<MediaItem>> fetchFavoriteMediaItems() async {
+    final json = await _getJson('/favorites/media');
+    final rows = _unwrapList(json, preferredKeys: const ['items', 'results']);
+    return rows
+        .whereType<Map>()
+        .map(_parseFavoriteMediaItem)
+        .where((item) => item.kind == MediaKind.pdf)
+        .toList(growable: false);
+  }
+
   Future<String> setFavorite(
     String mediaId,
     bool isFavorite, {
@@ -520,6 +530,32 @@ class RemoteTagApiClient {
       }
     }
     return out;
+  }
+
+  MediaItem _parseFavoriteMediaItem(Map<dynamic, dynamic> raw) {
+    final mediaId = raw['mediaId']?.toString().trim() ?? '';
+    final fullPath = raw['fullPath']?.toString().trim() ?? '';
+    final kindName = raw['kind']?.toString().trim().toLowerCase() ?? 'pdf';
+    return MediaItem(
+      id: fullPath.isNotEmpty ? fullPath : mediaId,
+      displayName: raw['displayName']?.toString() ?? mediaId,
+      kind: kindName == 'image' ? MediaKind.image : MediaKind.pdf,
+      folderRaw: raw['folderRaw']?.toString() ?? '',
+      modified: _parseDateTime(raw['modifiedAt']?.toString()),
+      sizeBytes: _asInt(raw['sizeBytes']),
+      tags: const [],
+    );
+  }
+
+  int? _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  DateTime? _parseDateTime(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    return DateTime.tryParse(value.trim());
   }
 
   String? _extractErrorMessage(dynamic json) {

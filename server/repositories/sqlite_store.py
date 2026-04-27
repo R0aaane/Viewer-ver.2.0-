@@ -693,6 +693,21 @@ class SqliteStore:
             ).fetchall()
         return [str(row["media_id"]) for row in rows]
 
+    def list_favorite_media_records(self) -> list[dict[str, Any]]:
+        with self._cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT records.*
+                  FROM media_favorites AS favorites
+                  JOIN media_records AS records
+                    ON records.media_id = favorites.media_id
+                 WHERE records.is_deleted = 0
+              ORDER BY favorites.updated_at DESC,
+                       records.display_name COLLATE NOCASE
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def set_media_favorite(self, media_id: str, is_favorite: bool, updated_at: str) -> None:
         with self._cursor() as cur:
             if is_favorite:

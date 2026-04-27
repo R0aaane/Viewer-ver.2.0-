@@ -739,6 +739,14 @@ class MetadataStore:
     def list_favorite_media_ids(self) -> list[str]:
         return self._db.list_favorite_media_ids()
 
+    def list_favorite_media_items(self) -> list[dict[str, Any]]:
+        items = [
+            self._row_to_media_dict(row)
+            for row in self._db.list_favorite_media_records()
+            if row["kind"] in {"image", "pdf"}
+        ]
+        return self._attach_stats_to_media_items(items)
+
     def set_media_favorite(
         self,
         media_id: str,
