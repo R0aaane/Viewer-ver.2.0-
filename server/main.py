@@ -40,9 +40,22 @@ settings = load_settings()
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 project_root = Path(__file__).resolve().parents[1]
-web_build_dir = Path(
-    os.getenv("MEDIA_SERVER_WEB_BUILD_DIR") or str(project_root / "build" / "web")
-).resolve()
+
+
+def _resolve_web_build_dir() -> Path:
+    configured = (os.getenv("MEDIA_SERVER_WEB_BUILD_DIR") or "").strip()
+    candidates = [
+        Path(configured).resolve() if configured else None,
+        (project_root / "build" / "web").resolve(),
+        (Path.cwd() / "build" / "web").resolve(),
+    ]
+    for candidate in candidates:
+        if candidate is not None and (candidate / "index.html").is_file():
+            return candidate
+    return (Path(configured).resolve() if configured else candidates[1])
+
+
+web_build_dir = _resolve_web_build_dir()
 
 
 @asynccontextmanager

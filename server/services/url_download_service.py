@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import inspect
 import json
@@ -26,6 +27,10 @@ _HITOMI_NOZOMI_HOSTS = (
     "ltn.gold-usergeneratedcontent.net",
     "ltn.hitomi.la",
 )
+_HITOMI_INDEX_HOST = "ltn.gold-usergeneratedcontent.net"
+_HITOMI_GALLERIES_INDEX_DIR = "galleriesindex"
+_HITOMI_INDEX_NODE_SIZE = 464
+_HITOMI_BTREE_ORDER = 16
 _SUPPORTED_HITOMI_SEARCH_NAMESPACES = {
     "artist",
     "group",
@@ -610,6 +615,10 @@ class UrlDownloadService:
         term: str,
         state: _HitomiSearchState,
     ) -> list[int]:
+        indexed_ids = self._download_hitomi_gallery_ids_from_index(term)
+        if indexed_ids:
+            return indexed_ids
+
         results: list[int] = []
         seen: set[int] = set()
         for area in _HITOMI_BARE_SEARCH_AREAS:
@@ -624,6 +633,156 @@ class UrlDownloadService:
                     seen.add(gallery_id)
                     results.append(gallery_id)
         return results
+
+    def _download_hitomi_gallery_ids_from_index(self, term: str) -> list[int]:
+        version = self._download_hitomi_index_version(_HITOMI_GALLERIES_INDEX_DIR)
+        data_range = self._hitomi_btree_search(
+            field="galleries",
+            key=hashlib.sha256(term.encode("utf-8")).digest()[:4],
+            version=version,
+        )
+        if data_range is None:
+            return []
+
+        offset, length = data_range
+        if length <= 0 or length > 100000000:
+            return []
+
+        payload = self._download_hitomi_index_range(
+            self._hitomi_galleries_index_url(version, suffix="data"),
+            offset,
+            offset + length - 1,
+        )
+        if len(payload) < 4:
+            return []
+        count = int.from_bytes(payload[0:4], "big", signed=True)
+        expected_length = count * 4 + 4
+        if count <= 0 or count > 10000000 or len(payload) != expected_length:
+            return []
+        return [
+            int.from_bytes(payload[pos : pos + 4], "big", signed=True)
+            for pos in range(4, len(payload), 4)
+        ]
+
+    def _download_hitomi_index_version(self, name: str) -> str:
+        url = f"https://{_HITOMI_INDEX_HOST}/{name}/version"
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": _STANDALONE_USER_AGENT},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            status_code = getattr(response, "status", response.getcode())
+            if status_code < 200 or status_code >= 300:
+                raise UrlDownloadError(f"HTTP {status_code} while resolving {url}")
+            return response.read().decode("utf-8", errors="ignore").strip()
+
+    def _hitomi_btree_search(
+        self,
+        *,
+        field: str,
+        key: bytes,
+        version: str,
+        address: int = 0,
+    ) -> tuple[int, int] | None:
+        node = self._download_hitomi_btree_node(field, version, address)
+        if not node["keys"]:
+            return None
+
+        found = False
+        index = 0
+        for index, node_key in enumerate(node["keys"]):
+            compare = (key > node_key) - (key < node_key)
+            if compare <= 0:
+                found = compare == 0
+                break
+        else:
+            index = len(node["keys"])
+
+        if found:
+            return node["datas"][index]
+        if not any(node["subnode_addresses"]):
+            return None
+
+        subnode_address = node["subnode_addresses"][index]
+        if subnode_address == 0:
+            return None
+        return self._hitomi_btree_search(
+            field=field,
+            key=key,
+            version=version,
+            address=subnode_address,
+        )
+
+    def _download_hitomi_btree_node(
+        self,
+        field: str,
+        version: str,
+        address: int,
+    ) -> dict[str, object]:
+        if field != "galleries":
+            raise UrlDownloadError(f"Unsupported Hitomi index field: {field}")
+        payload = self._download_hitomi_index_range(
+            self._hitomi_galleries_index_url(version, suffix="index"),
+            address,
+            address + _HITOMI_INDEX_NODE_SIZE - 1,
+        )
+        return self._decode_hitomi_btree_node(payload)
+
+    def _decode_hitomi_btree_node(self, payload: bytes) -> dict[str, object]:
+        pos = 0
+
+        def read_int32() -> int:
+            nonlocal pos
+            value = int.from_bytes(payload[pos : pos + 4], "big", signed=True)
+            pos += 4
+            return value
+
+        def read_uint64() -> int:
+            nonlocal pos
+            value = int.from_bytes(payload[pos : pos + 8], "big", signed=False)
+            pos += 8
+            return value
+
+        keys: list[bytes] = []
+        for _ in range(read_int32()):
+            key_size = read_int32()
+            if key_size <= 0 or key_size > 32:
+                return {"keys": [], "datas": [], "subnode_addresses": []}
+            keys.append(payload[pos : pos + key_size])
+            pos += key_size
+
+        datas: list[tuple[int, int]] = []
+        for _ in range(read_int32()):
+            offset = read_uint64()
+            length = read_int32()
+            datas.append((offset, length))
+
+        subnode_addresses = [read_uint64() for _ in range(_HITOMI_BTREE_ORDER + 1)]
+        return {
+            "keys": keys,
+            "datas": datas,
+            "subnode_addresses": subnode_addresses,
+        }
+
+    def _hitomi_galleries_index_url(self, version: str, *, suffix: str) -> str:
+        return (
+            f"https://{_HITOMI_INDEX_HOST}/{_HITOMI_GALLERIES_INDEX_DIR}/"
+            f"galleries.{version}.{suffix}"
+        )
+
+    def _download_hitomi_index_range(self, url: str, start: int, end: int) -> bytes:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Range": f"bytes={start}-{end}",
+                "User-Agent": _STANDALONE_USER_AGENT,
+            },
+        )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            status_code = getattr(response, "status", response.getcode())
+            if status_code not in {200, 206}:
+                raise UrlDownloadError(f"HTTP {status_code} while resolving {url}")
+            return response.read()
 
     def _download_hitomi_nozomi_gallery_ids(
         self,
