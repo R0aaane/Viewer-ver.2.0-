@@ -139,6 +139,23 @@ class TagService {
     );
   }
 
+  Future<Set<String>> favoriteLookupIdsForItem(MediaItem item) async {
+    final ids = <String>{
+      item.id,
+      item.id.replaceAll('\\', '/'),
+      item.id.replaceAll('/', '\\'),
+      item.id.toLowerCase(),
+    };
+    try {
+      final identity = await _idResolver.resolve(item);
+      ids.add(identity.stableId);
+      ids.addAll(identity.aliases);
+    } catch (_) {
+      // Keep local ID variants when file stats cannot be resolved.
+    }
+    return ids;
+  }
+
   void rememberItem(MediaItem item) {
     for (final key in _itemLookupKeys(item.id)) {
       _knownItems[key] = item;

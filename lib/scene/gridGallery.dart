@@ -410,6 +410,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   final Map<String, List<MediaItem>> _folderItemsCache = {};
   List<MediaItem> _favoriteItemsAll = const [];
+  Set<String> _favoriteResolvedIds = <String>{};
   bool _loadingFavAll = false;
   bool _homeShowcaseLoading = false;
   String? _homeShowcaseErrorMessage;
@@ -3012,6 +3013,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (_favorites.contains(variant)) {
         return true;
       }
+      if (_favoriteResolvedIds.contains(variant)) {
+        return true;
+      }
     }
     return false;
   }
@@ -4263,14 +4267,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
     if (!mounted) return;
     setState(() => _favorites = favList.toSet());
+    unawaited(_refreshResolvedFavoriteIds());
   }
 
   Future<void> _toggleFavorite(MediaItem item) async {
     final id = item.id;
+    final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
+    final wasFavorite = lookupIds.any(_favorites.contains);
 
     final next = Set<String>.from(_favorites);
-    if (next.contains(id)) {
-      next.remove(id);
+    if (wasFavorite) {
+      next.removeAll(lookupIds);
     } else {
       next.add(id);
     }
@@ -4278,7 +4285,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() => _favorites = next);
 
     final remoteId = await widget.tagService
-        .setRemoteFavorite(item, next.contains(id))
+        .setRemoteFavorite(item, !wasFavorite)
         .catchError((_) => null);
     if (remoteId != null && remoteId != id) {
       if (next.remove(id)) {
@@ -4294,6 +4301,31 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
     await _refreshAllFavoritesItems();
     await _refreshHomeShowcases();
+  }
+
+  Future<void> _refreshResolvedFavoriteIds() async {
+    final items = <MediaItem>[
+      ..._items,
+      ..._favoriteItemsAll,
+      ..._homeFavoriteShowcaseItems,
+      ..._homeRecentAddedItems,
+      ..._homeUnreadItems,
+      ..._homeRecentViewedItems,
+    ];
+    if (items.isEmpty || _favorites.isEmpty) {
+      if (!mounted) return;
+      setState(() => _favoriteResolvedIds = <String>{});
+      return;
+    }
+    final resolved = <String>{};
+    for (final item in items) {
+      final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
+      if (lookupIds.any(_favorites.contains)) {
+        resolved.addAll(lookupIds);
+      }
+    }
+    if (!mounted) return;
+    setState(() => _favoriteResolvedIds = resolved);
   }
 
   Future<void> _openDetailFromHome(
@@ -6794,13 +6826,25 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       final all = <MediaItem>[];
+      final resolvedFavoriteIds = <String>{};
       for (final raw in _foldersRaw) {
         final items = _folderItemsCache[raw] ?? const <MediaItem>[];
-        all.addAll(items.where((e) => _favorites.contains(e.id)));
+        for (final item in items) {
+          final lookupIds = await widget.tagService.favoriteLookupIdsForItem(
+            item,
+          );
+          if (lookupIds.any(_favorites.contains)) {
+            all.add(item);
+            resolvedFavoriteIds.addAll(lookupIds);
+          }
+        }
       }
 
       if (!mounted) return;
-      setState(() => _favoriteItemsAll = all.toList(growable: false));
+      setState(() {
+        _favoriteItemsAll = all.toList(growable: false);
+        _favoriteResolvedIds = resolvedFavoriteIds;
+      });
     } finally {
       if (mounted) setState(() => _loadingFavAll = false);
     }
