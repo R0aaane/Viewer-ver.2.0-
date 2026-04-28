@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -16,11 +16,13 @@ import '../services/media_id_resolver.dart';
 import '../services/remote_tag_api_client.dart';
 import '../services/tag_alias_service.dart';
 import 'app_db.dart';
+import 'database_backup_service.dart';
 import 'local_tag_store.dart';
 
 export '../models/tag_with_id.dart';
 
 class TagService {
+  final AppDb _db;
   final LocalTagStore _localStore;
   final AppSettingsService _settingsService;
   final MediaIdResolver _idResolver;
@@ -36,7 +38,8 @@ class TagService {
       <String, Future<List<RemoteTagRecord>>>{};
 
   TagService(AppDb db)
-    : _localStore = LocalTagStore(db),
+    : _db = db,
+      _localStore = LocalTagStore(db),
       _settingsService = AppSettingsService(),
       _idResolver = MediaIdResolver();
 
@@ -115,6 +118,11 @@ class TagService {
       return;
     }
     await _buildRemoteClient(draftSettings).requestRescan();
+  }
+
+  Future<DatabaseBackupResult?> exportLocalDatabaseBackup() async {
+    await initialize();
+    return DatabaseBackupService.exportBackupPickLocation(_db);
   }
 
   Future<Set<String>?> listRemoteFavoriteIds() async {
@@ -384,7 +392,9 @@ class TagService {
         }
       }
     } on MetadataException catch (error, stackTrace) {
-      debugPrint('[metadata] getDetailedTagsByItems failed: $error\n$stackTrace');
+      debugPrint(
+        '[metadata] getDetailedTagsByItems failed: $error\n$stackTrace',
+      );
     }
 
     return result;
@@ -408,7 +418,8 @@ class TagService {
         return items
             .where(
               (item) => (details[item.id] ?? const <TagWithId>[]).any(
-                (tag) => tag.tag.category == category &&
+                (tag) =>
+                    tag.tag.category == category &&
                     _matchesTagQuery(
                       category,
                       candidateName: tag.tag.name,
@@ -433,7 +444,8 @@ class TagService {
       return filteredItems
           .where(
             (item) => (details[item.id] ?? const <TagWithId>[]).any(
-              (tag) => tag.tag.category == category &&
+              (tag) =>
+                  tag.tag.category == category &&
                   _matchesTagQuery(
                     category,
                     candidateName: tag.tag.name,
@@ -473,7 +485,8 @@ class TagService {
     return items
         .where(
           (item) => (details[item.id] ?? const <TagWithId>[]).any(
-            (tag) => tag.tag.category == category &&
+            (tag) =>
+                tag.tag.category == category &&
                 _matchesTagQuery(
                   category,
                   candidateName: tag.tag.name,
@@ -521,7 +534,9 @@ class TagService {
       );
       return await _mapStableIdsToItemIds(items, remoteIds);
     } on MetadataException catch (error, stackTrace) {
-      debugPrint('[metadata] remote artist/series search failed: $error\n$stackTrace');
+      debugPrint(
+        '[metadata] remote artist/series search failed: $error\n$stackTrace',
+      );
       final details = await getDetailedTagsByItems(items);
       return items
           .where(
@@ -560,7 +575,9 @@ class TagService {
       final remoteIds = await _requireApiClient().fetchUntaggedIds();
       return await _mapStableIdsToItemIds(items, remoteIds);
     } on MetadataException catch (error, stackTrace) {
-      debugPrint('[metadata] remote untagged search failed: $error\n$stackTrace');
+      debugPrint(
+        '[metadata] remote untagged search failed: $error\n$stackTrace',
+      );
       final details = await getDetailedTagsByItems(items);
       return items
           .where((item) => (details[item.id] ?? const <TagWithId>[]).isEmpty)
@@ -592,9 +609,7 @@ class TagService {
       if (resolvedItem != null) {
         await _replaceHostMirrorTagsForItem(
           resolvedItem,
-          excludedTags: removedTag == null
-              ? const <Tag>[]
-              : <Tag>[removedTag],
+          excludedTags: removedTag == null ? const <Tag>[] : <Tag>[removedTag],
         );
       }
       return;
@@ -602,9 +617,7 @@ class TagService {
 
     final resolvedItem = item ?? _lookupKnownItem(itemId);
     if (resolvedItem == null) {
-      throw const MetadataException(
-        '対象アイテムの情報が見つからないため、タグを削除できません',
-      );
+      throw const MetadataException('対象アイテムの情報が見つからないため、タグを削除できません');
     }
 
     final identity = await _idResolver.resolve(resolvedItem);
@@ -667,8 +680,7 @@ class TagService {
       await client.deleteMasterTag(remoteTagId);
     } on MetadataException catch (error, stackTrace) {
       final refreshedRemoteTagId = await _findRemoteMasterTagId(tag.tag);
-      if (refreshedRemoteTagId != null &&
-          refreshedRemoteTagId != remoteTagId) {
+      if (refreshedRemoteTagId != null && refreshedRemoteTagId != remoteTagId) {
         remoteTagId = refreshedRemoteTagId;
         await client.deleteMasterTag(remoteTagId);
       } else if (!_isRemoteNotFoundError(error)) {
@@ -702,7 +714,9 @@ class TagService {
         }
       }
     } on MetadataException catch (error, stackTrace) {
-      debugPrint('[metadata] resolve remote master tag id failed: $error\n$stackTrace');
+      debugPrint(
+        '[metadata] resolve remote master tag id failed: $error\n$stackTrace',
+      );
     }
     return null;
   }
@@ -761,7 +775,9 @@ class TagService {
       );
       return tags.map(_toTagWithId).toList(growable: false);
     } on MetadataException catch (error, stackTrace) {
-      debugPrint('[metadata] listTagMasterByCategory failed: $error\n$stackTrace');
+      debugPrint(
+        '[metadata] listTagMasterByCategory failed: $error\n$stackTrace',
+      );
       return const <TagWithId>[];
     }
   }
@@ -846,9 +862,9 @@ class TagService {
       candidates: allItems,
     );
     final matched = ids.toSet();
-    return allItems.where((item) => matched.contains(item.id)).toList(
-      growable: false,
-    );
+    return allItems
+        .where((item) => matched.contains(item.id))
+        .toList(growable: false);
   }
 
   Future<List<MediaItem>> _findLocalMediaItemsByTag({
@@ -886,7 +902,8 @@ class TagService {
       final moved = await _requireApiClient().organizeLibrary(libraryRoot);
       _remoteTagCache.clear();
       for (final entry in moved.entries) {
-        final before = _lookupKnownItem(entry.key) ?? _fallbackMovedItem(entry.key);
+        final before =
+            _lookupKnownItem(entry.key) ?? _fallbackMovedItem(entry.key);
         final after = _remapMovedItem(before, entry.value);
         _forgetKnownItem(before);
         rememberItem(after);
@@ -896,13 +913,16 @@ class TagService {
       return moved;
     }
 
-    final moved = await _localStore.organizeAppLibrary(libraryRoot: libraryRoot);
+    final moved = await _localStore.organizeAppLibrary(
+      libraryRoot: libraryRoot,
+    );
     if (moved.isEmpty) {
       return moved;
     }
 
     for (final entry in moved.entries) {
-      final before = _lookupKnownItem(entry.key) ?? _fallbackMovedItem(entry.key);
+      final before =
+          _lookupKnownItem(entry.key) ?? _fallbackMovedItem(entry.key);
       final after = _remapMovedItem(before, entry.value);
       _forgetKnownItem(before);
       rememberItem(after);
@@ -1000,7 +1020,9 @@ class TagService {
         try {
           await _replaceHostMirrorTagsForItem(item);
         } catch (error, stackTrace) {
-          debugPrint('[host-mirror] item sync failed id=${item.id} error=$error');
+          debugPrint(
+            '[host-mirror] item sync failed id=${item.id} error=$error',
+          );
           debugPrintStack(
             label: '[host-mirror] item sync failed',
             stackTrace: stackTrace,
@@ -1050,10 +1072,12 @@ class TagService {
       excludedTagKeys: excludedKeys,
     );
     final currentTags = await _listLocallyStoredTagsForItemInternal(item);
-    final tags = currentTags.where((tag) {
-      final key = _tagLookupKey(tag);
-      return key == null || !excludedKeys.contains(key);
-    }).toList(growable: false);
+    final tags = currentTags
+        .where((tag) {
+          final key = _tagLookupKey(tag);
+          return key == null || !excludedKeys.contains(key);
+        })
+        .toList(growable: false);
     final identity = await _idResolver.resolve(item);
 
     await _runHostMirror(
@@ -1076,10 +1100,7 @@ class TagService {
     }
 
     final localTags = await _listLocallyStoredTagsForItemInternal(item);
-    final knownKeys = localTags
-        .map(_tagLookupKey)
-        .whereType<String>()
-        .toSet();
+    final knownKeys = localTags.map(_tagLookupKey).whereType<String>().toSet();
     final identity = await _idResolver.resolve(item);
 
     try {
@@ -1230,9 +1251,7 @@ class TagService {
         await client.requestRescan();
         await action();
       } on MetadataException catch (retryError, retryStackTrace) {
-        debugPrint(
-          '[host-mirror] retry failed: $retryError\n$retryStackTrace',
-        );
+        debugPrint('[host-mirror] retry failed: $retryError\n$retryStackTrace');
       }
     }
   }
@@ -1322,9 +1341,7 @@ class TagService {
       debugPrint(
         '[metadata] resolve item identity failed: ${item.id}\n$error\n$stackTrace',
       );
-      throw MetadataException(
-        'メディア識別情報の解決に失敗しました: ${item.displayName}',
-      );
+      throw MetadataException('メディア識別情報の解決に失敗しました: ${item.displayName}');
     }
     final cached = _remoteTagCache[identity.stableId];
     if (cached != null) {
@@ -1382,7 +1399,9 @@ class TagService {
       final chunks = _chunkItems(items, 8);
       for (final chunk in chunks) {
         final resolved = await Future.wait(
-          chunk.map((item) async => MapEntry(item.id, await _idResolver.resolve(item))),
+          chunk.map(
+            (item) async => MapEntry(item.id, await _idResolver.resolve(item)),
+          ),
         );
         for (final entry in resolved) {
           if (stableIds.contains(entry.value.stableId)) {
@@ -1494,7 +1513,9 @@ class TagService {
         try {
           await _replaceHostMirrorTagsForItem(item);
         } catch (error, stackTrace) {
-          debugPrint('[tag-alias] host mirror sync failed item=${item.id} error=$error');
+          debugPrint(
+            '[tag-alias] host mirror sync failed item=${item.id} error=$error',
+          );
           debugPrintStack(
             label: '[tag-alias] host mirror sync',
             stackTrace: stackTrace,
@@ -1512,7 +1533,8 @@ class TagService {
     final hasArtist =
         artist == null ||
         tags.any(
-          (tag) => tag.tag.category == TagCategory.artist &&
+          (tag) =>
+              tag.tag.category == TagCategory.artist &&
               _matchesTagQuery(
                 TagCategory.artist,
                 candidateName: tag.tag.name,
@@ -1522,7 +1544,8 @@ class TagService {
     final hasSeries =
         series == null ||
         tags.any(
-          (tag) => tag.tag.category == TagCategory.series &&
+          (tag) =>
+              tag.tag.category == TagCategory.series &&
               _matchesTagQuery(
                 TagCategory.series,
                 candidateName: tag.tag.name,
@@ -1541,7 +1564,9 @@ class TagService {
     final seen = <String>{};
 
     for (final folderRaw in folderRaws) {
-      final loaded = await repo.listMediaRecursiveFiles(FolderHandle(folderRaw));
+      final loaded = await repo.listMediaRecursiveFiles(
+        FolderHandle(folderRaw),
+      );
       for (final item in loaded) {
         if (item.kind == MediaKind.folder) {
           continue;
@@ -1569,7 +1594,9 @@ class TagService {
     return chunks;
   }
 
-  Future<List<Tag>> _listLocallyStoredTagsForItemInternal(MediaItem item) async {
+  Future<List<Tag>> _listLocallyStoredTagsForItemInternal(
+    MediaItem item,
+  ) async {
     final merged = <String, Tag>{};
     for (final itemId in _localItemLookupKeys(item.id)) {
       final current = await _localStore.listTagsForItem(itemId);

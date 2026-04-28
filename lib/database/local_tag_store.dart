@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
@@ -49,7 +49,9 @@ class LocalTagStore {
   }
 
   Future<void> upsertMediaItem(media.MediaItem item) async {
-    await _db.into(_db.mediaItems).insertOnConflictUpdate(
+    await _db
+        .into(_db.mediaItems)
+        .insertOnConflictUpdate(
           db.MediaItemsCompanion.insert(
             id: item.id,
             folderRaw: item.folderRaw,
@@ -63,24 +65,34 @@ class LocalTagStore {
   Future<int> ensureTagId(model.Tag tag) async {
     final category = _categoryToInt(tag.category);
 
-    final existing = await (_db.select(_db.tags)
-          ..where((table) => table.name.equals(tag.name) & table.category.equals(category)))
-        .getSingleOrNull();
-
-    if (existing != null) {
-      return existing.tagId;
-    }
-
-    return _db
+    await _db
         .into(_db.tags)
-        .insert(db.TagsCompanion.insert(name: tag.name, category: category));
+        .insert(
+          db.TagsCompanion.insert(name: tag.name, category: category),
+          mode: InsertMode.insertOrIgnore,
+        );
+
+    final row =
+        await (_db.select(_db.tags)..where(
+              (table) =>
+                  table.name.equals(tag.name) & table.category.equals(category),
+            ))
+            .getSingleOrNull();
+    if (row == null) {
+      throw StateError(
+        'Failed to create or find tag: ${tag.category.name}:${tag.name}',
+      );
+    }
+    return row.tagId;
   }
 
   Future<void> addTagToItem(media.MediaItem item, model.Tag tag) async {
     await upsertMediaItem(item);
     final tagId = await ensureTagId(tag);
 
-    await _db.into(_db.mediaItemTags).insert(
+    await _db
+        .into(_db.mediaItemTags)
+        .insert(
           db.MediaItemTagsCompanion.insert(itemId: item.id, tagId: tagId),
           mode: InsertMode.insertOrIgnore,
         );
@@ -125,17 +137,20 @@ class LocalTagStore {
   }
 
   Future<void> removeTagFromItem(String itemId, int tagId) async {
-    await (_db.delete(_db.mediaItemTags)
-          ..where((table) => table.itemId.equals(itemId) & table.tagId.equals(tagId)))
+    await (_db.delete(_db.mediaItemTags)..where(
+          (table) => table.itemId.equals(itemId) & table.tagId.equals(tagId),
+        ))
         .go();
   }
 
   Future<void> deleteTagMaster(int tagId) async {
     await _db.transaction(() async {
-      await (_db.delete(_db.mediaItemTags)
-            ..where((table) => table.tagId.equals(tagId)))
-          .go();
-      await (_db.delete(_db.tags)..where((table) => table.tagId.equals(tagId))).go();
+      await (_db.delete(
+        _db.mediaItemTags,
+      )..where((table) => table.tagId.equals(tagId))).go();
+      await (_db.delete(
+        _db.tags,
+      )..where((table) => table.tagId.equals(tagId))).go();
     });
   }
 
@@ -145,14 +160,20 @@ class LocalTagStore {
     }
 
     await _db.transaction(() async {
-      await (_db.delete(_db.mediaItemTags)..where((table) => table.itemId.isIn(ids))).go();
-      await (_db.delete(_db.mediaItems)..where((table) => table.id.isIn(ids))).go();
+      await (_db.delete(
+        _db.mediaItemTags,
+      )..where((table) => table.itemId.isIn(ids))).go();
+      await (_db.delete(
+        _db.mediaItems,
+      )..where((table) => table.id.isIn(ids))).go();
     });
   }
 
   Future<void> deleteItemsUnderPathPrefix(String prefix) async {
-    final like = '$prefix%';
-    final rows = await (_db.select(_db.mediaItems)..where((table) => table.id.like(like))).get();
+    final like = '${_escapeLike(prefix)}%';
+    final rows = await (_db.select(
+      _db.mediaItems,
+    )..where((table) => table.id.like(like, escapeChar: r'\'))).get();
     if (rows.isEmpty) {
       return;
     }
@@ -182,9 +203,9 @@ class LocalTagStore {
       return;
     }
 
-    final rows = await (_db.select(_db.mediaItems)
-          ..orderBy([(table) => OrderingTerm.asc(table.id)]))
-        .get();
+    final rows = await (_db.select(
+      _db.mediaItems,
+    )..orderBy([(table) => OrderingTerm.asc(table.id)])).get();
     final targets = rows
         .where((row) => _isPathWithinPrefix(row.id, normalizedBefore))
         .toList(growable: false);
@@ -194,7 +215,11 @@ class LocalTagStore {
 
     await _db.transaction(() async {
       for (final row in targets) {
-        final nextId = _replacePathPrefix(row.id, normalizedBefore, normalizedAfter);
+        final nextId = _replacePathPrefix(
+          row.id,
+          normalizedBefore,
+          normalizedAfter,
+        );
         final nextFolderRaw = _replacePathPrefix(
           row.folderRaw,
           normalizedBefore,
@@ -219,8 +244,7 @@ class LocalTagStore {
   Future<List<TagWithId>> listTagsForItem(String itemId) async {
     final rows = await (_db.select(_db.mediaItemTags).join(<Join>[
       innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-    ])..where(_db.mediaItemTags.itemId.equals(itemId)))
-        .get();
+    ])..where(_db.mediaItemTags.itemId.equals(itemId))).get();
 
     return rows
         .map(
@@ -235,7 +259,9 @@ class LocalTagStore {
         .toList(growable: false);
   }
 
-  Future<Map<String, List<String>>> getTagNamesByItemIds(List<String> itemIds) async {
+  Future<Map<String, List<String>>> getTagNamesByItemIds(
+    List<String> itemIds,
+  ) async {
     final result = <String, List<String>>{};
     if (itemIds.isEmpty) {
       return result;
@@ -245,13 +271,14 @@ class LocalTagStore {
     for (var index = 0; index < itemIds.length; index += chunkSize) {
       final chunk = itemIds.sublist(
         index,
-        (index + chunkSize) > itemIds.length ? itemIds.length : (index + chunkSize),
+        (index + chunkSize) > itemIds.length
+            ? itemIds.length
+            : (index + chunkSize),
       );
 
       final rows = await (_db.select(_db.mediaItemTags).join(<Join>[
         innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-      ])..where(_db.mediaItemTags.itemId.isIn(chunk)))
-          .get();
+      ])..where(_db.mediaItemTags.itemId.isIn(chunk))).get();
 
       for (final row in rows) {
         final link = row.readTable(_db.mediaItemTags);
@@ -271,15 +298,24 @@ class LocalTagStore {
   }) async {
     final categoryValue = _categoryToInt(category);
 
-    final query = _db.select(_db.mediaItems).join(<Join>[
-      innerJoin(_db.mediaItemTags, _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id)),
-      innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
-    ])
-      ..where(_db.mediaItems.folderRaw.equals(folderRaw))
-      ..where(_db.tags.category.equals(categoryValue));
+    final query =
+        _db.select(_db.mediaItems).join(<Join>[
+            innerJoin(
+              _db.mediaItemTags,
+              _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
+            ),
+            innerJoin(
+              _db.tags,
+              _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId),
+            ),
+          ])
+          ..where(_db.mediaItems.folderRaw.equals(folderRaw))
+          ..where(_db.tags.category.equals(categoryValue));
 
     if (partial) {
-      query.where(_db.tags.name.like('%$name%'));
+      query.where(
+        _db.tags.name.like('%${_escapeLike(name)}%', escapeChar: r'\'),
+      );
     } else {
       query.where(_db.tags.name.equals(name));
     }
@@ -304,7 +340,12 @@ class LocalTagStore {
       ..limit(limit);
 
     if (contains != null && contains.trim().isNotEmpty) {
-      query.where((table) => table.name.like('%${contains.trim()}%'));
+      query.where(
+        (table) => table.name.like(
+          '%${_escapeLike(contains.trim())}%',
+          escapeChar: r'\',
+        ),
+      );
     }
 
     final rows = await query.get();
@@ -323,8 +364,9 @@ class LocalTagStore {
 
   Future<List<model.Tag>> listTagsByCategory(model.TagCategory category) async {
     final categoryValue = _categoryToInt(category);
-    final rows =
-        await (_db.select(_db.tags)..where((table) => table.category.equals(categoryValue))).get();
+    final rows = await (_db.select(
+      _db.tags,
+    )..where((table) => table.category.equals(categoryValue))).get();
 
     final seen = <String>{};
     final result = <model.Tag>[];
@@ -333,10 +375,7 @@ class LocalTagStore {
       final key = '${row.category}:${row.name}';
       if (seen.add(key)) {
         result.add(
-          model.Tag(
-            name: row.name,
-            category: _intToCategory(row.category),
-          ),
+          model.Tag(name: row.name, category: _intToCategory(row.category)),
         );
       }
     }
@@ -344,9 +383,9 @@ class LocalTagStore {
   }
 
   Future<List<media.MediaItem>> listStoredMediaItems() async {
-    final rows = await (_db.select(_db.mediaItems)
-          ..orderBy([(table) => OrderingTerm.asc(table.displayName)]))
-        .get();
+    final rows = await (_db.select(
+      _db.mediaItems,
+    )..orderBy([(table) => OrderingTerm.asc(table.displayName)])).get();
 
     return rows
         .map(
@@ -371,12 +410,17 @@ class LocalTagStore {
     final categoryValue = _categoryToInt(category);
 
     final query = _db.select(_db.mediaItems).join(<Join>[
-      innerJoin(_db.mediaItemTags, _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id)),
+      innerJoin(
+        _db.mediaItemTags,
+        _db.mediaItemTags.itemId.equalsExp(_db.mediaItems.id),
+      ),
       innerJoin(_db.tags, _db.tags.tagId.equalsExp(_db.mediaItemTags.tagId)),
     ])..where(_db.tags.category.equals(categoryValue));
 
     if (partial) {
-      query.where(_db.tags.name.like('%$name%'));
+      query.where(
+        _db.tags.name.like('%${_escapeLike(name)}%', escapeChar: r'\'),
+      );
     } else {
       query.where(_db.tags.name.equals(name));
     }
@@ -410,9 +454,14 @@ class LocalTagStore {
     required String libraryRoot,
   }) async {
     final moved = <String, String>{};
-    final items = await (_db.select(_db.mediaItems)
-          ..where((table) => table.id.like('$libraryRoot%')))
-        .get();
+    final items =
+        await (_db.select(_db.mediaItems)..where(
+              (table) => table.id.like(
+                '${_escapeLike(libraryRoot)}%',
+                escapeChar: r'\',
+              ),
+            ))
+            .get();
 
     for (final item in items) {
       if (item.id.startsWith('content://')) {
@@ -434,7 +483,9 @@ class LocalTagStore {
       var targetPath = p.join(destinationDir, fileName);
 
       if (p.equals(p.normalize(sourcePath), p.normalize(targetPath))) {
-        debugPrint('[TAG-ORGANIZE] no file move required; db only path=$sourcePath');
+        debugPrint(
+          '[TAG-ORGANIZE] no file move required; db only path=$sourcePath',
+        );
         continue;
       }
 
@@ -451,7 +502,9 @@ class LocalTagStore {
           targetPath: targetPath,
         );
         if (conflict == LocalPathConflictResult.sameFile) {
-          debugPrint('[TAG-ORGANIZE] no file move required; db only path=$sourcePath');
+          debugPrint(
+            '[TAG-ORGANIZE] no file move required; db only path=$sourcePath',
+          );
           continue;
         }
         if (conflict == LocalPathConflictResult.duplicateName) {
@@ -480,7 +533,9 @@ class LocalTagStore {
               id: targetPath,
               folderRaw: p.dirname(targetPath),
               displayName: targetFileName,
-              kind: item.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
+              kind: item.kind == 0
+                  ? media.MediaKind.image
+                  : media.MediaKind.pdf,
               modified: item.modifiedEpochMs == null
                   ? null
                   : DateTime.fromMillisecondsSinceEpoch(item.modifiedEpochMs!),
@@ -497,10 +552,7 @@ class LocalTagStore {
         debugPrint(
           '[TAG-ORGANIZE] blocked source=$sourcePath target=$targetPath reason=$error',
         );
-        debugPrintStack(
-          label: '[TAG-ORGANIZE] stack',
-          stackTrace: stackTrace,
-        );
+        debugPrintStack(label: '[TAG-ORGANIZE] stack', stackTrace: stackTrace);
       }
     }
 
@@ -525,7 +577,8 @@ class LocalTagStore {
     return tags
         .where(
           (entry) =>
-              entry.tag.category == category && entry.tag.name.trim().isNotEmpty,
+              entry.tag.category == category &&
+              entry.tag.name.trim().isNotEmpty,
         )
         .toList(growable: false);
   }
@@ -586,7 +639,8 @@ class LocalTagStore {
   }) async {
     final normalizedStop = p.normalize(stopAt);
     var current = p.normalize(startDir);
-    while (!p.equals(current, normalizedStop) && p.isWithin(normalizedStop, current)) {
+    while (!p.equals(current, normalizedStop) &&
+        p.isWithin(normalizedStop, current)) {
       final removed = await _removeEmptyDirIfPossible(current);
       if (!removed) {
         break;
@@ -624,15 +678,15 @@ class LocalTagStore {
     }
 
     final dirs = <String>[];
-    await for (final entity
-        in legacyDir.list(recursive: true, followLinks: false)) {
+    await for (final entity in legacyDir.list(
+      recursive: true,
+      followLinks: false,
+    )) {
       if (entity is Directory) {
         dirs.add(entity.path);
       }
     }
-    dirs.sort(
-      (a, b) => p.normalize(b).length.compareTo(p.normalize(a).length),
-    );
+    dirs.sort((a, b) => p.normalize(b).length.compareTo(p.normalize(a).length));
     for (final dirPath in dirs) {
       await _removeEmptyDirIfPossible(dirPath);
     }
@@ -647,7 +701,11 @@ class LocalTagStore {
     return p.isWithin(prefix, normalizedValue);
   }
 
-  String _replacePathPrefix(String value, String beforePrefix, String afterPrefix) {
+  String _replacePathPrefix(
+    String value,
+    String beforePrefix,
+    String afterPrefix,
+  ) {
     final normalizedValue = p.normalize(value);
     if (p.equals(normalizedValue, beforePrefix)) {
       return afterPrefix;
@@ -660,11 +718,20 @@ class LocalTagStore {
     return p.normalize(p.join(afterPrefix, relative));
   }
 
+  String _escapeLike(String value) {
+    return value
+        .replaceAll(r'\', r'\\')
+        .replaceAll('%', r'\%')
+        .replaceAll('_', r'\_');
+  }
+
   Future<void> _moveMediaItemRecord({
     required String beforeId,
     required media.MediaItem after,
   }) async {
-    await _db.into(_db.mediaItems).insertOnConflictUpdate(
+    await _db
+        .into(_db.mediaItems)
+        .insertOnConflictUpdate(
           db.MediaItemsCompanion.insert(
             id: after.id,
             folderRaw: after.folderRaw,
@@ -683,9 +750,11 @@ class LocalTagStore {
       'SELECT ?, tag_id FROM media_item_tags WHERE item_id = ?',
       <Object?>[after.id, beforeId],
     );
-    await (_db.delete(_db.mediaItemTags)
-          ..where((table) => table.itemId.equals(beforeId)))
-        .go();
-    await (_db.delete(_db.mediaItems)..where((table) => table.id.equals(beforeId))).go();
+    await (_db.delete(
+      _db.mediaItemTags,
+    )..where((table) => table.itemId.equals(beforeId))).go();
+    await (_db.delete(
+      _db.mediaItems,
+    )..where((table) => table.id.equals(beforeId))).go();
   }
 }

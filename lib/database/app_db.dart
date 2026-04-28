@@ -45,8 +45,8 @@ class MediaItemTags extends Table {
 //  フォルダ一覧インデックス用
 enum FolderEntryKindDb {
   folder, // 0
-  image,  // 1
-  pdf,    // 2
+  image, // 1
+  pdf, // 2
 }
 
 @DataClassName('DbFolderIndex')
@@ -61,10 +61,10 @@ class FolderIndexes extends Table {
 
 @DataClassName('DbFolderEntry')
 class FolderEntries extends Table {
-  TextColumn get folderRaw => text()();         // parent folder raw
-  TextColumn get entryId => text()();           // SAF documentUri / fs full path
-  TextColumn get displayName => text()();       // name shown
-  IntColumn get kind => integer()();            // FolderEntryKindDb index
+  TextColumn get folderRaw => text()(); // parent folder raw
+  TextColumn get entryId => text()(); // SAF documentUri / fs full path
+  TextColumn get displayName => text()(); // name shown
+  IntColumn get kind => integer()(); // FolderEntryKindDb index
   IntColumn get modifiedEpochMs => integer().nullable()();
 
   // sort最適化（小文字化したキーを持つ）
@@ -74,30 +74,68 @@ class FolderEntries extends Table {
   Set<Column> get primaryKey => {folderRaw, entryId};
 }
 
-@DriftDatabase(tables: [
-  MediaItems, 
-  Tags, 
-  MediaItemTags, 
-  FolderIndexes, 
-  FolderEntries
-])
+@DriftDatabase(
+  tables: [MediaItems, Tags, MediaItemTags, FolderIndexes, FolderEntries],
+)
 class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   // 将来のマイグレーション用
   @override
   MigrationStrategy get migration => MigrationStrategy(
-    onCreate: (m) async => m.createAll(),
+    onCreate: (m) async {
+      await m.createAll();
+      await _createIndexes();
+    },
     onUpgrade: (m, from, to) async {
       if (from < 2) {
         await m.createTable(folderIndexes);
         await m.createTable(folderEntries);
       }
+      if (from < 3) {
+        await _createIndexes();
+      }
+    },
+    beforeOpen: (details) async {
+      await customStatement('PRAGMA foreign_keys = ON');
+      await customStatement('PRAGMA journal_mode = WAL');
+      await customStatement('PRAGMA busy_timeout = 5000');
     },
   );
+
+  Future<void> _createIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_media_items_folder_raw '
+      'ON media_items(folder_raw)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tags_category_name '
+      'ON tags(category, name)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_media_item_tags_item_id '
+      'ON media_item_tags(item_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_media_item_tags_tag_id '
+      'ON media_item_tags(tag_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_folder_entries_folder_sort '
+      'ON folder_entries(folder_raw, sort_name)',
+    );
+  }
+
+  Future<void> backupToFile(File target) async {
+    await target.parent.create(recursive: true);
+    if (await target.exists()) {
+      await target.delete();
+    }
+    await customStatement('VACUUM INTO ?', <Object?>[target.path]);
+  }
 }
 
 LazyDatabase _openConnection() {

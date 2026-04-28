@@ -67,6 +67,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
   bool _hostWorking = false;
   bool _publishingUpdate = false;
   bool _checkingAppUpdate = false;
+  bool _backingUpDatabase = false;
 
   @override
   void initState() {
@@ -188,6 +189,64 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _exportDatabaseBackup() async {
+    setState(() => _backingUpDatabase = true);
+    try {
+      final result = await widget.tagService.exportLocalDatabaseBackup();
+      if (!mounted || result == null) return;
+      _showSnackBar('DB backup saved: ${result.savedPath}');
+    } catch (error) {
+      _showSnackBar('DB backup failed: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _backingUpDatabase = false);
+      }
+    }
+  }
+
+  Widget _buildDatabaseBackupSection(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).colorScheme.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Database backup',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Exports a consistent SQLite backup of local metadata.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: (_saving || _backingUpDatabase)
+                  ? null
+                  : _exportDatabaseBackup,
+              icon: _backingUpDatabase
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.backup_outlined),
+              label: Text(
+                _backingUpDatabase ? 'Backing up...' : 'Export DB backup',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildProjectCookieSection(BuildContext context) {
@@ -1189,6 +1248,8 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                   hintText: '未設定なら認証なしで接続します',
                 ),
               ),
+              const SizedBox(height: 12),
+              _buildDatabaseBackupSection(context),
               const SizedBox(height: 12),
               _buildProjectCookieSection(context),
               const SizedBox(height: 12),

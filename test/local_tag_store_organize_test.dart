@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:pdf_viewer/database/app_db.dart';
+import 'package:pdf_viewer/database/database_backup_service.dart';
 import 'package:pdf_viewer/database/local_tag_store.dart';
 import 'package:pdf_viewer/models/mediaItem.dart';
 import 'package:pdf_viewer/models/tag.dart';
@@ -21,8 +22,111 @@ void main() {
     PathProviderPlatform.instance = originalPathProvider;
   });
 
-  test('renameItem keeps tags when destination media record already exists', () async {
-    final docsDir = await Directory.systemTemp.createTemp('local-tag-store-rename');
+  test(
+    'renameItem keeps tags when destination media record already exists',
+    () async {
+      final docsDir = await Directory.systemTemp.createTemp(
+        'local-tag-store-rename',
+      );
+      addTearDown(() async {
+        if (await docsDir.exists()) {
+          await docsDir.delete(recursive: true);
+        }
+      });
+      PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+      final db = AppDb();
+      addTearDown(db.close);
+      final store = LocalTagStore(db);
+
+      final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+      await libraryRoot.create(recursive: true);
+
+      final beforePath = p.join(libraryRoot.path, 'source.pdf');
+      await File(beforePath).writeAsBytes(const <int>[1, 2, 3]);
+      final before = MediaItem(
+        id: beforePath,
+        displayName: 'source.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: libraryRoot.path,
+      );
+
+      final afterFolder = Directory(p.join(libraryRoot.path, 'organized'));
+      await afterFolder.create(recursive: true);
+      final afterPath = p.join(afterFolder.path, 'source.pdf');
+      final after = MediaItem(
+        id: afterPath,
+        displayName: 'source.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: afterFolder.path,
+      );
+
+      await store.addTagToItem(
+        before,
+        const Tag(name: 'ArtistA', category: TagCategory.artist),
+      );
+      await store.addTagToItem(
+        after,
+        const Tag(name: 'SeriesB', category: TagCategory.series),
+      );
+
+      await store.renameItem(before, after);
+
+      final tags = await store.listTagsForItem(after.id);
+      expect(
+        tags
+            .map((entry) => '${entry.tag.category.name}:${entry.tag.name}')
+            .toSet(),
+        <String>{'artist:ArtistA', 'series:SeriesB'},
+      );
+      expect(await store.listTagsForItem(before.id), isEmpty);
+      expect(
+        await store.findMediaItemsByTagGlobal(
+          category: TagCategory.artist,
+          name: 'ArtistA',
+        ),
+        hasLength(1),
+      );
+      expect(
+        (await store.findMediaItemsByTagGlobal(
+          category: TagCategory.artist,
+          name: 'ArtistA',
+        )).single.id,
+        after.id,
+      );
+    },
+  );
+
+  test('database creates query indexes', () async {
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-indexes',
+    );
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+
+    final rows = await db
+        .customSelect("SELECT name FROM sqlite_master WHERE type = 'index'")
+        .get();
+    final names = rows.map((row) => row.read<String>('name')).toSet();
+
+    expect(names, contains('idx_media_items_folder_raw'));
+    expect(names, contains('idx_tags_category_name'));
+    expect(names, contains('idx_media_item_tags_item_id'));
+    expect(names, contains('idx_media_item_tags_tag_id'));
+    expect(names, contains('idx_folder_entries_folder_sort'));
+  });
+
+  test('ensureTagId tolerates repeated concurrent inserts', () async {
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-tags',
+    );
     addTearDown(() async {
       if (await docsDir.exists()) {
         await docsDir.delete(recursive: true);
@@ -34,63 +138,143 @@ void main() {
     addTearDown(db.close);
     final store = LocalTagStore(db);
 
-    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
-    await libraryRoot.create(recursive: true);
-
-    final beforePath = p.join(libraryRoot.path, 'source.pdf');
-    await File(beforePath).writeAsBytes(const <int>[1, 2, 3]);
-    final before = MediaItem(
-      id: beforePath,
-      displayName: 'source.pdf',
-      kind: MediaKind.pdf,
-      folderRaw: libraryRoot.path,
-    );
-
-    final afterFolder = Directory(p.join(libraryRoot.path, 'organized'));
-    await afterFolder.create(recursive: true);
-    final afterPath = p.join(afterFolder.path, 'source.pdf');
-    final after = MediaItem(
-      id: afterPath,
-      displayName: 'source.pdf',
-      kind: MediaKind.pdf,
-      folderRaw: afterFolder.path,
-    );
-
-    await store.addTagToItem(
-      before,
-      const Tag(name: 'ArtistA', category: TagCategory.artist),
-    );
-    await store.addTagToItem(
-      after,
-      const Tag(name: 'SeriesB', category: TagCategory.series),
-    );
-
-    await store.renameItem(before, after);
-
-    final tags = await store.listTagsForItem(after.id);
-    expect(
-      tags.map((entry) => '${entry.tag.category.name}:${entry.tag.name}').toSet(),
-      <String>{'artist:ArtistA', 'series:SeriesB'},
-    );
-    expect(await store.listTagsForItem(before.id), isEmpty);
-    expect(
-      await store.findMediaItemsByTagGlobal(
-        category: TagCategory.artist,
-        name: 'ArtistA',
+    final ids = await Future.wait(
+      List<Future<int>>.generate(
+        20,
+        (_) => store.ensureTagId(
+          const Tag(name: 'Same Tag', category: TagCategory.free),
+        ),
       ),
-      hasLength(1),
     );
-    expect(
-      (await store.findMediaItemsByTagGlobal(
-        category: TagCategory.artist,
-        name: 'ArtistA',
-      )).single.id,
-      after.id,
-    );
+
+    expect(ids.toSet(), hasLength(1));
   });
 
+  test('database backup exports a readable sqlite file', () async {
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-backup',
+    );
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+    await store.ensureTagId(
+      const Tag(name: 'Backup Tag', category: TagCategory.free),
+    );
+
+    final backup = await DatabaseBackupService.createBackupInAppStorage(db);
+    expect(await File(backup.savedPath).exists(), isTrue);
+    expect(backup.sizeBytes, greaterThan(0));
+  });
+
+  test(
+    'partial tag search treats LIKE wildcards as literal characters',
+    () async {
+      final docsDir = await Directory.systemTemp.createTemp(
+        'local-tag-store-like',
+      );
+      addTearDown(() async {
+        if (await docsDir.exists()) {
+          await docsDir.delete(recursive: true);
+        }
+      });
+      PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+      final db = AppDb();
+      addTearDown(db.close);
+      final store = LocalTagStore(db);
+
+      final folder = p.join(docsDir.path, 'library');
+      final percentItem = MediaItem(
+        id: p.join(folder, 'percent.pdf'),
+        displayName: 'percent.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: folder,
+      );
+      final plainItem = MediaItem(
+        id: p.join(folder, 'plain.pdf'),
+        displayName: 'plain.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: folder,
+      );
+
+      await store.addTagToItem(
+        percentItem,
+        const Tag(name: '50% off', category: TagCategory.free),
+      );
+      await store.addTagToItem(
+        plainItem,
+        const Tag(name: '50X off', category: TagCategory.free),
+      );
+
+      expect(
+        await store.findItemIdsByTag(
+          folderRaw: folder,
+          category: TagCategory.free,
+          name: '50%',
+          partial: true,
+        ),
+        <String>[percentItem.id],
+      );
+    },
+  );
+
+  test(
+    'deleteItemsUnderPathPrefix treats LIKE wildcards as literal characters',
+    () async {
+      final docsDir = await Directory.systemTemp.createTemp(
+        'local-tag-store-prefix',
+      );
+      addTearDown(() async {
+        if (await docsDir.exists()) {
+          await docsDir.delete(recursive: true);
+        }
+      });
+      PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+      final db = AppDb();
+      addTearDown(db.close);
+      final store = LocalTagStore(db);
+
+      final underPrefix = MediaItem(
+        id: p.join(docsDir.path, 'a_1', 'inside.pdf'),
+        displayName: 'inside.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: p.join(docsDir.path, 'a_1'),
+      );
+      final outsidePrefix = MediaItem(
+        id: p.join(docsDir.path, 'ab1', 'outside.pdf'),
+        displayName: 'outside.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: p.join(docsDir.path, 'ab1'),
+      );
+
+      await store.addTagToItem(
+        underPrefix,
+        const Tag(name: 'Inside', category: TagCategory.free),
+      );
+      await store.addTagToItem(
+        outsidePrefix,
+        const Tag(name: 'Outside', category: TagCategory.free),
+      );
+
+      await store.deleteItemsUnderPathPrefix(p.join(docsDir.path, 'a_1'));
+
+      expect(await store.listTagsForItem(underPrefix.id), isEmpty);
+      expect(await store.listTagsForItem(outsidePrefix.id), isNotEmpty);
+    },
+  );
+
   test('organizeAppLibrary keeps moved items searchable by tag', () async {
-    final docsDir = await Directory.systemTemp.createTemp('local-tag-store-organize');
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-organize',
+    );
     addTearDown(() async {
       if (await docsDir.exists()) {
         await docsDir.delete(recursive: true);
@@ -190,7 +374,9 @@ void main() {
     );
   });
 
-  test('organizeAppLibrary uses series folder for items with multiple artists', () async {
+  test(
+    'organizeAppLibrary uses series folder for items with multiple artists',
+    () async {
       final docsDir = await Directory.systemTemp.createTemp(
         'local-tag-store-hitomi-collab',
       );
@@ -230,7 +416,9 @@ void main() {
         const Tag(name: 'Original Series', category: TagCategory.series),
       );
 
-      final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+      final moved = await store.organizeAppLibrary(
+        libraryRoot: libraryRoot.path,
+      );
       final targetPath = p.join(
         libraryRoot.path,
         '\u30b7\u30ea\u30fc\u30ba',
@@ -241,57 +429,60 @@ void main() {
       expect(moved[sourcePath], targetPath);
       expect(await File(targetPath).exists(), isTrue);
       expect(
-        await Directory(
-          p.join(libraryRoot.path, '\u4f5c\u8005'),
-        ).exists(),
+        await Directory(p.join(libraryRoot.path, '\u4f5c\u8005')).exists(),
         isFalse,
       );
     },
   );
 
-  test('organizeAppLibrary uses series folder when artist tags are missing', () async {
-    final docsDir = await Directory.systemTemp.createTemp(
-      'local-tag-store-series-only',
-    );
-    addTearDown(() async {
-      if (await docsDir.exists()) {
-        await docsDir.delete(recursive: true);
-      }
-    });
-    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+  test(
+    'organizeAppLibrary uses series folder when artist tags are missing',
+    () async {
+      final docsDir = await Directory.systemTemp.createTemp(
+        'local-tag-store-series-only',
+      );
+      addTearDown(() async {
+        if (await docsDir.exists()) {
+          await docsDir.delete(recursive: true);
+        }
+      });
+      PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
 
-    final db = AppDb();
-    addTearDown(db.close);
-    final store = LocalTagStore(db);
+      final db = AppDb();
+      addTearDown(db.close);
+      final store = LocalTagStore(db);
 
-    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
-    await libraryRoot.create(recursive: true);
+      final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+      await libraryRoot.create(recursive: true);
 
-    final sourcePath = p.join(libraryRoot.path, 'series-only.pdf');
-    await File(sourcePath).writeAsBytes(const <int>[4, 4, 4]);
-    final source = MediaItem(
-      id: sourcePath,
-      displayName: 'series-only.pdf',
-      kind: MediaKind.pdf,
-      folderRaw: libraryRoot.path,
-    );
+      final sourcePath = p.join(libraryRoot.path, 'series-only.pdf');
+      await File(sourcePath).writeAsBytes(const <int>[4, 4, 4]);
+      final source = MediaItem(
+        id: sourcePath,
+        displayName: 'series-only.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: libraryRoot.path,
+      );
 
-    await store.addTagToItem(
-      source,
-      const Tag(name: 'Series Only', category: TagCategory.series),
-    );
+      await store.addTagToItem(
+        source,
+        const Tag(name: 'Series Only', category: TagCategory.series),
+      );
 
-    final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
-    final targetPath = p.join(
-      libraryRoot.path,
-      '\u30b7\u30ea\u30fc\u30ba',
-      'Series Only',
-      'series-only.pdf',
-    );
+      final moved = await store.organizeAppLibrary(
+        libraryRoot: libraryRoot.path,
+      );
+      final targetPath = p.join(
+        libraryRoot.path,
+        '\u30b7\u30ea\u30fc\u30ba',
+        'Series Only',
+        'series-only.pdf',
+      );
 
-    expect(moved[sourcePath], targetPath);
-    expect(await File(targetPath).exists(), isTrue);
-  });
+      expect(moved[sourcePath], targetPath);
+      expect(await File(targetPath).exists(), isTrue);
+    },
+  );
 
   test(
     'organizeAppLibrary uses unknown folder when multiple artists have no series',
@@ -331,7 +522,9 @@ void main() {
         const Tag(name: 'Artist B', category: TagCategory.artist),
       );
 
-      final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+      final moved = await store.organizeAppLibrary(
+        libraryRoot: libraryRoot.path,
+      );
       final targetPath = p.join(
         libraryRoot.path,
         '\u4e0d\u660e',
@@ -343,48 +536,55 @@ void main() {
     },
   );
 
-  test('organizeAppLibrary uses unknown folder when artist and series tags are missing', () async {
-    final docsDir = await Directory.systemTemp.createTemp(
-      'local-tag-store-unknown',
-    );
-    addTearDown(() async {
-      if (await docsDir.exists()) {
-        await docsDir.delete(recursive: true);
-      }
-    });
-    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+  test(
+    'organizeAppLibrary uses unknown folder when artist and series tags are missing',
+    () async {
+      final docsDir = await Directory.systemTemp.createTemp(
+        'local-tag-store-unknown',
+      );
+      addTearDown(() async {
+        if (await docsDir.exists()) {
+          await docsDir.delete(recursive: true);
+        }
+      });
+      PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
 
-    final db = AppDb();
-    addTearDown(db.close);
-    final store = LocalTagStore(db);
+      final db = AppDb();
+      addTearDown(db.close);
+      final store = LocalTagStore(db);
 
-    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
-    await libraryRoot.create(recursive: true);
+      final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+      await libraryRoot.create(recursive: true);
 
-    final sourcePath = p.join(libraryRoot.path, 'unknown.pdf');
-    await File(sourcePath).writeAsBytes(const <int>[6, 6, 6]);
-    final source = MediaItem(
-      id: sourcePath,
-      displayName: 'unknown.pdf',
-      kind: MediaKind.pdf,
-      folderRaw: libraryRoot.path,
-    );
+      final sourcePath = p.join(libraryRoot.path, 'unknown.pdf');
+      await File(sourcePath).writeAsBytes(const <int>[6, 6, 6]);
+      final source = MediaItem(
+        id: sourcePath,
+        displayName: 'unknown.pdf',
+        kind: MediaKind.pdf,
+        folderRaw: libraryRoot.path,
+      );
 
-    await store.upsertMediaItem(source);
+      await store.upsertMediaItem(source);
 
-    final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
-    final targetPath = p.join(
-      libraryRoot.path,
-      '\u4e0d\u660e',
-      'unknown.pdf',
-    );
+      final moved = await store.organizeAppLibrary(
+        libraryRoot: libraryRoot.path,
+      );
+      final targetPath = p.join(
+        libraryRoot.path,
+        '\u4e0d\u660e',
+        'unknown.pdf',
+      );
 
-    expect(moved[sourcePath], targetPath);
-    expect(await File(targetPath).exists(), isTrue);
-  });
+      expect(moved[sourcePath], targetPath);
+      expect(await File(targetPath).exists(), isTrue);
+    },
+  );
 
   test('renameItemsUnderPathPrefix keeps tags after folder rename', () async {
-    final docsDir = await Directory.systemTemp.createTemp('local-tag-store-folder-rename');
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-folder-rename',
+    );
     addTearDown(() async {
       if (await docsDir.exists()) {
         await docsDir.delete(recursive: true);
@@ -435,7 +635,9 @@ void main() {
   });
 
   test('organizeAppLibrary suffixes duplicate target names', () async {
-    final docsDir = await Directory.systemTemp.createTemp('local-tag-store-conflict');
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-conflict',
+    );
     addTearDown(() async {
       if (await docsDir.exists()) {
         await docsDir.delete(recursive: true);
