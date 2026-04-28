@@ -6,6 +6,7 @@ import re
 import secrets
 import shutil
 import tempfile
+import time
 import unicodedata
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from server.models.dto import (
     DeleteRequest,
     DownloadUrlRequest,
     DownloadUrlResponse,
+    DownloadUrlStatusResponse,
     MessageResponse,
     OrganizeLibraryRequest,
     OrganizeLibraryResponse,
@@ -41,6 +43,47 @@ from server.vendor.kemono_dl.hitomi import strip_hitomi_download_prefix
 
 router = APIRouter(tags=["actions"], dependencies=[Depends(require_bearer_token)])
 logger = logging.getLogger(__name__)
+
+
+def _url_download_status_store(request: Request) -> dict[str, dict[str, object]]:
+    store = getattr(request.app.state, "url_download_statuses", None)
+    if not isinstance(store, dict):
+        store = {}
+        request.app.state.url_download_statuses = store
+    return store
+
+
+def _set_url_download_status(
+    request: Request,
+    request_id: str,
+    *,
+    status: str,
+    total: int = 0,
+    completed: int = 0,
+    success: int = 0,
+    failed: int = 0,
+    skipped: int = 0,
+    current_file: str | None = None,
+) -> None:
+    store = _url_download_status_store(request)
+    store[request_id] = {
+        "requestId": request_id,
+        "status": status,
+        "total": max(0, int(total or 0)),
+        "completed": max(0, int(completed or 0)),
+        "success": max(0, int(success or 0)),
+        "failed": max(0, int(failed or 0)),
+        "skipped": max(0, int(skipped or 0)),
+        "currentFile": current_file,
+        "updatedAt": time.time(),
+    }
+
+
+def _as_status_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 
@@ -530,11 +573,45 @@ async def upload_files(
     )
     return response
 
+
+@router.get("/download-url/status", response_model=DownloadUrlStatusResponse)
+def download_url_status(
+    request: Request,
+    requestId: str,
+) -> DownloadUrlStatusResponse:
+    request_id = requestId.strip()
+    if not request_id:
+        raise bad_request("requestId is required")
+    store = _url_download_status_store(request)
+    raw = store.get(request_id)
+    if raw is None:
+        return DownloadUrlStatusResponse(
+            requestId=request_id,
+            status="ホスト応答待ち",
+        )
+    return DownloadUrlStatusResponse(
+        requestId=request_id,
+        status=str(raw.get("status") or ""),
+        total=_as_status_int(raw.get("total")),
+        completed=_as_status_int(raw.get("completed")),
+        success=_as_status_int(raw.get("success")),
+        failed=_as_status_int(raw.get("failed")),
+        skipped=_as_status_int(raw.get("skipped")),
+        currentFile=raw.get("currentFile") if isinstance(raw.get("currentFile"), str) else None,
+    )
+
+
 @router.post("/download-url", response_model=DownloadUrlResponse)
 async def download_url(
     request: Request,
     payload: DownloadUrlRequest,
 ) -> DownloadUrlResponse:
+    request_id = (payload.requestId or "").strip() or secrets.token_hex(8)
+    _set_url_download_status(
+        request,
+        request_id,
+        status="ホストがURLダウンロードを受信しました",
+    )
     source_url = payload.url.strip() or "\n".join(entry.strip() for entry in payload.urls if entry.strip())
     options = UrlDownloadOptions(
         cookie_file_path=payload.cookieFilePath,
@@ -567,10 +644,35 @@ async def download_url(
     staging_dir = _create_hidden_download_staging_dir(folder_path)
 
     try:
+        async def on_download_event(event: dict[str, object]) -> None:
+            _set_url_download_status(
+                request,
+                request_id,
+                status=str(event.get("status") or "ダウンロード中"),
+                total=_as_status_int(event.get("total")),
+                completed=_as_status_int(event.get("completed")),
+                success=_as_status_int(event.get("success")),
+                failed=_as_status_int(event.get("failed")),
+                skipped=_as_status_int(event.get("skipped")),
+                current_file=event.get("current_file") if isinstance(event.get("current_file"), str) else None,
+            )
+
         download_result = await request.app.state.url_download_service.download_url(
             source_url=source_url,
             destination_folder=staging_dir,
             options=options,
+            on_event=on_download_event,
+        )
+        _set_url_download_status(
+            request,
+            request_id,
+            status="ホスト側で取り込み準備中",
+            total=download_result.total_count,
+            completed=download_result.completed_count,
+            success=download_result.imported_count,
+            failed=download_result.failed_count,
+            skipped=download_result.skipped_count,
+            current_file=download_result.current_file,
         )
         if download_result.imported_count > 0:
             staged_entries = _stage_download_url_imports(
@@ -579,6 +681,7 @@ async def download_url(
                 overwrite_existing=payload.overwrite,
             )
     except UrlDownloadError as error:
+        _set_url_download_status(request, request_id, status=f"失敗: {error}")
         raise bad_request(str(error)) from error
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -653,6 +756,17 @@ async def download_url(
             organized_count = len(organized)
             rescanned_count = index_service.scan_folder(folder_path)
 
+    _set_url_download_status(
+        request,
+        request_id,
+        status="完了",
+        total=download_result.total_count,
+        completed=download_result.completed_count,
+        success=download_result.imported_count,
+        failed=download_result.failed_count,
+        skipped=download_result.skipped_count,
+        current_file=download_result.current_file,
+    )
     return DownloadUrlResponse(
         importedCount=download_result.imported_count,
         skippedCount=download_result.skipped_count,

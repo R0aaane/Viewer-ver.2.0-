@@ -165,6 +165,7 @@ class OrganizeLibraryResponse(BaseModel):
 
 
 class DownloadUrlRequest(BaseModel):
+    requestId: str | None = None
     folderRaw: str
     url: str = ""
     urls: list[str] = Field(default_factory=list)
@@ -200,6 +201,18 @@ class DownloadUrlResponse(BaseModel):
     organizedCount: int = 0
     rescannedCount: int = 0
     targetCollection: str | None = None
+
+
+class DownloadUrlStatusResponse(BaseModel):
+    ok: bool = True
+    requestId: str
+    status: str
+    total: int = 0
+    completed: int = 0
+    success: int = 0
+    failed: int = 0
+    skipped: int = 0
+    currentFile: str | None = None
 
 
 class RenameSideDto(BaseModel):

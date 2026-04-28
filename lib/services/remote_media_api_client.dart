@@ -869,8 +869,11 @@ class RemoteMediaApiClient {
     required String sourceUrl,
     ImportMetadata? importMetadata,
     UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     final effectiveOptions = options ?? const UrlImportOptions();
+    final requestId =
+        'url_${DateTime.now().microsecondsSinceEpoch}_${sourceUrl.hashCode.abs()}';
     final sourceUrls = effectiveOptions.collectSourceUrls(sourceUrl);
     final artistTag = importMetadata?.artistTag?.trim();
     final seriesTag = importMetadata?.seriesTag?.trim();
@@ -881,54 +884,109 @@ class RemoteMediaApiClient {
     final favoriteUserServices =
         effectiveOptions.normalizedFavoriteUserServices;
 
-    final jsonBody = await _sendJsonRequest(
-      'POST',
-      '/download-url',
-      requestTimeout: uploadTimeout,
-      body: <String, dynamic>{
-        'folderRaw': folderRaw,
-        'url': sourceUrl,
-        'urls': sourceUrls,
-        if (cookieFilePath != null) 'cookieFilePath': cookieFilePath,
-        'cookieMode': effectiveOptions.cookieMode.apiValue,
-        if (urlListFilePath != null) 'urlListFilePath': urlListFilePath,
-        if (favoriteSites.isNotEmpty) 'sites': favoriteSites,
-        'favoritePosts': effectiveOptions.favoritePosts,
-        if (favoriteUserServices.isNotEmpty)
-          'favoriteUserServices': favoriteUserServices,
-        'mediaType': effectiveOptions.mediaType.apiValue,
-        'parallelDownloads': effectiveOptions.effectiveParallelDownloads,
-        'inline': effectiveOptions.includeInlineImages,
-        'content': effectiveOptions.includePostContent,
-        'comments': effectiveOptions.includeComments,
-        'saveJson': effectiveOptions.saveJson,
-        'overwrite': effectiveOptions.overwriteExistingFiles,
-        'verbose': effectiveOptions.verbose,
-        'convertHitomiToPdf': effectiveOptions.convertHitomiToPdf,
-        if (artistTag != null && artistTag.isNotEmpty) 'artistTag': artistTag,
-        if (seriesTag != null && seriesTag.isNotEmpty) 'seriesTag': seriesTag,
-        if (importMetadata != null && importMetadata.freeTags.isNotEmpty)
-          'freeTags': importMetadata.freeTags,
-        if (importMetadata != null && importMetadata.characterTags.isNotEmpty)
-          'characterTags': importMetadata.characterTags,
-        if (targetCollection != null && targetCollection.isNotEmpty)
-          'targetCollection': targetCollection,
-        'organizeAfterImport': importMetadata?.organizeAfterImport ?? false,
-      },
+    var polling = true;
+    final pollingFuture = _pollUrlDownloadStatus(
+      requestId,
+      () => polling,
+      onProgress,
     );
+    try {
+      onProgress?.call(
+        const MediaTransferProgress(
+          sentBytes: 0,
+          totalBytes: 0,
+          completedFiles: 0,
+          totalFiles: 0,
+          statusLabel: 'ホストへURLダウンロードを送信しています',
+        ),
+      );
+      final jsonBody = await _sendJsonRequest(
+        'POST',
+        '/download-url',
+        requestTimeout: const Duration(hours: 24),
+        body: <String, dynamic>{
+          'requestId': requestId,
+          'folderRaw': folderRaw,
+          'url': sourceUrl,
+          'urls': sourceUrls,
+          if (cookieFilePath != null) 'cookieFilePath': cookieFilePath,
+          'cookieMode': effectiveOptions.cookieMode.apiValue,
+          if (urlListFilePath != null) 'urlListFilePath': urlListFilePath,
+          if (favoriteSites.isNotEmpty) 'sites': favoriteSites,
+          'favoritePosts': effectiveOptions.favoritePosts,
+          if (favoriteUserServices.isNotEmpty)
+            'favoriteUserServices': favoriteUserServices,
+          'mediaType': effectiveOptions.mediaType.apiValue,
+          'parallelDownloads': effectiveOptions.effectiveParallelDownloads,
+          'inline': effectiveOptions.includeInlineImages,
+          'content': effectiveOptions.includePostContent,
+          'comments': effectiveOptions.includeComments,
+          'saveJson': effectiveOptions.saveJson,
+          'overwrite': effectiveOptions.overwriteExistingFiles,
+          'verbose': effectiveOptions.verbose,
+          'convertHitomiToPdf': effectiveOptions.convertHitomiToPdf,
+          if (artistTag != null && artistTag.isNotEmpty) 'artistTag': artistTag,
+          if (seriesTag != null && seriesTag.isNotEmpty) 'seriesTag': seriesTag,
+          if (importMetadata != null && importMetadata.freeTags.isNotEmpty)
+            'freeTags': importMetadata.freeTags,
+          if (importMetadata != null && importMetadata.characterTags.isNotEmpty)
+            'characterTags': importMetadata.characterTags,
+          if (targetCollection != null && targetCollection.isNotEmpty)
+            'targetCollection': targetCollection,
+          'organizeAfterImport': importMetadata?.organizeAfterImport ?? false,
+        },
+      );
 
-    if (jsonBody is! Map<String, dynamic>) {
-      return const UrlImportResult(importedCount: 0);
+      if (jsonBody is! Map<String, dynamic>) {
+        return const UrlImportResult(importedCount: 0);
+      }
+
+      return UrlImportResult(
+        importedCount: _asInt(jsonBody['importedCount']) ?? 0,
+        skippedCount: _asInt(jsonBody['skippedCount']) ?? 0,
+        failedCount: _asInt(jsonBody['failedCount']) ?? 0,
+        taggedCount: _asInt(jsonBody['taggedCount']) ?? 0,
+        organizedCount: _asInt(jsonBody['organizedCount']) ?? 0,
+        rescannedCount: _asInt(jsonBody['rescannedCount']) ?? 0,
+      );
+    } finally {
+      polling = false;
+      await pollingFuture.timeout(const Duration(seconds: 1), onTimeout: () {});
     }
+  }
 
-    return UrlImportResult(
-      importedCount: _asInt(jsonBody['importedCount']) ?? 0,
-      skippedCount: _asInt(jsonBody['skippedCount']) ?? 0,
-      failedCount: _asInt(jsonBody['failedCount']) ?? 0,
-      taggedCount: _asInt(jsonBody['taggedCount']) ?? 0,
-      organizedCount: _asInt(jsonBody['organizedCount']) ?? 0,
-      rescannedCount: _asInt(jsonBody['rescannedCount']) ?? 0,
-    );
+  Future<void> _pollUrlDownloadStatus(
+    String requestId,
+    bool Function() shouldContinue,
+    void Function(MediaTransferProgress progress)? onProgress,
+  ) async {
+    if (onProgress == null) {
+      return;
+    }
+    while (shouldContinue()) {
+      try {
+        final json = await _sendJsonRequest(
+          'GET',
+          '/download-url/status',
+          queryParameters: <String, String>{'requestId': requestId},
+        );
+        if (json is Map<String, dynamic>) {
+          final total = _asInt(json['total']) ?? 0;
+          final completed = _asInt(json['completed']) ?? 0;
+          onProgress(
+            MediaTransferProgress(
+              sentBytes: completed,
+              totalBytes: total,
+              completedFiles: completed,
+              totalFiles: total,
+              currentFileName: json['currentFile']?.toString(),
+              statusLabel: json['status']?.toString(),
+            ),
+          );
+        }
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
   }
 
   Future<dynamic> _getJson(
@@ -1194,8 +1252,7 @@ class RemoteMediaApiClient {
   }
 
   ReadingProgressEntry _parseReadingProgressEntry(Map<String, dynamic> json) {
-    final currentPage =
-        (_asInt(json['currentPage']) ?? 1).clamp(1, 1 << 30) as int;
+    final currentPage = (_asInt(json['currentPage']) ?? 1).clamp(1, 1 << 30);
     final totalPages = _asInt(json['totalPages']);
     final lastReadAt =
         _parseDateTime(json['lastReadAt']?.toString()) ?? DateTime.now();

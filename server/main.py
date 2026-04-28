@@ -80,6 +80,7 @@ async def lifespan(app: FastAPI):
     app.state.stream_service = stream_service
     app.state.thumbnail_service = thumbnail_service
     app.state.url_download_service = url_download_service
+    app.state.url_download_statuses = {}
     app.state.client_app_versions = set()
 
     if settings.startup_rescan and settings.media_roots:

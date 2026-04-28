@@ -850,6 +850,7 @@ class RemoteMediaRepository implements MediaRepository {
         sourceUrl: trimmedUrl,
         importMetadata: importMetadata,
         options: effectiveOptions,
+        onProgress: onProgress,
       );
     } on RemoteMediaException catch (error, stackTrace) {
       if (!_shouldFallbackToClientUrlImport(error)) {
