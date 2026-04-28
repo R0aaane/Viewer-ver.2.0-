@@ -270,14 +270,14 @@ class UrlDownloadService:
         results: list[UrlDownloadResult] = []
 
         if effective_options.has_favorite_sources or prepared.has_launcher_urls:
-            launcher_source_url = "\n".join(prepared.launcher_urls)
-            launcher_result = await self._run_with_launcher(
-                source_url=launcher_source_url,
+            launcher_results = await self._run_launcher_batches(
+                launcher_urls=prepared.launcher_urls,
                 destination_folder=destination_folder,
                 options=launcher_options,
+                has_favorite_sources=effective_options.has_favorite_sources,
                 on_event=on_event,
             )
-            results.append(launcher_result)
+            results.extend(launcher_results)
 
         if prepared.direct_urls:
             direct_result = await self._run_direct_url_download_urls(
@@ -290,6 +290,55 @@ class UrlDownloadService:
             results.append(direct_result)
 
         return self._merge_download_results(results)
+
+    async def _run_launcher_batches(
+        self,
+        *,
+        launcher_urls: list[str],
+        destination_folder: str,
+        options: UrlDownloadOptions,
+        has_favorite_sources: bool,
+        on_event: UrlDownloadEventHandler | None = None,
+    ) -> list[UrlDownloadResult]:
+        if has_favorite_sources or len(launcher_urls) <= 1:
+            return [
+                await self._run_with_launcher(
+                    source_url="\n".join(launcher_urls),
+                    destination_folder=destination_folder,
+                    options=options,
+                    on_event=on_event,
+                )
+            ]
+
+        batch_size = min(max(1, options.effective_parallel_downloads), 8)
+        batches = [
+            launcher_urls[index : index + batch_size]
+            for index in range(0, len(launcher_urls), batch_size)
+        ]
+        results: list[UrlDownloadResult] = []
+        for index, batch in enumerate(batches):
+            if on_event is not None:
+                event = {
+                    "type": "progress",
+                    "total": len(batches),
+                    "completed": index,
+                    "success": sum(result.imported_count for result in results),
+                    "failed": sum(result.failed_count for result in results),
+                    "skipped": sum(result.skipped_count for result in results),
+                    "status": f"URL batch {index + 1}/{len(batches)}",
+                }
+                maybe_awaitable = on_event(event)
+                if inspect.isawaitable(maybe_awaitable):
+                    await maybe_awaitable
+            results.append(
+                await self._run_with_launcher(
+                    source_url="\n".join(batch),
+                    destination_folder=destination_folder,
+                    options=options,
+                    on_event=on_event,
+                )
+            )
+        return results
 
     async def _run_with_launcher(
         self,

@@ -272,9 +272,25 @@ def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
 
 def _convert_hitomi_galleries_to_pdf(destination: Path) -> int:
     converted = 0
-    for gallery_dir in _iter_hitomi_gallery_dirs(destination):
+    gallery_dirs = _iter_hitomi_gallery_dirs(destination)
+    total = len(gallery_dirs)
+    for index, gallery_dir in enumerate(gallery_dirs, start=1):
+        _emit_event(
+            "progress",
+            total=total,
+            completed=index - 1,
+            status="Hitomi PDF 変換中",
+            current_file=gallery_dir.name,
+        )
         if _convert_gallery_to_pdf(gallery_dir):
             converted += 1
+        _emit_event(
+            "progress",
+            total=total,
+            completed=index,
+            status="Hitomi PDF 変換中",
+            current_file=gallery_dir.name,
+        )
     return converted
 
 

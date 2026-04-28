@@ -189,23 +189,20 @@ class UrlImportDownloaderService {
     final needsLauncherWork =
         effectiveOptions.hasFavoriteTargets || prepared.hasLauncherUrls;
     if (needsLauncherWork && _canUseLauncherFlow) {
-      final launcherSourceUrl = prepared.launcherUrls.join('\n');
       final launchers = <String>['python', 'py'];
       for (final launcher in launchers) {
         try {
-          final completedOffset = _totalHandledFiles(results);
-          final result = await _runWithLauncher(
+          final launcherResults = await _runLauncherBatches(
             launcher: launcher,
-            sourceUrl: launcherSourceUrl,
+            launcherUrls: prepared.launcherUrls,
             destinationFolder: destinationFolder,
             options: launcherOptions,
-            onProgress: _withProgressOffset(
-              onProgress,
-              completedOffset: completedOffset,
-              trailingFiles: pendingDirectUrls.length,
-            ),
+            hasFavoriteTargets: effectiveOptions.hasFavoriteTargets,
+            completedOffset: _totalHandledFiles(results),
+            trailingFiles: pendingDirectUrls.length,
+            onProgress: onProgress,
           );
-          results.add(result);
+          results.addAll(launcherResults);
           await runDirectUrls();
           return _mergeDownloadResults(results);
         } on ProcessException catch (error) {
@@ -239,6 +236,63 @@ class UrlImportDownloaderService {
     }
     await runDirectUrls();
     return _mergeDownloadResults(results);
+  }
+
+  Future<List<LocalUrlDownloadResult>> _runLauncherBatches({
+    required String launcher,
+    required List<String> launcherUrls,
+    required String destinationFolder,
+    required UrlImportOptions options,
+    required bool hasFavoriteTargets,
+    required int completedOffset,
+    required int trailingFiles,
+    void Function(MediaTransferProgress progress)? onProgress,
+  }) async {
+    if (hasFavoriteTargets || launcherUrls.length <= 1) {
+      final result = await _runWithLauncher(
+        launcher: launcher,
+        sourceUrl: launcherUrls.join('\n'),
+        destinationFolder: destinationFolder,
+        options: options,
+        onProgress: _withProgressOffset(
+          onProgress,
+          completedOffset: completedOffset,
+          trailingFiles: trailingFiles,
+        ),
+      );
+      return <LocalUrlDownloadResult>[result];
+    }
+
+    final batches = _chunkItems(
+      launcherUrls,
+      options.effectiveParallelDownloads.clamp(1, 8).toInt(),
+    );
+    final results = <LocalUrlDownloadResult>[];
+    for (var index = 0; index < batches.length; index++) {
+      final batch = batches[index];
+      onProgress?.call(
+        MediaTransferProgress(
+          sentBytes: index,
+          totalBytes: batches.length,
+          completedFiles: index,
+          totalFiles: batches.length,
+          statusLabel: 'URL ダウンロード ${index + 1}/${batches.length} を処理しています',
+        ),
+      );
+      final result = await _runWithLauncher(
+        launcher: launcher,
+        sourceUrl: batch.join('\n'),
+        destinationFolder: destinationFolder,
+        options: options,
+        onProgress: _withProgressOffset(
+          onProgress,
+          completedOffset: completedOffset + _totalHandledFiles(results),
+          trailingFiles: trailingFiles,
+        ),
+      );
+      results.add(result);
+    }
+    return results;
   }
 
   bool get _canUseLauncherFlow => !Platform.isAndroid && !Platform.isIOS;
@@ -1949,4 +2003,14 @@ class UrlImportDownloaderService {
     }
     return trimmed;
   }
+}
+
+List<List<T>> _chunkItems<T>(List<T> items, int chunkSize) {
+  final normalizedSize = chunkSize < 1 ? 1 : chunkSize;
+  final chunks = <List<T>>[];
+  for (var index = 0; index < items.length; index += normalizedSize) {
+    final end = index + normalizedSize;
+    chunks.add(items.sublist(index, end > items.length ? items.length : end));
+  }
+  return chunks;
 }
