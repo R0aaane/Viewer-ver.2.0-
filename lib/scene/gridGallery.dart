@@ -278,6 +278,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _folderPreviewActive = 0;
   final List<Completer<void>> _folderPreviewWaiters = [];
 
+  final LinkedHashMap<String, ThumbPair> _mediaThumbCache = LinkedHashMap();
+  final Map<String, Future<ThumbPair>> _mediaThumbInFlight = {};
+  int _mediaThumbCacheBytes = 0;
+  int _mediaThumbActive = 0;
+  int _visiblePrepareGeneration = 0;
+  final List<Completer<void>> _mediaThumbWaiters = [];
+  static const int _mediaThumbMaxWidth = 160;
+  static const int _mediaThumbCacheMaxEntries = 240;
+  static const int _mediaThumbCacheMaxBytes = 32 * 1024 * 1024;
+
   Future<void> _acquireFolderPreviewSlot([int max = 1]) async {
     if (_folderPreviewActive < max) {
       _folderPreviewActive++;
@@ -293,6 +303,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     _folderPreviewActive--;
     if (_folderPreviewWaiters.isNotEmpty) {
       _folderPreviewWaiters.removeAt(0).complete();
+    }
+  }
+
+  Future<void> _acquireMediaThumbSlot([int max = 2]) async {
+    if (_mediaThumbActive < max) {
+      _mediaThumbActive++;
+      return;
+    }
+    final c = Completer<void>();
+    _mediaThumbWaiters.add(c);
+    await c.future;
+    _mediaThumbActive++;
+  }
+
+  void _releaseMediaThumbSlot() {
+    _mediaThumbActive--;
+    if (_mediaThumbWaiters.isNotEmpty) {
+      _mediaThumbWaiters.removeAt(0).complete();
     }
   }
 
@@ -319,6 +347,100 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _folderPreviewCacheBytes -= oldestVal.lengthInBytes;
       }
     }
+  }
+
+  String _mediaThumbCacheKey(MediaItem item) {
+    final modified = item.modified?.millisecondsSinceEpoch ?? 0;
+    final size = item.sizeBytes ?? -1;
+    return '${item.id}|$modified|$size|$_mediaThumbMaxWidth';
+  }
+
+  ThumbPair? _mediaThumbCacheGet(String key) {
+    final pair = _mediaThumbCache.remove(key);
+    if (pair == null) return null;
+    _mediaThumbCache[key] = pair;
+    return pair;
+  }
+
+  void _mediaThumbCachePut(String key, ThumbPair pair) {
+    final old = _mediaThumbCache.remove(key);
+    if (old != null) {
+      _mediaThumbCacheBytes -=
+          old.front.lengthInBytes + (old.back?.lengthInBytes ?? 0);
+    }
+
+    _mediaThumbCache[key] = pair;
+    _mediaThumbCacheBytes +=
+        pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0);
+
+    while (_mediaThumbCache.isNotEmpty &&
+        (_mediaThumbCache.length > _mediaThumbCacheMaxEntries ||
+            _mediaThumbCacheBytes > _mediaThumbCacheMaxBytes)) {
+      final oldestKey = _mediaThumbCache.keys.first;
+      final oldest = _mediaThumbCache.remove(oldestKey);
+      if (oldest != null) {
+        _mediaThumbCacheBytes -=
+            oldest.front.lengthInBytes + (oldest.back?.lengthInBytes ?? 0);
+      }
+    }
+  }
+
+  Future<ThumbPair> _getMediaThumbPair(MediaItem item) {
+    final key = _mediaThumbCacheKey(item);
+    final cached = _mediaThumbCacheGet(key);
+    if (cached != null) return Future.value(cached);
+
+    final inFlight = _mediaThumbInFlight[key];
+    if (inFlight != null) return inFlight;
+
+    final future = (() async {
+      await _acquireMediaThumbSlot();
+      try {
+        final pair = await widget.repo.readThumbPair(
+          item,
+          maxWidth: _mediaThumbMaxWidth,
+        );
+        _mediaThumbCachePut(key, pair);
+        return pair;
+      } finally {
+        _releaseMediaThumbSlot();
+      }
+    })().whenComplete(() {
+      _mediaThumbInFlight.remove(key);
+    });
+
+    _mediaThumbInFlight[key] = future;
+    return future;
+  }
+
+  void _prepareVisibleMedia(List<MediaItem> items) {
+    final generation = ++_visiblePrepareGeneration;
+    final visible = items
+        .where((item) => item.kind != MediaKind.folder)
+        .toList(growable: false);
+    if (visible.isEmpty) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        for (final item in visible) {
+          if (!mounted || generation != _visiblePrepareGeneration) return;
+          unawaited(_getMediaThumbPair(item).catchError((_) {
+            return ThumbPair(front: Uint8List(0), back: null);
+          }));
+        }
+
+        for (final item in visible) {
+          if (!mounted || generation != _visiblePrepareGeneration) return;
+          if (item.kind != MediaKind.pdf) continue;
+          try {
+            await widget.repo.getPageCount(item);
+          } catch (_) {
+            // Ignore background warm-up failures; foreground open still reports.
+          }
+        }
+      }());
+    });
   }
 
   static const int _pageSize = 20;
@@ -1905,10 +2027,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     if (refreshRegisteredFolders) {
       await _loadPrefsAndAutoOpenFolder(pageIndex: _galleryPageIndex);
     } else {
-      final currentFolderRaw = _currentFolderRaw;
-      if (currentFolderRaw != null) {
+      final visibleFolder = _folder;
+      if (visibleFolder != null) {
         await _loadFolder(
-          FolderHandle(currentFolderRaw),
+          visibleFolder,
           saveAsLast: false,
           pageIndex: _galleryPageIndex,
         );
@@ -2048,7 +2170,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       try {
         final cand = await pickCandidateInFolder(folderItem.id);
         if (cand != null) {
-          final pair = await widget.repo.readThumbPair(cand, maxWidth: 240);
+          final pair = await _getMediaThumbPair(cand);
           _folderPreviewCachePut(key, pair.front);
           return pair.front;
         }
@@ -2064,7 +2186,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           if (it.kind != MediaKind.folder) continue;
           final cand2 = await pickCandidateInFolder(it.id);
           if (cand2 != null) {
-            final pair = await widget.repo.readThumbPair(cand2, maxWidth: 240);
+            final pair = await _getMediaThumbPair(cand2);
             _folderPreviewCachePut(key, pair.front);
             return pair.front;
           }
@@ -2479,7 +2601,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(14),
       child: FutureBuilder<ThumbPair>(
-        future: widget.repo.readThumbPair(item, maxWidth: 320),
+        future: _getMediaThumbPair(item),
         builder: (context, snap) {
           if (snap.hasError) {
             return Container(
@@ -2975,7 +3097,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final thumb = ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: FutureBuilder<ThumbPair>(
-        future: widget.repo.readThumbPair(item, maxWidth: 240),
+        future: _getMediaThumbPair(item),
         builder: (context, snap) {
           if (snap.hasError) {
             return Container(
@@ -4828,6 +4950,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       widget.tagService.rememberItems(res.items);
       unawaited(_refreshCurrentPageTags(res.items));
+      _prepareVisibleMedia(res.items);
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -4905,6 +5028,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
       widget.tagService.rememberItems(res.items);
       unawaited(_refreshCurrentPageTags(res.items));
+      _prepareVisibleMedia(res.items);
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -9198,7 +9322,9 @@ class _ThumbTile extends StatelessWidget {
             child: !thumbsEnabled
                 ? const _TileShell(loading: true)
                 : FutureBuilder<ThumbPair>(
-                    future: repo.readThumbPair(item, maxWidth: 240),
+                    future:
+                        galleryState?._getMediaThumbPair(item) ??
+                        repo.readThumbPair(item, maxWidth: 160),
                     builder: (context, snapshot) {
                       if (snapshot.hasError) {
                         return const _TileShell();
