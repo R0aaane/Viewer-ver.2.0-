@@ -1015,7 +1015,11 @@ class RemoteMediaApiClient {
       ..idleTimeout = effectiveTimeout;
 
     try {
-      final request = await _openRequest(client, method, uri);
+      final request = await _openRequest(
+        client,
+        method,
+        uri,
+      ).timeout(effectiveTimeout);
       request.headers.contentType = ContentType.json;
       _applyHeaders(request.headers);
       if (body != null) {
@@ -1042,6 +1046,8 @@ class RemoteMediaApiClient {
       throw const RemoteMediaException('サーバー応答がタイムアウトしました');
     } on SocketException {
       throw const RemoteMediaException('サーバーに接続できません');
+    } on HttpException {
+      throw const RemoteMediaException('サーバー応答が終了しました');
     } finally {
       client.close(force: true);
     }
@@ -1209,7 +1215,9 @@ class RemoteMediaApiClient {
     return hash.toRadixString(16).padLeft(8, '0');
   }
 
-  Map<String, String>? _identityQueryParameters(ResolvedMediaIdentity? identity) {
+  Map<String, String>? _identityQueryParameters(
+    ResolvedMediaIdentity? identity,
+  ) {
     if (identity == null) {
       return null;
     }
