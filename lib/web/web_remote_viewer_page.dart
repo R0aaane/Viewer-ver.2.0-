@@ -55,7 +55,7 @@ enum _WebBrowserSortMode {
   const _WebBrowserSortMode({required this.label, required this.icon});
 }
 
-const String _webViewerVersion = '2026.04.12.1';
+const String _webViewerVersion = '2026.04.29.1';
 
 class WebRemoteViewerPage extends StatefulWidget {
   final MetadataSettings initialSettings;

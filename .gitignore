@@ -63,3 +63,18 @@ Thumbs.db
 
 ### Environment ###
 .env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyc.*
+
+# Runtime / local data
+.tmp/
+data/app_updates/
+data/*.pid
+data/*.log
+data/*.log.err
+data/*.db-shm
+data/*.db-wal
+

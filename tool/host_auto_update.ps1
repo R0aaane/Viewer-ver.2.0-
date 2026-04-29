@@ -359,7 +359,6 @@ function Build-And-Restart {
         }
     }
 
-    Start-HostServer
     Start-HostApp
 }
 
@@ -452,6 +451,9 @@ try {
         $remoteRevision = $latestRevision
         Build-And-Restart
     }
+} catch {
+    Write-AutoUpdateLog "failed: $($_.Exception.Message)"
+    throw
 } finally {
     Unregister-AutoUpdateProcess
 }

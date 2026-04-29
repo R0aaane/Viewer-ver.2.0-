@@ -112,7 +112,6 @@ class HostApiServerService extends ChangeNotifier {
   Process? _process;
   StreamSubscription<String>? _stdoutSubscription;
   StreamSubscription<String>? _stderrSubscription;
-  bool _autoUpdateStarted = false;
 
   HostServerStatus get status => _status;
 
@@ -255,6 +254,7 @@ class HostApiServerService extends ChangeNotifier {
 
     final existingHealth = await _checkHealth(settings);
     if (existingHealth.state == MetadataConnectionState.connected) {
+      await _startHostAutoUpdate(settings);
       final networkInfo = await _loadNetworkInfo(settings.hostPort);
       _setStatus(
         _status.copyWith(
@@ -629,7 +629,7 @@ class HostApiServerService extends ChangeNotifier {
   }
 
   Future<void> _startHostAutoUpdate(MetadataSettings settings) async {
-    if (_autoUpdateStarted || !Platform.isWindows) {
+    if (!Platform.isWindows) {
       return;
     }
 
@@ -682,14 +682,19 @@ class HostApiServerService extends ChangeNotifier {
 
     try {
       await Process.start(
-        'powershell.exe',
-        arguments,
+        'cmd.exe',
+        <String>[
+          '/c',
+          'start',
+          'PDFViewer Host Auto Update',
+          'powershell.exe',
+          '-NoExit',
+          ...arguments,
+        ],
         workingDirectory: projectRoot.path,
         mode: ProcessStartMode.detached,
-        runInShell: true,
       );
-      _autoUpdateStarted = true;
-      _appendLog('[auto-update] started');
+      _appendLog('[auto-update] started: ${script.path}');
     } on ProcessException catch (error) {
       _appendLog('[auto-update] ${error.message}');
     }
