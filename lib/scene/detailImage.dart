@@ -141,8 +141,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   Future<Uint8List>? _leftFuture;
   Future<Uint8List>? _rightFuture;
+  bool _gifAnimationPaused = false;
 
   final Map<int, Future<Uint8List>> _readerFutureCache = {};
+  final Map<int, Future<Uint8List>> _staticReaderFutureCache = {};
   final Map<int, Future<Uint8List>> _thumbFutureCache = {};
 
   MediaItem get _item => _items[_index];
@@ -1007,6 +1009,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Future<Uint8List> _loadReaderBytes(MediaItem item, int page) {
+    if (_gifAnimationPaused) {
+      return _staticReaderFutureCache.putIfAbsent(page, () {
+        return widget.repo.renderStaticPageBytes(item, page, maxWidth: 1600);
+      });
+    }
     return _readerFutureCache.putIfAbsent(page, () {
       return widget.repo.renderPageBytes(item, page, maxWidth: 1600);
     });
@@ -1071,6 +1078,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       _syncReaderFutures(_item);
     });
     _schedulePersistCurrentActivity();
+  }
+
+  void _toggleGifAnimation() {
+    if (!_isPdf) {
+      return;
+    }
+    setState(() {
+      _gifAnimationPaused = !_gifAnimationPaused;
+      _syncReaderFutures(_item);
+    });
   }
 
   Future<void> _loadPageCountForCurrent(MediaItem item, int loadVersion) async {
@@ -1149,6 +1166,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     final loadVersion = ++_detailLoadVersion;
 
     _readerFutureCache.clear();
+    _staticReaderFutureCache.clear();
     _thumbFutureCache.clear();
     _loadedTagItemId = null;
     if (mounted) {
@@ -1160,6 +1178,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       setState(() {
         _canPersistReadingProgress = item.kind != MediaKind.pdf;
         _hasMovedPdfPageSinceLoad = false;
+        _gifAnimationPaused = false;
         _isFavorite = false;
         _tags = const [];
         _tagsLoading = false;
@@ -1796,9 +1815,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   final rightEdge = w * 0.65;
 
                   if (dx < leftEdge) {
-                    _prev(); // 蟾ｦ繧ｿ繝・・ 竊・蜑・
+                    _prev();
                   } else if (dx > rightEdge) {
-                    _next(); // 蜿ｳ繧ｿ繝・・ 竊・谺｡
+                    _next();
+                  } else {
+                    _toggleGifAnimation();
                   }
                 },
               );

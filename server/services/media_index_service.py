@@ -60,7 +60,34 @@ class MediaIndexService:
     def index_files(self, paths: list[str]) -> int:
         indexed = 0
         indexed_media_ids: list[str] = []
+        gif_member_paths: set[str] = set()
+        gif_dirs = {
+            os.path.dirname(os.path.normpath(raw_path))
+            for raw_path in paths
+            if Path(raw_path).suffix.lower() == ".gif"
+            and os.path.isfile(os.path.normpath(raw_path))
+        }
+        for gif_dir in sorted(gif_dirs):
+            try:
+                file_names = os.listdir(gif_dir)
+            except OSError:
+                continue
+            record = self._build_record_for_gif_collection(gif_dir, file_names)
+            if record is None:
+                continue
+            stable_record = self._preserve_existing_media_identity(record)
+            self._db.upsert_media_record(stable_record)
+            indexed_media_ids.append(str(stable_record["media_id"]))
+            indexed += 1
+            gif_member_paths.update(
+                _normalize_path(os.path.join(gif_dir, file_name))
+                for file_name in file_names
+                if Path(file_name).suffix.lower() == ".gif"
+            )
+
         for raw_path in paths:
+            if _normalize_path(raw_path) in gif_member_paths:
+                continue
             record = self._build_record_for_path(raw_path)
             if record is None:
                 continue
@@ -74,6 +101,8 @@ class MediaIndexService:
                 indexed_media_ids,
                 added_at=datetime.now(tz=timezone.utc).isoformat(),
             )
+        if gif_member_paths:
+            self._db.mark_deleted_by_paths(list(gif_member_paths), is_deleted=True)
         return indexed
 
     def rescan_configured_roots(self, roots: list[str]) -> list[dict[str, int | str]]:

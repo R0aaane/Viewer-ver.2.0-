@@ -58,6 +58,37 @@ class GifCollectionTest(unittest.TestCase):
         self.assertEqual(rendered.mime, "image/gif")
         self.assertTrue(rendered.payload.startswith(b"GIF"))
 
+    def test_index_files_collapses_gif_members_into_collection(self) -> None:
+        collection = self.library_dir / "Sample GIF"
+        collection.mkdir()
+        first = collection / "001.gif"
+        second = collection / "002.gif"
+        first.write_bytes(_GIF_1X1)
+        second.write_bytes(_GIF_1X1)
+
+        self.index.index_files([str(first), str(second)])
+        records = self.sqlite.list_media_records(include_deleted=False)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["kind"], "pdf")
+        self.assertEqual(records[0]["mime_type"], "application/x.gif-collection")
+        self.assertEqual(Path(records[0]["full_path"]), collection)
+
+    def test_delete_gif_collection_removes_directory(self) -> None:
+        collection = self.library_dir / "Sample GIF"
+        collection.mkdir()
+        (collection / "001.gif").write_bytes(_GIF_1X1)
+        self.index.scan_folder(str(self.library_dir))
+        record = self.sqlite.list_media_records(include_deleted=False)[0]
+
+        deleted = self.metadata.apply_delete(
+            [{"mediaId": str(record["media_id"])}],
+            hard_delete=True,
+        )
+
+        self.assertEqual(deleted, 1)
+        self.assertFalse(collection.exists())
+
     def test_flattened_gif_collection_uses_stripped_hitomi_title(self) -> None:
         staging = Path(self._temp_dir.name) / "stage"
         gallery = staging / "hitomi" / "artist" / "[20240101] [123] Sample GIF"

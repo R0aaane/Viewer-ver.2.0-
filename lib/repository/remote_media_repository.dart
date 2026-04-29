@@ -1407,6 +1407,12 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<Uint8List> readBytes(MediaItem item) async {
+    if (!await _isLocalExternalItem(item)) {
+      final meta = await _validatedMetaForItem(item);
+      if (meta.mimeType == 'application/x.gif-collection') {
+        return _client.fetchPageImage(meta.mediaId, 1, width: 1600);
+      }
+    }
     final file = await _ensureCachedMediaFile(item);
     return file.readAsBytes();
   }
@@ -1421,6 +1427,10 @@ class RemoteMediaRepository implements MediaRepository {
         item,
         maxWidth: maxWidth,
       );
+    }
+    final meta = await _validatedMetaForItem(item);
+    if (meta.mimeType == 'application/x.gif-collection') {
+      return _client.fetchPageImage(meta.mediaId, 1, width: maxWidth);
     }
     final ext = MediaFileTypes.extensionOf(item.displayName);
     if (ext == '.avif') {
@@ -1530,6 +1540,31 @@ class RemoteMediaRepository implements MediaRepository {
       throw RangeError.range(page, 1, total, 'page');
     }
     return _renderPdfPage(doc, page, maxWidth);
+  }
+
+  @override
+  Future<Uint8List> renderStaticPageBytes(
+    MediaItem item,
+    int page, {
+    int maxWidth = 1600,
+  }) async {
+    if (item.kind != MediaKind.pdf || await _isLocalExternalItem(item)) {
+      return renderPageBytes(item, page, maxWidth: maxWidth);
+    }
+    final meta = await _validatedMetaForItem(item);
+    if (meta.mimeType != 'application/x.gif-collection') {
+      return renderPageBytes(item, page, maxWidth: maxWidth);
+    }
+    final total = meta.pageCount ?? 1;
+    if (page < 1 || page > total) {
+      throw RangeError.range(page, 1, total, 'page');
+    }
+    return _client.fetchThumbnail(
+      meta.mediaId,
+      width: maxWidth,
+      height: maxWidth * 2,
+      page: page,
+    );
   }
 
   @override
@@ -2757,6 +2792,19 @@ class SwitchingMediaRepository implements MediaRepository {
     int maxWidth = 1600,
   }) {
     return _activeRepository.renderPageBytes(item, page, maxWidth: maxWidth);
+  }
+
+  @override
+  Future<Uint8List> renderStaticPageBytes(
+    MediaItem item,
+    int page, {
+    int maxWidth = 1600,
+  }) {
+    return _activeRepository.renderStaticPageBytes(
+      item,
+      page,
+      maxWidth: maxWidth,
+    );
   }
 
   @override

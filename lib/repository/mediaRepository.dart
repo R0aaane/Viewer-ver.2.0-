@@ -533,6 +533,14 @@ abstract class MediaRepository {
     int maxWidth = 1600,
   });
 
+  Future<Uint8List> renderStaticPageBytes(
+    MediaItem item,
+    int page, {
+    int maxWidth = 1600,
+  }) {
+    return renderPageBytes(item, page, maxWidth: maxWidth);
+  }
+
   Future<bool> deleteItem(MediaItem item);
 
   Future<int> deleteItems(List<MediaItem> items);

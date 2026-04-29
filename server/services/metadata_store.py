@@ -1249,11 +1249,23 @@ class MetadataStore:
             target_ids.append(record["media_id"])
             target_paths.append(record["normalized_full_path"])
             deleted_count += 1
+            if os.path.isdir(record["full_path"]):
+                descendants = self._db.list_media_records(
+                    folder_prefix=record["normalized_full_path"],
+                    include_deleted=False,
+                )
+                target_ids.extend(str(row["media_id"]) for row in descendants)
+                target_paths.extend(
+                    str(row["normalized_full_path"]) for row in descendants
+                )
 
             if hard_delete:
                 full_path = record["full_path"]
                 if os.path.exists(full_path):
-                    os.remove(full_path)
+                    if os.path.isdir(full_path):
+                        shutil.rmtree(full_path)
+                    else:
+                        os.remove(full_path)
 
         if target_ids:
             deduped_ids = list(dict.fromkeys(target_ids))
