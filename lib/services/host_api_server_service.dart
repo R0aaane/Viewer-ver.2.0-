@@ -112,6 +112,7 @@ class HostApiServerService extends ChangeNotifier {
   Process? _process;
   StreamSubscription<String>? _stdoutSubscription;
   StreamSubscription<String>? _stderrSubscription;
+  bool _autoUpdateStarted = false;
 
   HostServerStatus get status => _status;
 
@@ -331,6 +332,8 @@ class HostApiServerService extends ChangeNotifier {
       );
       return;
     }
+
+    await _startHostAutoUpdate(settings);
 
     if (tagService != null) {
       try {
@@ -620,6 +623,103 @@ class HostApiServerService extends ChangeNotifier {
         );
       } on ProcessException catch (error) {
         _appendLog('[start] $launcher: ${error.message}');
+      }
+    }
+    return null;
+  }
+
+  Future<void> _startHostAutoUpdate(MetadataSettings settings) async {
+    if (_autoUpdateStarted || !Platform.isWindows) {
+      return;
+    }
+
+    final projectRoot = await _resolveProjectRoot();
+    if (projectRoot == null) {
+      _appendLog('[auto-update] project root was not found');
+      return;
+    }
+
+    final script = File(
+      '${projectRoot.path}${Platform.pathSeparator}tool'
+      '${Platform.pathSeparator}host_auto_update.ps1',
+    );
+    if (!await script.exists()) {
+      _appendLog('[auto-update] script was not found: ${script.path}');
+      return;
+    }
+
+    final appExePath = Platform.resolvedExecutable;
+    final branch = Platform.environment['MEDIA_SERVER_HOST_UPDATE_BRANCH'] ?? '';
+    final remote = Platform.environment['MEDIA_SERVER_HOST_UPDATE_REMOTE'] ??
+        'origin';
+
+    final arguments = <String>[
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      script.path,
+      '-ProjectRoot',
+      projectRoot.path,
+      '-Remote',
+      remote,
+      '-ServerPort',
+      '${settings.hostPort}',
+      '-AppExePath',
+      appExePath,
+      '-SkipInitialServerStartWhenNoUpdate',
+    ];
+    if (branch.trim().isNotEmpty) {
+      arguments.addAll(<String>['-Branch', branch.trim()]);
+    }
+    if ((Platform.environment['MEDIA_SERVER_HOST_UPDATE_BUILD_ANDROID_APK'] ??
+            'true')
+        .trim()
+        .toLowerCase() !=
+        'false') {
+      arguments.add('-BuildAndroidApk');
+    }
+
+    try {
+      await Process.start(
+        'powershell.exe',
+        arguments,
+        workingDirectory: projectRoot.path,
+        mode: ProcessStartMode.detached,
+        runInShell: true,
+      );
+      _autoUpdateStarted = true;
+      _appendLog('[auto-update] started');
+    } on ProcessException catch (error) {
+      _appendLog('[auto-update] ${error.message}');
+    }
+  }
+
+  Future<Directory?> _resolveProjectRoot() async {
+    final candidates = <Directory>[
+      Directory.current,
+      File(Platform.resolvedExecutable).parent,
+    ];
+
+    for (final start in candidates) {
+      var current = start.absolute;
+      for (var depth = 0; depth < 8; depth++) {
+        final pubspec = File(
+          '${current.path}${Platform.pathSeparator}pubspec.yaml',
+        );
+        final script = File(
+          '${current.path}${Platform.pathSeparator}tool'
+          '${Platform.pathSeparator}host_auto_update.ps1',
+        );
+        if (await pubspec.exists() && await script.exists()) {
+          return current;
+        }
+
+        final parent = current.parent;
+        if (parent.path == current.path) {
+          break;
+        }
+        current = parent;
       }
     }
     return null;

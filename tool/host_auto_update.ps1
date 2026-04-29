@@ -16,6 +16,7 @@ param(
     [switch]$SkipHostAppRestart,
     [switch]$SkipCleanBuild,
     [switch]$SkipAndroidDeviceStop,
+    [switch]$SkipInitialServerStartWhenNoUpdate,
     [switch]$Once
 )
 
@@ -78,11 +79,45 @@ function Invoke-ScriptRelaunch {
     if ($SkipHostAppRestart) { $arguments.Add('-SkipHostAppRestart') }
     if ($SkipCleanBuild) { $arguments.Add('-SkipCleanBuild') }
     if ($SkipAndroidDeviceStop) { $arguments.Add('-SkipAndroidDeviceStop') }
+    if ($SkipInitialServerStartWhenNoUpdate) { $arguments.Add('-SkipInitialServerStartWhenNoUpdate') }
     if ($Once) { $arguments.Add('-Once') }
 
     Write-Host "script: updated; relaunching"
     & powershell.exe @arguments
     exit $LASTEXITCODE
+}
+
+function Test-ProcessRunning {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return $false
+    }
+    return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+function Register-AutoUpdateProcess {
+    New-Item -ItemType Directory -Force -Path 'data' | Out-Null
+    $pidFile = Join-Path 'data' 'host_auto_update.pid'
+    if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
+        $existingPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+        if ($existingPid -match '^\d+$' -and (Test-ProcessRunning -ProcessId ([int]$existingPid))) {
+            Write-Host "auto-update: already running pid=$existingPid"
+            exit 0
+        }
+    }
+    Set-Content -LiteralPath $pidFile -Value $PID
+}
+
+function Unregister-AutoUpdateProcess {
+    $pidFile = Join-Path 'data' 'host_auto_update.pid'
+    if (-not (Test-Path -LiteralPath $pidFile -PathType Leaf)) {
+        return
+    }
+    $registeredPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+    if ($registeredPid -eq [string]$PID) {
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Restart-IfUpdateScriptChanged {
@@ -377,39 +412,46 @@ function Get-Revision {
     return (& git rev-parse $Ref).Trim()
 }
 
-Enter-ProjectRoot
-if ([string]::IsNullOrWhiteSpace($Branch)) {
-    $Branch = (& git branch --show-current).Trim()
+try {
+    Enter-ProjectRoot
+    Register-AutoUpdateProcess
     if ([string]::IsNullOrWhiteSpace($Branch)) {
-        throw "Branch was not specified and the current branch could not be detected."
+        $Branch = (& git branch --show-current).Trim()
+        if ([string]::IsNullOrWhiteSpace($Branch)) {
+            throw "Branch was not specified and the current branch could not be detected."
+        }
     }
-}
-Invoke-Checked -FilePath 'git' -Arguments @('fetch', $Remote, $Branch)
-$remoteRef = "$Remote/$Branch"
-$currentRevision = Get-Revision -Ref 'HEAD'
-$remoteRevision = Get-Revision -Ref $remoteRef
-
-if ($currentRevision -ne $remoteRevision) {
-    Write-Host "update: $currentRevision -> $remoteRevision"
-    Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
-    Restart-IfUpdateScriptChanged -FromRevision $currentRevision -ToRevision $remoteRevision
-    Build-And-Restart
-} else {
-    Write-Host "update: none"
-    Start-HostServer
-}
-
-while (-not $Once) {
-    Start-Sleep -Seconds $PollSeconds
     Invoke-Checked -FilePath 'git' -Arguments @('fetch', $Remote, $Branch)
-    $latestRevision = Get-Revision -Ref $remoteRef
-    if ($latestRevision -eq $remoteRevision) {
-        continue
+    $remoteRef = "$Remote/$Branch"
+    $currentRevision = Get-Revision -Ref 'HEAD'
+    $remoteRevision = Get-Revision -Ref $remoteRef
+
+    if ($currentRevision -ne $remoteRevision) {
+        Write-Host "update: $currentRevision -> $remoteRevision"
+        Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
+        Restart-IfUpdateScriptChanged -FromRevision $currentRevision -ToRevision $remoteRevision
+        Build-And-Restart
+    } else {
+        Write-Host "update: none"
+        if (-not $SkipInitialServerStartWhenNoUpdate) {
+            Start-HostServer
+        }
     }
 
-    Write-Host "update: $remoteRevision -> $latestRevision"
-    Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
-    Restart-IfUpdateScriptChanged -FromRevision $remoteRevision -ToRevision $latestRevision
-    $remoteRevision = $latestRevision
-    Build-And-Restart
+    while (-not $Once) {
+        Start-Sleep -Seconds $PollSeconds
+        Invoke-Checked -FilePath 'git' -Arguments @('fetch', $Remote, $Branch)
+        $latestRevision = Get-Revision -Ref $remoteRef
+        if ($latestRevision -eq $remoteRevision) {
+            continue
+        }
+
+        Write-Host "update: $remoteRevision -> $latestRevision"
+        Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
+        Restart-IfUpdateScriptChanged -FromRevision $remoteRevision -ToRevision $latestRevision
+        $remoteRevision = $latestRevision
+        Build-And-Restart
+    }
+} finally {
+    Unregister-AutoUpdateProcess
 }
