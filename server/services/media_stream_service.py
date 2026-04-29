@@ -30,7 +30,7 @@ class MediaStreamService:
             "sizeBytes": record["sizeBytes"],
             "modifiedAt": record["modifiedAt"],
             "etag": record["etag"],
-            "supportsRange": True,
+            "supportsRange": not os.path.isdir(str(record["fullPath"])),
         }
 
     def build_download_response(self, media_id: str, request: Request) -> Response:
@@ -39,6 +39,8 @@ class MediaStreamService:
             raise not_found("削除済みメディアです")
 
         full_path = record["fullPath"]
+        if os.path.isdir(full_path):
+            raise bad_request("GIF collection download is not supported")
         if not os.path.exists(full_path):
             raise not_found("メディア本体が見つかりません")
 

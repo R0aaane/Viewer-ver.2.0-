@@ -1161,7 +1161,10 @@ class MetadataStore:
                 target_parent = os.path.dirname(target_full_path)
                 if target_parent:
                     os.makedirs(target_parent, exist_ok=True)
-                os.replace(old_full_path, target_full_path)
+                if os.path.isdir(old_full_path):
+                    shutil.move(old_full_path, target_full_path)
+                else:
+                    os.replace(old_full_path, target_full_path)
 
         actual_path = target_full_path
         kind = current["kind"]

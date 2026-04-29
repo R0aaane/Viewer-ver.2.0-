@@ -680,6 +680,8 @@ async def download_url(
                 folder_path=folder_path,
                 staging_dir=staging_dir,
                 overwrite_existing=payload.overwrite,
+                prefer_gif_collections=payload.preferHitomiOriginal
+                and not payload.convertHitomiToPdf,
             )
     except UrlDownloadError as error:
         _set_url_download_status(request, request_id, status=f"失敗: {error}")
@@ -710,6 +712,7 @@ async def download_url(
         should_organize_after_import = True
         for saved_path, relative_path_hint in staged_entries:
             inferred_tags = []
+            is_gif_collection = _is_gif_collection_path(saved_path)
             hitomi_metadata = _lookup_hitomi_metadata_for_relative_path(
                 relative_path_hint,
                 download_result.hitomi_metadata_by_relative_path,
@@ -719,11 +722,16 @@ async def download_url(
                 source_urls=source_urls,
                 hitomi_metadata=hitomi_metadata,
             )
-            if normalized_extension(saved_path) == ".pdf":
+            if normalized_extension(saved_path) == ".pdf" or is_gif_collection:
                 inferred_tags = filter_hitomi_pdf_auto_tags(inferred_candidates)
             else:
                 inferred_tags = filter_supported_url_import_image_tags(
                     inferred_candidates
+                )
+            if is_gif_collection:
+                inferred_tags = _merge_import_tags(
+                    inferred_tags,
+                    [{"category": "mediaType", "name": "GIF"}],
                 )
             merged_tags = _merge_import_tags(common_tags, inferred_tags)
             if merged_tags:
@@ -1193,17 +1201,24 @@ def _stage_download_url_imports(
     folder_path: str,
     staging_dir: str,
     overwrite_existing: bool,
+    prefer_gif_collections: bool = False,
 ) -> list[tuple[str, str]]:
     staged_media_paths = _collect_media_paths(staging_dir, include_hidden=True)
     preferred_paths = _prefer_generated_pdf_import_paths(
         staging_dir,
         sorted(staged_media_paths),
     )
+    if prefer_gif_collections:
+        preferred_paths = _prefer_gif_collection_import_paths(
+            staging_dir,
+            preferred_paths,
+        )
     flattened_entries = _flatten_imported_media_paths(staging_dir, preferred_paths)
     saved_entries = _move_staged_media_entries_to_library(
         folder_path=folder_path,
         flattened_entries=flattened_entries,
     )
+    _remove_empty_dirs(staging_dir)
     _move_remaining_stage_items_to_folder(
         staging_dir=staging_dir,
         folder_path=folder_path,
@@ -1223,12 +1238,20 @@ def _move_staged_media_entries_to_library(
         file_name = os.path.basename(source_path)
         target_path = os.path.normpath(os.path.join(folder_path, file_name))
         if os.path.exists(target_path):
-            if _same_file(source_path, target_path):
+            if os.path.isfile(source_path) and _same_file(source_path, target_path):
                 logger.info('[MOVE] skipped same-file old=%s new=%s', source_path, target_path)
                 try:
                     os.remove(source_path)
                 except OSError:
                     pass
+                saved_entries.append((os.path.normpath(target_path), relative_hint))
+                continue
+            if os.path.isdir(source_path) and os.path.isdir(target_path):
+                _merge_staged_path(
+                    source_path=source_path,
+                    target_path=target_path,
+                    overwrite_existing=False,
+                )
                 saved_entries.append((os.path.normpath(target_path), relative_hint))
                 continue
             replacement_path = _resolve_available_import_target_path(target_path)
@@ -1490,6 +1513,33 @@ def _is_generated_pdf_source_image(
     )
 
 
+def _prefer_gif_collection_import_paths(
+    folder_path: str,
+    imported_paths: list[str],
+) -> list[str]:
+    normalized_root = os.path.normcase(os.path.normpath(folder_path))
+    gif_parents: set[str] = set()
+    for path in imported_paths:
+        normalized_path = os.path.normpath(path)
+        if normalized_extension(normalized_path) != ".gif":
+            continue
+        parent = os.path.dirname(normalized_path)
+        if os.path.normcase(parent) == normalized_root:
+            continue
+        gif_parents.add(parent)
+    if not gif_parents:
+        return imported_paths
+
+    preferred: list[str] = []
+    for path in imported_paths:
+        normalized_path = os.path.normpath(path)
+        if os.path.dirname(normalized_path) in gif_parents:
+            continue
+        preferred.append(normalized_path)
+    preferred.extend(sorted(gif_parents))
+    return preferred
+
+
 def _normalized_relative_path(path: str, folder_path: str) -> str:
     return os.path.relpath(path, folder_path).replace("\\", "/")
 
@@ -1559,15 +1609,39 @@ def _lookup_hitomi_metadata_for_relative_path(
     basename = posixpath.basename(normalized)
     if not basename:
         return None
+    basename_stem = posixpath.splitext(basename)[0]
+    basename_candidates = {basename, basename_stem}
+    stripped_basename_stem = strip_hitomi_download_prefix(basename_stem)
+    if stripped_basename_stem:
+        basename_candidates.add(stripped_basename_stem.casefold())
 
     match: dict[str, object] | None = None
     for key, value in metadata_by_relative_path.items():
-        if posixpath.basename(str(key or "").replace("\\", "/").casefold()) != basename:
+        key_basename = posixpath.basename(str(key or "").replace("\\", "/").casefold())
+        key_stem = posixpath.splitext(key_basename)[0]
+        key_candidates = {key_basename, key_stem}
+        stripped_key_stem = strip_hitomi_download_prefix(key_stem)
+        if stripped_key_stem:
+            key_candidates.add(stripped_key_stem.casefold())
+        if not basename_candidates.intersection(key_candidates):
             continue
         if match is not None:
             return None
         match = value
     return match
+
+
+def _is_gif_collection_path(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+    try:
+        return any(
+            normalized_extension(file_name) == ".gif"
+            and os.path.isfile(os.path.join(path, file_name))
+            for file_name in os.listdir(path)
+        )
+    except OSError:
+        return False
 
 
 def _flatten_imported_media_paths(
@@ -1580,7 +1654,28 @@ def _flatten_imported_media_paths(
         source_path = os.path.normpath(raw_path)
         relative_path = os.path.relpath(source_path, folder_path).replace("\\", "/")
         file_name = _normalized_import_file_name(os.path.basename(source_path))
+        if os.path.isdir(source_path):
+            stripped_file_name = strip_hitomi_download_prefix(file_name)
+            if stripped_file_name:
+                file_name = _normalized_import_file_name(stripped_file_name)
         relative_hint = _replace_relative_basename(relative_path, file_name)
+        if os.path.isdir(source_path):
+            target_path = os.path.normpath(os.path.join(folder_path, file_name))
+            if os.path.normcase(target_path) == os.path.normcase(source_path):
+                flattened.append((source_path, relative_hint))
+                continue
+            if os.path.exists(target_path):
+                replacement_path = _resolve_available_import_target_path(target_path)
+                logger.info(
+                    '[MOVE] renamed duplicate flattened import folder source=%s target=%s replacement=%s',
+                    source_path,
+                    target_path,
+                    replacement_path,
+                )
+                target_path = replacement_path
+            shutil.move(source_path, target_path)
+            flattened.append((os.path.normpath(target_path), relative_hint))
+            continue
         target_path = os.path.normpath(os.path.join(folder_path, file_name))
         if os.path.normcase(target_path) == os.path.normcase(source_path):
             flattened.append((source_path, relative_hint))

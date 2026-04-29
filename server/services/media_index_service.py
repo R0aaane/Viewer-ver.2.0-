@@ -107,7 +107,26 @@ class MediaIndexService:
                     for directory_name in dirs
                     if not _is_hidden_entry(os.path.join(base, directory_name))
                 ]
+                gif_collection_record = (
+                    self._build_record_for_gif_collection(base, files)
+                    if _normalize_path(base) != normalized_root
+                    else None
+                )
+                gif_collection_names: set[str] = set()
+                if gif_collection_record is not None:
+                    stable_record = self._preserve_existing_media_identity(gif_collection_record)
+                    self._db.upsert_media_record(stable_record)
+                    indexed_media_ids.append(str(stable_record['media_id']))
+                    found_paths.add(str(stable_record['normalized_full_path']))
+                    scanned += 1
+                    gif_collection_names = {
+                        file_name
+                        for file_name in files
+                        if Path(file_name).suffix.lower() == ".gif"
+                    }
                 for file_name in files:
+                    if file_name in gif_collection_names:
+                        continue
                     if _is_hidden_entry(os.path.join(base, file_name)):
                         continue
                     full_path = os.path.normpath(os.path.join(base, file_name))
@@ -221,6 +240,62 @@ class MediaIndexService:
             'normalized_full_path': _normalize_path(full_path),
             'kind': kind,
             'mime_type': mime_type,
+            'size_bytes': size_bytes,
+            'modified_at': modified_at,
+            'modified_epoch_ms': modified_epoch_ms,
+            'etag': _etag_for_file(full_path, size_bytes, modified_epoch_ms),
+            'is_deleted': 0,
+        }
+
+    def _build_record_for_gif_collection(
+        self,
+        directory_path: str,
+        file_names: list[str],
+    ) -> dict[str, object] | None:
+        gif_names = sorted(
+            file_name
+            for file_name in file_names
+            if Path(file_name).suffix.lower() == ".gif"
+            and not _is_hidden_entry(os.path.join(directory_path, file_name))
+        )
+        if not gif_names:
+            return None
+
+        full_path = os.path.normpath(directory_path)
+        try:
+            size_bytes = 0
+            modified_epoch_ms = 0
+            for file_name in gif_names:
+                stat = os.stat(os.path.join(full_path, file_name))
+                size_bytes += int(stat.st_size)
+                modified_epoch_ms = max(modified_epoch_ms, int(stat.st_mtime * 1000))
+            modified_at = datetime.fromtimestamp(
+                modified_epoch_ms / 1000,
+                tz=timezone.utc,
+            ).isoformat()
+            folder_of_item = os.path.dirname(full_path)
+            display_name = os.path.basename(full_path)
+            media_id = build_media_id(
+                kind="pdf",
+                full_path=full_path,
+                folder_raw=folder_of_item,
+                display_name=display_name,
+                size_bytes=size_bytes,
+                modified_epoch_ms=modified_epoch_ms,
+            )
+        except OSError as error:
+            logger.warning('scan skip unreadable gif collection: %s (%s)', full_path, error)
+            return None
+
+        return {
+            'media_id': media_id,
+            'folder_raw': folder_of_item,
+            'relative_hint': display_name,
+            'display_name': display_name,
+            'full_path': full_path,
+            'normalized_full_path': _normalize_path(full_path),
+            'kind': "pdf",
+            'mime_type': "application/x.gif-collection",
             'size_bytes': size_bytes,
             'modified_at': modified_at,
             'modified_epoch_ms': modified_epoch_ms,

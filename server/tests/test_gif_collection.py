@@ -1,0 +1,75 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from server.repositories.sqlite_store import SqliteStore
+from server.api.routes_actions import _flatten_imported_media_paths
+from server.services.media_index_service import MediaIndexService
+from server.services.metadata_store import MetadataStore
+from server.services.thumbnail_service import ThumbnailService
+
+
+_GIF_1X1 = (
+    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+    b"\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
+    b"\x00\x02\x02D\x01\x00;"
+)
+
+
+class GifCollectionTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+
+        root = Path(self._temp_dir.name)
+        self.library_dir = root / "library"
+        self.library_dir.mkdir()
+        self.thumbs_dir = root / "thumbs"
+
+        self.sqlite = SqliteStore(root / "metadata.db")
+        self.addCleanup(self.sqlite.close)
+        self.sqlite.init_schema()
+        self.metadata = MetadataStore(self.sqlite)
+        self.index = MediaIndexService(self.sqlite)
+        self.thumbnails = ThumbnailService(self.metadata, self.thumbs_dir)
+
+    def test_gif_folder_indexes_as_pdf_like_collection(self) -> None:
+        collection = self.library_dir / "[20240101] [123] Sample GIF"
+        collection.mkdir()
+        (collection / "002.gif").write_bytes(_GIF_1X1)
+        (collection / "001.gif").write_bytes(_GIF_1X1)
+
+        self.index.scan_folder(str(self.library_dir))
+        records = self.sqlite.list_media_records(include_deleted=False)
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["kind"], "pdf")
+        self.assertEqual(record["mime_type"], "application/x.gif-collection")
+        self.assertEqual(Path(record["full_path"]), collection)
+        self.assertEqual(
+            self.thumbnails.get_pdf_page_count(str(record["media_id"])),
+            2,
+        )
+        rendered = self.thumbnails.render_pdf_page(
+            str(record["media_id"]),
+            page_no=1,
+        )
+        self.assertEqual(rendered.mime, "image/gif")
+        self.assertTrue(rendered.payload.startswith(b"GIF"))
+
+    def test_flattened_gif_collection_uses_stripped_hitomi_title(self) -> None:
+        staging = Path(self._temp_dir.name) / "stage"
+        gallery = staging / "hitomi" / "artist" / "[20240101] [123] Sample GIF"
+        gallery.mkdir(parents=True)
+        (gallery / "001.gif").write_bytes(_GIF_1X1)
+
+        entries = _flatten_imported_media_paths(str(staging), [str(gallery)])
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(Path(entries[0][0]).name, "Sample GIF")
+        self.assertEqual(entries[0][1], "hitomi/artist/Sample GIF")
+
+
+if __name__ == "__main__":
+    unittest.main()

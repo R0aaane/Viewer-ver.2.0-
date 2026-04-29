@@ -95,7 +95,10 @@ class ThumbnailService:
         is_placeholder = False
         detail: str | None = None
         try:
-            if record["kind"] == "pdf":
+            if _is_gif_collection_path(path):
+                image = Image.open(_gif_collection_page_path(path, page_no)).convert("RGB")
+                image.thumbnail((target_width, target_height))
+            elif record["kind"] == "pdf":
                 image, is_placeholder, detail = self._render_pdf_page(
                     media_id=media_id,
                     path=path,
@@ -162,6 +165,14 @@ class ThumbnailService:
         if not os.path.exists(path):
             raise not_found("PDF file was not found")
 
+        if _is_gif_collection_path(path):
+            page_path = _gif_collection_page_path(path, page_no)
+            return ThumbnailBuildResult(
+                payload=Path(page_path).read_bytes(),
+                mime="image/gif",
+                is_placeholder=False,
+            )
+
         target_width = max(128, width or 1600)
         is_placeholder = False
         detail: str | None = None
@@ -216,6 +227,9 @@ class ThumbnailService:
             return None
 
         path = str(record["fullPath"])
+        if _is_gif_collection_path(path):
+            return len(_gif_collection_page_paths(path))
+
         self._log_pdf_probe(media_id, path, context="page_count")
         if not os.path.isfile(path):
             logger.warning(
@@ -516,3 +530,25 @@ class ThumbnailBuildResult:
     mime: str
     is_placeholder: bool = False
     detail: str | None = None
+
+
+def _is_gif_collection_path(path: str) -> bool:
+    return os.path.isdir(path) and bool(_gif_collection_page_paths(path))
+
+
+def _gif_collection_page_paths(path: str) -> list[str]:
+    if not os.path.isdir(path):
+        return []
+    return [
+        os.path.join(path, file_name)
+        for file_name in sorted(os.listdir(path), key=lambda value: value.casefold())
+        if Path(file_name).suffix.lower() == ".gif"
+        and os.path.isfile(os.path.join(path, file_name))
+    ]
+
+
+def _gif_collection_page_path(path: str, page_no: int) -> str:
+    pages = _gif_collection_page_paths(path)
+    if page_no < 1 or page_no > len(pages):
+        raise bad_request("pageNo is out of range")
+    return pages[page_no - 1]
