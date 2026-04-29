@@ -9115,6 +9115,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             .where((entry) => entry.kind != MediaKind.folder)
             .toList(growable: false);
         final index = mediaOnly.indexWhere((entry) => entry.id == item.id);
+        final initialPageCountFuture = item.kind == MediaKind.pdf
+            ? widget.repo.getPageCount(item)
+            : null;
+        final initialReaderBytesFuture = item.kind == MediaKind.pdf
+            ? widget.repo.renderPageBytes(item, 1, maxWidth: 1600)
+            : null;
 
         final changed = await Navigator.push<bool>(
           context,
@@ -9125,6 +9131,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               items: mediaOnly,
               initialIndex: index < 0 ? 0 : index,
               initialPdfPage: 1,
+              initialPreloadItemId: item.id,
+              initialPageCountFuture: initialPageCountFuture,
+              initialReaderBytesFuture: initialReaderBytesFuture,
             ),
           ),
         );

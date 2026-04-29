@@ -54,6 +54,9 @@ class ImageDetailPage extends StatefulWidget {
   final List<MediaItem> items;
   final int initialIndex;
   final int? initialPdfPage;
+  final String? initialPreloadItemId;
+  final Future<int>? initialPageCountFuture;
+  final Future<Uint8List>? initialReaderBytesFuture;
 
   const ImageDetailPage({
     super.key,
@@ -62,6 +65,9 @@ class ImageDetailPage extends StatefulWidget {
     required this.items,
     required this.initialIndex,
     this.initialPdfPage,
+    this.initialPreloadItemId,
+    this.initialPageCountFuture,
+    this.initialReaderBytesFuture,
   });
 
   @override
@@ -1012,6 +1018,36 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     });
   }
 
+  bool _canUseInitialPreload(MediaItem item) {
+    return item.kind == MediaKind.pdf &&
+        _index == widget.initialIndex &&
+        widget.initialPreloadItemId == item.id;
+  }
+
+  void _seedInitialReaderPreload(MediaItem item, int page) {
+    final future = widget.initialReaderBytesFuture;
+    if (future == null || !_canUseInitialPreload(item)) return;
+    _readerFutureCache.putIfAbsent(page, () => future);
+  }
+
+  Future<int> _getPageCountForCurrent(MediaItem item) {
+    final future = widget.initialPageCountFuture;
+    if (future != null && _canUseInitialPreload(item)) return future;
+    return widget.repo.getPageCount(item);
+  }
+
+  void _prefetchAdjacentReaderPages(MediaItem item) {
+    if (item.kind != MediaKind.pdf || _totalPages <= 1) return;
+
+    final pages = <int>{_page - 1, _page + 1};
+    if (_twoPage) pages.add(_page + 2);
+
+    for (final page in pages) {
+      if (page < 1 || page > _totalPages) continue;
+      unawaited(_loadReaderBytes(item, page).catchError((_) => Uint8List(0)));
+    }
+  }
+
   void _syncReaderFutures(MediaItem item) {
     _leftFuture = _loadReaderBytes(item, _page);
 
@@ -1020,10 +1056,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       _rightFuture = nextPage <= _totalPages
           ? _loadReaderBytes(item, nextPage)
           : null;
+      _prefetchAdjacentReaderPages(item);
       return;
     }
 
     _rightFuture = null;
+    _prefetchAdjacentReaderPages(item);
   }
 
   void _setCurrentPdfPage(int page) {
@@ -1037,7 +1075,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   Future<void> _loadPageCountForCurrent(MediaItem item, int loadVersion) async {
     try {
-      final total = await widget.repo.getPageCount(item);
+      final total = await _getPageCountForCurrent(item);
       if (!_isCurrentLoad(loadVersion, item)) return;
 
       setState(() {
@@ -1054,6 +1092,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         _syncReaderFutures(item);
       });
       _schedulePersistCurrentActivity();
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('ページ情報の取得に失敗しました: $error')));
@@ -1117,6 +1156,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           ? (_pendingInitialPdfPage ?? 1)
           : 1;
       _pendingInitialPdfPage = null;
+      _seedInitialReaderPreload(item, initialPage < 1 ? 1 : initialPage);
       setState(() {
         _canPersistReadingProgress = item.kind != MediaKind.pdf;
         _hasMovedPdfPageSinceLoad = false;
