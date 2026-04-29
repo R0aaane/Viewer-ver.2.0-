@@ -648,7 +648,15 @@ class HostApiServerService extends ChangeNotifier {
       return;
     }
 
-    final appExePath = Platform.resolvedExecutable;
+    final appExePath = [
+      projectRoot.path,
+      'build',
+      'windows',
+      'x64',
+      'runner',
+      'Release',
+      'pdf_viewer.exe',
+    ].join(Platform.pathSeparator);
     final branch = Platform.environment['MEDIA_SERVER_HOST_UPDATE_BRANCH'] ?? '';
     final remote = Platform.environment['MEDIA_SERVER_HOST_UPDATE_REMOTE'] ??
         'origin';
