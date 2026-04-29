@@ -1022,6 +1022,15 @@ class AndroidFolderRepository implements MediaRepository {
   }
 
   @override
+  Future<Uint8List> renderStaticPageBytes(
+    MediaItem item,
+    int page, {
+    int maxWidth = 1600,
+  }) {
+    return renderPageBytes(item, page, maxWidth: maxWidth);
+  }
+
+  @override
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
     final cacheKey = '${item.id}|$maxWidth';
 
