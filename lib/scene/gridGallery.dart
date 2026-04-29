@@ -948,8 +948,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 child: const Text('後で'),
               ),
               FilledButton(
-                onPressed: () =>
-                    Navigator.of(dialogContext).pop(mismatch.hasUpdateUrl),
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                ).pop(mismatch.hasUpdateUrl || mismatch.isHostOlder),
                 child: Text(mismatch.hasUpdateUrl ? 'アップデート' : '確認'),
               ),
             ],
@@ -957,8 +958,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         },
       );
       if (openUpdate == true) {
-        final opened = await _appVersionService.openUpdate(mismatch);
-        if (!opened && mounted) {
+        final handled = mismatch.isHostOlder
+            ? await _appVersionService.requestHostUpdate(
+                widget.tagService.settings,
+                mismatch,
+              )
+            : await _appVersionService.openUpdate(mismatch);
+        if (!handled && mounted) {
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text('更新先を開けませんでした')));

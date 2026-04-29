@@ -37,7 +37,11 @@ def load_host_update_status(settings) -> dict[str, object]:
     return {"ok": True, "state": "unknown"}
 
 
-def start_host_update(settings, project_root: Path) -> dict[str, object]:
+def start_host_update(
+    settings,
+    project_root: Path,
+    request_payload: dict[str, object] | None = None,
+) -> dict[str, object]:
     runner_path = settings.host_update_runner_path
     if not runner_path.is_file():
         raise bad_request(f"host update runner was not found: {runner_path}")
@@ -54,6 +58,7 @@ def start_host_update(settings, project_root: Path) -> dict[str, object]:
             "state": "queued",
             "startedAt": _now_iso(),
             "message": "host update was queued",
+            "request": _clean_request_payload(request_payload),
         },
     )
 
@@ -101,9 +106,21 @@ def start_host_update(settings, project_root: Path) -> dict[str, object]:
             "pid": process.pid,
             "startedAt": _now_iso(),
             "message": "host update runner started",
+            "request": _clean_request_payload(request_payload),
         },
     )
     return {"ok": True, "state": "running", "pid": process.pid}
+
+
+def _clean_request_payload(payload: dict[str, object] | None) -> dict[str, str]:
+    if not payload:
+        return {}
+    allowed = ("clientVersion", "hostVersion", "latestVersion")
+    return {
+        key: str(payload.get(key) or "").strip()[:80]
+        for key in allowed
+        if str(payload.get(key) or "").strip()
+    }
 
 
 def _status_path(settings) -> Path:

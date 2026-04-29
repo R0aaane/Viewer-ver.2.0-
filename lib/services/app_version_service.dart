@@ -10,7 +10,7 @@ import '../models/metadata_settings.dart';
 
 const String _fallbackAppVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.2+5',
+  defaultValue: '1.0.31+41',
 );
 const String defaultAppUpdateVersion = String.fromEnvironment(
   'PDF_VIEWER_UPDATE_VERSION',
@@ -124,11 +124,12 @@ class AppVersionService {
       hostVersion: hostInfo.version,
       latestVersion: latestVersion,
       hostUrl: baseUrl,
-      updateUrl: _canUseHostUpdate(
-        localVersion: localVersion,
-        updateVersion: hostInfo.updateVersion,
-        updateUrl: hostInfo.updateUrl,
-      )
+      updateUrl:
+          _canUseHostUpdate(
+            localVersion: localVersion,
+            updateVersion: hostInfo.updateVersion,
+            updateUrl: hostInfo.updateUrl,
+          )
           ? _resolveUpdateUrl(baseUrl, hostInfo.updateUrl)
           : null,
       knownVersions: knownVersions,
@@ -145,6 +146,49 @@ class AppVersionService {
       return false;
     }
     return launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<bool> requestHostUpdate(
+    MetadataSettings settings,
+    AppVersionMismatch mismatch,
+  ) async {
+    if (!mismatch.isHostOlder) {
+      return false;
+    }
+    final uri = _buildUri(mismatch.hostUrl, '/host-update/run');
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6)
+      ..idleTimeout = const Duration(seconds: 6);
+
+    try {
+      final request = await client.postUrl(uri);
+      request.headers.contentType = ContentType.json;
+      final token = settings.authToken?.trim();
+      if (token != null && token.isNotEmpty) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
+      request.headers.set('X-Pdf-Viewer-App-Version', mismatch.localVersion);
+      request.add(
+        utf8.encode(
+          jsonEncode(<String, String>{
+            'clientVersion': mismatch.localVersion,
+            'hostVersion': mismatch.hostVersion,
+            'latestVersion': mismatch.latestVersion,
+          }),
+        ),
+      );
+      final response = await request.close().timeout(
+        const Duration(seconds: 6),
+      );
+      await response.drain<void>();
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } on SocketException {
+      return false;
+    } on TimeoutException {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
   }
 
   Future<_HostVersionInfo?> _fetchHostVersion({

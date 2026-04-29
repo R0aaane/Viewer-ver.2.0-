@@ -688,7 +688,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                 child: const Text('閉じる'),
               ),
               FilledButton(
-                onPressed: mismatch.hasUpdateUrl
+                onPressed: (mismatch.hasUpdateUrl || mismatch.isHostOlder)
                     ? () => Navigator.of(dialogContext).pop(true)
                     : null,
                 child: const Text('更新を開く'),
@@ -699,8 +699,11 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
       );
 
       if (shouldOpen == true) {
-        final opened = await AppVersionService().openUpdate(mismatch);
-        if (!opened) {
+        final service = AppVersionService();
+        final handled = mismatch.isHostOlder
+            ? await service.requestHostUpdate(draft, mismatch)
+            : await service.openUpdate(mismatch);
+        if (!handled) {
           _showSnackBar('更新ファイルを開けませんでした');
         }
       }
