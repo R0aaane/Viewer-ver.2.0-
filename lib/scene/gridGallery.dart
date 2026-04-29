@@ -393,21 +393,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final inFlight = _mediaThumbInFlight[key];
     if (inFlight != null) return inFlight;
 
-    final future = (() async {
-      await _acquireMediaThumbSlot();
-      try {
-        final pair = await widget.repo.readThumbPair(
-          item,
-          maxWidth: _mediaThumbMaxWidth,
-        );
-        _mediaThumbCachePut(key, pair);
-        return pair;
-      } finally {
-        _releaseMediaThumbSlot();
-      }
-    })().whenComplete(() {
-      _mediaThumbInFlight.remove(key);
-    });
+    final future =
+        (() async {
+          await _acquireMediaThumbSlot();
+          try {
+            final pair = await widget.repo.readThumbPair(
+              item,
+              maxWidth: _mediaThumbMaxWidth,
+            );
+            _mediaThumbCachePut(key, pair);
+            return pair;
+          } finally {
+            _releaseMediaThumbSlot();
+          }
+        })().whenComplete(() {
+          _mediaThumbInFlight.remove(key);
+        });
 
     _mediaThumbInFlight[key] = future;
     return future;
@@ -425,9 +426,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         await Future<void>.delayed(const Duration(milliseconds: 80));
         for (final item in visible) {
           if (!mounted || generation != _visiblePrepareGeneration) return;
-          unawaited(_getMediaThumbPair(item).catchError((_) {
-            return ThumbPair(front: Uint8List(0), back: null);
-          }));
+          unawaited(
+            _getMediaThumbPair(item).catchError((_) {
+              return ThumbPair(front: Uint8List(0), back: null);
+            }),
+          );
         }
 
         for (final item in visible) {
@@ -2380,9 +2383,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     switch (sortMode) {
       case _SortMode.name:
         sorted.sort(
-          (a, b) => a.displayName.toLowerCase().compareTo(
-            b.displayName.toLowerCase(),
-          ),
+          (a, b) => _compareNaturalName(a.displayName, b.displayName),
         );
         break;
       case _SortMode.updatedAt:
@@ -7068,6 +7069,37 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
+  int _compareNaturalName(String left, String right) {
+    final a = left.toLowerCase();
+    final b = right.toLowerCase();
+    final tokenPattern = RegExp(r'\d+|\D+');
+    final aTokens = tokenPattern.allMatches(a).map((m) => m.group(0)!).toList();
+    final bTokens = tokenPattern.allMatches(b).map((m) => m.group(0)!).toList();
+    final count = aTokens.length < bTokens.length
+        ? aTokens.length
+        : bTokens.length;
+
+    for (var i = 0; i < count; i++) {
+      final aToken = aTokens[i];
+      final bToken = bTokens[i];
+      final aNumber = int.tryParse(aToken);
+      final bNumber = int.tryParse(bToken);
+
+      if (aNumber != null && bNumber != null) {
+        final numberCompare = aNumber.compareTo(bNumber);
+        if (numberCompare != 0) return numberCompare;
+        final lengthCompare = aToken.length.compareTo(bToken.length);
+        if (lengthCompare != 0) return lengthCompare;
+        continue;
+      }
+
+      final textCompare = aToken.compareTo(bToken);
+      if (textCompare != 0) return textCompare;
+    }
+
+    return aTokens.length.compareTo(bTokens.length);
+  }
+
   List<MediaItem> _applyFilter(
     List<MediaItem> input, {
     required bool? pdfOnly,
@@ -7138,11 +7170,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final list = out.toList(growable: true);
     switch (_sortMode) {
       case _SortMode.name:
-        list.sort(
-          (a, b) => a.displayName.toLowerCase().compareTo(
-            b.displayName.toLowerCase(),
-          ),
-        );
+        list.sort((a, b) => _compareNaturalName(a.displayName, b.displayName));
         break;
       case _SortMode.updatedAt:
         list.sort((a, b) => _getUpdatedAt(b).compareTo(_getUpdatedAt(a)));
