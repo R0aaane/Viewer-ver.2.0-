@@ -596,7 +596,9 @@ class HostApiServerService extends ChangeNotifier {
     required int port,
     required Map<String, String> environment,
   }) async {
-    final workdir = Directory.current.path;
+    final projectRoot = await _resolveProjectRoot();
+    final workdir = projectRoot?.path ?? Directory.current.path;
+    final serverEnvironment = _withPythonPath(environment, workdir);
     final commands = <List<String>>[
       <String>['python', '-m', 'uvicorn', 'server.main:app', '--host', '0.0.0.0', '--port', '$port'],
       <String>['py', '-m', 'uvicorn', 'server.main:app', '--host', '0.0.0.0', '--port', '$port'],
@@ -607,7 +609,7 @@ class HostApiServerService extends ChangeNotifier {
       final available = await _canLaunchServerWith(
         launcher,
         workdir: workdir,
-        environment: environment,
+        environment: serverEnvironment,
       );
       if (!available) {
         continue;
@@ -618,7 +620,7 @@ class HostApiServerService extends ChangeNotifier {
           launcher,
           command.sublist(1),
           workingDirectory: workdir,
-          environment: environment,
+          environment: serverEnvironment,
           runInShell: true,
         );
       } on ProcessException catch (error) {
@@ -626,6 +628,19 @@ class HostApiServerService extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  Map<String, String> _withPythonPath(
+    Map<String, String> environment,
+    String projectRoot,
+  ) {
+    final next = Map<String, String>.from(environment);
+    final current = next['PYTHONPATH']?.trim();
+    final separator = Platform.isWindows ? ';' : ':';
+    next['PYTHONPATH'] = current == null || current.isEmpty
+        ? projectRoot
+        : '$projectRoot$separator$current';
+    return next;
   }
 
   Future<void> _startHostAutoUpdate(MetadataSettings settings) async {
@@ -720,11 +735,11 @@ class HostApiServerService extends ChangeNotifier {
         final pubspec = File(
           '${current.path}${Platform.pathSeparator}pubspec.yaml',
         );
-        final script = File(
-          '${current.path}${Platform.pathSeparator}tool'
-          '${Platform.pathSeparator}host_auto_update.ps1',
+        final serverMain = File(
+          '${current.path}${Platform.pathSeparator}server'
+          '${Platform.pathSeparator}main.py',
         );
-        if (await pubspec.exists() && await script.exists()) {
+        if (await pubspec.exists() && await serverMain.exists()) {
           return current;
         }
 
