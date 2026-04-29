@@ -126,6 +126,15 @@ class HitomiHelpersTest(unittest.TestCase):
             'gif',
         )
 
+    def test_list_hitomi_extensions_prefers_webp_fallback_for_original_gif(self) -> None:
+        self.assertEqual(
+            list_hitomi_extensions(
+                {'name': 'sample.gif', 'hasavif': True},
+                preferred='original',
+            )[1],
+            'webp',
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

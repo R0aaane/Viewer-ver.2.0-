@@ -263,10 +263,15 @@ def list_hitomi_extensions(file_info: dict, preferred: str = "auto"):
         if preferred not in {"avif", "jxl"} or file_info.get(f"has{preferred}"):
             add_extension(preferred)
 
-    if file_info.get("hasavif"):
-        add_extension("avif")
+    if preferred == "original" and original_ext == "gif":
+        add_extension("webp")
+        if file_info.get("hasavif"):
+            add_extension("avif")
+    else:
+        if file_info.get("hasavif"):
+            add_extension("avif")
 
-    add_extension("webp")
+        add_extension("webp")
 
     if file_info.get("hasjxl"):
         add_extension("jxl")
@@ -323,11 +328,16 @@ def build_hitomi_file(file_info: dict, gg_map: dict, gg_base: str, gg_default: i
     original_name = os.path.basename((file_info.get("name") or "").split("?")[0])
     filename = os.path.splitext(original_name)[0] or image_hash
     primary_url = build_hitomi_media_url(gg_base, image_number, image_hash, extension, host_index)
+    fallback_urls = [
+        build_hitomi_media_url(gg_base, image_number, image_hash, fallback_ext, host_index)
+        for fallback_ext in extensions[1:]
+    ]
 
     return {
         "filename": filename,
         "ext": extension,
         "url": primary_url,
-        "fallback_urls": [],
+        "fallback_urls": fallback_urls,
+        "fallback_exts": extensions[1:],
         "hash": None,
     }

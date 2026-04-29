@@ -1093,9 +1093,21 @@ class downloader:
         self.mark_file_started(file)
 
         request_headers={'Referer':file['file_variables']['referer']}
-        candidate_urls = [file['file_variables']['url']]
-        candidate_urls.extend(file['file_variables'].get('fallback_urls', []))
-        candidate_urls = list(dict.fromkeys(url for url in candidate_urls if url))
+        candidate_exts = [
+            file['file_variables'].get('ext'),
+            *file['file_variables'].get('fallback_exts', []),
+        ]
+        candidate_urls = [
+            file['file_variables']['url'],
+            *file['file_variables'].get('fallback_urls', []),
+        ]
+        candidate_pairs = []
+        seen_candidate_urls = set()
+        for candidate_url, candidate_ext in zip(candidate_urls, candidate_exts):
+            if not candidate_url or candidate_url in seen_candidate_urls:
+                continue
+            seen_candidate_urls.add(candidate_url)
+            candidate_pairs.append((candidate_url, candidate_ext))
 
         if self.force_dss:
             dss_letter=isinstance(self.force_dss,str) and self.force_dss[0]
@@ -1120,8 +1132,9 @@ class downloader:
         response = None
         head_ref = None
         selected_url = file['file_variables']['url']
-        for index, candidate_url in enumerate(candidate_urls):
-            is_last_candidate = index == len(candidate_urls) - 1
+        selected_ext = file['file_variables'].get('ext')
+        for index, (candidate_url, candidate_ext) in enumerate(candidate_pairs):
+            is_last_candidate = index == len(candidate_pairs) - 1
             try:
                 if self.headcheck:
                     head_ref = self.session.get(
@@ -1151,6 +1164,7 @@ class downloader:
                 return
 
             selected_url = candidate_url
+            selected_ext = candidate_ext
             if response.status_code in {403, 404} and not is_last_candidate:
                 logger.warning(f"Candidate url returned {response.status_code}, trying fallback | {candidate_url}")
                 continue
@@ -1277,10 +1291,55 @@ class downloader:
                     return
             # remove .part from file name
             if self.overwrite:
+                self.convert_downloaded_file_if_needed(part_file, file, selected_ext)
                 os.replace(part_file, file['file_path'])
             else:
+                self.convert_downloaded_file_if_needed(part_file, file, selected_ext)
                 os.rename(part_file, file['file_path'])
             self.mark_file_outcome(file, 'success')
+
+    def convert_downloaded_file_if_needed(self, part_file: str, file: dict, selected_ext: str | None):
+        target_ext = str(file['file_variables'].get('ext') or '').lower().lstrip('.')
+        source_ext = str(selected_ext or '').lower().lstrip('.')
+        if target_ext != 'gif' or source_ext in {'', 'gif'}:
+            return
+        if source_ext not in {'webp', 'avif'}:
+            return
+
+        converted_path = f"{part_file}.gif-convert"
+        try:
+            with Image.open(part_file) as source:
+                frames = []
+                durations = []
+                frame_index = 0
+                while True:
+                    try:
+                        source.seek(frame_index)
+                    except EOFError:
+                        break
+                    frames.append(source.convert('RGBA'))
+                    durations.append(source.info.get('duration', 100))
+                    frame_index += 1
+                if not frames:
+                    raise ValueError("no frames")
+                first, rest = frames[0], frames[1:]
+                first.save(
+                    converted_path,
+                    format='GIF',
+                    save_all=True,
+                    append_images=rest,
+                    duration=durations,
+                    loop=source.info.get('loop', 0),
+                    disposal=2,
+                )
+            os.replace(converted_path, part_file)
+            logger.info(f"Converted downloaded {source_ext} to gif: {os.path.split(file['file_path'])[1]}")
+        finally:
+            if os.path.exists(converted_path):
+                try:
+                    os.remove(converted_path)
+                except OSError:
+                    pass
 
     def download_yt_dlp(self, post:dict):
         # download from video streaming site
