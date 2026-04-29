@@ -290,6 +290,10 @@ def get_args():
                     # help="Check some first bytes of downloaded content with a separate request to fail quick if weird thing happend. (default: False)")
                     help=argparse.SUPPRESS)
 
+    ap.add_argument("--hitomi-original",
+                    action=argparse.BooleanOptionalAction, default=False,
+                    help="Prefer original Hitomi file extension when available. (default: False)")
+
     ap.add_argument("--proxy-agent",
                     metavar="https://agent/proxy", type=str, default=None,
                     help="Proxy agent URL. This is NOT standrad http/s proxy. Pass 'u' parameter to agent for proxying. Not enabled by default. "

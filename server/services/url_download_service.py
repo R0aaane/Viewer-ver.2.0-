@@ -76,6 +76,7 @@ _SUPPORTED_MEDIA_EXTENSIONS = {
     ".jpg",
     ".jpeg",
     ".png",
+    ".gif",
     ".webp",
     ".bmp",
     ".avif",
@@ -116,6 +117,7 @@ class UrlDownloadOptions:
     overwrite_existing_files: bool = False
     verbose: bool = False
     convert_hitomi_to_pdf: bool = True
+    prefer_hitomi_original: bool = False
 
     def collect_source_urls(self, source_url: str) -> list[str]:
         urls: list[str] = []
@@ -978,6 +980,8 @@ class UrlDownloadService:
             args.append("--verbose")
         if options.convert_hitomi_to_pdf:
             args.append("--hitomi-pdf")
+        if options.prefer_hitomi_original:
+            args.append("--hitomi-original")
 
         return args
 
@@ -1626,6 +1630,8 @@ class UrlDownloadService:
             return ".jpg"
         if mime_type == "image/png":
             return ".png"
+        if mime_type == "image/gif":
+            return ".gif"
         if mime_type == "image/webp":
             return ".webp"
         if mime_type in {"image/bmp", "image/x-ms-bmp"}:

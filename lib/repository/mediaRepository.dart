@@ -227,6 +227,7 @@ class UrlImportOptions {
   final bool overwriteExistingFiles;
   final bool verbose;
   final bool convertHitomiToPdf;
+  final bool preferHitomiOriginal;
 
   const UrlImportOptions({
     this.cookieMode = UrlImportCookieMode.auto,
@@ -244,6 +245,7 @@ class UrlImportOptions {
     this.overwriteExistingFiles = false,
     this.verbose = false,
     this.convertHitomiToPdf = true,
+    this.preferHitomiOriginal = false,
   });
 
   List<String> collectSourceUrls(String sourceUrl) {

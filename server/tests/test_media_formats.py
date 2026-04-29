@@ -22,9 +22,15 @@ class MediaFormatsTest(unittest.TestCase):
         self.assertTrue(is_supported_media_extension(normalized_extension('cover.AVIF')))
         self.assertEqual(media_kind_for_extension('.avif'), 'image')
 
+    def test_gif_is_supported_across_server_helpers(self) -> None:
+        self.assertIn('.gif', SUPPORTED_IMAGE_EXTENSIONS)
+        self.assertIn('.gif', SUPPORTED_MEDIA_EXTENSIONS)
+        self.assertTrue(is_supported_media_extension(normalized_extension('cover.GIF')))
+        self.assertEqual(media_kind_for_extension('.gif'), 'image')
+
     def test_unknown_extension_is_rejected(self) -> None:
-        self.assertFalse(is_supported_media_extension('.gif'))
-        self.assertIsNone(media_kind_for_extension('.gif'))
+        self.assertFalse(is_supported_media_extension('.tga'))
+        self.assertIsNone(media_kind_for_extension('.tga'))
 
 
 if __name__ == '__main__':

@@ -4,6 +4,7 @@ from server.vendor.kemono_dl.hitomi import (
     build_hitomi_pdf_path,
     collect_hitomi_names,
     extract_hitomi_gallery_html_metadata,
+    list_hitomi_extensions,
     pick_hitomi_directory_name,
     strip_hitomi_download_prefix,
 )
@@ -114,6 +115,15 @@ class HitomiHelpersTest(unittest.TestCase):
                 r'C:\library\hitomi\Original Series [12345]\[20241105] [3114110] Sample Title\001.webp',
             ),
             r'C:\library\hitomi\Original Series [12345]\Sample Title.pdf',
+        )
+
+    def test_list_hitomi_extensions_can_prefer_original_gif(self) -> None:
+        self.assertEqual(
+            list_hitomi_extensions(
+                {'name': 'sample.gif', 'hasavif': True},
+                preferred='original',
+            )[0],
+            'gif',
         )
 
 

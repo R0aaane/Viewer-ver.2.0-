@@ -164,7 +164,10 @@ class RemoteMediaRepository implements MediaRepository {
     final future = () async {
       try {
         try {
-          final meta = await _client.fetchMediaMeta(mediaId, identity: identity);
+          final meta = await _client.fetchMediaMeta(
+            mediaId,
+            identity: identity,
+          );
           _metaCache[meta.mediaId] = meta;
           if (meta.mediaId != mediaId) {
             _metaCache[mediaId] = meta;
@@ -382,6 +385,9 @@ class RemoteMediaRepository implements MediaRepository {
     }
     if (meta.mimeType == 'image/png') {
       return '.png';
+    }
+    if (meta.mimeType == 'image/gif') {
+      return '.gif';
     }
     if (meta.mimeType == 'image/avif') {
       return '.avif';
@@ -2724,14 +2730,8 @@ class SwitchingMediaRepository implements MediaRepository {
       _activeRepository.readBytes(item);
 
   @override
-  Future<Uint8List> readPdfSourceBytes(
-    MediaItem item, {
-    int maxWidth = 2800,
-  }) {
-    return _activeRepository.readPdfSourceBytes(
-      item,
-      maxWidth: maxWidth,
-    );
+  Future<Uint8List> readPdfSourceBytes(MediaItem item, {int maxWidth = 2800}) {
+    return _activeRepository.readPdfSourceBytes(item, maxWidth: maxWidth);
   }
 
   @override

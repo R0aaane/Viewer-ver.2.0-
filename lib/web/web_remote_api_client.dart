@@ -814,6 +814,7 @@ class WebRemoteApiClient {
       'overwrite': effectiveOptions.overwriteExistingFiles,
       'verbose': effectiveOptions.verbose,
       'convertHitomiToPdf': effectiveOptions.convertHitomiToPdf,
+      'preferHitomiOriginal': effectiveOptions.preferHitomiOriginal,
       if (artistTag != null && artistTag.isNotEmpty) 'artistTag': artistTag,
       if (seriesTag != null && seriesTag.isNotEmpty) 'seriesTag': seriesTag,
       if (importMetadata != null && importMetadata.freeTags.isNotEmpty)

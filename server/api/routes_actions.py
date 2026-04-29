@@ -629,6 +629,7 @@ async def download_url(
         overwrite_existing_files=payload.overwrite,
         verbose=payload.verbose,
         convert_hitomi_to_pdf=payload.convertHitomiToPdf,
+        prefer_hitomi_original=payload.preferHitomiOriginal,
     )
     if not options.has_any_source(source_url):
         raise bad_request("Provide a URL, URL list file, or favorites condition")

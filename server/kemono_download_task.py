@@ -124,6 +124,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Convert downloaded Hitomi galleries into PDF files",
     )
+    parser.add_argument(
+        "--hitomi-original",
+        action="store_true",
+        help="Prefer Hitomi original file extensions when available",
+    )
     return parser.parse_args()
 
 
@@ -353,6 +358,8 @@ def main() -> None:
         kemono_argv.append("--verbose")
     if options.replace_tld:
         kemono_argv.append("--replace-tld")
+    if options.hitomi_original:
+        kemono_argv.append("--hitomi-original")
 
     _emit_event(
         "task_start",

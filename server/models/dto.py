@@ -184,6 +184,7 @@ class DownloadUrlRequest(BaseModel):
     overwrite: bool = False
     verbose: bool = False
     convertHitomiToPdf: bool = True
+    preferHitomiOriginal: bool = False
     artistTag: str | None = None
     seriesTag: str | None = None
     freeTags: list[str] = Field(default_factory=list)

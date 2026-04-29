@@ -83,6 +83,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
   bool _overwriteExistingFiles = false;
   bool _verbose = false;
   bool _convertHitomiToPdf = true;
+  bool _preferHitomiOriginal = false;
   bool _favoriteSitesCustomized = false;
   bool _hitomiPdfCustomized = false;
   bool _organizeAfterImport = false;
@@ -155,6 +156,7 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
     overwriteExistingFiles: _overwriteExistingFiles,
     verbose: _verbose,
     convertHitomiToPdf: _convertHitomiToPdf,
+    preferHitomiOriginal: _preferHitomiOriginal,
   );
 
   ImportMetadata get _importMetadata =>
@@ -916,6 +918,15 @@ class _WebUrlImportSheetState extends State<WebUrlImportSheet> {
                 setState(() {
                   _hitomiPdfCustomized = true;
                   _convertHitomiToPdf = selected;
+                });
+              },
+            ),
+            FilterChip(
+              label: const Text('Hitomi original'),
+              selected: _preferHitomiOriginal,
+              onSelected: (selected) {
+                setState(() {
+                  _preferHitomiOriginal = selected;
                 });
               },
             ),

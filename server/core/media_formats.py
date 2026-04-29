@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-SUPPORTED_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp", ".avif"})
+SUPPORTED_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"})
 SUPPORTED_MEDIA_EXTENSIONS = frozenset({*SUPPORTED_IMAGE_EXTENSIONS, ".pdf"})
 
 

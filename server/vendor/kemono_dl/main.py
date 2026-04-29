@@ -114,6 +114,7 @@ class downloader:
             self.icon_banner.append('banner')
         self.dms = args['dms']
         self.announcements = args['announcements']
+        self.hitomi_file_preference = 'original' if args['hitomi_original'] else 'auto'
 
         # controls files to ignore
         self.overwrite = args['overwrite']
@@ -396,7 +397,13 @@ class downloader:
         files = info.get('files') or []
         index_width = len(str(len(files))) if files else 1
         for index, file_info in enumerate(files, start=1):
-            file_variables = build_hitomi_file(file_info, gg_map, gg_base, gg_default)
+            file_variables = build_hitomi_file(
+                file_info,
+                gg_map,
+                gg_base,
+                gg_default,
+                preferred=self.hitomi_file_preference,
+            )
             file_variables.update({
                 'index': str(index).zfill(index_width),
                 'referer': gallery['reader_url'],

@@ -1590,6 +1590,7 @@ class UrlImportDownloaderService {
       overwriteExistingFiles: options.overwriteExistingFiles,
       verbose: options.verbose,
       convertHitomiToPdf: options.convertHitomiToPdf,
+      preferHitomiOriginal: options.preferHitomiOriginal,
     );
   }
 
@@ -1607,6 +1608,7 @@ class UrlImportDownloaderService {
       overwriteExistingFiles: options.overwriteExistingFiles,
       verbose: options.verbose,
       convertHitomiToPdf: options.convertHitomiToPdf,
+      preferHitomiOriginal: options.preferHitomiOriginal,
     );
   }
 
@@ -1828,6 +1830,8 @@ class UrlImportDownloaderService {
         return '.jpg';
       case 'image/png':
         return '.png';
+      case 'image/gif':
+        return '.gif';
       case 'image/webp':
         return '.webp';
       case 'image/bmp':
@@ -1924,6 +1928,9 @@ class UrlImportDownloaderService {
     }
     if (options.convertHitomiToPdf) {
       args.add('--hitomi-pdf');
+    }
+    if (options.preferHitomiOriginal) {
+      args.add('--hitomi-original');
     }
 
     return args;

@@ -75,6 +75,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
   bool _overwriteExistingFiles = false;
   bool _verbose = false;
   bool _convertHitomiToPdf = true;
+  bool _preferHitomiOriginal = false;
   bool _favoriteSitesCustomized = false;
   bool _hitomiPdfCustomized = false;
   UrlImportMediaType _mediaType = UrlImportMediaType.all;
@@ -131,6 +132,7 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
     overwriteExistingFiles: _overwriteExistingFiles,
     verbose: _verbose,
     convertHitomiToPdf: _convertHitomiToPdf,
+    preferHitomiOriginal: _preferHitomiOriginal,
   );
 
   bool get _canSubmit => _validate(showMessage: false);
@@ -571,6 +573,13 @@ class _UrlImportDialogState extends State<UrlImportDialog> {
                     onSelected: (selected) => setState(() {
                       _hitomiPdfCustomized = true;
                       _convertHitomiToPdf = selected;
+                    }),
+                  ),
+                  FilterChip(
+                    label: const Text('Hitomi original'),
+                    selected: _preferHitomiOriginal,
+                    onSelected: (selected) => setState(() {
+                      _preferHitomiOriginal = selected;
                     }),
                   ),
                   FilterChip(

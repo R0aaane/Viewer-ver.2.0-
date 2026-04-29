@@ -4,6 +4,7 @@ class MediaFileTypes {
     'jpg',
     'jpeg',
     'png',
+    'gif',
     'webp',
     'bmp',
     'avif',
@@ -18,6 +19,7 @@ class MediaFileTypes {
     '.jpg',
     '.jpeg',
     '.png',
+    '.gif',
     '.webp',
     '.bmp',
     '.avif',
@@ -49,6 +51,8 @@ class MediaFileTypes {
     switch (extensionOf(fileName)) {
       case '.png':
         return 'image/png';
+      case '.gif':
+        return 'image/gif';
       case '.webp':
         return 'image/webp';
       case '.bmp':
