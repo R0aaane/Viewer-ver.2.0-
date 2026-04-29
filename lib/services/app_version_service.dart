@@ -10,7 +10,7 @@ import '../models/metadata_settings.dart';
 
 const String _fallbackAppVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.31+41',
+  defaultValue: '1.0.43+53',
 );
 const String defaultAppUpdateVersion = String.fromEnvironment(
   'PDF_VIEWER_UPDATE_VERSION',
@@ -41,6 +41,38 @@ class AppVersionMismatch {
   bool get isHostOlder => compareAppVersions(hostVersion, latestVersion) < 0;
 
   bool get hasUpdateUrl => updateUrl?.trim().isNotEmpty == true;
+}
+
+class HostUpdateStatus {
+  final String state;
+  final String message;
+  final int? pid;
+
+  const HostUpdateStatus({
+    required this.state,
+    required this.message,
+    this.pid,
+  });
+
+  String get displayText {
+    final stateLabel = switch (state) {
+      'idle' => 'サーバー起動中',
+      'queued' => '更新待機中',
+      'running' => '更新処理中',
+      'checking' => '更新確認中',
+      'building' => 'ビルド中',
+      'restarting' => '再起動中',
+      'succeeded' => '更新完了',
+      'failed' => 'エラー発生中',
+      'unknown' => '状態不明',
+      _ => state,
+    };
+    final detail = message.trim();
+    if (detail.isEmpty) {
+      return stateLabel;
+    }
+    return '$stateLabel: $detail';
+  }
 }
 
 class _HostVersionInfo {
@@ -191,6 +223,58 @@ class AppVersionService {
     }
   }
 
+  Future<HostUpdateStatus?> fetchHostUpdateStatus(
+    MetadataSettings settings,
+  ) async {
+    final baseUrl = _baseUrlForSettings(settings);
+    if (baseUrl.isEmpty) {
+      return null;
+    }
+    final uri = _buildUri(baseUrl, '/host-update/status');
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6)
+      ..idleTimeout = const Duration(seconds: 6);
+
+    try {
+      final request = await client.getUrl(uri);
+      final token = settings.authToken?.trim();
+      if (token != null && token.isNotEmpty) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
+      request.headers.set(
+        'X-Pdf-Viewer-App-Version',
+        await currentVersionLabel(),
+      );
+
+      final response = await request.close().timeout(
+        const Duration(seconds: 6),
+      );
+      final payload = await response
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map) {
+        return null;
+      }
+      return HostUpdateStatus(
+        state: decoded['state']?.toString().trim() ?? 'unknown',
+        message: decoded['message']?.toString().trim() ?? '',
+        pid: _asInt(decoded['pid']),
+      );
+    } on FormatException {
+      return null;
+    } on SocketException {
+      return null;
+    } on TimeoutException {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<_HostVersionInfo?> _fetchHostVersion({
     required String baseUrl,
     required String? authToken,
@@ -259,6 +343,24 @@ class AppVersionService {
     final right = childPath.startsWith('/') ? childPath : '/$childPath';
     return baseUri.replace(path: '$left$right');
   }
+
+  String _baseUrlForSettings(MetadataSettings settings) {
+    return switch (settings.appMode) {
+      AppMode.standalone => '',
+      AppMode.host => settings.hostLoopbackApiBaseUrl,
+      AppMode.client => settings.remoteApiBaseUrl,
+    }.trim();
+  }
+}
+
+int? _asInt(Object? value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  return int.tryParse(value?.toString() ?? '');
 }
 
 bool _canUseHostUpdate({

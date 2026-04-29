@@ -664,10 +664,13 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
 
     setState(() => _checkingAppUpdate = true);
     try {
-      final mismatch = await AppVersionService().findHostVersionMismatch(draft);
+      final versionService = AppVersionService();
+      final status = await versionService.fetchHostUpdateStatus(draft);
+      final statusText = status?.displayText ?? 'ホスト状態を取得できませんでした';
+      final mismatch = await versionService.findHostVersionMismatch(draft);
       if (!mounted) return;
       if (mismatch == null) {
-        _showSnackBar('アプリは最新です');
+        _showSnackBar('アプリは最新です / $statusText');
         return;
       }
 
@@ -680,6 +683,7 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
               'この端末: ${mismatch.localVersion}\n'
               'ホスト: ${mismatch.hostVersion}\n'
               '最新: ${mismatch.latestVersion}\n\n'
+              'ホスト状態: $statusText\n\n'
               '${mismatch.hasUpdateUrl ? '更新ファイルを開きますか？' : '更新ファイルがホストに登録されていません。'}',
             ),
             actions: [
@@ -699,10 +703,9 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
       );
 
       if (shouldOpen == true) {
-        final service = AppVersionService();
         final handled = mismatch.isHostOlder
-            ? await service.requestHostUpdate(draft, mismatch)
-            : await service.openUpdate(mismatch);
+            ? await versionService.requestHostUpdate(draft, mismatch)
+            : await versionService.openUpdate(mismatch);
         if (!handled) {
           _showSnackBar('更新ファイルを開けませんでした');
         }

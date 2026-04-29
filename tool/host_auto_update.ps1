@@ -120,6 +120,39 @@ function Unregister-AutoUpdateProcess {
     }
 }
 
+function Write-HostUpdateStatus {
+    param(
+        [string]$State,
+        [string]$Message
+    )
+
+    New-Item -ItemType Directory -Force -Path 'data' | Out-Null
+    $statusPath = Join-Path 'data' 'host_update_status.json'
+    $request = $null
+    if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
+        try {
+            $current = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+            $request = $current.request
+        } catch {
+            $request = $null
+        }
+    }
+
+    $payload = [ordered]@{
+        state = $State
+        message = $Message
+        pid = $PID
+        updatedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+    if ($request) {
+        $payload.request = $request
+    }
+
+    $tempPath = "$statusPath.tmp"
+    $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tempPath -Encoding UTF8
+    Move-Item -LiteralPath $tempPath -Destination $statusPath -Force
+}
+
 function Restart-IfUpdateScriptChanged {
     param(
         [string]$FromRevision,
@@ -305,6 +338,7 @@ function Clear-BuildOutputs {
 }
 
 function Start-HostServer {
+    Write-HostUpdateStatus -State 'restarting' -Message 'host server is starting'
     New-Item -ItemType Directory -Force -Path 'data' | Out-Null
     Import-DotEnv -Path $EnvFile
     $version = Get-PubspecVersion
@@ -334,6 +368,7 @@ function Start-HostServer {
 }
 
 function Build-And-Restart {
+    Write-HostUpdateStatus -State 'building' -Message 'build and restart started'
     Stop-HostApp
     Stop-HostServer
     Stop-AndroidApp
@@ -346,10 +381,12 @@ function Build-And-Restart {
         Write-Host "dependencies: flutter pub get"
         Invoke-Checked -FilePath 'flutter' -Arguments @('pub', 'get')
 
+        Write-HostUpdateStatus -State 'building' -Message 'building web app'
         Write-Host "build: flutter build web"
         Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'web')
 
         if (-not $SkipWindowsBuild) {
+            Write-HostUpdateStatus -State 'building' -Message 'building Windows app'
             Write-Host "build: flutter build windows"
             Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'windows')
         }
@@ -374,6 +411,7 @@ function Get-PubspecVersion {
 
 function Publish-AndroidApkUpdate {
     $version = Get-PubspecVersion
+    Write-HostUpdateStatus -State 'building' -Message 'building Android APK'
     Write-Host "build: flutter build apk"
     Invoke-Checked -FilePath 'flutter' -Arguments @('build', 'apk', '--release')
 
@@ -421,12 +459,14 @@ try {
         }
     }
     Invoke-Checked -FilePath 'git' -Arguments @('fetch', $Remote, $Branch)
+    Write-HostUpdateStatus -State 'checking' -Message 'checking host update'
     $remoteRef = "$Remote/$Branch"
     $currentRevision = Get-Revision -Ref 'HEAD'
     $remoteRevision = Get-Revision -Ref $remoteRef
 
     if ($currentRevision -ne $remoteRevision) {
         Write-Host "update: $currentRevision -> $remoteRevision"
+        Write-HostUpdateStatus -State 'running' -Message 'pulling host update'
         Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
         Restart-IfUpdateScriptChanged -FromRevision $currentRevision -ToRevision $remoteRevision
         Build-And-Restart
@@ -437,22 +477,28 @@ try {
         }
     }
 
+    if ($Once) {
+        Write-HostUpdateStatus -State 'succeeded' -Message 'host update completed'
+    }
+
     while (-not $Once) {
         Start-Sleep -Seconds $PollSeconds
         Invoke-Checked -FilePath 'git' -Arguments @('fetch', $Remote, $Branch)
+        Write-HostUpdateStatus -State 'checking' -Message 'checking host update'
         $latestRevision = Get-Revision -Ref $remoteRef
         if ($latestRevision -eq $remoteRevision) {
             continue
         }
 
         Write-Host "update: $remoteRevision -> $latestRevision"
+        Write-HostUpdateStatus -State 'running' -Message 'pulling host update'
         Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
         Restart-IfUpdateScriptChanged -FromRevision $remoteRevision -ToRevision $latestRevision
         $remoteRevision = $latestRevision
         Build-And-Restart
     }
 } catch {
-    Write-AutoUpdateLog "failed: $($_.Exception.Message)"
+    Write-HostUpdateStatus -State 'failed' -Message $_.Exception.Message
     throw
 } finally {
     Unregister-AutoUpdateProcess
