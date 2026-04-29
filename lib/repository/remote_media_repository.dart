@@ -1492,6 +1492,10 @@ class RemoteMediaRepository implements MediaRepository {
     if (await _isLocalExternalItem(item)) {
       return _localPickerRepository.getPageCount(item);
     }
+    final meta = await _validatedMetaForItem(item);
+    if (meta.mimeType == 'application/x.gif-collection') {
+      return meta.pageCount ?? 1;
+    }
     final doc = await _openCachedPdf(item);
     return doc.pagesCount;
   }
@@ -1511,6 +1515,14 @@ class RemoteMediaRepository implements MediaRepository {
         page,
         maxWidth: maxWidth,
       );
+    }
+    final meta = await _validatedMetaForItem(item);
+    if (meta.mimeType == 'application/x.gif-collection') {
+      final total = meta.pageCount ?? 1;
+      if (page < 1 || page > total) {
+        throw RangeError.range(page, 1, total, 'page');
+      }
+      return _client.fetchPageImage(meta.mediaId, page, width: maxWidth);
     }
     final doc = await _openCachedPdf(item);
     final total = doc.pagesCount;
