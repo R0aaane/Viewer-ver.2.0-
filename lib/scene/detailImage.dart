@@ -93,6 +93,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _twoPage = false;
   bool _fullscreen = false;
   bool _inReader = true;
+  bool _leaving = false;
 
   bool _isFavorite = false;
   bool _favChanged = false;
@@ -152,7 +153,19 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   String get _displayTitle =>
       ItemNameService.formatMediaTitle(_item.displayName, kind: _item.kind);
 
-  void _popWithResult() {
+  Future<void> _popWithResult() async {
+    if (_leaving) return;
+    if (mounted) {
+      setState(() {
+        _leaving = true;
+        _leftFuture = null;
+        _rightFuture = null;
+        _readerFutureCache.clear();
+        _staticReaderFutureCache.clear();
+      });
+      await SchedulerBinding.instance.endOfFrame;
+    }
+    if (!mounted) return;
     Navigator.of(context).pop(_favChanged || _tagsChanged || _itemChanged);
   }
 
@@ -1621,7 +1634,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       onKeyEvent: _handleReaderNavigationKeyEvent,
       child: WillPopScope(
         onWillPop: () async {
-          _popWithResult();
+          await _popWithResult();
           return false;
         },
         child: Scaffold(
@@ -1662,7 +1675,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                 IconButton(
                   tooltip: '戻る',
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: _popWithResult,
+                  onPressed: () => unawaited(_popWithResult()),
                 ),
                 if (!wide)
                   Builder(
@@ -1762,6 +1775,19 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Widget _buildReader() {
+    if (_leaving) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 12),
+            Text('戻っています...', style: TextStyle(color: Colors.white70)),
+          ],
+        ),
+      );
+    }
+
     return Stack(
       children: [
         Center(
