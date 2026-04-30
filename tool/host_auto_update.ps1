@@ -83,6 +83,7 @@ function Invoke-ScriptRelaunch {
     if ($Once) { $arguments.Add('-Once') }
 
     Write-Host "script: updated; relaunching"
+    Unregister-AutoUpdateProcess
     & powershell.exe @arguments
     exit $LASTEXITCODE
 }
