@@ -1899,7 +1899,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
         // 隕矩幕縺阪・縲檎ｸｦ蜷医ｏ縺帙搾ｼ九檎ｶｴ縺伜・蟇・○縲阪′荳逡ｪ螳牙ｮ壹＠繧・☆縺九▲縺・
         final fit = _fullscreen
-            ? BoxFit.cover
+            ? BoxFit.contain
             : (isSpread ? BoxFit.fitHeight : _boxFit);
 
         //pdf縺ｮ閭梧勹縺ｫ逋ｽ繧定ｿｽ蜉・磯乗・縺ｧ騾上￠縺ｦ隕九∴繧具ｼ・
@@ -1907,13 +1907,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           snap.data!,
           fit: fit,
           alignment: align,
-          width: double.infinity,
-          height: double.infinity,
+          width: _fullscreen ? double.infinity : null,
+          height: _fullscreen ? double.infinity : null,
           gaplessPlayback: true,
           filterQuality: FilterQuality.high,
         );
 
-        final widgetToShow = _isPdf
+        final widgetToShow = _isPdf && !_fullscreen
             ? DecoratedBox(
                 decoration: const BoxDecoration(color: Colors.white),
                 child: img,
@@ -1923,7 +1923,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           minScale: 0.5,
           maxScale: 6,
           alignment: align,
-          child: SizedBox.expand(child: widgetToShow),
+          child: _fullscreen
+              ? SizedBox.expand(child: widgetToShow)
+              : Align(alignment: align, child: widgetToShow),
         );
       },
     );
