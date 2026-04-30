@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:collection';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -3235,6 +3236,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _refreshHomeShowcases() async {
     final loadVersion = ++_homeShowcaseLoadVersion;
+    final sw = Stopwatch()..start();
+    debugPrint('[home-refresh] start version=$loadVersion');
     if (mounted) {
       setState(() {
         _homeShowcaseLoading = true;
@@ -3244,6 +3247,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _homeShowcaseLoading = true;
       _homeShowcaseErrorMessage = null;
     }
+    await SchedulerBinding.instance.endOfFrame;
 
     try {
       if (_foldersRaw.isEmpty) {
@@ -3262,14 +3266,25 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         return;
       }
 
+      final fetchSw = Stopwatch()..start();
+      debugPrint('[home-refresh] remote API fetch start');
       final recentProgress = await _readingProgressService.fetchRecent(
         limit: 200,
       );
+      debugPrint(
+        '[home-refresh] remote API fetch end ${fetchSw.elapsedMilliseconds}ms',
+      );
+
+      final corpusSw = Stopwatch()..start();
       final allItems = await _ensureHomeShelfCorpusLoaded();
+      debugPrint(
+        '[home-refresh] home corpus load end ${corpusSw.elapsedMilliseconds}ms',
+      );
       final mediaItems = allItems
           .where((item) => item.kind != MediaKind.folder)
           .toList(growable: false);
 
+      final buildSw = Stopwatch()..start();
       final recentAdded = mediaItems.toList(growable: true)
         ..sort(
           (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
@@ -3318,6 +3333,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 !recentViewEntriesByItemId.containsKey(item.id),
           )
           .toList(growable: false);
+      debugPrint(
+        '[home-refresh] list build end ${buildSw.elapsedMilliseconds}ms',
+      );
 
       if (!mounted || loadVersion != _homeShowcaseLoadVersion) {
         return;
@@ -3348,7 +3366,51 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       } else if (loadVersion == _homeShowcaseLoadVersion) {
         _homeShowcaseLoading = false;
       }
+      if (loadVersion == _homeShowcaseLoadVersion) {
+        debugPrint('[home-refresh] end ${sw.elapsedMilliseconds}ms');
+      }
     }
+  }
+
+  void _refreshHomeShowcasesAfterFrame(String reason) {
+    debugPrint('[home-refresh] scheduled reason=$reason');
+    if (mounted) {
+      setState(() {
+        _homeShowcaseLoading = true;
+        _homeShowcaseErrorMessage = null;
+      });
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_refreshHomeShowcases());
+    });
+  }
+
+  Widget _buildHomeRefreshBanner() {
+    if (!_homeShowcaseLoading) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 10),
+              Expanded(child: Text('ホームを更新中...')),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildHomeSectionHeading(String title, String subtitle) {
@@ -3769,6 +3831,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         physics: _refreshScrollPhysics,
         padding: const EdgeInsets.all(12),
         children: [
+          _buildHomeRefreshBanner(),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
@@ -4532,7 +4595,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
 
-    await _refreshHomeShowcases();
+    _refreshHomeShowcasesAfterFrame('detail-home-pop');
   }
 
   bool _canDeleteItem(MediaItem item) {
@@ -9133,7 +9196,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           return;
         }
 
-        unawaited(_refreshHomeShowcases());
+        _refreshHomeShowcasesAfterFrame('detail-gallery-pop');
       },
       child: _ThumbTile(
         repo: widget.repo,

@@ -155,6 +155,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   Future<void> _popWithResult() async {
     if (_leaving) return;
+    debugPrint('[detail-back] back pressed item=${_item.id}');
     if (mounted) {
       setState(() {
         _leaving = true;
@@ -166,6 +167,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       await SchedulerBinding.instance.endOfFrame;
     }
     if (!mounted) return;
+    debugPrint('[detail-back] Navigator.pop');
     Navigator.of(context).pop(_favChanged || _tagsChanged || _itemChanged);
   }
 
@@ -1387,11 +1389,23 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
     final page = _page < 1 ? 1 : _page;
     final totalPages = _totalPages > 0 ? _totalPages : null;
-    await _readingProgressService.saveProgressForItem(
-      item,
-      currentPage: page,
-      totalPages: totalPages,
-    );
+    final sw = Stopwatch()..start();
+    debugPrint('[detail-back] progress save start item=${item.id}');
+    try {
+      await _readingProgressService.saveProgressForItem(
+        item,
+        currentPage: page,
+        totalPages: totalPages,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('[detail-back] progress save failed: $error');
+      debugPrintStack(
+        label: '[detail-back] progress save stack',
+        stackTrace: stackTrace,
+      );
+    } finally {
+      debugPrint('[detail-back] progress save end ${sw.elapsedMilliseconds}ms');
+    }
   }
 
   Future<void> _toggleFullscreen() async {
