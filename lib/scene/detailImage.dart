@@ -1,8 +1,7 @@
-import 'dart:typed_data';
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1011,12 +1010,21 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Future<Uint8List> _loadReaderBytes(MediaItem item, int page) {
     if (_gifAnimationPaused) {
       return _staticReaderFutureCache.putIfAbsent(page, () {
-        return widget.repo.renderStaticPageBytes(item, page, maxWidth: 1600);
+        return _loadAfterFirstPaint(
+          () => widget.repo.renderStaticPageBytes(item, page, maxWidth: 1600),
+        );
       });
     }
     return _readerFutureCache.putIfAbsent(page, () {
-      return widget.repo.renderPageBytes(item, page, maxWidth: 1600);
+      return _loadAfterFirstPaint(
+        () => widget.repo.renderPageBytes(item, page, maxWidth: 1600),
+      );
     });
+  }
+
+  Future<T> _loadAfterFirstPaint<T>(Future<T> Function() load) async {
+    await SchedulerBinding.instance.endOfFrame;
+    return load();
   }
 
   Future<Uint8List> _loadThumbBytes(MediaItem item, int page) {
@@ -1855,7 +1863,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         }
 
         if (!snap.hasData) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 12),
+                Text('読み込み中...', style: TextStyle(color: Colors.white70)),
+              ],
+            ),
+          );
         }
 
         // 隕矩幕縺阪・縲檎ｸｦ蜷医ｏ縺帙搾ｼ九檎ｶｴ縺伜・蟇・○縲阪′荳逡ｪ螳牙ｮ壹＠繧・☆縺九▲縺・
