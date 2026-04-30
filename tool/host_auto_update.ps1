@@ -245,6 +245,16 @@ function Stop-HostApp {
         $processIds += [int]$app.ProcessId
     }
 
+    $projectRoot = (Get-Location).Path
+    $buildRoot = (Join-Path $projectRoot 'build\windows')
+    $runningApps = Get-CimInstance Win32_Process -Filter "Name = 'pdf_viewer.exe'" -ErrorAction SilentlyContinue
+    foreach ($app in $runningApps) {
+        if (-not [string]::IsNullOrWhiteSpace($app.ExecutablePath) -and
+            $app.ExecutablePath.StartsWith($buildRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $processIds += [int]$app.ProcessId
+        }
+    }
+
     foreach ($processId in ($processIds | Select-Object -Unique)) {
         $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
         if ($process) {
@@ -311,8 +321,20 @@ function Remove-ProjectPath {
         throw "Refusing to remove path outside project root: $resolved"
     }
 
-    Remove-Item -LiteralPath $resolved -Recurse -Force
-    Write-Host "clean: removed $RelativePath"
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction Stop
+            Write-Host "clean: removed $RelativePath"
+            return
+        } catch {
+            $lastError = $_
+            Stop-HostApp
+            Start-Sleep -Milliseconds (300 * $attempt)
+        }
+    }
+
+    throw $lastError
 }
 
 function Clear-BuildOutputs {
