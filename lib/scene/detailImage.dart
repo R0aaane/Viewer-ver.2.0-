@@ -308,11 +308,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
   }
 
-  Future<void> _saveFitMode(ReaderFitMode v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_PrefsKeys.fitMode, v.index);
-  }
-
   Future<void> _saveTwoPage(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_PrefsKeys.twoPage, v);
@@ -1409,8 +1404,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Future<void> _toggleFullscreen() async {
-    setState(() => _fullscreen = !_fullscreen);
-    if (_fullscreen) {
+    await _setFullscreen(!_fullscreen);
+  }
+
+  Future<void> _setFullscreen(bool value) async {
+    if (_fullscreen == value) return;
+    setState(() => _fullscreen = value);
+    if (value) {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     } else {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -1507,7 +1507,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   Widget _withSidebar(BuildContext context, Widget body) {
-    if (!_isWideLayout(context)) return body;
+    if (_fullscreen || !_isWideLayout(context)) return body;
     return Row(
       children: [
         SizedBox(width: _kSidebarWidth, child: _buildSidebarPanel()),
@@ -1555,41 +1555,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       children: [
         _sidebarHeader(),
         _sidebarSectionLabel('表示設定'),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: InputDecorator(
-            decoration: const InputDecoration(
-              labelText: '表示フィット',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<ReaderFitMode>(
-                value: _fitMode,
-                isDense: true,
-                items: const [
-                  DropdownMenuItem(
-                    value: ReaderFitMode.vertical,
-                    child: Text('縦フィット'),
-                  ),
-                  DropdownMenuItem(
-                    value: ReaderFitMode.horizontal,
-                    child: Text('横フィット'),
-                  ),
-                  DropdownMenuItem(
-                    value: ReaderFitMode.contain,
-                    child: Text('全体表示 (Contain)'),
-                  ),
-                ],
-                onChanged: (v) async {
-                  if (v == null) return;
-                  setState(() => _fitMode = v);
-                  await _saveFitMode(v);
-                },
-              ),
-            ),
-          ),
-        ),
         SwitchListTile(
           title: const Text('見開き表示 (ON/OFF)'),
           value: _twoPage,
@@ -1648,11 +1613,15 @@ class _ImageDetailPageState extends State<ImageDetailPage>
       onKeyEvent: _handleReaderNavigationKeyEvent,
       child: WillPopScope(
         onWillPop: () async {
+          if (_fullscreen) {
+            await _setFullscreen(false);
+            return false;
+          }
           await _popWithResult();
           return false;
         },
         child: Scaffold(
-          drawer: wide ? null : _buildSidebar(),
+          drawer: wide || _fullscreen ? null : _buildSidebar(),
           backgroundColor: _uiBg,
           appBar: AppBar(
             backgroundColor: _uiBar,
@@ -1667,7 +1636,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (_inReader) ...[
+                if (_inReader || _fullscreen) ...[
                   const SizedBox(width: 8),
                   Flexible(
                     child: Align(
@@ -1689,9 +1658,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                 IconButton(
                   tooltip: '戻る',
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: () => unawaited(_popWithResult()),
+                  onPressed: () => _fullscreen
+                      ? unawaited(_setFullscreen(false))
+                      : unawaited(_popWithResult()),
                 ),
-                if (!wide)
+                if (!wide && !_fullscreen)
                   Builder(
                     builder: (ctx) => IconButton(
                       tooltip: 'メニュー',
@@ -1715,7 +1686,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
                 ),
               ),
-              if (_canDeleteFromLibrary)
+              if (!_fullscreen && _canDeleteFromLibrary)
                 PopupMenuButton<_DetailMenuAction>(
                   tooltip: 'メニュー',
                   onSelected: (a) {
@@ -1734,13 +1705,15 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   ],
                 ),
             ],
-            bottom: TabBar(
-              controller: _tab,
-              tabs: const [
-                Tab(text: '閲覧'),
-                Tab(text: '詳細'),
-              ],
-            ),
+            bottom: _fullscreen
+                ? null
+                : TabBar(
+                    controller: _tab,
+                    tabs: const [
+                      Tab(text: '閲覧'),
+                      Tab(text: '詳細'),
+                    ],
+                  ),
           ),
 
           body: _withSidebar(
@@ -1753,6 +1726,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                     _PrevIntent(),
                 SingleActivator(LogicalKeyboardKey.gameButtonRight1):
                     _NextIntent(),
+                SingleActivator(LogicalKeyboardKey.escape):
+                    _ExitFullscreenIntent(),
               },
               child: Actions(
                 actions: <Type, Action<Intent>>{
@@ -1769,13 +1744,21 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                       return null;
                     },
                   ),
+                  _ExitFullscreenIntent: CallbackAction<_ExitFullscreenIntent>(
+                    onInvoke: (intent) {
+                      if (_fullscreen) {
+                        unawaited(_setFullscreen(false));
+                      }
+                      return null;
+                    },
+                  ),
                 },
                 child: Focus(
                   autofocus: true,
                   child: AnimatedBuilder(
                     animation: _tab,
                     builder: (context, _) {
-                      if (_tab.index == 0) return _buildReader();
+                      if (_fullscreen || _tab.index == 0) return _buildReader();
                       return _buildDetail();
                     },
                   ),
@@ -1874,7 +1857,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             },
           ),
         ),
-        if (_isPdf) _readerPageDropdownOverlay(),
       ],
     );
   }
@@ -1916,13 +1898,17 @@ class _ImageDetailPageState extends State<ImageDetailPage>
         }
 
         // 隕矩幕縺阪・縲檎ｸｦ蜷医ｏ縺帙搾ｼ九檎ｶｴ縺伜・蟇・○縲阪′荳逡ｪ螳牙ｮ壹＠繧・☆縺九▲縺・
-        final fit = isSpread ? BoxFit.fitHeight : _boxFit;
+        final fit = _fullscreen
+            ? BoxFit.cover
+            : (isSpread ? BoxFit.fitHeight : _boxFit);
 
         //pdf縺ｮ閭梧勹縺ｫ逋ｽ繧定ｿｽ蜉・磯乗・縺ｧ騾上￠縺ｦ隕九∴繧具ｼ・
         final img = Image.memory(
           snap.data!,
           fit: fit,
           alignment: align,
+          width: double.infinity,
+          height: double.infinity,
           gaplessPlayback: true,
           filterQuality: FilterQuality.high,
         );
@@ -1937,7 +1923,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           minScale: 0.5,
           maxScale: 6,
           alignment: align,
-          child: Align(alignment: align, child: widgetToShow),
+          child: SizedBox.expand(child: widgetToShow),
         );
       },
     );
@@ -2930,64 +2916,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     );
   }
 
-  Widget _readerPageDropdownOverlay() {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 12,
-      child: SafeArea(
-        minimum: const EdgeInsets.symmetric(horizontal: 12),
-        child: Center(child: _pdfPageDropdown()),
-      ),
-    );
-  }
-
-  Widget _pdfPageDropdown() {
-    final totalPages = _totalPages < 1 ? 1 : _totalPages;
-    final currentPage = _page.clamp(1, totalPages).toInt();
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-      decoration: BoxDecoration(
-        color: _uiChip,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<int>(
-          value: currentPage,
-          isDense: true,
-          menuMaxHeight: 360,
-          dropdownColor: _uiBar,
-          borderRadius: BorderRadius.circular(14),
-          iconEnabledColor: Colors.white,
-          style: const TextStyle(color: Colors.white, fontSize: 12),
-          selectedItemBuilder: (context) => [
-            for (var page = 1; page <= totalPages; page++)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'ページ $page',
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                ),
-              ),
-          ],
-          items: [
-            for (var page = 1; page <= totalPages; page++)
-              DropdownMenuItem<int>(value: page, child: Text('ページ $page')),
-          ],
-          onChanged: totalPages <= 1
-              ? null
-              : (value) {
-                  if (value == null || value == _page) {
-                    return;
-                  }
-                  _setCurrentPdfPage(value);
-                },
-        ),
-      ),
-    );
-  }
-
   Widget _topReaderControls() {
     final canPrev = _isPdf ? (_page > 1) : (_index > 0);
     final canNext = _isPdf
@@ -3102,47 +3030,6 @@ class _ImageDetailPageState extends State<ImageDetailPage>
               ),
             ),
           ),
-
-        if (_isPdf) const SizedBox(width: 6),
-
-        PopupMenuButton<ReaderFitMode>(
-          tooltip: 'Fit',
-          initialValue: _fitMode,
-          onSelected: (v) async {
-            setState(() => _fitMode = v);
-            await _saveFitMode(v);
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem(value: ReaderFitMode.vertical, child: Text('縦フィット')),
-            PopupMenuItem(
-              value: ReaderFitMode.horizontal,
-              child: Text('横フィット'),
-            ),
-            PopupMenuItem(
-              value: ReaderFitMode.contain,
-              child: Text('全体表示 (Contain)'),
-            ),
-          ],
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: _uiChip,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.aspect_ratio, size: 18, color: Colors.white),
-                const SizedBox(width: 6),
-                Text(switch (_fitMode) {
-                  ReaderFitMode.vertical => '縦',
-                  ReaderFitMode.horizontal => '横',
-                  ReaderFitMode.contain => '全体',
-                }, style: const TextStyle(color: Colors.white, fontSize: 12)),
-              ],
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -3232,4 +3119,8 @@ class _PrevIntent extends Intent {
 
 class _NextIntent extends Intent {
   const _NextIntent();
+}
+
+class _ExitFullscreenIntent extends Intent {
+  const _ExitFullscreenIntent();
 }
