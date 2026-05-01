@@ -9,10 +9,9 @@ extension _DetailActions on _ImageDetailPageState {
     if (mounted) {
       setState(() {
         _leaving = true;
-        _leftFuture = null;
-        _rightFuture = null;
-        _readerFutureCache.clear();
-        _staticReaderFutureCache.clear();
+        _readerController.leftFuture = null;
+        _readerController.rightFuture = null;
+        _readerController.clearCaches();
       });
       await SchedulerBinding.instance.endOfFrame;
     }
