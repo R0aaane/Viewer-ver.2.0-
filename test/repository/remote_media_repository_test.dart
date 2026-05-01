@@ -373,50 +373,47 @@ void main() {
           apiClient.lastUploadFiles.single.fileName,
           '[20241105] [3114110] Sample Title.pdf',
         );
-          expect(
-            apiClient.lastUploadFiles.single.tags
-                .map((tag) => '${tag.category.name}:${tag.name}')
-                .toSet(),
-            containsAll(<String>{
-              'artist:ArtistName',
-              'artist:CoArtist',
-              'series:Original Series',
-              'mediaType:hitomi',
-            }),
-          );
-      },
-    );
-
-    test(
-      'attaches ddd-smart media type to fallback-uploaded images',
-      () async {
-        final apiClient = _FakeRemoteMediaApiClient()
-          ..downloadUrlError = const RemoteMediaException(
-            "[stderr] ModuleNotFoundError: No module named 'requests'",
-          );
-        final localRepository = _RecordingLocalUrlImportRepository();
-        final repository = RemoteMediaRepository(
-          apiClient: apiClient,
-          idResolver: _FakeMediaIdResolver(),
-          localPickerRepository: localRepository,
-        );
-
-        final result = await repository.importFromUrlIntoFolder(
-          const FolderHandle(r'C:\Users\Host\Documents\library'),
-          'https://ddd-smart.net/doujinshi3/show-m.php?g=20260411&dir=0058&page=0',
-        );
-
-        expect(result.importedCount, 1);
-        expect(apiClient.lastUploadFiles, hasLength(1));
-        expect(apiClient.lastUploadFiles.single.fileName, 'downloaded.jpg');
         expect(
           apiClient.lastUploadFiles.single.tags
               .map((tag) => '${tag.category.name}:${tag.name}')
               .toSet(),
-          contains('mediaType:ddd-smart'),
+          containsAll(<String>{
+            'artist:ArtistName',
+            'artist:CoArtist',
+            'series:Original Series',
+            'mediaType:hitomi',
+          }),
         );
       },
     );
+
+    test('attaches ddd-smart media type to fallback-uploaded images', () async {
+      final apiClient = _FakeRemoteMediaApiClient()
+        ..downloadUrlError = const RemoteMediaException(
+          "[stderr] ModuleNotFoundError: No module named 'requests'",
+        );
+      final localRepository = _RecordingLocalUrlImportRepository();
+      final repository = RemoteMediaRepository(
+        apiClient: apiClient,
+        idResolver: _FakeMediaIdResolver(),
+        localPickerRepository: localRepository,
+      );
+
+      final result = await repository.importFromUrlIntoFolder(
+        const FolderHandle(r'C:\Users\Host\Documents\library'),
+        'https://ddd-smart.net/doujinshi3/show-m.php?g=20260411&dir=0058&page=0',
+      );
+
+      expect(result.importedCount, 1);
+      expect(apiClient.lastUploadFiles, hasLength(1));
+      expect(apiClient.lastUploadFiles.single.fileName, 'downloaded.jpg');
+      expect(
+        apiClient.lastUploadFiles.single.tags
+            .map((tag) => '${tag.category.name}:${tag.name}')
+            .toSet(),
+        contains('mediaType:ddd-smart'),
+      );
+    });
 
     test(
       'prefers client staging for ddd-smart urls even when host downloader is available',
@@ -697,7 +694,10 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
   }
 
   @override
-  Future<RemoteMediaMeta> fetchMediaMeta(String mediaId) async {
+  Future<RemoteMediaMeta> fetchMediaMeta(
+    String mediaId, {
+    ResolvedMediaIdentity? identity,
+  }) async {
     metaRequests.add(mediaId);
     if (_deletedStableIds.contains(mediaId)) {
       throw const RemoteMediaException('not found', statusCode: 404);
@@ -732,6 +732,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
     required String sourceUrl,
     ImportMetadata? importMetadata,
     UrlImportOptions? options,
+    void Function(MediaTransferProgress progress)? onProgress,
   }) async {
     lastDownloadUrlFolderRaw = folderRaw;
     lastDownloadUrl = sourceUrl;
@@ -906,6 +907,7 @@ class _StubMediaRepository implements MediaRepository {
       canBatchUpload: true,
       canAssignImportTags: true,
     ),
+    // ignore: unused_element_parameter
     this.appMode = AppMode.standalone,
   });
 
@@ -984,6 +986,13 @@ class _StubMediaRepository implements MediaRepository {
 
   @override
   Future<Uint8List> renderPageBytes(
+    MediaItem item,
+    int page, {
+    int maxWidth = 1600,
+  }) async => Uint8List(0);
+
+  @override
+  Future<Uint8List> renderStaticPageBytes(
     MediaItem item,
     int page, {
     int maxWidth = 1600,
