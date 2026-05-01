@@ -4,14 +4,7 @@ part of 'detailImage.dart';
 
 extension _DetailTagPanel on _ImageDetailPageState {
   String? _normalizeTag(String input) {
-    var t = input.trim();
-    if (t.isEmpty) return null;
-    if (t.startsWith('#')) t = t.substring(1);
-    t = t.trim();
-    if (t.isEmpty) return null;
-    // 遨ｺ逋ｽ縺ｯ遖∵ｭ｢
-    if (t.contains(RegExp(r'\s'))) return null;
-    return t;
+    return _tagController.normalizeTag(input);
   }
 
   Future<void> _loadMasterTags({String? contains}) async {
@@ -39,11 +32,14 @@ extension _DetailTagPanel on _ImageDetailPageState {
   }
 
   void _scheduleMasterTagReload(String rawQuery) {
-    _masterFilterDebounce?.cancel();
-    _masterFilterDebounce = Timer(const Duration(milliseconds: 240), () {
-      final query = rawQuery.trim();
-      unawaited(_loadMasterTags(contains: query.isEmpty ? null : query));
-    });
+    _tagController.masterFilterDebounce?.cancel();
+    _tagController.masterFilterDebounce = Timer(
+      const Duration(milliseconds: 240),
+      () {
+        final query = rawQuery.trim();
+        unawaited(_loadMasterTags(contains: query.isEmpty ? null : query));
+      },
+    );
   }
 
   Future<void> _loadRecentTags() async {
@@ -71,30 +67,10 @@ extension _DetailTagPanel on _ImageDetailPageState {
     });
   }
 
-  String _serializeRecentTag(Tag tag) =>
-      '${tag.category.name}\u0001${tag.name}';
+  String _serializeRecentTag(Tag tag) => _tagController.serializeRecentTag(tag);
 
   Tag? _deserializeRecentTag(String raw) {
-    final separatorIndex = raw.indexOf('\u0001');
-    if (separatorIndex <= 0 || separatorIndex >= raw.length - 1) {
-      return null;
-    }
-    final categoryRaw = raw.substring(0, separatorIndex);
-    final name = raw.substring(separatorIndex + 1).trim();
-    if (name.isEmpty) {
-      return null;
-    }
-    TagCategory? category;
-    for (final candidate in TagCategory.values) {
-      if (candidate.name == categoryRaw) {
-        category = candidate;
-        break;
-      }
-    }
-    if (category == null) {
-      return null;
-    }
-    return Tag(name: name, category: category);
+    return _tagController.deserializeRecentTag(raw);
   }
 
   Future<void> _recordRecentTag(Tag tag) async {
@@ -193,11 +169,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
   }
 
   String? _tagLookupKey(Tag tag) {
-    final normalizedName = tag.name.trim();
-    if (normalizedName.isEmpty) {
-      return null;
-    }
-    return '${tag.category.name}\u0000${normalizedName.toLowerCase()}';
+    return _tagController.tagLookupKey(tag);
   }
 
   Future<void> _loadTagsForCurrent({
@@ -245,7 +217,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
   }
 
   Future<void> _addTagFromUi() async {
-    final raw = _tagCtrl.text;
+    final raw = _tagController.tagCtrl.text;
     final name = _normalizeTag(raw);
     if (name == null) {
       if (!mounted) return;
@@ -255,20 +227,20 @@ extension _DetailTagPanel on _ImageDetailPageState {
       return;
     }
 
-    final tag = Tag(name: name, category: _selectedCategory);
+    final tag = Tag(name: name, category: _tagController.selectedCategory);
 
     try {
       await widget.tagService.addTagToItem(_item, tag);
 
       _tagsChanged = true;
       await _recordRecentTag(tag);
-      _tagCtrl.clear();
+      _tagController.tagCtrl.clear();
       await _loadTagsForCurrent(force: true);
       unawaited(
         _loadMasterTags(
-          contains: _masterFilterCtrl.text.trim().isEmpty
+          contains: _tagController.masterFilterCtrl.text.trim().isEmpty
               ? null
-              : _masterFilterCtrl.text.trim(),
+              : _tagController.masterFilterCtrl.text.trim(),
         ),
       );
     } catch (e) {
@@ -292,112 +264,39 @@ extension _DetailTagPanel on _ImageDetailPageState {
     }
   }
 
-  List<TagCategory> get _orderedTagCategories => const <TagCategory>[
-    TagCategory.artist,
-    TagCategory.series,
-    TagCategory.character,
-    TagCategory.mediaType,
-    TagCategory.free,
-  ];
+  List<TagCategory> get _orderedTagCategories =>
+      _tagController.orderedTagCategories;
 
   int _categoryOrder(TagCategory category) {
-    return _orderedTagCategories.indexOf(category);
+    return _tagController.categoryOrder(category);
   }
 
   String _categoryLabel(TagCategory category) {
-    switch (category) {
-      case TagCategory.artist:
-        return 'artist';
-      case TagCategory.series:
-        return 'series';
-      case TagCategory.mediaType:
-        return 'source';
-      case TagCategory.character:
-        return 'character';
-      case TagCategory.free:
-        return 'free';
-    }
+    return _tagController.categoryLabel(category);
   }
 
   String _categoryLongLabel(TagCategory category) {
-    switch (category) {
-      case TagCategory.artist:
-        return 'artist';
-      case TagCategory.series:
-        return 'series';
-      case TagCategory.mediaType:
-        return 'source / media';
-      case TagCategory.character:
-        return 'character';
-      case TagCategory.free:
-        return 'free';
-    }
+    return _tagController.categoryLongLabel(category);
   }
 
   IconData _categoryIcon(TagCategory category) {
-    switch (category) {
-      case TagCategory.artist:
-        return Icons.palette_outlined;
-      case TagCategory.series:
-        return Icons.collections_bookmark_outlined;
-      case TagCategory.mediaType:
-        return Icons.public_outlined;
-      case TagCategory.character:
-        return Icons.face_retouching_natural_outlined;
-      case TagCategory.free:
-        return Icons.sell_outlined;
-    }
+    return _tagController.categoryIcon(category);
   }
 
   Color _categoryColor(TagCategory category) {
-    switch (category) {
-      case TagCategory.artist:
-        return const Color(0xFFE0A15A);
-      case TagCategory.series:
-        return const Color(0xFF53B889);
-      case TagCategory.mediaType:
-        return const Color(0xFF4CA3D9);
-      case TagCategory.character:
-        return const Color(0xFF6D8CFF);
-      case TagCategory.free:
-        return const Color(0xFFC987A6);
-    }
+    return _tagController.categoryColor(category);
   }
 
   List<TagWithId> _sortTagWithIdList(Iterable<TagWithId> source) {
-    final sorted = source.toList(growable: true);
-    sorted.sort((left, right) {
-      final categoryCompare = _categoryOrder(
-        left.tag.category,
-      ).compareTo(_categoryOrder(right.tag.category));
-      if (categoryCompare != 0) {
-        return categoryCompare;
-      }
-      return left.tag.name.toLowerCase().compareTo(
-        right.tag.name.toLowerCase(),
-      );
-    });
-    return sorted;
+    return _tagController.sortTagWithIdList(source);
   }
 
   List<TagWithId> _filteredAssignedTags() {
-    final query = _assignedFilterCtrl.text.trim().toLowerCase();
-    final filtered = _tags.where((entry) {
-      if (query.isEmpty) {
-        return true;
-      }
-      return entry.tag.name.toLowerCase().contains(query) ||
-          _categoryLabel(entry.tag.category).contains(query);
-    });
-    return _sortTagWithIdList(filtered);
+    return _tagController.filteredAssignedTags(_tags);
   }
 
   Map<TagCategory, List<TagWithId>> _groupAssignedTags() {
-    final grouped = <TagCategory, List<TagWithId>>{};
-    for (final entry in _filteredAssignedTags()) {
-      grouped.putIfAbsent(entry.tag.category, () => <TagWithId>[]).add(entry);
-    }
-    return grouped;
+    return _tagController.groupAssignedTags(_tags);
   }
 
   int _tagUsageCount(Tag tag) {
@@ -409,27 +308,11 @@ extension _DetailTagPanel on _ImageDetailPageState {
   }
 
   bool _matchesMasterFilter(Tag tag) {
-    final query = _masterFilterCtrl.text.trim().toLowerCase();
-    if (query.isEmpty) {
-      return true;
-    }
-    return tag.name.toLowerCase().contains(query) ||
-        _categoryLabel(tag.category).contains(query);
+    return _tagController.matchesMasterFilter(tag);
   }
 
   int _tagNameMatchRank(Tag tag) {
-    final query = _masterFilterCtrl.text.trim().toLowerCase();
-    if (query.isEmpty) {
-      return 2;
-    }
-    final name = tag.name.toLowerCase();
-    if (name == query) {
-      return 0;
-    }
-    if (name.startsWith(query)) {
-      return 1;
-    }
-    return 2;
+    return _tagController.tagNameMatchRank(tag);
   }
 
   List<_TagSuggestionEntry> _buildSuggestionEntries(_TagSuggestionTab tab) {
@@ -496,7 +379,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
             .where((entry) {
               return entry.isRecent ||
                   entry.usageCount > 0 ||
-                  entry.tag.category == _selectedCategory ||
+                  entry.tag.category == _tagController.selectedCategory ||
                   assignedCategories.contains(entry.tag.category);
             })
             .toList(growable: true);
@@ -529,8 +412,10 @@ extension _DetailTagPanel on _ImageDetailPageState {
           return recentCompare;
         }
       } else {
-        final leftSelected = left.tag.category == _selectedCategory ? 1 : 0;
-        final rightSelected = right.tag.category == _selectedCategory ? 1 : 0;
+        final leftSelected =
+            left.tag.category == _tagController.selectedCategory ? 1 : 0;
+        final rightSelected =
+            right.tag.category == _tagController.selectedCategory ? 1 : 0;
         final selectedCompare = rightSelected.compareTo(leftSelected);
         if (selectedCompare != 0 && tab == _TagSuggestionTab.recommended) {
           return selectedCompare;
@@ -580,12 +465,12 @@ extension _DetailTagPanel on _ImageDetailPageState {
   }
 
   bool _isGroupExpanded(String key, {required bool defaultValue}) {
-    return _tagGroupExpanded[key] ?? defaultValue;
+    return _tagController.isGroupExpanded(key, defaultValue: defaultValue);
   }
 
   void _toggleGroupExpanded(String key, {required bool defaultValue}) {
     setState(() {
-      _tagGroupExpanded[key] = !(_tagGroupExpanded[key] ?? defaultValue);
+      _tagController.toggleGroupExpanded(key, defaultValue: defaultValue);
     });
   }
 
@@ -594,20 +479,22 @@ extension _DetailTagPanel on _ImageDetailPageState {
     TagCategory category,
     int total,
   ) {
-    final key = '${tab.name}:${category.name}';
-    final count = _candidateVisibleCounts[key] ?? 12;
-    return count > total ? total : count;
+    return _tagController.visibleCandidateCount(
+      tab: tab,
+      category: category,
+      total: total,
+    );
   }
 
   void _showMoreCandidates(_TagSuggestionTab tab, TagCategory category) {
-    final key = '${tab.name}:${category.name}';
     setState(() {
-      _candidateVisibleCounts[key] = (_candidateVisibleCounts[key] ?? 12) + 12;
+      _tagController.showMoreCandidates(tab, category);
     });
   }
 
   List<TagWithId> get _masterTags =>
-      _masterTagsByCategory[_selectedCategory] ?? const <TagWithId>[];
+      _masterTagsByCategory[_tagController.selectedCategory] ??
+      const <TagWithId>[];
 
   Future<void> _addExistingMasterTag(TagWithId tag) {
     return _addSuggestedTag(tag.tag);
@@ -636,7 +523,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildTagSearchField(
-            controller: _assignedFilterCtrl,
+            controller: _tagController.assignedFilterCtrl,
             hintText: '付与済みタグを探す',
             onChanged: (_) => setState(() {}),
           ),
@@ -678,7 +565,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
 
   Widget _buildTagEditToolbar() {
     final categoryField = DropdownButtonFormField<TagCategory>(
-      initialValue: _selectedCategory,
+      initialValue: _tagController.selectedCategory,
       decoration: const InputDecoration(
         labelText: '追加カテゴリ',
         border: OutlineInputBorder(),
@@ -696,11 +583,11 @@ extension _DetailTagPanel on _ImageDetailPageState {
         if (value == null) {
           return;
         }
-        setState(() => _selectedCategory = value);
+        setState(() => _tagController.selectedCategory = value);
       },
     );
     final inputField = TextField(
-      controller: _tagCtrl,
+      controller: _tagController.tagCtrl,
       decoration: const InputDecoration(
         hintText: 'タグ名を入力 / 空白は不可',
         isDense: true,
@@ -888,9 +775,9 @@ extension _DetailTagPanel on _ImageDetailPageState {
           IconButton(
             tooltip: '候補を更新',
             onPressed: () => _loadMasterTags(
-              contains: _masterFilterCtrl.text.trim().isEmpty
+              contains: _tagController.masterFilterCtrl.text.trim().isEmpty
                   ? null
-                  : _masterFilterCtrl.text.trim(),
+                  : _tagController.masterFilterCtrl.text.trim(),
             ),
             icon: const Icon(Icons.refresh),
           ),
@@ -902,7 +789,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildTagSearchField(
-              controller: _masterFilterCtrl,
+              controller: _tagController.masterFilterCtrl,
               hintText: '候補タグを探す',
               onChanged: (value) {
                 setState(() {});

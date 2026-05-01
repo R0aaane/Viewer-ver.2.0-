@@ -20,6 +20,8 @@ import 'rename_item_dialog.dart';
 
 part 'image_detail_page.dart';
 part 'reader_view.dart';
+part 'detail_reader_controller.dart';
+part 'detail_tag_controller.dart';
 part 'detail_tag_panel.dart';
 part 'detail_actions.dart';
 part 'detail_widgets.dart';
@@ -55,9 +57,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _tagsChanged = false;
   bool _tagEditMode = false;
   _TagLayoutMode _tagLayoutMode = _TagLayoutMode.chips;
-  final TextEditingController _assignedFilterCtrl = TextEditingController();
-  final Map<String, bool> _tagGroupExpanded = <String, bool>{};
-  final Map<String, int> _candidateVisibleCounts = <String, int>{};
+  late final DetailTagController _tagController;
 
   //縲繝輔か繝ｫ繝繧・ヵ繧｡繧､繝ｫ繧貞炎髯､
   bool _canDeleteFromLibrary = false;
@@ -66,15 +66,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   Map<TagCategory, List<TagWithId>> _masterTagsByCategory =
       <TagCategory, List<TagWithId>>{};
   bool _masterLoading = false;
-  final TextEditingController _masterFilterCtrl = TextEditingController();
-  Timer? _masterFilterDebounce;
   Timer? _activityPersistDebounce;
   int? _pendingInitialPdfPage;
   bool _canPersistReadingProgress = true;
   bool _hasMovedPdfPageSinceLoad = false;
 
-  TagCategory _selectedCategory = TagCategory.free;
-  final TextEditingController _tagCtrl = TextEditingController();
   bool _tagsLoading = false;
   String? _loadedTagItemId;
   bool _masterTagsInitialized = false;
@@ -87,13 +83,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
-  Future<Uint8List>? _leftFuture;
-  Future<Uint8List>? _rightFuture;
-  bool _gifAnimationPaused = false;
-
-  final Map<int, Future<Uint8List>> _readerFutureCache = {};
-  final Map<int, Future<Uint8List>> _staticReaderFutureCache = {};
-  final Map<int, Future<Uint8List>> _thumbFutureCache = {};
+  late final DetailReaderController _readerController;
 
   MediaItem get _item => _items[_index];
   bool get _isPdf => _item.kind == MediaKind.pdf;
@@ -114,6 +104,14 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     _index = widget.initialIndex;
     _page = widget.initialPdfPage ?? 1;
     _pendingInitialPdfPage = widget.initialPdfPage;
+    _readerController = DetailReaderController(
+      repo: widget.repo,
+      initialIndex: widget.initialIndex,
+      initialPreloadItemId: widget.initialPreloadItemId,
+      initialPageCountFuture: widget.initialPageCountFuture,
+      initialReaderBytesFuture: widget.initialReaderBytesFuture,
+    );
+    _tagController = DetailTagController();
 
     _tab = TabController(length: 2, vsync: this);
     _candidateTabController = TabController(
@@ -142,11 +140,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _activityPersistDebounce?.cancel();
-    _masterFilterDebounce?.cancel();
+    _tagController.dispose();
     unawaited(_persistCurrentActivity());
-    _assignedFilterCtrl.dispose();
-    _masterFilterCtrl.dispose();
-    _tagCtrl.dispose();
     for (final controller in _candidateScrollControllers.values) {
       controller.dispose();
     }

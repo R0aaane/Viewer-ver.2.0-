@@ -222,7 +222,7 @@ extension _DetailWidgets on _ImageDetailPageState {
 
             final categoryField = DropdownButtonHideUnderline(
               child: DropdownButton<TagCategory>(
-                value: _selectedCategory,
+                value: _tagController.selectedCategory,
                 isDense: true,
                 items: const [
                   DropdownMenuItem(
@@ -245,14 +245,14 @@ extension _DetailWidgets on _ImageDetailPageState {
                 ],
                 onChanged: (v) async {
                   if (v == null) return;
-                  setState(() => _selectedCategory = v);
+                  setState(() => _tagController.selectedCategory = v);
                   await _loadMasterTags();
                 },
               ),
             );
 
             final inputField = TextField(
-              controller: _tagCtrl,
+              controller: _tagController.tagCtrl,
               decoration: const InputDecoration(
                 hintText: 'タグ名を入力 / 空白は不可',
                 isDense: true,
@@ -339,8 +339,9 @@ extension _DetailWidgets on _ImageDetailPageState {
             const Spacer(),
             IconButton(
               tooltip: '再読み込み',
-              onPressed: () =>
-                  _loadMasterTags(contains: _masterFilterCtrl.text),
+              onPressed: () => _loadMasterTags(
+                contains: _tagController.masterFilterCtrl.text,
+              ),
               icon: const Icon(Icons.refresh),
             ),
           ],
@@ -349,19 +350,19 @@ extension _DetailWidgets on _ImageDetailPageState {
         SizedBox(
           height: 44,
           child: TextField(
-            controller: _masterFilterCtrl,
+            controller: _tagController.masterFilterCtrl,
             decoration: InputDecoration(
               prefixIcon: const Icon(Icons.search),
               hintText: '候補を絞り込み（部分一致）',
               border: const OutlineInputBorder(),
               isDense: true,
-              suffixIcon: (_masterFilterCtrl.text.trim().isEmpty)
+              suffixIcon: (_tagController.masterFilterCtrl.text.trim().isEmpty)
                   ? null
                   : IconButton(
                       tooltip: 'クリア',
                       icon: const Icon(Icons.clear),
                       onPressed: () {
-                        _masterFilterCtrl.clear();
+                        _tagController.masterFilterCtrl.clear();
                         _loadMasterTags();
                         setState(() {});
                       },
@@ -471,6 +472,34 @@ extension _DetailWidgets on _ImageDetailPageState {
   }
 
   Widget _buildMetaPill({required IconData icon, required String label}) {
+    return _DetailMetaPill(icon: icon, label: label);
+  }
+
+  Widget _infoRow(String k, String v) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 64,
+          child: Text(k, style: const TextStyle(color: Colors.white70)),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: SelectableText(v, style: const TextStyle(color: Colors.white)),
+        ),
+      ],
+    );
+  }
+}
+
+class _DetailMetaPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _DetailMetaPill({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
@@ -489,22 +518,6 @@ extension _DetailWidgets on _ImageDetailPageState {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _infoRow(String k, String v) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 64,
-          child: Text(k, style: const TextStyle(color: Colors.white70)),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: SelectableText(v, style: const TextStyle(color: Colors.white)),
-        ),
-      ],
     );
   }
 }

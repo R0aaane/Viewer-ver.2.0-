@@ -20,75 +20,37 @@ extension _ReaderView on _ImageDetailPageState {
   }
 
   Future<Uint8List> _loadReaderBytes(MediaItem item, int page) {
-    if (_gifAnimationPaused) {
-      return _staticReaderFutureCache.putIfAbsent(page, () {
-        return _loadAfterFirstPaint(
-          () => widget.repo.renderStaticPageBytes(item, page, maxWidth: 1600),
-        );
-      });
-    }
-    return _readerFutureCache.putIfAbsent(page, () {
-      return _loadAfterFirstPaint(
-        () => widget.repo.renderPageBytes(item, page, maxWidth: 1600),
-      );
-    });
-  }
-
-  Future<T> _loadAfterFirstPaint<T>(Future<T> Function() load) async {
-    await SchedulerBinding.instance.endOfFrame;
-    return load();
+    return _readerController.loadReaderBytes(
+      item,
+      page,
+      useStaticFrame: _readerController.gifAnimationPaused,
+    );
   }
 
   Future<Uint8List> _loadThumbBytes(MediaItem item, int page) {
-    return _thumbFutureCache.putIfAbsent(page, () {
-      return widget.repo.renderPageBytes(item, page, maxWidth: 320);
-    });
+    return _readerController.loadThumbBytes(item, page);
   }
 
   bool _canUseInitialPreload(MediaItem item) {
-    return item.kind == MediaKind.pdf &&
-        _index == widget.initialIndex &&
-        widget.initialPreloadItemId == item.id;
+    return _readerController.canUseInitialPreload(item, _index);
   }
 
   void _seedInitialReaderPreload(MediaItem item, int page) {
-    final future = widget.initialReaderBytesFuture;
-    if (future == null || !_canUseInitialPreload(item)) return;
-    _readerFutureCache.putIfAbsent(page, () => future);
+    _readerController.seedInitialReaderPreload(item, page, _index);
   }
 
   Future<int> _getPageCountForCurrent(MediaItem item) {
-    final future = widget.initialPageCountFuture;
-    if (future != null && _canUseInitialPreload(item)) return future;
-    return widget.repo.getPageCount(item);
-  }
-
-  void _prefetchAdjacentReaderPages(MediaItem item) {
-    if (item.kind != MediaKind.pdf || _totalPages <= 1) return;
-
-    final pages = <int>{_page - 1, _page + 1};
-    if (_twoPage) pages.add(_page + 2);
-
-    for (final page in pages) {
-      if (page < 1 || page > _totalPages) continue;
-      unawaited(_loadReaderBytes(item, page).catchError((_) => Uint8List(0)));
-    }
+    return _readerController.getPageCountForCurrent(item, _index);
   }
 
   void _syncReaderFutures(MediaItem item) {
-    _leftFuture = _loadReaderBytes(item, _page);
-
-    if (_twoPage && _isPdf) {
-      final nextPage = _page + 1;
-      _rightFuture = nextPage <= _totalPages
-          ? _loadReaderBytes(item, nextPage)
-          : null;
-      _prefetchAdjacentReaderPages(item);
-      return;
-    }
-
-    _rightFuture = null;
-    _prefetchAdjacentReaderPages(item);
+    _readerController.syncFutures(
+      item: item,
+      page: _page,
+      totalPages: _totalPages,
+      twoPage: _twoPage,
+      isPdf: _isPdf,
+    );
   }
 
   void _setCurrentPdfPage(int page) {
@@ -105,7 +67,8 @@ extension _ReaderView on _ImageDetailPageState {
       return;
     }
     setState(() {
-      _gifAnimationPaused = !_gifAnimationPaused;
+      _readerController.gifAnimationPaused =
+          !_readerController.gifAnimationPaused;
       _syncReaderFutures(_item);
     });
   }
@@ -185,9 +148,7 @@ extension _ReaderView on _ImageDetailPageState {
     final item = _item;
     final loadVersion = ++_detailLoadVersion;
 
-    _readerFutureCache.clear();
-    _staticReaderFutureCache.clear();
-    _thumbFutureCache.clear();
+    _readerController.clearCaches();
     _loadedTagItemId = null;
     if (mounted) {
       final initialPage = item.kind == MediaKind.pdf
@@ -198,7 +159,7 @@ extension _ReaderView on _ImageDetailPageState {
       setState(() {
         _canPersistReadingProgress = item.kind != MediaKind.pdf;
         _hasMovedPdfPageSinceLoad = false;
-        _gifAnimationPaused = false;
+        _readerController.gifAnimationPaused = false;
         _isFavorite = false;
         _tags = const [];
         _tagsLoading = false;
@@ -336,7 +297,7 @@ extension _ReaderView on _ImageDetailPageState {
                   SizedBox(
                     width: pageW,
                     child: _pageImage(
-                      _leftFuture,
+                      _readerController.leftFuture,
                       align: isSpread
                           ? Alignment.centerRight
                           : Alignment.center,
@@ -349,7 +310,7 @@ extension _ReaderView on _ImageDetailPageState {
                     SizedBox(
                       width: pageW,
                       child: _pageImage(
-                        _rightFuture,
+                        _readerController.rightFuture,
                         align: Alignment.centerLeft,
                         isSpread: isSpread,
                         pageNumber: _page + 1,
@@ -411,7 +372,7 @@ extension _ReaderView on _ImageDetailPageState {
             '画像の読み込みに失敗しました。\n${snap.error}',
             onRetry: () {
               setState(() {
-                _readerFutureCache.remove(pageNumber);
+                _readerController.removeReaderPage(pageNumber);
                 _syncReaderFutures(_item);
               });
             },
@@ -622,7 +583,7 @@ extension _ReaderView on _ImageDetailPageState {
                       'ページ $page のサムネイル取得に失敗しました。',
                       onRetry: () {
                         setState(() {
-                          _thumbFutureCache.remove(page);
+                          _readerController.removeThumbPage(page);
                         });
                       },
                     );
