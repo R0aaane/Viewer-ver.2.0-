@@ -107,6 +107,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
   final TextEditingController _seriesController = TextEditingController();
   final TextEditingController _characterController = TextEditingController();
   final TextEditingController _freeTagsController = TextEditingController();
+  final ScrollController _sheetScrollController = ScrollController();
   var _selectedItems = const <MediaItem>[];
   var _cleanupPaths = const <String>[];
   final List<String> _artistTags = <String>[];
@@ -136,6 +137,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     _seriesController.dispose();
     _characterController.dispose();
     _freeTagsController.dispose();
+    _sheetScrollController.dispose();
     super.dispose();
   }
 
@@ -712,7 +714,9 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
                         final horizontalPadding =
                             constraints.maxWidth >= 720 ? 28.0 : 20.0;
                         return Scrollbar(
+                          controller: _sheetScrollController,
                           child: SingleChildScrollView(
+                            controller: _sheetScrollController,
                             keyboardDismissBehavior:
                                 ScrollViewKeyboardDismissBehavior.onDrag,
                             padding: EdgeInsets.fromLTRB(
