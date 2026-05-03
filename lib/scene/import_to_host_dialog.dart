@@ -408,7 +408,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     if (tail.isEmpty) {
       return trimmed;
     }
-    final candidate = Uri.decodeComponent(tail.last);
+    final candidate = _safeDecodeComponent(tail.last);
     final colonIndex = candidate.lastIndexOf(':');
     if (colonIndex >= 0 && colonIndex + 1 < candidate.length) {
       final afterColon = candidate.substring(colonIndex + 1).trim();
@@ -428,6 +428,14 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
       }
     }
     return candidate;
+  }
+
+  String _safeDecodeComponent(String value) {
+    try {
+      return Uri.decodeComponent(value);
+    } on ArgumentError {
+      return value;
+    }
   }
 
   String _normalizeHostPdfName(String raw) {
