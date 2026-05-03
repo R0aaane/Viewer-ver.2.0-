@@ -148,6 +148,28 @@ class ImportMetadata {
     this.organizeAfterImport = false,
   });
 
+  ImportMetadata copyWith({
+    String? artistTag,
+    String? seriesTag,
+    List<String>? freeTags,
+    List<String>? characterTags,
+    String? targetCollection,
+    bool? convertToPdfOnHost,
+    String? hostPdfFileNameHint,
+    bool? organizeAfterImport,
+  }) {
+    return ImportMetadata(
+      artistTag: artistTag ?? this.artistTag,
+      seriesTag: seriesTag ?? this.seriesTag,
+      freeTags: freeTags ?? this.freeTags,
+      characterTags: characterTags ?? this.characterTags,
+      targetCollection: targetCollection ?? this.targetCollection,
+      convertToPdfOnHost: convertToPdfOnHost ?? this.convertToPdfOnHost,
+      hostPdfFileNameHint: hostPdfFileNameHint ?? this.hostPdfFileNameHint,
+      organizeAfterImport: organizeAfterImport ?? this.organizeAfterImport,
+    );
+  }
+
   bool get hasAssignedTags {
     return (artistTag?.trim().isNotEmpty ?? false) ||
         (seriesTag?.trim().isNotEmpty ?? false) ||

@@ -42,6 +42,13 @@ class _PreparedImportSelection {
   });
 }
 
+class _HostImportFolderGroup {
+  final String folderRaw;
+  final List<MediaItem> items;
+
+  const _HostImportFolderGroup(this.folderRaw, this.items);
+}
+
 extension _GalleryImportActions on _GalleryGridPageState {
   void _bindExternalSharePayloads() {
     _externalShareSubscription = _externalShareService.payloads.listen((
@@ -238,11 +245,10 @@ extension _GalleryImportActions on _GalleryGridPageState {
         ),
       );
 
-      final importedCount = await widget.repo.importItemsIntoFolder(
+      final importedCount = await _runHostImportSelection(
         lib,
-        selection.items,
-        importMetadata: request.metadata,
-        skipIfExists: request.skipIfExists,
+        selection,
+        request,
         onProgress: (next) => progress.value = next,
       );
       if (!mounted) return;
@@ -442,6 +448,108 @@ extension _GalleryImportActions on _GalleryGridPageState {
       items: selection.items,
       cleanupPaths: selection.cleanupPaths,
     );
+  }
+
+  Future<int> _runHostImportSelection(
+    FolderHandle lib,
+    ImportToHostSelection selection,
+    ImportRequest request, {
+    required void Function(MediaTransferProgress progress) onProgress,
+  }) async {
+    final shouldSplitByFolder =
+        request.sourceKind == ImportSourceKind.folder &&
+        request.metadata.convertToPdfOnHost;
+    if (!shouldSplitByFolder) {
+      return widget.repo.importItemsIntoFolder(
+        lib,
+        selection.items,
+        importMetadata: request.metadata,
+        skipIfExists: request.skipIfExists,
+        onProgress: onProgress,
+      );
+    }
+
+    final groups = _groupHostImportItemsByFolder(selection.items);
+    if (groups.length <= 1) {
+      return widget.repo.importItemsIntoFolder(
+        lib,
+        selection.items,
+        importMetadata: request.metadata.copyWith(
+          hostPdfFileNameHint: _hostPdfNameHintForFolderGroup(
+            selection.items,
+            fallback: request.metadata.hostPdfFileNameHint,
+          ),
+        ),
+        skipIfExists: request.skipIfExists,
+        onProgress: onProgress,
+      );
+    }
+
+    var importedCount = 0;
+    for (var index = 0; index < groups.length; index++) {
+      final group = groups[index];
+      final folderName = _hostPdfNameHintForFolderGroup(group.items);
+      importedCount += await widget.repo.importItemsIntoFolder(
+        lib,
+        group.items,
+        importMetadata: request.metadata.copyWith(
+          hostPdfFileNameHint: folderName,
+        ),
+        skipIfExists: request.skipIfExists,
+        onProgress: (next) {
+          onProgress(
+            MediaTransferProgress(
+              sentBytes: next.sentBytes,
+              totalBytes: next.totalBytes,
+              completedFiles: next.completedFiles,
+              totalFiles: next.totalFiles,
+              currentFileName: next.currentFileName,
+              statusLabel:
+                  '${index + 1} / ${groups.length} フォルダ: ${next.statusLabel ?? folderName}',
+            ),
+          );
+        },
+      );
+    }
+    return importedCount;
+  }
+
+  List<_HostImportFolderGroup> _groupHostImportItemsByFolder(
+    List<MediaItem> items,
+  ) {
+    final groups = <String, List<MediaItem>>{};
+    for (final item in items) {
+      final key = item.folderRaw.trim().isNotEmpty
+          ? item.folderRaw.trim()
+          : item.id.trim();
+      groups.putIfAbsent(key, () => <MediaItem>[]).add(item);
+    }
+    return groups.entries
+        .map((entry) => _HostImportFolderGroup(entry.key, entry.value))
+        .toList(growable: false);
+  }
+
+  String? _hostPdfNameHintForFolderGroup(
+    List<MediaItem> items, {
+    String? fallback,
+  }) {
+    final raw = items.isNotEmpty ? items.first.folderRaw.trim() : '';
+    if (raw.isNotEmpty) {
+      final normalized = raw.replaceAll('\\', '/');
+      final parts = normalized
+          .split('/')
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .toList(growable: false);
+      if (parts.isNotEmpty) {
+        try {
+          return Uri.decodeComponent(parts.last);
+        } on ArgumentError {
+          return parts.last;
+        }
+      }
+    }
+    return fallback;
   }
 
   Future<void> _cleanupImportSelectionPaths(

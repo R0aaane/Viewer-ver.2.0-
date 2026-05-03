@@ -330,6 +330,12 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
 
   String _selectionName() {
     if (_sourceKind == ImportSourceKind.folder) {
+      final locations = _sourceLocations();
+      if (locations.length > 1) {
+        final label = _displayNameFromRaw(locations.first);
+        return '${label.isNotEmpty ? label : 'フォルダ'} ほか '
+            '${locations.length - 1}フォルダ';
+      }
       final root = _selectedSourceRootRaw();
       final label = _displayNameFromRaw(root);
       if (label.isNotEmpty) {
@@ -380,6 +386,9 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
   String _selectionPathSummary() {
     final locations = _sourceLocations();
     if (_sourceKind == ImportSourceKind.folder) {
+      if (locations.length > 1) {
+        return '${locations.length} フォルダから選択';
+      }
       return _selectedSourceRootRaw();
     }
     if (_selectedMediaItems.length == 1) {
@@ -631,10 +640,18 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
       final nextSourceKind = selection.sourceKind;
       final nextItems = List<MediaItem>.unmodifiable(selection.items);
       final nextCleanupPaths = List<String>.unmodifiable(selection.cleanupPaths);
+      final appendsFolderSelection = _sourceKind == ImportSourceKind.folder &&
+          nextSourceKind == ImportSourceKind.folder &&
+          _selectedItems.isNotEmpty;
       setState(() {
         _sourceKind = nextSourceKind;
-        _selectedItems = nextItems;
-        _cleanupPaths = nextCleanupPaths;
+        if (appendsFolderSelection) {
+          _selectedItems = _mergeSelectedItems(_selectedItems, nextItems);
+          _cleanupPaths = _mergeCleanupPaths(_cleanupPaths, nextCleanupPaths);
+        } else {
+          _selectedItems = nextItems;
+          _cleanupPaths = nextCleanupPaths;
+        }
         _hostPdfNameController.text = _defaultHostPdfFileNameHint();
         if (_sourceKind != ImportSourceKind.folder ||
             _hostPdfModeDisabledReason() != null) {
@@ -646,6 +663,27 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
         setState(() => _pickingSelection = false);
       }
     }
+  }
+
+  List<MediaItem> _mergeSelectedItems(
+    List<MediaItem> current,
+    List<MediaItem> next,
+  ) {
+    final seen = current.map((item) => item.id).toSet();
+    return List<MediaItem>.unmodifiable(<MediaItem>[
+      ...current,
+      for (final item in next)
+        if (seen.add(item.id)) item,
+    ]);
+  }
+
+  List<String> _mergeCleanupPaths(List<String> current, List<String> next) {
+    final seen = current.toSet();
+    return List<String>.unmodifiable(<String>[
+      ...current,
+      for (final path in next)
+        if (seen.add(path)) path,
+    ]);
   }
 
   ImportRequest _buildRequest() {
@@ -817,7 +855,9 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     final sourceLocations = _sourceLocations();
     final hasSelection = _selectedMediaItems.isNotEmpty;
     final reselectionLabel = _sourceKind == ImportSourceKind.folder
-        ? 'フォルダを選択'
+        ? hasSelection
+              ? 'フォルダを追加'
+              : 'フォルダを選択'
         : 'ファイルを選択';
 
     return _SectionCard(
@@ -858,7 +898,11 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
               onPressed:
                   _pickingSelection ? null : () => _pickSelection(_sourceKind),
               icon: const Icon(Icons.refresh),
-              label: Text(hasSelection ? '再選択' : reselectionLabel),
+              label: Text(
+                hasSelection && _sourceKind != ImportSourceKind.folder
+                    ? '再選択'
+                    : reselectionLabel,
+              ),
             ),
           ),
           const SizedBox(height: 16),
