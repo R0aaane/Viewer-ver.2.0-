@@ -119,6 +119,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
   GalleryViewMode _galleryViewMode = GalleryViewMode.grid;
+  MediaItem? _bookshelfFocusItem;
+  final Map<String, Future<int>> _bookshelfPageCountCache =
+      <String, Future<int>>{};
 
   Set<String> _favorites = <String>{};
 
