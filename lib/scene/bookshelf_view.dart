@@ -181,7 +181,7 @@ class _BookshelfCoverShelf extends StatelessWidget {
   Widget build(BuildContext context) {
     return _WoodShelfFrame(
       label: section.label,
-      height: 188,
+      height: 210,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: section.items.length,
@@ -218,7 +218,7 @@ class _BookshelfSpineShelf extends StatelessWidget {
 
     return _WoodShelfFrame(
       label: section.label,
-      height: 168,
+      height: 182,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
@@ -250,21 +250,65 @@ class _WoodShelfFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      child: Column(
+      padding: const EdgeInsets.fromLTRB(12, 14, 12, 0),
+      child: Stack(
+        alignment: Alignment.topCenter,
         children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 18),
+            child: CustomPaint(
+              painter: const _WoodBackdropPainter(),
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      const Color(0xFF8B4F22).withValues(alpha: 0.98),
+                      const Color(0xFFA9672D).withValues(alpha: 0.96),
+                      const Color(0xFF6E3717).withValues(alpha: 0.98),
+                    ],
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                      color: Colors.black38,
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 18, 10, 0),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        height: height,
+                        child: Align(
+                          alignment: Alignment.bottomLeft,
+                          child: child,
+                        ),
+                      ),
+                      const _ShelfBoard(),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF4A1E0F), Color(0xFF7A3217)],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF6B260F), Color(0xFF3B1309)],
               ),
-              borderRadius: BorderRadius.circular(2),
+              border: Border.all(color: Color(0xFFB36A2F), width: 0.8),
               boxShadow: const [
                 BoxShadow(
-                  blurRadius: 5,
-                  offset: Offset(0, 2),
-                  color: Colors.black26,
+                  blurRadius: 7,
+                  offset: Offset(0, 3),
+                  color: Colors.black45,
                 ),
               ],
             ),
@@ -278,50 +322,88 @@ class _WoodShelfFrame extends StatelessWidget {
               ),
             ),
           ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFF8A5124),
-                  Color(0xFFC98740),
-                  Color(0xFF5B2D13),
-                ],
-              ),
-              boxShadow: const [
-                BoxShadow(
-                  blurRadius: 8,
-                  offset: Offset(0, 3),
-                  color: Colors.black26,
-                ),
-              ],
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 12, 10, 8),
-              child: Column(
-                children: [
-                  SizedBox(height: height, child: child),
-                  Container(
-                    height: 14,
-                    margin: const EdgeInsets.only(top: 6),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [Color(0xFFE0A151), Color(0xFF693819)],
-                      ),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
         ],
       ),
     );
   }
+}
+
+class _ShelfBoard extends StatelessWidget {
+  const _ShelfBoard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 22,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFFFC26A), Color(0xFFB66F2F), Color(0xFF6B3516)],
+          stops: [0.0, 0.35, 1.0],
+        ),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 3,
+            offset: Offset(0, -2),
+            color: Colors.black38,
+          ),
+          BoxShadow(blurRadius: 8, offset: Offset(0, 4), color: Colors.black45),
+        ],
+      ),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Container(height: 3, color: Colors.white24),
+      ),
+    );
+  }
+}
+
+class _WoodBackdropPainter extends CustomPainter {
+  const _WoodBackdropPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final linePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    for (var i = 0; i < 14; i++) {
+      final y = (i + 1) * size.height / 15;
+      final alpha = i.isEven ? 0.12 : 0.07;
+      linePaint.color = Colors.white.withValues(alpha: alpha);
+      final path = Path()..moveTo(0, y);
+      path.cubicTo(
+        size.width * 0.25,
+        y - 12,
+        size.width * 0.45,
+        y + 10,
+        size.width * 0.70,
+        y - 4,
+      );
+      path.cubicTo(
+        size.width * 0.86,
+        y - 12,
+        size.width * 0.94,
+        y + 8,
+        size.width,
+        y,
+      );
+      canvas.drawPath(path, linePaint);
+    }
+
+    final shadePaint = Paint()
+      ..shader = LinearGradient(
+        colors: [
+          Colors.black.withValues(alpha: 0.24),
+          Colors.transparent,
+          Colors.black.withValues(alpha: 0.18),
+        ],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, shadePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _WoodBackdropPainter oldDelegate) => false;
 }
 
 class _BookSpineTile extends StatelessWidget {
@@ -364,84 +446,98 @@ class _BookSpineTile extends StatelessWidget {
               },
               child: SizedBox(
                 width: width + 12,
-                height: 156,
-                child: CustomPaint(
-                  painter: _BookSpinePainter(
-                    color: color,
-                    focused: false,
-                    selected: selected,
-                  ),
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(5, 9, 5 + (width * 0.13), 5),
-                    child: Stack(
-                      children: [
-                        if (series.isNotEmpty)
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            child: Text(
-                              series,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 8,
+                height: 172,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: SizedBox(
+                    width: width + 12,
+                    height: 158,
+                    child: CustomPaint(
+                      painter: _BookSpinePainter(
+                        color: color,
+                        focused: false,
+                        selected: selected,
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          5,
+                          11,
+                          5 + (width * 0.13),
+                          5,
+                        ),
+                        child: Stack(
+                          children: [
+                            if (series.isNotEmpty)
+                              Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                child: Text(
+                                  series,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 8,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        Positioned.fill(
-                          top: series.isEmpty ? 2 : 16,
-                          bottom: 38,
-                          child: Center(
-                            child: RotatedBox(
-                              quarterTurns: 1,
-                              child: Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12,
+                            Positioned.fill(
+                              top: series.isEmpty ? 2 : 16,
+                              bottom: 38,
+                              child: Center(
+                                child: RotatedBox(
+                                  quarterTurns: 1,
+                                  child: Text(
+                                    title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          child: Container(
-                            height: 34,
-                            alignment: Alignment.center,
-                            padding: const EdgeInsets.symmetric(horizontal: 3),
-                            color: Colors.black.withValues(alpha: 0.30),
-                            child: Text(
-                              author,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 8,
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                height: 34,
+                                alignment: Alignment.center,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 3,
+                                ),
+                                color: Colors.black.withValues(alpha: 0.30),
+                                child: Text(
+                                  author,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 8,
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                            if (favorite)
+                              const Positioned(
+                                top: 3,
+                                right: 2,
+                                child: Icon(
+                                  Icons.star,
+                                  color: Colors.amber,
+                                  size: 13,
+                                ),
+                              ),
+                          ],
                         ),
-                        if (favorite)
-                          const Positioned(
-                            top: 3,
-                            right: 2,
-                            child: Icon(
-                              Icons.star,
-                              color: Colors.amber,
-                              size: 13,
-                            ),
-                          ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -511,6 +607,12 @@ class _BookSpinePainter extends CustomPainter {
       ..lineTo(size.width - depth, 0)
       ..lineTo(size.width - (depth * 2), depth)
       ..close();
+    final pageTop = Path()
+      ..moveTo(depth * 0.55, depth * 0.42)
+      ..lineTo(size.width - (depth * 1.45), depth * 0.34)
+      ..lineTo(size.width - (depth * 2.05), depth * 1.28)
+      ..lineTo(depth * 0.15, depth * 1.42)
+      ..close();
 
     canvas.drawPath(front, Paint()..color = color);
     canvas.drawPath(
@@ -522,6 +624,22 @@ class _BookSpinePainter extends CustomPainter {
       Paint()..color = Color.lerp(color, Colors.white, 0.24)!,
     );
     canvas.drawPath(
+      pageTop,
+      Paint()..color = Colors.white.withValues(alpha: 0.72),
+    );
+    final pageLinePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.7
+      ..color = Colors.black.withValues(alpha: 0.14);
+    for (var i = 0; i < 3; i++) {
+      final y = depth * (0.62 + i * 0.2);
+      canvas.drawLine(
+        Offset(depth * 0.7, y),
+        Offset(size.width - depth * 1.7, y - 0.4),
+        pageLinePaint,
+      );
+    }
+    canvas.drawPath(
       front,
       Paint()
         ..shader = LinearGradient(
@@ -530,6 +648,15 @@ class _BookSpinePainter extends CustomPainter {
             Colors.transparent,
             Colors.black.withValues(alpha: 0.20),
           ],
+        ).createShader(Offset.zero & size),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(0, size.height - 7, size.width - depth, 7),
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.22)],
         ).createShader(Offset.zero & size),
     );
 
@@ -571,32 +698,59 @@ class _BookCoverTile extends StatelessWidget {
         onTap: () => state._openBookshelfCover(item, detailItemsSource),
         onLongPress: () => state._enterSelectMode(item),
         child: SizedBox(
-          width: 118,
-          child: Transform(
-            transform: Matrix4.identity()
-              ..setEntry(3, 2, 0.001)
-              ..rotateY(-0.055),
-            alignment: Alignment.center,
-            child: DecoratedBox(
-              decoration: const BoxDecoration(
-                boxShadow: [
-                  BoxShadow(
-                    blurRadius: 7,
-                    offset: Offset(3, 3),
-                    color: Colors.black38,
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(2),
-                child: FutureBuilder<ThumbPair>(
-                  future: state._getMediaThumbPair(item),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData) {
-                      return _ThumbImage(bytes: snapshot.data!.front);
-                    }
-                    return const _TileShell(loading: true);
-                  },
+          width: 124,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              height: 184,
+              child: Transform(
+                transform: Matrix4.identity()
+                  ..setEntry(3, 2, 0.001)
+                  ..rotateY(-0.085),
+                alignment: Alignment.center,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      top: 5,
+                      right: -7,
+                      bottom: 2,
+                      width: 10,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.34),
+                          borderRadius: const BorderRadius.horizontal(
+                            right: Radius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: const BoxDecoration(
+                          boxShadow: [
+                            BoxShadow(
+                              blurRadius: 9,
+                              offset: Offset(4, 5),
+                              color: Colors.black45,
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: FutureBuilder<ThumbPair>(
+                            future: state._getMediaThumbPair(item),
+                            builder: (context, snapshot) {
+                              if (snapshot.hasData) {
+                                return _ThumbImage(bytes: snapshot.data!.front);
+                              }
+                              return const _TileShell(loading: true);
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
