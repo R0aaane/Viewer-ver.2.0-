@@ -684,4 +684,26 @@ extension _GalleryFolderActions on _GalleryGridPageState {
     if (mode == null) return;
     _saveFolderTileMode(mode);
   }
+
+  Future<void> _showGalleryViewModeDialog() async {
+    final mode = await showControllerDialog<GalleryViewMode>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('表示モード'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, GalleryViewMode.grid),
+            child: const Text('グリッド'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, GalleryViewMode.bookshelf),
+            child: const Text('本棚'),
+          ),
+        ],
+      ),
+    );
+
+    if (mode == null) return;
+    _saveGalleryViewMode(mode);
+  }
 }

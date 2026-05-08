@@ -41,6 +41,7 @@ import 'url_import_dialog.dart';
 
 part 'grid_gallery_models.dart';
 part 'gallery_grid_view.dart';
+part 'bookshelf_view.dart';
 part 'gallery_home_view.dart';
 part 'gallery_import_actions.dart';
 part 'gallery_thumbnail_cache.dart';
@@ -117,6 +118,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _galleryTotal = 0;
 
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
+  GalleryViewMode _galleryViewMode = GalleryViewMode.grid;
 
   Set<String> _favorites = <String>{};
 
@@ -616,6 +618,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           modeIndex < FolderTileMode.values.length) {
         _folderTileMode = FolderTileMode.values[modeIndex];
       }
+      final galleryModeIndex = prefs.getInt(_PrefsKeys.galleryViewMode);
+      if (galleryModeIndex != null &&
+          galleryModeIndex >= 0 &&
+          galleryModeIndex < GalleryViewMode.values.length) {
+        _galleryViewMode = GalleryViewMode.values[galleryModeIndex];
+      }
       if (widget.repo.isRemoteMode) {
         List<FolderHandle> remoteFolders = const <FolderHandle>[];
         try {
@@ -881,6 +889,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() => _folderTileMode = m);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_PrefsKeys.folderTileMode, m.index);
+  }
+
+  Future<void> _saveGalleryViewMode(GalleryViewMode m) async {
+    setState(() => _galleryViewMode = m);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_PrefsKeys.galleryViewMode, m.index);
   }
 
   // ----------------
@@ -1559,6 +1573,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       case _GalleryMenuAction.tagManagement:
         await _openTagManagementPage();
         return;
+      case _GalleryMenuAction.galleryViewMode:
+        await _showGalleryViewModeDialog();
+        return;
       case _GalleryMenuAction.folderTileMode:
         await _showFolderTileModeDialog();
         return;
@@ -1654,6 +1671,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       icon: const Icon(Icons.more_vert),
       onSelected: _onGalleryMenuSelected,
       itemBuilder: (context) => <PopupMenuEntry<_GalleryMenuAction>>[
+        const PopupMenuItem(
+          value: _GalleryMenuAction.galleryViewMode,
+          child: ListTile(
+            leading: Icon(Icons.view_carousel_outlined),
+            title: Text('表示モード'),
+          ),
+        ),
         const PopupMenuItem(
           value: _GalleryMenuAction.folderTileMode,
           child: ListTile(

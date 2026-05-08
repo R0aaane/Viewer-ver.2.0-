@@ -996,6 +996,15 @@ extension _GalleryGridView on _GalleryGridPageState {
       );
     }
 
+    if (_galleryViewMode == GalleryViewMode.bookshelf) {
+      return _buildBookshelf(
+        items,
+        showFolderLabel: showFolderLabel,
+        showPager: showPager,
+        onRefresh: onRefresh,
+      );
+    }
+
     return RefreshIndicator(
       onRefresh: onRefresh,
       child: CustomScrollView(

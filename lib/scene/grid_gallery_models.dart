@@ -24,12 +24,15 @@ enum _GalleryMenuAction {
   exportPdf,
   organizeLibrary,
   tagManagement,
+  galleryViewMode,
   folderTileMode,
   metadataSettings,
   goHome,
 }
 
 enum FolderTileMode { labelOnly, preview }
+
+enum GalleryViewMode { grid, bookshelf }
 
 class _PrefsKeys {
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
@@ -43,6 +46,7 @@ class _PrefsKeys {
 
   static const String folderAliasesJson = 'prefs.folderAliasesJson';
   static const String folderTileMode = 'prefs.folderTileMode';
+  static const String galleryViewMode = 'prefs.galleryViewMode';
 }
 
 class _FolderNavState {
