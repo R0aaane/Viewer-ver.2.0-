@@ -119,7 +119,7 @@ extension _ReaderView on _ImageDetailPageState {
           ? progressTotalPages
           : _totalPages;
       final nextPage = entry != null && !_hasMovedPdfPageSinceLoad
-          ? entry.currentPage
+          ? (entry.isCompleted ? 1 : entry.currentPage)
           : _page;
 
       setState(() {

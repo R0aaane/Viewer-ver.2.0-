@@ -383,6 +383,18 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     return out;
   }
 
+  Map<String, int> _sourceLocationCounts() {
+    final counts = <String, int>{};
+    for (final item in _selectedMediaItems) {
+      final raw = item.folderRaw.trim();
+      if (raw.isEmpty) {
+        continue;
+      }
+      counts[raw] = (counts[raw] ?? 0) + 1;
+    }
+    return counts;
+  }
+
   String _selectionPathSummary() {
     final locations = _sourceLocations();
     if (_sourceKind == ImportSourceKind.folder) {
@@ -853,6 +865,7 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
     final remainingCount = _selectedMediaItems.length - previewItems.length;
     final sourceRoot = _selectedSourceRootRaw();
     final sourceLocations = _sourceLocations();
+    final sourceLocationCounts = _sourceLocationCounts();
     final hasSelection = _selectedMediaItems.isNotEmpty;
     final reselectionLabel = _sourceKind == ImportSourceKind.folder
         ? hasSelection
@@ -889,6 +902,12 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
                   icon: Icons.data_usage_outlined,
                   label: _formatFileSize(_selectedTotalBytes),
                 ),
+              if (_sourceKind == ImportSourceKind.folder &&
+                  sourceLocationCounts.isNotEmpty)
+                _SelectionStatChip(
+                  icon: Icons.folder_open_outlined,
+                  label: 'フォルダ ${sourceLocationCounts.length}件',
+                ),
             ],
           ),
           const SizedBox(height: 16),
@@ -909,9 +928,19 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
           _SummaryField(label: '選択元種別', value: _sourceKindLabel()),
           const SizedBox(height: 12),
           _SummaryField(label: '選択名', value: _selectionName()),
-          if (_sourceKind == ImportSourceKind.folder && sourceRoot.isNotEmpty) ...[
+          if (_sourceKind == ImportSourceKind.folder &&
+              sourceRoot.isNotEmpty &&
+              sourceLocationCounts.length <= 1) ...[
             const SizedBox(height: 12),
             _SummaryField(label: '選択フォルダ', value: sourceRoot),
+          ],
+          if (_sourceKind == ImportSourceKind.folder &&
+              sourceLocationCounts.length > 1) ...[
+            const SizedBox(height: 12),
+            _SummaryField(
+              label: '選択フォルダ数',
+              value: '${sourceLocationCounts.length} フォルダ',
+            ),
           ],
           const SizedBox(height: 12),
           _SummaryField(
@@ -927,6 +956,35 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
             ),
           ],
           const SizedBox(height: 16),
+          if (_sourceKind == ImportSourceKind.folder &&
+              sourceLocationCounts.isNotEmpty) ...[
+            Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                initiallyExpanded: sourceLocationCounts.length > 1,
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(top: 8),
+                title: const Text('選択フォルダを確認'),
+                subtitle: Text(
+                  sourceLocationCounts.length > 1
+                      ? '${sourceLocationCounts.length} フォルダを個別にPDF化します'
+                      : '1 フォルダをPDF化します',
+                ),
+                children: [
+                  for (final entry in sourceLocationCounts.entries)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _buildSelectedFolderTile(
+                        context,
+                        folderRaw: entry.key,
+                        itemCount: entry.value,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
@@ -958,6 +1016,74 @@ class _ImportToHostSheetState extends State<ImportToHostSheet> {
                   ),
                 if (hasSelection && remainingCount > 0)
                   _TagPlaceholder('ほか $remainingCount 件あります。'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectedFolderTile(
+    BuildContext context, {
+    required String folderRaw,
+    required int itemCount,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final folderName = _displayNameFromRaw(folderRaw);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.surface.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: colorScheme.primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: Icon(Icons.folder_open_outlined, color: colorScheme.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  folderName.isNotEmpty ? folderName : 'フォルダ',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$itemCount 件を1つのPDFとして取り込み',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Tooltip(
+                  message: folderRaw,
+                  child: Text(
+                    _shortenMiddle(folderRaw),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),

@@ -177,14 +177,15 @@ extension _DetailActions on _ImageDetailPageState {
     if (!force && !_canPersistReadingProgress && !_hasMovedPdfPageSinceLoad) {
       return;
     }
-    final page = _page < 1 ? 1 : _page;
+    final page = _twoPage ? (_page + 1).clamp(1, _totalPages) : _page;
+    final currentPage = page < 1 ? 1 : page;
     final totalPages = _totalPages > 0 ? _totalPages : null;
     final sw = Stopwatch()..start();
     debugPrint('[detail-back] progress save start item=${item.id}');
     try {
       await _readingProgressService.saveProgressForItem(
         item,
-        currentPage: page,
+        currentPage: currentPage,
         totalPages: totalPages,
       );
     } catch (error, stackTrace) {

@@ -5648,9 +5648,10 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       return;
     }
 
-    final page = _page < 1 ? 1 : _page;
+    final page = _twoPage ? (_page + 1).clamp(1, _totalPages) : _page;
+    final currentPage = page < 1 ? 1 : page;
     final totalPages = _totalPages > 0 ? _totalPages : null;
-    final progressKey = '$page/${totalPages ?? 0}';
+    final progressKey = '$currentPage/${totalPages ?? 0}';
     if (!force && _lastPersistedProgressKey == progressKey) {
       return;
     }
@@ -5658,7 +5659,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     try {
       await _readingProgressService.saveProgress(
         mediaId: mediaId,
-        currentPage: page,
+        currentPage: currentPage,
         totalPages: totalPages,
       );
       _lastPersistedProgressKey = progressKey;
@@ -5754,7 +5755,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         if (savedTotalPages != null && savedTotalPages > 0) savedTotalPages,
       ].reduce((left, right) => left > right ? left : right);
       final effectivePage = !_hasMovedPageSinceLoad && progress != null
-          ? progress.currentPage
+          ? (progress.isCompleted ? 1 : progress.currentPage)
           : _page;
       setState(() {
         _twoPage = twoPage ?? _twoPage;
