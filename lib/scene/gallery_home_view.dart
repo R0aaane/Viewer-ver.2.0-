@@ -771,6 +771,23 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       });
                     },
                   );
+                  final viewDropdown = DropdownButton<DetailedBrowseViewMode>(
+                    value: _detailedBrowseViewMode,
+                    items: const [
+                      DropdownMenuItem(
+                        value: DetailedBrowseViewMode.grid,
+                        child: Text('カード'),
+                      ),
+                      DropdownMenuItem(
+                        value: DetailedBrowseViewMode.bookshelf,
+                        child: Text('本棚'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      _saveDetailedBrowseViewMode(value);
+                    },
+                  );
 
                   if (constraints.maxWidth < 520) {
                     return Column(
@@ -782,6 +799,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
                             const Text('並び替え'),
                             const SizedBox(width: 8),
                             dropdown,
+                            const SizedBox(width: 16),
+                            const Text('表示'),
+                            const SizedBox(width: 8),
+                            viewDropdown,
                           ],
                         ),
                       ],
@@ -795,6 +816,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       const Text('並び替え'),
                       const SizedBox(width: 8),
                       dropdown,
+                      const SizedBox(width: 16),
+                      const Text('表示'),
+                      const SizedBox(width: 8),
+                      viewDropdown,
                     ],
                   );
                 },
@@ -825,6 +850,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
             (contentWidth - (crossSpacing * (crossAxisCount - 1))) /
             crossAxisCount;
         final tileHeight = (tileWidth * (4 / 3)) + 84;
+        final bookshelfMode =
+            _detailedBrowseViewMode == DetailedBrowseViewMode.bookshelf;
 
         return RefreshIndicator(
           onRefresh: _handlePullToRefresh,
@@ -860,7 +887,24 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   ),
                 )
               else ...[
-                if (showPager)
+                if (bookshelfMode) ...[
+                  ..._buildDetailedBrowseBookshelfSlivers(
+                    pageItems,
+                    showPager: showPager,
+                  ),
+                ] else ...[
+                  if (showPager)
+                    SliverPadding(
+                      padding: EdgeInsets.fromLTRB(
+                        sidePadding,
+                        0,
+                        sidePadding,
+                        12,
+                      ),
+                      sliver: SliverToBoxAdapter(
+                        child: _buildDetailedBrowsePager(),
+                      ),
+                    ),
                   SliverPadding(
                     padding: EdgeInsets.fromLTRB(
                       sidePadding,
@@ -868,37 +912,32 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       sidePadding,
                       12,
                     ),
-                    sliver: SliverToBoxAdapter(
-                      child: _buildDetailedBrowsePager(),
+                    sliver: SliverGrid(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        mainAxisSpacing: mainSpacing,
+                        crossAxisSpacing: crossSpacing,
+                        mainAxisExtent: tileHeight,
+                      ),
+                      delegate: SliverChildBuilderDelegate((context, index) {
+                        final item = pageItems[index];
+                        return _buildDetailedBrowseGridTile(item);
+                      }, childCount: pageItems.length),
                     ),
                   ),
-                SliverPadding(
-                  padding: EdgeInsets.fromLTRB(sidePadding, 0, sidePadding, 12),
-                  sliver: SliverGrid(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: crossAxisCount,
-                      mainAxisSpacing: mainSpacing,
-                      crossAxisSpacing: crossSpacing,
-                      mainAxisExtent: tileHeight,
+                  if (showPager)
+                    SliverPadding(
+                      padding: EdgeInsets.fromLTRB(
+                        sidePadding,
+                        0,
+                        sidePadding,
+                        12,
+                      ),
+                      sliver: SliverToBoxAdapter(
+                        child: _buildDetailedBrowsePager(),
+                      ),
                     ),
-                    delegate: SliverChildBuilderDelegate((context, index) {
-                      final item = pageItems[index];
-                      return _buildDetailedBrowseGridTile(item);
-                    }, childCount: pageItems.length),
-                  ),
-                ),
-                if (showPager)
-                  SliverPadding(
-                    padding: EdgeInsets.fromLTRB(
-                      sidePadding,
-                      0,
-                      sidePadding,
-                      12,
-                    ),
-                    sliver: SliverToBoxAdapter(
-                      child: _buildDetailedBrowsePager(),
-                    ),
-                  ),
+                ],
               ],
             ],
           ),
