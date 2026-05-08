@@ -16,6 +16,9 @@ extension _BookshelfView on _GalleryGridPageState {
     required bool showPager,
     required Future<void> Function() onRefresh,
   }) {
+    final folderItems = items
+        .where((item) => item.kind == MediaKind.folder)
+        .toList(growable: false);
     final pdfItems = items
         .where((item) => item.kind == MediaKind.pdf)
         .toList(growable: false);
@@ -30,6 +33,46 @@ extension _BookshelfView on _GalleryGridPageState {
         slivers: [
           if (showPager && _galleryTotal > _GalleryGridPageState._pageSize)
             SliverToBoxAdapter(child: _buildPager()),
+          if (folderItems.isNotEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.all(12),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 220,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 0.75,
+                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final item = folderItems[index];
+                  return _buildGridTile(
+                    item,
+                    showFolderLabel: showFolderLabel,
+                    detailItemsSource: items,
+                  );
+                }, childCount: folderItems.length),
+              ),
+            ),
+          if (pdfItems.isEmpty && folderItems.isEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.all(12),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 220,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 0.75,
+                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final item = items[index];
+                  return _buildGridTile(
+                    item,
+                    showFolderLabel: showFolderLabel,
+                    detailItemsSource: items,
+                  );
+                }, childCount: items.length),
+              ),
+            ),
           SliverList.builder(
             itemCount: coverSections.length,
             itemBuilder: (context, index) => _BookshelfCoverShelf(
