@@ -34,23 +34,11 @@ extension _BookshelfView on _GalleryGridPageState {
           if (showPager && _galleryTotal > _GalleryGridPageState._pageSize)
             SliverToBoxAdapter(child: _buildPager()),
           if (folderItems.isNotEmpty)
-            SliverPadding(
-              padding: const EdgeInsets.all(12),
-              sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 220,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 0.75,
-                ),
-                delegate: SliverChildBuilderDelegate((context, index) {
-                  final item = folderItems[index];
-                  return _buildGridTile(
-                    item,
-                    showFolderLabel: showFolderLabel,
-                    detailItemsSource: items,
-                  );
-                }, childCount: folderItems.length),
+            SliverToBoxAdapter(
+              child: _BookshelfFolderShelf(
+                section: _BookshelfSection(label: 'フォルダ', items: folderItems),
+                state: this,
+                isSelected: (item) => _selectedIds.contains(item.id),
               ),
             ),
           if (pdfItems.isEmpty && folderItems.isEmpty)
@@ -275,6 +263,36 @@ class _BookshelfCoverShelf extends StatelessWidget {
   }
 }
 
+class _BookshelfFolderShelf extends StatelessWidget {
+  final _BookshelfSection section;
+  final _GalleryGridPageState state;
+  final bool Function(MediaItem item) isSelected;
+
+  const _BookshelfFolderShelf({
+    required this.section,
+    required this.state,
+    required this.isSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _WoodShelfFrame(
+      label: section.label,
+      height: 150,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: section.items.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
+        itemBuilder: (context, index) => _FolderBookTile(
+          state: state,
+          item: section.items[index],
+          selected: isSelected(section.items[index]),
+        ),
+      ),
+    );
+  }
+}
+
 class _BookshelfSpineShelf extends StatelessWidget {
   static const int _maxSpines = 36;
 
@@ -315,6 +333,86 @@ class _BookshelfSpineShelf extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _FolderBookTile extends StatelessWidget {
+  final _GalleryGridPageState state;
+  final MediaItem item;
+  final bool selected;
+
+  const _FolderBookTile({
+    required this.state,
+    required this.item,
+    required this.selected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final title = state._bookTitle(item);
+    final color = _stableFolderColor(item);
+    return Tooltip(
+      message: title,
+      child: InkWell(
+        onTap: () async {
+          state._exitSelectMode();
+          await state._enterFolder(item);
+        },
+        onLongPress: () => state._enterSelectMode(item),
+        child: SizedBox(
+          width: 86,
+          height: 142,
+          child: CustomPaint(
+            painter: _BookSpinePainter(
+              color: color,
+              focused: false,
+              selected: selected,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 12, 15, 12),
+              child: Column(
+                children: [
+                  const Icon(Icons.folder, color: Colors.white, size: 30),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Center(
+                      child: RotatedBox(
+                        quarterTurns: 1,
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Color _stableFolderColor(MediaItem item) {
+    final key = item.id.isNotEmpty ? item.id : item.displayName;
+    var hash = 0;
+    for (final codeUnit in key.codeUnits) {
+      hash = (hash * 31 + codeUnit) & 0x7fffffff;
+    }
+    final palette = <Color>[
+      const Color(0xFF7A4A22),
+      const Color(0xFF6A3C18),
+      const Color(0xFF8A5124),
+      const Color(0xFF5B3A1E),
+    ];
+    return palette[hash % palette.length];
   }
 }
 
