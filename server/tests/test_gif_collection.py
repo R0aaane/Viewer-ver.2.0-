@@ -5,7 +5,10 @@ from pathlib import Path
 from PIL import Image
 
 from server.repositories.sqlite_store import SqliteStore
-from server.api.routes_actions import _flatten_imported_media_paths
+from server.api.routes_actions import (
+    _flatten_imported_media_paths,
+    _prefer_gif_collection_import_paths,
+)
 from server.services.media_index_service import MediaIndexService
 from server.services.metadata_store import MetadataStore
 from server.services.thumbnail_service import ThumbnailService
@@ -136,11 +139,25 @@ class GifCollectionTest(unittest.TestCase):
         self.assertEqual(deleted, 1)
         self.assertFalse(collection.exists())
 
+    def test_single_hitomi_gif_imports_as_file(self) -> None:
+        staging = Path(self._temp_dir.name) / "stage"
+        gallery = staging / "hitomi" / "artist" / "[20240101] [123] Sample GIF"
+        gallery.mkdir(parents=True)
+        (gallery / "001.gif").write_bytes(_GIF_1X1)
+
+        paths = _prefer_gif_collection_import_paths(
+            str(staging),
+            [str(gallery / "001.gif")],
+        )
+
+        self.assertEqual(paths, [str(gallery / "001.gif")])
+
     def test_flattened_gif_collection_uses_stripped_hitomi_title(self) -> None:
         staging = Path(self._temp_dir.name) / "stage"
         gallery = staging / "hitomi" / "artist" / "[20240101] [123] Sample GIF"
         gallery.mkdir(parents=True)
         (gallery / "001.gif").write_bytes(_GIF_1X1)
+        (gallery / "002.gif").write_bytes(_GIF_1X1)
 
         entries = _flatten_imported_media_paths(str(staging), [str(gallery)])
 

@@ -263,7 +263,8 @@ def list_hitomi_extensions(file_info: dict, preferred: str = "auto"):
         if preferred not in {"avif", "jxl"} or file_info.get(f"has{preferred}"):
             add_extension(preferred)
 
-    if preferred == "original" and original_ext == "gif":
+    if original_ext == "gif":
+        add_extension("gif")
         add_extension("webp")
         if file_info.get("hasavif"):
             add_extension("avif")

@@ -2082,7 +2082,7 @@ extension _GalleryImportActions on _GalleryGridPageState {
     MediaKind kind,
     Iterable<Tag> tags,
   ) {
-    if (kind == MediaKind.pdf) {
+    if (kind == MediaKind.pdf || kind == MediaKind.image) {
       return _filterHitomiPdfAutoTags(tags);
     }
 

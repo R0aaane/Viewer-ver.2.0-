@@ -11,6 +11,18 @@ from server.vendor.kemono_dl.hitomi import (
 
 
 class HitomiHelpersTest(unittest.TestCase):
+    def test_gif_original_extension_is_preferred_in_auto_mode(self) -> None:
+        extensions = list_hitomi_extensions(
+            {
+                "name": "sample.gif",
+                "hasavif": True,
+                "hasjxl": False,
+            },
+            preferred="auto",
+        )
+
+        self.assertEqual(extensions[0], "gif")
+
     def test_collect_hitomi_names_keeps_all_distinct_entries(self) -> None:
         info = {
             'artists': [

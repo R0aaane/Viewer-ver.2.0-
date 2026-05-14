@@ -1518,7 +1518,7 @@ def _prefer_gif_collection_import_paths(
     imported_paths: list[str],
 ) -> list[str]:
     normalized_root = os.path.normcase(os.path.normpath(folder_path))
-    gif_parents: set[str] = set()
+    gif_parent_counts: dict[str, int] = {}
     for path in imported_paths:
         normalized_path = os.path.normpath(path)
         if not _is_gif_collection_member_path(normalized_path):
@@ -1526,7 +1526,10 @@ def _prefer_gif_collection_import_paths(
         parent = os.path.dirname(normalized_path)
         if os.path.normcase(parent) == normalized_root:
             continue
-        gif_parents.add(parent)
+        gif_parent_counts[parent] = gif_parent_counts.get(parent, 0) + 1
+    gif_parents = {
+        parent for parent, count in gif_parent_counts.items() if count > 1
+    }
     if not gif_parents:
         return imported_paths
 
