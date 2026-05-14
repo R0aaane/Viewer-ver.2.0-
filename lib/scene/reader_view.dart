@@ -391,6 +391,18 @@ extension _ReaderView on _ImageDetailPageState {
             ),
           );
         }
+        final bytes = snap.data!;
+        if (bytes.isEmpty) {
+          return _buildLoadError(
+            '画像の読み込みに失敗しました。',
+            onRetry: () {
+              setState(() {
+                _readerController.removeReaderPage(pageNumber);
+                _syncReaderFutures(_item);
+              });
+            },
+          );
+        }
 
         // 隕矩幕縺阪・縲檎ｸｦ蜷医ｏ縺帙搾ｼ九檎ｶｴ縺伜・蟇・○縲阪′荳逡ｪ螳牙ｮ壹＠繧・☆縺九▲縺・
         final fit = _fullscreen
@@ -399,7 +411,7 @@ extension _ReaderView on _ImageDetailPageState {
 
         //pdf縺ｮ閭梧勹縺ｫ逋ｽ繧定ｿｽ蜉・磯乗・縺ｧ騾上￠縺ｦ隕九∴繧具ｼ・
         final img = Image.memory(
-          snap.data!,
+          bytes,
           fit: fit,
           alignment: align,
           width: _fullscreen ? double.infinity : null,
@@ -591,8 +603,19 @@ extension _ReaderView on _ImageDetailPageState {
                   if (!snap.hasData) {
                     return const Center(child: CircularProgressIndicator());
                   }
+                  final bytes = snap.data!;
+                  if (bytes.isEmpty) {
+                    return _buildLoadError(
+                      'ページ $page のサムネイル取得に失敗しました。',
+                      onRetry: () {
+                        setState(() {
+                          _readerController.removeThumbPage(page);
+                        });
+                      },
+                    );
+                  }
                   return Image.memory(
-                    snap.data!,
+                    bytes,
                     fit: BoxFit.cover,
                     gaplessPlayback: true,
                     filterQuality: FilterQuality.low,

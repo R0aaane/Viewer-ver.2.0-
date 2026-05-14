@@ -153,7 +153,7 @@ class DetailReaderController {
           item,
           adjacentPage,
           useStaticFrame: gifAnimationPaused,
-        ).catchError((_) => Uint8List(0)),
+        ).then<void>((_) {}, onError: (_, _) {}),
       );
     }
   }
