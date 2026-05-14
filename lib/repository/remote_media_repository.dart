@@ -1614,6 +1614,11 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   @override
+  Future<MediaItem> deletePdfPage(MediaItem item, int pageNumber) async {
+    throw UnsupportedError('リモート PDF のページ削除は未対応です');
+  }
+
+  @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async {
     final fixedName = ItemNameService.buildDisplayName(item, newDisplayName);
     final nextPath = _winPath.join(item.folderRaw, fixedName);
@@ -2813,6 +2818,11 @@ class SwitchingMediaRepository implements MediaRepository {
   @override
   Future<int> deleteItems(List<MediaItem> items) =>
       _activeRepository.deleteItems(items);
+
+  @override
+  Future<MediaItem> deletePdfPage(MediaItem item, int pageNumber) {
+    return _activeRepository.deletePdfPage(item, pageNumber);
+  }
 
   @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) {

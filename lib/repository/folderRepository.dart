@@ -9,6 +9,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
 import '../media_file_types.dart';
 import '../models/folder.dart';
@@ -107,6 +108,7 @@ class WindowsFolderRepository implements MediaRepository {
     canImportToHost: false,
     canBatchUpload: true,
     canAssignImportTags: true,
+    canEditPdfPages: true,
   );
 
   @override
@@ -648,6 +650,57 @@ class WindowsFolderRepository implements MediaRepository {
       if (deleted) ok++;
     }
     return ok;
+  }
+
+  @override
+  Future<MediaItem> deletePdfPage(MediaItem item, int pageNumber) async {
+    if (item.kind != MediaKind.pdf) {
+      throw ArgumentError('PDF ではありません');
+    }
+
+    final total = await getPageCount(item);
+    if (total <= 1) {
+      throw StateError('最後の1ページは削除できません');
+    }
+    if (pageNumber < 1 || pageNumber > total) {
+      throw RangeError.range(pageNumber, 1, total, 'pageNumber');
+    }
+
+    final cachedDoc = _pdfCache.remove(item.id);
+    if (cachedDoc != null) {
+      await cachedDoc.close();
+    }
+
+    final bytes = await _withFsRetry(
+      item.id,
+      () => File(item.id).readAsBytes(),
+    );
+    final document = sf.PdfDocument(inputBytes: bytes);
+    late final List<int> updatedBytes;
+    try {
+      document.pages.removeAt(pageNumber - 1);
+      updatedBytes = await document.save();
+    } finally {
+      document.dispose();
+    }
+
+    final file = File(item.id);
+    await _withFsRetry(
+      item.id,
+      () => file.writeAsBytes(updatedBytes, flush: true),
+    );
+    _thumbCache.clear();
+
+    final stat = await file.stat();
+    return MediaItem(
+      id: item.id,
+      displayName: item.displayName,
+      kind: item.kind,
+      folderRaw: item.folderRaw,
+      modified: stat.modified,
+      sizeBytes: stat.size,
+      tags: item.tags,
+    );
   }
 
   @override

@@ -46,7 +46,7 @@ extension _DetailActions on _ImageDetailPageState {
 
   Future<void> _loadLibraryContext() async {
     try {
-      final lib = await widget.repo.getAppLibraryFolder();
+      await widget.repo.getAppLibraryFolder();
       if (!mounted) return;
       setState(() {
         _canDeleteFromLibrary = widget.repo.capabilities.canDelete && _isPdf;
@@ -273,5 +273,64 @@ extension _DetailActions on _ImageDetailPageState {
     // 隧ｳ邏ｰ逕ｻ髱｢繧帝哩縺倥※荳隕ｧ蛛ｴ縺ｧ繝ｪ繝ｭ繝ｼ繝峨＆縺帙ｋ
     if (!mounted) return;
     Navigator.pop(context, true);
+  }
+
+  Future<void> _deleteCurrentPdfPageWithWarning() async {
+    if (!_isPdf || !widget.repo.capabilities.canEditPdfPages) return;
+    if (_totalPages <= 1) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('最後の1ページは削除できません')));
+      return;
+    }
+
+    final item = _item;
+    final page = _page;
+    final ok = await showControllerDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('このページを削除しますか？'),
+        content: Text(
+          '「${item.displayName}」の $page ページ目を削除します。\n'
+          '削除すると元に戻せません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('削除'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    try {
+      final updated = await widget.repo.deletePdfPage(item, page);
+      if (!mounted) return;
+
+      setState(() {
+        _items[_index] = updated;
+        _totalPages = (_totalPages - 1).clamp(1, _totalPages);
+        _page = page.clamp(1, _totalPages);
+        _readerController.clearCaches();
+        _syncReaderFutures(updated);
+      });
+      _itemChanged = true;
+      _schedulePersistCurrentActivity();
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$page ページ目を削除しました')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('ページ削除に失敗しました: $error')));
+    }
   }
 }

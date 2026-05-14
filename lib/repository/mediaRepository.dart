@@ -20,6 +20,7 @@ class RepositoryCapabilities {
   final bool canImportToHost;
   final bool canBatchUpload;
   final bool canAssignImportTags;
+  final bool canEditPdfPages;
 
   const RepositoryCapabilities({
     required this.canRename,
@@ -33,6 +34,7 @@ class RepositoryCapabilities {
     required this.canImportToHost,
     required this.canBatchUpload,
     required this.canAssignImportTags,
+    this.canEditPdfPages = false,
   });
 }
 
@@ -566,6 +568,12 @@ abstract class MediaRepository {
   Future<bool> deleteItem(MediaItem item);
 
   Future<int> deleteItems(List<MediaItem> items);
+
+  Future<MediaItem> deletePdfPage(MediaItem item, int pageNumber) async {
+    throw UnsupportedError(
+      'PDF page editing is not supported in this repository',
+    );
+  }
 
   Future<MediaItem> rename(MediaItem item, String newDisplayName);
 

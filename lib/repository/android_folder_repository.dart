@@ -2002,6 +2002,11 @@ class AndroidFolderRepository implements MediaRepository {
     return ok;
   }
 
+  @override
+  Future<MediaItem> deletePdfPage(MediaItem item, int pageNumber) async {
+    throw UnsupportedError('Android の PDF ページ削除は未対応です');
+  }
+
   String _mimeFor({required String itemExt}) {
     if (itemExt == '.pdf') return 'application/pdf';
     return MediaFileTypes.imageMimeTypeForFileName(itemExt);

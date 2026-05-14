@@ -314,10 +314,20 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   onSelected: (a) {
                     if (a == _DetailMenuAction.delete) {
                       _deleteCurrentItemWithWarning();
+                    } else if (a == _DetailMenuAction.deletePdfPage) {
+                      _deleteCurrentPdfPageWithWarning();
                     }
                   },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
+                  itemBuilder: (context) => [
+                    if (_isPdf && widget.repo.capabilities.canEditPdfPages)
+                      const PopupMenuItem(
+                        value: _DetailMenuAction.deletePdfPage,
+                        child: ListTile(
+                          leading: Icon(Icons.delete_sweep_outlined),
+                          title: Text('現在のページを削除'),
+                        ),
+                      ),
+                    const PopupMenuItem(
                       value: _DetailMenuAction.delete,
                       child: ListTile(
                         leading: Icon(Icons.delete_outline),

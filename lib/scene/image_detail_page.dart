@@ -4,7 +4,7 @@ part of 'detailImage.dart';
 
 enum ReaderFitMode { vertical, horizontal, contain }
 
-enum _DetailMenuAction { delete }
+enum _DetailMenuAction { delete, deletePdfPage }
 
 enum _TagSuggestionTab { recommended, recent, all }
 
