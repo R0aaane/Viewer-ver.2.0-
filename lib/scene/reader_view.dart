@@ -268,16 +268,11 @@ extension _ReaderView on _ImageDetailPageState {
 
   Widget _buildReader() {
     if (_leaving) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 12),
-            Text('戻っています...', style: TextStyle(color: Colors.white70)),
-          ],
-        ),
-      );
+      return _buildReaderBusy('閲覧を終了しています...');
+    }
+
+    if (_readerController.leftFuture == null) {
+      return _buildReaderBusy(_isPdf ? 'PDF を読み込んでいます...' : '読み込んでいます...');
     }
 
     return Stack(
@@ -356,6 +351,19 @@ extension _ReaderView on _ImageDetailPageState {
     );
   }
 
+  Widget _buildReaderBusy(String message) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 12),
+          Text(message, style: const TextStyle(color: Colors.white70)),
+        ],
+      ),
+    );
+  }
+
   Widget _pageImage(
     Future<Uint8List>? future, {
     required Alignment align,
@@ -380,16 +388,7 @@ extension _ReaderView on _ImageDetailPageState {
         }
 
         if (!snap.hasData) {
-          return const Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 12),
-                Text('読み込み中...', style: TextStyle(color: Colors.white70)),
-              ],
-            ),
-          );
+          return _buildReaderBusy(_isPdf ? 'PDF ページを読み込んでいます...' : '読み込み中...');
         }
         final bytes = snap.data!;
         if (bytes.isEmpty) {

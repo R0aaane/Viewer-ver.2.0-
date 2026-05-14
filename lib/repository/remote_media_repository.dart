@@ -679,6 +679,7 @@ class RemoteMediaRepository implements MediaRepository {
       displayName: entry.displayName,
       kind: kind,
       folderRaw: entry.folderRaw,
+      mimeType: entry.mimeType,
       modified: entry.modifiedAt,
       sizeBytes: entry.sizeBytes,
       tags: const [],

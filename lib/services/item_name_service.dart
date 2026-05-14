@@ -12,6 +12,10 @@ class ItemNameValidationException implements Exception {
 class ItemNameService {
   static final RegExp _invalidChars = RegExp(r'[\\/:*?"<>|]');
 
+  static bool isGifCollection(MediaItem item) {
+    return item.mimeType == 'application/x.gif-collection';
+  }
+
   static String formatMediaTitle(String name, {required MediaKind kind}) {
     if (kind == MediaKind.pdf) {
       return name.replaceFirst(RegExp(r'\.pdf$', caseSensitive: false), '');
@@ -34,7 +38,7 @@ class ItemNameService {
   static String kindLabel(MediaItem item) {
     switch (item.kind) {
       case MediaKind.pdf:
-        return 'PDF';
+        return isGifCollection(item) ? 'GIF' : 'PDF';
       case MediaKind.image:
         return '画像';
       case MediaKind.folder:

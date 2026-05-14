@@ -8,6 +8,7 @@ class MediaItem {
   final DateTime? modified;
   final int? sizeBytes;
   final MediaKind kind;
+  final String? mimeType;
 
   /// このアイテムが属するフォルダ識別子
   /// Windows: 親ディレクトリパス
@@ -22,6 +23,7 @@ class MediaItem {
     required this.displayName,
     required this.kind,
     required this.folderRaw,
+    this.mimeType,
     this.modified,
     this.sizeBytes,
     this.tags = const [],

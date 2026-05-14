@@ -103,6 +103,7 @@ class RemoteFolderEntry {
   final String kind;
   final String? mediaId;
   final String? fullPath;
+  final String? mimeType;
   final int? sizeBytes;
   final DateTime? modifiedAt;
 
@@ -113,6 +114,7 @@ class RemoteFolderEntry {
     required this.kind,
     required this.mediaId,
     required this.fullPath,
+    required this.mimeType,
     required this.sizeBytes,
     required this.modifiedAt,
   });
@@ -1374,6 +1376,7 @@ class RemoteMediaApiClient {
       kind: raw['kind']?.toString() ?? 'folder',
       mediaId: raw['mediaId']?.toString(),
       fullPath: raw['fullPath']?.toString(),
+      mimeType: raw['mimeType']?.toString(),
       sizeBytes: _asInt(raw['sizeBytes']),
       modifiedAt: _parseDateTime(raw['modifiedAt']?.toString()),
     );
@@ -1394,6 +1397,7 @@ class RemoteMediaApiClient {
       kind: raw['kind']?.toString() ?? 'image',
       mediaId: raw['mediaId']?.toString(),
       fullPath: raw['fullPath']?.toString(),
+      mimeType: raw['mimeType']?.toString(),
       sizeBytes: _asInt(raw['sizeBytes']),
       modifiedAt: _parseDateTime(raw['modifiedAt']?.toString()),
     );

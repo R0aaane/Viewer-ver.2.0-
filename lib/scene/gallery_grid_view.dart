@@ -171,7 +171,8 @@ class _ThumbTile extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (item.kind == MediaKind.pdf) const _PdfBadge(),
+                if (item.kind == MediaKind.pdf)
+                  _PdfBadge(label: ItemNameService.kindLabel(item)),
                 const SizedBox(width: 6),
                 _FavButton(isFavorite: isFavorite, onPressed: onToggleFavorite),
                 if ((canRenameItem && onRenameItem != null) ||
@@ -276,7 +277,9 @@ class _FavButton extends StatelessWidget {
 }
 
 class _PdfBadge extends StatelessWidget {
-  const _PdfBadge();
+  final String label;
+
+  const _PdfBadge({required this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -285,14 +288,14 @@ class _PdfBadge extends StatelessWidget {
         color: Colors.black.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.picture_as_pdf, size: 16, color: Colors.white),
-            SizedBox(width: 4),
-            Text('PDF', style: TextStyle(color: Colors.white)),
+            const Icon(Icons.picture_as_pdf, size: 16, color: Colors.white),
+            const SizedBox(width: 4),
+            Text(label, style: const TextStyle(color: Colors.white)),
           ],
         ),
       ),

@@ -274,6 +274,7 @@ class FolderEntryDto(BaseModel):
     kind: MediaKind
     mediaId: str | None = None
     fullPath: str | None = None
+    mimeType: str | None = None
     sizeBytes: int | None = None
     modifiedAt: datetime | None = None
 
