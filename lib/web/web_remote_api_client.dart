@@ -527,6 +527,7 @@ class WebSearchParser {
 class WebRemoteApiClient {
   final String baseUrl;
   final String? authToken;
+  final String? appVersion;
   final Duration timeout;
   final Duration actionTimeout;
   Future<List<WebRemoteFolder>>? _foldersFuture;
@@ -546,6 +547,7 @@ class WebRemoteApiClient {
   WebRemoteApiClient({
     required this.baseUrl,
     this.authToken,
+    this.appVersion,
     this.timeout = const Duration(seconds: 20),
     this.actionTimeout = const Duration(minutes: 10),
   });
@@ -1449,6 +1451,10 @@ class WebRemoteApiClient {
     final token = authToken?.trim();
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
+    }
+    final version = appVersion?.trim();
+    if (version != null && version.isNotEmpty) {
+      headers['X-Pdf-Viewer-App-Version'] = version;
     }
     return headers;
   }

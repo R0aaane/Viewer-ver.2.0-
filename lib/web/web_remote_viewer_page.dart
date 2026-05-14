@@ -5,6 +5,7 @@ import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -55,7 +56,10 @@ enum _WebBrowserSortMode {
   const _WebBrowserSortMode({required this.label, required this.icon});
 }
 
-const String _webViewerVersion = '2026.04.29.1';
+const String _fallbackWebViewerVersion = String.fromEnvironment(
+  'PDF_VIEWER_APP_VERSION',
+  defaultValue: 'unknown',
+);
 
 class WebRemoteViewerPage extends StatefulWidget {
   final MetadataSettings initialSettings;
@@ -90,6 +94,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   WebRemoteEntry? _selectedEntry;
   WebRemoteFolder? _libraryRoot;
   String? _selectedFolderRaw;
+  String _webViewerVersion = _fallbackWebViewerVersion;
   bool _isConnecting = false;
   bool _isLoading = false;
   bool _homeLoading = false;
@@ -103,6 +108,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
   int _threeUpPage = 1;
   Timer? _remoteRefreshTimer;
+  Future<void>? _webViewerVersionFuture;
   DateTime? _latestObservedLibraryScanAt;
 
   @override
@@ -112,6 +118,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     _apiController = TextEditingController(text: _settings.clientApiBaseUrl);
     _tokenController = TextEditingController(text: _settings.authToken ?? '');
     _searchController = TextEditingController();
+    _webViewerVersionFuture = _loadWebViewerVersion();
+    unawaited(_webViewerVersionFuture);
     if (_settings.clientApiBaseUrl.trim().isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _saveAndConnect(showSuccessMessage: false);
@@ -167,6 +175,35 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
 
     return '';
+  }
+
+  Future<void> _loadWebViewerVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final version = info.version.trim();
+      final build = info.buildNumber.trim();
+      final label = build.isEmpty ? version : '$version+$build';
+      if (label.trim().isEmpty || !mounted) {
+        return;
+      }
+      setState(() => _webViewerVersion = label);
+    } catch (error, stackTrace) {
+      debugPrint('[WebRemoteViewerPage] Failed to load version: $error');
+      debugPrintStack(
+        label: '[WebRemoteViewerPage] _loadWebViewerVersion',
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  Future<void> _ensureWebViewerVersion() async {
+    final future = _webViewerVersionFuture;
+    if (future != null) {
+      await future;
+      return;
+    }
+    _webViewerVersionFuture = _loadWebViewerVersion();
+    await _webViewerVersionFuture;
   }
 
   String? _inferApiBaseUrlFromCurrentLocation() {
@@ -272,9 +309,17 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
+    await _ensureWebViewerVersion();
+    if (!mounted) {
+      return;
+    }
+
     final client = WebRemoteApiClient(
       baseUrl: apiBaseUrl,
       authToken: authToken.isEmpty ? null : authToken,
+      appVersion: _webViewerVersion == _fallbackWebViewerVersion
+          ? null
+          : _webViewerVersion,
     );
 
     try {

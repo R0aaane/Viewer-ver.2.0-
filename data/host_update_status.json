@@ -1,0 +1,6 @@
+﻿{
+    "state":  "failed",
+    "message":  "Command failed: git fetch origin feature_hitomi",
+    "pid":  5632,
+    "updatedAt":  "2026-05-14T11:04:52.6067737+00:00"
+}
