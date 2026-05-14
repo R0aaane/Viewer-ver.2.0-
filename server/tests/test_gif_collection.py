@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from server.repositories.sqlite_store import SqliteStore
 from server.api.routes_actions import _flatten_imported_media_paths
 from server.services.media_index_service import MediaIndexService
@@ -14,6 +16,23 @@ _GIF_1X1 = (
     b"\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
     b"\x00\x02\x02D\x01\x00;"
 )
+
+
+def _write_animated_webp(path: Path) -> bool:
+    try:
+        first = Image.new("RGBA", (1, 1), (255, 0, 0, 255))
+        second = Image.new("RGBA", (1, 1), (0, 0, 255, 255))
+        first.save(
+            path,
+            format="WEBP",
+            save_all=True,
+            append_images=[second],
+            duration=[100, 100],
+            loop=0,
+        )
+        return True
+    except Exception:
+        return False
 
 
 class GifCollectionTest(unittest.TestCase):
@@ -73,6 +92,34 @@ class GifCollectionTest(unittest.TestCase):
         self.assertEqual(records[0]["kind"], "pdf")
         self.assertEqual(records[0]["mime_type"], "application/x.gif-collection")
         self.assertEqual(Path(records[0]["full_path"]), collection)
+
+    def test_animated_webp_folder_indexes_as_gif_collection(self) -> None:
+        collection = self.library_dir / "Sample Animated WebP"
+        collection.mkdir()
+        if not _write_animated_webp(collection / "001.webp"):
+            self.skipTest("Pillow WebP animation support is unavailable")
+        (collection / "002.webp").write_bytes(b"not animated webp")
+
+        self.index.scan_folder(str(self.library_dir))
+        records = self.sqlite.list_media_records(include_deleted=False)
+
+        self.assertEqual(len(records), 2)
+        collection_record = next(
+            record
+            for record in records
+            if record["mime_type"] == "application/x.gif-collection"
+        )
+        self.assertEqual(collection_record["kind"], "pdf")
+        self.assertEqual(
+            self.thumbnails.get_pdf_page_count(str(collection_record["media_id"])),
+            1,
+        )
+        rendered = self.thumbnails.render_pdf_page(
+            str(collection_record["media_id"]),
+            page_no=1,
+        )
+        self.assertEqual(rendered.mime, "image/webp")
+        self.assertTrue(rendered.payload.startswith(b"RIFF"))
 
     def test_delete_gif_collection_removes_directory(self) -> None:
         collection = self.library_dir / "Sample GIF"

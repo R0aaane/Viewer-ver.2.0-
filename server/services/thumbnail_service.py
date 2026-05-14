@@ -167,9 +167,10 @@ class ThumbnailService:
 
         if _is_gif_collection_path(path):
             page_path = _gif_collection_page_path(path, page_no)
+            mime = "image/webp" if Path(page_path).suffix.lower() == ".webp" else "image/gif"
             return ThumbnailBuildResult(
                 payload=Path(page_path).read_bytes(),
-                mime="image/gif",
+                mime=mime,
                 is_placeholder=False,
             )
 
@@ -536,13 +537,32 @@ def _is_gif_collection_path(path: str) -> bool:
     return os.path.isdir(path) and bool(_gif_collection_page_paths(path))
 
 
+def _is_animated_webp(path: str) -> bool:
+    if Path(path).suffix.lower() != ".webp":
+        return False
+    try:
+        with Image.open(path) as image:
+            return bool(getattr(image, "is_animated", False)) or int(
+                getattr(image, "n_frames", 1) or 1
+            ) > 1
+    except OSError:
+        return False
+
+
+def _is_gif_collection_member(path: str) -> bool:
+    ext = Path(path).suffix.lower()
+    if ext == ".gif":
+        return True
+    return ext == ".webp" and _is_animated_webp(path)
+
+
 def _gif_collection_page_paths(path: str) -> list[str]:
     if not os.path.isdir(path):
         return []
     return [
         os.path.join(path, file_name)
         for file_name in sorted(os.listdir(path), key=lambda value: value.casefold())
-        if Path(file_name).suffix.lower() == ".gif"
+        if _is_gif_collection_member(os.path.join(path, file_name))
         and os.path.isfile(os.path.join(path, file_name))
     ]
 

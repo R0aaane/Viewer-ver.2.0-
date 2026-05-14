@@ -7,6 +7,8 @@ import stat
 from datetime import datetime, timezone
 from pathlib import Path
 
+from PIL import Image, UnidentifiedImageError
+
 from server.core.errors import bad_request
 from server.core.media_formats import SUPPORTED_MEDIA_EXTENSIONS, media_kind_for_extension
 from server.repositories.sqlite_store import SqliteStore
@@ -16,6 +18,7 @@ from server.services.metadata_store import build_media_id
 logger = logging.getLogger(__name__)
 
 mimetypes.add_type('image/avif', '.avif')
+mimetypes.add_type('image/webp', '.webp')
 
 
 def _normalize_path(raw: str) -> str:
@@ -25,6 +28,25 @@ def _normalize_path(raw: str) -> str:
 
 def _media_kind(path: str) -> str | None:
     return media_kind_for_extension(Path(path).suffix.lower())
+
+
+def _is_animated_webp(path: str) -> bool:
+    if Path(path).suffix.lower() != ".webp":
+        return False
+    try:
+        with Image.open(path) as image:
+            return bool(getattr(image, "is_animated", False)) or int(
+                getattr(image, "n_frames", 1) or 1
+            ) > 1
+    except (OSError, UnidentifiedImageError):
+        return False
+
+
+def _is_gif_collection_member(path: str) -> bool:
+    ext = Path(path).suffix.lower()
+    if ext == ".gif":
+        return True
+    return ext == ".webp" and _is_animated_webp(path)
 
 
 def _is_hidden_entry(path: str) -> bool:
@@ -64,8 +86,8 @@ class MediaIndexService:
         gif_dirs = {
             os.path.dirname(os.path.normpath(raw_path))
             for raw_path in paths
-            if Path(raw_path).suffix.lower() == ".gif"
-            and os.path.isfile(os.path.normpath(raw_path))
+            if os.path.isfile(os.path.normpath(raw_path))
+            and _is_gif_collection_member(os.path.normpath(raw_path))
         }
         for gif_dir in sorted(gif_dirs):
             try:
@@ -82,7 +104,7 @@ class MediaIndexService:
             gif_member_paths.update(
                 _normalize_path(os.path.join(gif_dir, file_name))
                 for file_name in file_names
-                if Path(file_name).suffix.lower() == ".gif"
+                if _is_gif_collection_member(os.path.join(gif_dir, file_name))
             )
 
         for raw_path in paths:
@@ -151,7 +173,9 @@ class MediaIndexService:
                     gif_collection_names = {
                         file_name
                         for file_name in files
-                        if Path(file_name).suffix.lower() == ".gif"
+                        if _is_gif_collection_member(
+                            os.path.join(base, file_name)
+                        )
                     }
                 for file_name in files:
                     if file_name in gif_collection_names:
@@ -284,7 +308,7 @@ class MediaIndexService:
         gif_names = sorted(
             file_name
             for file_name in file_names
-            if Path(file_name).suffix.lower() == ".gif"
+            if _is_gif_collection_member(os.path.join(directory_path, file_name))
             and not _is_hidden_entry(os.path.join(directory_path, file_name))
         )
         if not gif_names:

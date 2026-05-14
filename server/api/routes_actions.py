@@ -1521,7 +1521,7 @@ def _prefer_gif_collection_import_paths(
     gif_parents: set[str] = set()
     for path in imported_paths:
         normalized_path = os.path.normpath(path)
-        if normalized_extension(normalized_path) != ".gif":
+        if not _is_gif_collection_member_path(normalized_path):
             continue
         parent = os.path.dirname(normalized_path)
         if os.path.normcase(parent) == normalized_root:
@@ -1636,11 +1636,25 @@ def _is_gif_collection_path(path: str) -> bool:
         return False
     try:
         return any(
-            normalized_extension(file_name) == ".gif"
-            and os.path.isfile(os.path.join(path, file_name))
+            _is_gif_collection_member_path(os.path.join(path, file_name))
             for file_name in os.listdir(path)
         )
     except OSError:
+        return False
+
+
+def _is_gif_collection_member_path(path: str) -> bool:
+    extension = normalized_extension(path)
+    if extension == ".gif":
+        return os.path.isfile(path)
+    if extension != ".webp" or not os.path.isfile(path):
+        return False
+    try:
+        with Image.open(path) as image:
+            return bool(getattr(image, "is_animated", False)) or int(
+                getattr(image, "n_frames", 1) or 1
+            ) > 1
+    except (OSError, UnidentifiedImageError):
         return False
 
 
