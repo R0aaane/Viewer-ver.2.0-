@@ -539,7 +539,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                     top: 8,
                     left: 8,
                     child: item.kind == MediaKind.pdf
-                        ? const _PdfBadge()
+                        ? _PdfBadge(label: ItemNameService.kindLabel(item))
                         : const SizedBox.shrink(),
                   ),
                   Positioned(
