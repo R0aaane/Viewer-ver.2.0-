@@ -1005,6 +1005,9 @@ class _StubMediaRepository implements MediaRepository {
   Future<int> deleteItems(List<MediaItem> items) async => 0;
 
   @override
+  Future<MediaItem> deletePdfPage(MediaItem item, int pageNumber) async => item;
+
+  @override
   Future<MediaItem> rename(MediaItem item, String newDisplayName) async => item;
 
   @override

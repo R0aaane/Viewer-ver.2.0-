@@ -3574,26 +3574,6 @@ class _BrowserDisplayModeCard extends StatelessWidget {
       ),
     );
   }
-
-  // ignore: unused_element
-  Widget _buildWebViewerVersionCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Text(
-        'Web ビューアー版: $_webViewerVersion',
-        style: const TextStyle(
-          color: Colors.white70,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
 }
 
 class _EntryCard extends StatelessWidget {
