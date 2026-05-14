@@ -347,6 +347,8 @@ class RemoteMediaRepository implements MediaRepository {
         return MediaKind.pdf;
       case 'image':
         return MediaKind.image;
+      case 'folder':
+        return MediaKind.folder;
       default:
         throw RemoteMediaException('未対応のメディア種別です: $rawKind');
     }
@@ -1074,13 +1076,13 @@ class RemoteMediaRepository implements MediaRepository {
       final isSupportedMediaType =
           tag.category == TagCategory.mediaType &&
           _isSupportedUrlImportMediaType(normalizedName);
-      final isAllowedForPdf =
-          kind == MediaKind.pdf &&
+      final isAllowedForPdfOrImage =
+          (kind == MediaKind.pdf || kind == MediaKind.image) &&
           (tag.category == TagCategory.artist ||
               tag.category == TagCategory.series ||
               tag.category == TagCategory.character ||
               tag.category == TagCategory.free);
-      if (!isSupportedMediaType && !isAllowedForPdf) {
+      if (!isSupportedMediaType && !isAllowedForPdfOrImage) {
         continue;
       }
 
