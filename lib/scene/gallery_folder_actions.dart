@@ -316,16 +316,19 @@ extension _GalleryFolderActions on _GalleryGridPageState {
         return;
       }
 
+      final filteredItems = _filterContentItems(res.items);
       setState(() {
-        _galleryTotal = res.total;
-        _items = res.items;
+        _galleryTotal = AppContentModeConfig.isReader
+            ? filteredItems.length
+            : res.total;
+        _items = filteredItems;
         _loading = false;
         _galleryLoadErrorMessage = null;
       });
 
-      widget.tagService.rememberItems(res.items);
-      unawaited(_refreshCurrentPageTags(res.items));
-      _prepareVisibleMedia(res.items);
+      widget.tagService.rememberItems(filteredItems);
+      unawaited(_refreshCurrentPageTags(filteredItems));
+      _prepareVisibleMedia(filteredItems);
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -395,17 +398,20 @@ extension _GalleryFolderActions on _GalleryGridPageState {
         return;
       }
 
+      final filteredItems = _filterContentItems(res.items);
       setState(() {
         _galleryPageIndex = pageIndex;
-        _galleryTotal = res.total;
-        _items = res.items;
+        _galleryTotal = AppContentModeConfig.isReader
+            ? filteredItems.length
+            : res.total;
+        _items = filteredItems;
         _loading = false;
         _galleryLoadErrorMessage = null;
       });
 
-      widget.tagService.rememberItems(res.items);
-      unawaited(_refreshCurrentPageTags(res.items));
-      _prepareVisibleMedia(res.items);
+      widget.tagService.rememberItems(filteredItems);
+      unawaited(_refreshCurrentPageTags(filteredItems));
+      _prepareVisibleMedia(filteredItems);
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -622,7 +628,9 @@ extension _GalleryFolderActions on _GalleryGridPageState {
 
   Future<List<MediaItem>> _loadFolderItemsForDeletion(String raw) async {
     try {
-      return await widget.repo.listMediaRecursiveFiles(FolderHandle(raw));
+      return _filterContentItems(
+        await widget.repo.listMediaRecursiveFiles(FolderHandle(raw)),
+      );
     } catch (_) {
       return const <MediaItem>[];
     }

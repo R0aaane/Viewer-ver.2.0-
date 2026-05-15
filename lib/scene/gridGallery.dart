@@ -9,6 +9,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../app/app_content_mode.dart';
 import '../database/tag_service.dart';
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
@@ -148,6 +149,20 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   _SortMode _homeSearchSortMode = _SortMode.updatedAt;
   int _homeSearchPageIndex = 0;
 
+  bool _shouldShowItem(MediaItem item) {
+    if (item.kind == MediaKind.folder) {
+      if (!AppContentModeConfig.isR18) return true;
+      return item.displayName.trim().toLowerCase() != 'epub';
+    }
+    return AppContentModeConfig.isReader
+        ? item.kind == MediaKind.epub
+        : item.kind != MediaKind.epub;
+  }
+
+  List<MediaItem> _filterContentItems(List<MediaItem> items) {
+    return items.where(_shouldShowItem).toList(growable: false);
+  }
+
   Timer? _homeSearchDebounce;
 
   Map<String, List<String>> _dbTagsByItemId = <String, List<String>>{};
@@ -267,8 +282,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       all.addAll(
-        (_folderItemsCacheRecursive[raw] ?? const <MediaItem>[]).where(
-          (item) => item.kind != MediaKind.folder,
+        _filterContentItems(
+          (_folderItemsCacheRecursive[raw] ?? const <MediaItem>[])
+              .where((item) => item.kind != MediaKind.folder)
+              .toList(growable: false),
         ),
       );
     }
@@ -694,12 +711,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
       final lib = await widget.repo.getAppLibraryFolder();
       final libRaw = lib.raw;
-      if (!folders.contains(libRaw)) {
-        folders = <String>[libRaw, ...folders];
+      final epubRaw = p.join(libRaw, 'epub');
+      final epubDir = Directory(epubRaw);
+      if (!await epubDir.exists()) {
+        await epubDir.create(recursive: true);
+      }
+      final primaryRaw = AppContentModeConfig.isReader ? epubRaw : libRaw;
+      if (!folders.contains(primaryRaw)) {
+        folders = <String>[primaryRaw, ...folders];
         await prefs.setStringList(_PrefsKeys.folders, folders);
       }
       if (!aliases.containsKey(libRaw) || aliases[libRaw]!.trim().isEmpty) {
         aliases[libRaw] = '保管庫';
+        aliasesUpdated = true;
+      }
+      if (!aliases.containsKey(epubRaw) || aliases[epubRaw]!.trim().isEmpty) {
+        aliases[epubRaw] = 'EPUB';
         aliasesUpdated = true;
       }
       final existsFolders = <String>{};
@@ -713,9 +740,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           if (await d.exists()) existsFolders.add(p);
         } catch (_) {}
       }
+      if (AppContentModeConfig.isReader) {
+        existsFolders
+          ..clear()
+          ..add(primaryRaw);
+      } else {
+        existsFolders.remove(epubRaw);
+      }
       if (current == null || !existsFolders.contains(current)) {
-        if (existsFolders.contains(libRaw)) {
-          current = libRaw;
+        if (existsFolders.contains(primaryRaw)) {
+          current = primaryRaw;
         } else {
           current = existsFolders.isNotEmpty ? existsFolders.first : null;
         }
@@ -730,8 +764,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         aliases[libRaw] = '保管庫';
         aliasesUpdated = true;
       }
-      if (!folders.contains(libRaw)) {
-        folders = List<String>.from(folders)..insert(0, libRaw);
+      if (!folders.contains(primaryRaw)) {
+        folders = List<String>.from(folders)..insert(0, primaryRaw);
         await prefs.setStringList(_PrefsKeys.folders, folders);
       }
       if (aliasesUpdated) {
@@ -1149,6 +1183,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     switch (item.kind) {
       case MediaKind.pdf:
         return 'PDF';
+      case MediaKind.epub:
+        return 'EPUB';
       case MediaKind.image:
         return '画像';
       case MediaKind.folder:
@@ -1207,6 +1243,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
 
     final pdfCount = items.where((item) => item.kind == MediaKind.pdf).length;
+    final epubCount = items.where((item) => item.kind == MediaKind.epub).length;
     final imageCount = items
         .where((item) => item.kind == MediaKind.image)
         .length;
@@ -1215,6 +1252,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .length;
     final summary = <String>[
       if (pdfCount > 0) 'PDF: $pdfCount件',
+      if (epubCount > 0) 'EPUB: $epubCount件',
       if (imageCount > 0) '画像: $imageCount件',
       if (folderCount > 0) 'フォルダ: $folderCount件',
     ].join('\n');
@@ -1285,8 +1323,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     for (final item in items) {
       if (item.kind == MediaKind.folder) {
         try {
-          final descendants = await widget.repo.listMediaRecursiveFiles(
-            FolderHandle(item.id),
+          final descendants = _filterContentItems(
+            await widget.repo.listMediaRecursiveFiles(FolderHandle(item.id)),
           );
           for (final descendant in descendants) {
             append(descendant);

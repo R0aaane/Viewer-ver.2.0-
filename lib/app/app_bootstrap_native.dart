@@ -9,6 +9,7 @@ import '../services/app_version_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/host_api_server_service.dart';
 import 'app_bootstrap_shared.dart';
+import 'app_content_mode.dart';
 import 'app_theme.dart';
 
 Future<void> bootstrapApp() async {
@@ -55,7 +56,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'メディアビューア',
+      title: AppContentModeConfig.isReader ? 'Book Reader' : 'pdf_viewer R18',
       theme: buildAppTheme(),
       builder: (context, child) =>
           ControllerNavigationShell(child: child ?? const SizedBox.shrink()),

@@ -47,6 +47,7 @@ enum FolderEntryKindDb {
   folder, // 0
   image, // 1
   pdf, // 2
+  epub, // 3
 }
 
 @DataClassName('DbFolderIndex')

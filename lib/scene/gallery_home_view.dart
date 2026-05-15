@@ -48,7 +48,11 @@ class _HomeShelfScrollerState extends State<_HomeShelfScroller> {
 
 class _TileShell extends StatelessWidget {
   final bool loading;
-  const _TileShell({this.loading = false});
+  final IconData icon;
+  const _TileShell({
+    this.loading = false,
+    this.icon = Icons.broken_image_outlined,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -56,9 +60,7 @@ class _TileShell extends StatelessWidget {
       elevation: 2,
       borderRadius: BorderRadius.circular(10),
       child: Center(
-        child: loading
-            ? const CircularProgressIndicator()
-            : const Icon(Icons.broken_image_outlined),
+        child: loading ? const CircularProgressIndicator() : Icon(icon),
       ),
     );
   }
@@ -141,8 +143,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
     for (final raw in _foldersRaw) {
       if (_folderItemsCacheRecursive.containsKey(raw)) continue;
       try {
-        final list = await widget.repo.listMediaRecursiveFiles(
-          FolderHandle(raw),
+        final list = _filterContentItems(
+          await widget.repo.listMediaRecursiveFiles(FolderHandle(raw)),
         );
         _folderItemsCacheRecursive[raw] = list
             .where((item) => item.kind != MediaKind.folder)
@@ -413,6 +415,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
     switch (item.kind) {
       case MediaKind.pdf:
         return scheme.primaryContainer;
+      case MediaKind.epub:
+        return scheme.primaryContainer;
       case MediaKind.image:
         return scheme.tertiaryContainer;
       case MediaKind.folder:
@@ -424,6 +428,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
     final scheme = Theme.of(context).colorScheme;
     switch (item.kind) {
       case MediaKind.pdf:
+        return scheme.onPrimaryContainer;
+      case MediaKind.epub:
         return scheme.onPrimaryContainer;
       case MediaKind.image:
         return scheme.onTertiaryContainer;
@@ -1035,7 +1041,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
         continue;
       }
       try {
-        _folderItemsCache[raw] = await widget.repo.listMedia(FolderHandle(raw));
+        _folderItemsCache[raw] = _filterContentItems(
+          await widget.repo.listMedia(FolderHandle(raw)),
+        );
       } catch (_) {
         _folderItemsCache[raw] = const <MediaItem>[];
       }
@@ -2116,7 +2124,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     if (folderItems.isEmpty) {
       try {
-        folderItems = await widget.repo.listMedia(FolderHandle(folderRaw));
+        folderItems = _filterContentItems(
+          await widget.repo.listMedia(FolderHandle(folderRaw)),
+        );
         _folderItemsCache[folderRaw] = folderItems;
       } catch (error) {
         if (!mounted) return;
@@ -2130,7 +2140,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
     var idx = folderItems.indexWhere((entry) => entry.id == item.id);
     if (idx < 0) {
       try {
-        folderItems = await widget.repo.listMedia(FolderHandle(folderRaw));
+        folderItems = _filterContentItems(
+          await widget.repo.listMedia(FolderHandle(folderRaw)),
+        );
         _folderItemsCache[folderRaw] = folderItems;
         idx = folderItems.indexWhere((entry) => entry.id == item.id);
       } catch (error) {
@@ -2211,7 +2223,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
     try {
       for (final raw in _foldersRaw) {
         if (_folderItemsCache.containsKey(raw)) continue;
-        final items = await widget.repo.listMedia(FolderHandle(raw));
+        final items = _filterContentItems(
+          await widget.repo.listMedia(FolderHandle(raw)),
+        );
         _folderItemsCache[raw] = items;
       }
 

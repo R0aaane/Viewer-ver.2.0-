@@ -136,7 +136,9 @@ extension _GalleryThumbnailCache on _GalleryGridPageState {
   void _prepareVisibleMedia(List<MediaItem> items) {
     final generation = ++_visiblePrepareGeneration;
     final visible = items
-        .where((item) => item.kind != MediaKind.folder)
+        .where(
+          (item) => item.kind != MediaKind.folder && item.kind != MediaKind.epub,
+        )
         .toList(growable: false);
     if (visible.isEmpty) return;
 

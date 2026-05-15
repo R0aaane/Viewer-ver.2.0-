@@ -92,6 +92,7 @@ class _FsPageEntry {
 
 class WindowsFolderRepository implements MediaRepository {
   static const _pdfExt = '.pdf';
+  static const _epubExt = '.epub';
 
   final UrlImportDownloaderService _urlImportDownloader =
       UrlImportDownloaderService();
@@ -320,7 +321,9 @@ class WindowsFolderRepository implements MediaRepository {
           ? e.uri.pathSegments.last
           : e.path;
       final ext = _lowerExt(name);
-      return MediaFileTypes.imageExtensions.contains(ext) || ext == _pdfExt;
+      return MediaFileTypes.imageExtensions.contains(ext) ||
+          ext == _pdfExt ||
+          ext == _epubExt;
     }
 
     // 髯ｦ・ｨ驕会ｽｺ騾包ｽｨ邵ｺ・ｯ邵ｲ讙主ｳｩ闕ｳ荵昴・邵ｺ・ｿ邵ｲ謳ｾ・ｼ繝ｻDirectory 郢ｧ繧奇ｽｿ譁絶・
@@ -371,9 +374,8 @@ class WindowsFolderRepository implements MediaRepository {
       final name = _fileName(f.path);
       final ext = _lowerExt(name);
 
-      final kind = MediaFileTypes.imageExtensions.contains(ext)
-          ? MediaKind.image
-          : MediaKind.pdf;
+      final kind = _mediaKindForExt(ext);
+      if (kind == null) continue;
       final stat = await f.stat();
 
       files.add(
@@ -459,13 +461,9 @@ class WindowsFolderRepository implements MediaRepository {
         if (!_isTargetFileName(name)) continue;
 
         final ext = _lowerExt(name);
-        entries.add(
-          _FsPageEntry(
-            path: ent.path,
-            name: name,
-            kind: (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image,
-          ),
-        );
+        final kind = _mediaKindForExt(ext);
+        if (kind == null) continue;
+        entries.add(_FsPageEntry(path: ent.path, name: name, kind: kind));
       }
     }
 
@@ -558,7 +556,7 @@ class WindowsFolderRepository implements MediaRepository {
           ? e.uri.pathSegments.last
           : e.path;
       final ext = _lowerExt(name);
-      return ext == _pdfExt || MediaFileTypes.imageExtensions.contains(ext);
+      return _mediaKindForExt(ext) != null;
     }
 
     int total = 0;
@@ -603,8 +601,7 @@ class WindowsFolderRepository implements MediaRepository {
       final ext = _lowerExt(name);
 
       MediaKind? kind;
-      if (ext == _pdfExt) kind = MediaKind.pdf;
-      if (MediaFileTypes.imageExtensions.contains(ext)) kind = MediaKind.image;
+      kind = _mediaKindForExt(ext);
       if (kind == null) continue;
 
       final stat = await ent.stat();
@@ -1079,7 +1076,14 @@ class WindowsFolderRepository implements MediaRepository {
 
   bool _isTargetFileName(String name) {
     final ext = _lowerExt(name);
-    return ext == _pdfExt || MediaFileTypes.imageExtensions.contains(ext);
+    return _mediaKindForExt(ext) != null;
+  }
+
+  MediaKind? _mediaKindForExt(String ext) {
+    if (ext == _pdfExt) return MediaKind.pdf;
+    if (ext == _epubExt) return MediaKind.epub;
+    if (MediaFileTypes.imageExtensions.contains(ext)) return MediaKind.image;
+    return null;
   }
 
   Future<MediaItem?> _mediaItemFromPath(String rawPath) async {
@@ -1098,7 +1102,7 @@ class WindowsFolderRepository implements MediaRepository {
     return MediaItem(
       id: path,
       displayName: name,
-      kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+      kind: _mediaKindForExt(ext)!,
       folderRaw: file.parent.path,
       modified: stat.modified,
       sizeBytes: stat.size,

@@ -13,6 +13,7 @@ class MediaFileTypes {
   static const List<String> mediaPickerExtensions = <String>[
     ...imagePickerExtensions,
     'pdf',
+    'epub',
   ];
 
   static const Set<String> imageExtensions = <String>{
@@ -28,6 +29,7 @@ class MediaFileTypes {
   static const Set<String> mediaExtensions = <String>{
     ...imageExtensions,
     '.pdf',
+    '.epub',
   };
 
   static String extensionOf(String fileName) {

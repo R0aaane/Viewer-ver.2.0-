@@ -15,7 +15,19 @@ class LocalTagStore {
 
   LocalTagStore(this._db);
 
-  int _kindToInt(media.MediaKind kind) => kind == media.MediaKind.image ? 0 : 1;
+  int _kindToInt(media.MediaKind kind) => switch (kind) {
+    media.MediaKind.image => 0,
+    media.MediaKind.pdf => 1,
+    media.MediaKind.epub => 2,
+    media.MediaKind.folder => 3,
+  };
+
+  media.MediaKind _kindFromInt(int kind) => switch (kind) {
+    0 => media.MediaKind.image,
+    2 => media.MediaKind.epub,
+    3 => media.MediaKind.folder,
+    _ => media.MediaKind.pdf,
+  };
 
   int _categoryToInt(model.TagCategory category) {
     switch (category) {
@@ -231,7 +243,7 @@ class LocalTagStore {
             id: nextId,
             folderRaw: nextFolderRaw,
             displayName: row.displayName,
-            kind: row.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
+            kind: _kindFromInt(row.kind),
             modified: row.modifiedEpochMs == null
                 ? null
                 : DateTime.fromMillisecondsSinceEpoch(row.modifiedEpochMs!),
@@ -393,7 +405,7 @@ class LocalTagStore {
             id: row.id,
             folderRaw: row.folderRaw,
             displayName: row.displayName,
-            kind: row.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
+            kind: _kindFromInt(row.kind),
             modified: row.modifiedEpochMs == null
                 ? null
                 : DateTime.fromMillisecondsSinceEpoch(row.modifiedEpochMs!),
@@ -440,7 +452,7 @@ class LocalTagStore {
           id: item.id,
           folderRaw: item.folderRaw,
           displayName: item.displayName,
-          kind: item.kind == 0 ? media.MediaKind.image : media.MediaKind.pdf,
+          kind: _kindFromInt(item.kind),
           modified: item.modifiedEpochMs == null
               ? null
               : DateTime.fromMillisecondsSinceEpoch(item.modifiedEpochMs!),
@@ -533,9 +545,7 @@ class LocalTagStore {
               id: targetPath,
               folderRaw: p.dirname(targetPath),
               displayName: targetFileName,
-              kind: item.kind == 0
-                  ? media.MediaKind.image
-                  : media.MediaKind.pdf,
+              kind: _kindFromInt(item.kind),
               modified: item.modifiedEpochMs == null
                   ? null
                   : DateTime.fromMillisecondsSinceEpoch(item.modifiedEpochMs!),

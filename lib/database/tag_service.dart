@@ -1648,7 +1648,11 @@ class TagService {
 
   MediaItem _fallbackMovedItem(String path) {
     final lowered = path.toLowerCase();
-    final kind = lowered.endsWith('.pdf') ? MediaKind.pdf : MediaKind.image;
+    final kind = lowered.endsWith('.pdf')
+        ? MediaKind.pdf
+        : lowered.endsWith('.epub')
+        ? MediaKind.epub
+        : MediaKind.image;
     DateTime? modified;
     int? sizeBytes;
 

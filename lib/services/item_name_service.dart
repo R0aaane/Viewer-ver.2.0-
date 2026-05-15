@@ -20,6 +20,9 @@ class ItemNameService {
     if (kind == MediaKind.pdf) {
       return name.replaceFirst(RegExp(r'\.pdf$', caseSensitive: false), '');
     }
+    if (kind == MediaKind.epub) {
+      return name.replaceFirst(RegExp(r'\.epub$', caseSensitive: false), '');
+    }
     return name;
   }
 
@@ -39,6 +42,8 @@ class ItemNameService {
     switch (item.kind) {
       case MediaKind.pdf:
         return isGifCollection(item) ? 'GIF' : 'PDF';
+      case MediaKind.epub:
+        return 'EPUB';
       case MediaKind.image:
         return '画像';
       case MediaKind.folder:

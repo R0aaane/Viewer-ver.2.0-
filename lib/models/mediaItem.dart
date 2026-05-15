@@ -1,6 +1,6 @@
 import 'tag.dart';
 
-enum MediaKind { image, pdf, folder }
+enum MediaKind { image, pdf, epub, folder }
 
 class MediaItem {
   final String id; // Windowsはfull path / Android: document Uri

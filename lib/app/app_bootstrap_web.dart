@@ -5,6 +5,7 @@ import '../services/app_settings_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../web/web_remote_viewer_page.dart';
 import 'app_bootstrap_shared.dart';
+import 'app_content_mode.dart';
 import 'app_theme.dart';
 
 Future<void> bootstrapApp() async {
@@ -40,7 +41,9 @@ class WebViewerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'メディアビューア Web',
+      title: AppContentModeConfig.isReader
+          ? 'Book Reader Web'
+          : 'pdf_viewer R18 Web',
       theme: buildAppTheme(),
       debugShowCheckedModeBanner: false,
       builder: (context, child) =>

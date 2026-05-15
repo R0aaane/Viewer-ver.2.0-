@@ -48,6 +48,7 @@ class _RenameItemDialogState extends State<_RenameItemDialog> {
   Widget build(BuildContext context) {
     final helperText = switch (widget.item.kind) {
       MediaKind.pdf => '拡張子 .pdf はそのまま維持されます。',
+      MediaKind.epub => '拡張子 .epub はそのまま維持されます。',
       MediaKind.image => '拡張子はそのまま維持されます。',
       MediaKind.folder => null,
     };
@@ -75,10 +76,7 @@ class _RenameItemDialogState extends State<_RenameItemDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('キャンセル'),
         ),
-        FilledButton(
-          onPressed: _submit,
-          child: const Text('変更'),
-        ),
+        FilledButton(onPressed: _submit, child: const Text('変更')),
       ],
     );
   }

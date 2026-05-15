@@ -411,6 +411,8 @@ class RemoteMediaRepository implements MediaRepository {
         return 'image';
       case MediaKind.pdf:
         return 'pdf';
+      case MediaKind.epub:
+        return 'epub';
     }
   }
 

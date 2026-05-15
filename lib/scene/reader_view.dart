@@ -31,6 +31,18 @@ extension _ReaderView on _ImageDetailPageState {
     return _readerController.loadThumbBytes(item, page);
   }
 
+  Future<EpubTextDocument> _ensureEpubDocument(MediaItem item) {
+    if (_epubDocumentFuture != null && _epubDocumentItemId == item.id) {
+      return _epubDocumentFuture!;
+    }
+    _disposeEpubController();
+    _epubDocumentFuture = widget.repo
+        .readBytes(item)
+        .then((bytes) => EpubTextExtractor.parse(bytes));
+    _epubDocumentItemId = item.id;
+    return _epubDocumentFuture!;
+  }
+
   bool _canUseInitialPreload(MediaItem item) {
     return _readerController.canUseInitialPreload(item, _index);
   }
@@ -44,6 +56,11 @@ extension _ReaderView on _ImageDetailPageState {
   }
 
   void _syncReaderFutures(MediaItem item) {
+    if (item.kind == MediaKind.epub) {
+      _readerController.leftFuture = null;
+      _readerController.rightFuture = null;
+      return;
+    }
     _readerController.syncFutures(
       item: item,
       page: _page,
@@ -151,6 +168,9 @@ extension _ReaderView on _ImageDetailPageState {
     _readerController.clearCaches();
     _loadedTagItemId = null;
     if (mounted) {
+      if (!_isEpub) {
+        _disposeEpubController();
+      }
       final initialPage = item.kind == MediaKind.pdf
           ? (_pendingInitialPdfPage ?? 1)
           : 1;
@@ -271,6 +291,10 @@ extension _ReaderView on _ImageDetailPageState {
       return _buildReaderBusy('閲覧を終了しています...');
     }
 
+    if (_isEpub) {
+      return _buildEpubReader(_item);
+    }
+
     if (_readerController.leftFuture == null) {
       return _buildReaderBusy(_isPdf ? 'PDF を読み込んでいます...' : '読み込んでいます...');
     }
@@ -361,6 +385,80 @@ extension _ReaderView on _ImageDetailPageState {
           Text(message, style: const TextStyle(color: Colors.white70)),
         ],
       ),
+    );
+  }
+
+  Widget _buildEpubReader(MediaItem item) {
+    return FutureBuilder<EpubTextDocument>(
+      future: _ensureEpubDocument(item),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return _buildLoadError(
+            'EPUB を読み込めませんでした。\n${snapshot.error}',
+            onRetry: () {
+              setState(_disposeEpubController);
+            },
+          );
+        }
+        if (!snapshot.hasData) {
+          return _buildReaderBusy('EPUB を読み込んでいます...');
+        }
+        final doc = snapshot.data!;
+        if (doc.chapters.isEmpty) {
+          return _buildLoadError(
+            'EPUB に表示できる本文がありません。',
+            onRetry: () {
+              setState(_disposeEpubController);
+            },
+          );
+        }
+        return Material(
+          color: const Color(0xFFFAF8F2),
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+            itemCount: doc.chapters.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: Text(
+                    doc.title,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      color: const Color(0xFF211D18),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                );
+              }
+              final chapter = doc.chapters[index - 1];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 28),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      chapter.title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: const Color(0xFF332C24),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      chapter.body,
+                      style: const TextStyle(
+                        color: Color(0xFF211D18),
+                        fontSize: 17,
+                        height: 1.65,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 

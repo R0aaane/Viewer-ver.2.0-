@@ -184,7 +184,7 @@ extension _DetailWidgets on _ImageDetailPageState {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        _infoRow('種別', item.kind == MediaKind.pdf ? 'PDF' : '画像'),
+        _infoRow('種別', ItemNameService.kindLabel(item)),
         const SizedBox(height: 8),
         if (_isPdf) _infoRow('ページ', '$_totalPages'),
         const SizedBox(height: 8),
@@ -449,7 +449,7 @@ extension _DetailWidgets on _ImageDetailPageState {
                 icon: item.kind == MediaKind.pdf
                     ? Icons.picture_as_pdf_outlined
                     : Icons.image_outlined,
-                label: item.kind == MediaKind.pdf ? 'PDF' : '画像',
+                label: ItemNameService.kindLabel(item),
               ),
               if (_isPdf)
                 _buildMetaPill(

@@ -148,7 +148,9 @@ class _ThumbTile extends StatelessWidget {
       child: Stack(
         children: [
           Positioned.fill(
-            child: !thumbsEnabled
+            child: item.kind == MediaKind.epub
+                ? const _TileShell(icon: Icons.menu_book_outlined)
+                : !thumbsEnabled
                 ? const _TileShell(loading: true)
                 : FutureBuilder<ThumbPair>(
                     future:
@@ -171,7 +173,7 @@ class _ThumbTile extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (item.kind == MediaKind.pdf)
+                if (item.kind == MediaKind.pdf || item.kind == MediaKind.epub)
                   _PdfBadge(label: ItemNameService.kindLabel(item)),
                 const SizedBox(width: 6),
                 _FavButton(isFavorite: isFavorite, onPressed: onToggleFavorite),

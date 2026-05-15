@@ -70,6 +70,7 @@ class AndroidFolderRepository implements MediaRepository {
   // Supported image extensions for local filesystem scans.
   static const Set<String> _imageExt = MediaFileTypes.imageExtensions;
   static const _pdfExt = '.pdf';
+  static const _epubExt = '.epub';
   static const Duration _safShallowTtl = Duration(seconds: 15);
 
   final _AsyncMutex _docmanMutex = _AsyncMutex();
@@ -138,6 +139,8 @@ class AndroidFolderRepository implements MediaRepository {
         return MediaKind.image;
       case db.FolderEntryKindDb.pdf:
         return MediaKind.pdf;
+      case db.FolderEntryKindDb.epub:
+        return MediaKind.epub;
     }
   }
 
@@ -149,6 +152,8 @@ class AndroidFolderRepository implements MediaRepository {
         return db.FolderEntryKindDb.image.index;
       case MediaKind.pdf:
         return db.FolderEntryKindDb.pdf.index;
+      case MediaKind.epub:
+        return db.FolderEntryKindDb.epub.index;
     }
   }
 
@@ -227,26 +232,14 @@ class AndroidFolderRepository implements MediaRepository {
       }
 
       final ext = _lowerExt(e.name);
-      if (ext == _pdfExt) {
+      final kind = _mediaKindForExt(ext);
+      if (kind != null) {
         out.add(
           db.FolderEntriesCompanion.insert(
             folderRaw: folderRaw,
             entryId: e.documentUri,
             displayName: e.name,
-            kind: _mediaKindToFolderEntryKind(MediaKind.pdf),
-            modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
-            sortName: _sortKey(e.name),
-          ),
-        );
-        continue;
-      }
-      if (_imageExt.contains(ext)) {
-        out.add(
-          db.FolderEntriesCompanion.insert(
-            folderRaw: folderRaw,
-            entryId: e.documentUri,
-            displayName: e.name,
-            kind: _mediaKindToFolderEntryKind(MediaKind.image),
+            kind: _mediaKindToFolderEntryKind(kind),
             modifiedEpochMs: drift.Value(e.modified?.millisecondsSinceEpoch),
             sortName: _sortKey(e.name),
           ),
@@ -647,7 +640,7 @@ class AndroidFolderRepository implements MediaRepository {
         if (!_isTargetFileName(name)) continue;
 
         final ext = _lowerExt(name);
-        final kind = (ext == _pdfExt) ? MediaKind.pdf : MediaKind.image;
+        final kind = _mediaKindForExt(ext)!;
         final stat = await ent.stat();
 
         fileItems.add(
@@ -711,9 +704,7 @@ class AndroidFolderRepository implements MediaRepository {
       } else {
         final ext = _lowerExt(e.name);
 
-        MediaKind? kind;
-        if (ext == _pdfExt) kind = MediaKind.pdf;
-        if (_imageExt.contains(ext)) kind = MediaKind.image;
+        final kind = _mediaKindForExt(ext);
         if (kind == null) continue;
 
         files.add(
@@ -749,7 +740,7 @@ class AndroidFolderRepository implements MediaRepository {
           ? e.uri.pathSegments.last
           : e.path;
       final ext = _lowerExt(name);
-      return ext == _pdfExt || _imageExt.contains(ext);
+      return _mediaKindForExt(ext) != null;
     }
 
     // Count only target media when progress reporting is enabled.
@@ -772,12 +763,7 @@ class AndroidFolderRepository implements MediaRepository {
 
       final ext = _lowerExt(name);
 
-      MediaKind? kind;
-      if (ext == _pdfExt) {
-        kind = MediaKind.pdf;
-      } else if (_imageExt.contains(ext)) {
-        kind = MediaKind.image;
-      }
+      final kind = _mediaKindForExt(ext);
       if (kind == null) continue;
 
       final stat = await ent.stat();
@@ -828,9 +814,7 @@ class AndroidFolderRepository implements MediaRepository {
     final items = <MediaItem>[];
     for (final e in entries) {
       final ext = _lowerExt(e.name);
-      MediaKind? kind;
-      if (ext == _pdfExt) kind = MediaKind.pdf;
-      if (_imageExt.contains(ext)) kind = MediaKind.image;
+      final kind = _mediaKindForExt(ext);
       if (kind == null) continue;
 
       items.add(
@@ -861,7 +845,7 @@ class AndroidFolderRepository implements MediaRepository {
           ? e.uri.pathSegments.last
           : e.path;
       final ext = _lowerExt(name);
-      return ext == _pdfExt || _imageExt.contains(ext);
+      return _mediaKindForExt(ext) != null;
     }
 
     int total = 0;
@@ -882,9 +866,7 @@ class AndroidFolderRepository implements MediaRepository {
           : ent.path;
       final ext = _lowerExt(name);
 
-      MediaKind? kind;
-      if (ext == _pdfExt) kind = MediaKind.pdf;
-      if (_imageExt.contains(ext)) kind = MediaKind.image;
+      final kind = _mediaKindForExt(ext);
       if (kind == null) continue;
 
       final stat = await ent.stat();
@@ -1244,7 +1226,14 @@ class AndroidFolderRepository implements MediaRepository {
 
   bool _isTargetFileName(String name) {
     final ext = _lowerExt(name);
-    return ext == _pdfExt || _imageExt.contains(ext);
+    return _mediaKindForExt(ext) != null;
+  }
+
+  MediaKind? _mediaKindForExt(String ext) {
+    if (ext == _pdfExt) return MediaKind.pdf;
+    if (ext == _epubExt) return MediaKind.epub;
+    if (_imageExt.contains(ext)) return MediaKind.image;
+    return null;
   }
 
   String? _pickedDocIdentifier(dynamic picked) {
@@ -1287,7 +1276,7 @@ class AndroidFolderRepository implements MediaRepository {
       return MediaItem(
         id: uri,
         displayName: name,
-        kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+        kind: _mediaKindForExt(ext)!,
         folderRaw: uri,
         modified: _toDateTimeSafe(doc.lastModified),
         tags: const [],
@@ -1307,7 +1296,7 @@ class AndroidFolderRepository implements MediaRepository {
     return MediaItem(
       id: path,
       displayName: name,
-      kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+      kind: _mediaKindForExt(ext)!,
       folderRaw: file.parent.path,
       modified: stat.modified,
       tags: const [],
@@ -1525,7 +1514,7 @@ class AndroidFolderRepository implements MediaRepository {
           }
 
           final ext = _lowerExt(name);
-          if (!(ext == _pdfExt || _imageExt.contains(ext))) continue;
+          if (_mediaKindForExt(ext) == null) continue;
 
           out.add(
             _SafEntry(
@@ -1770,16 +1759,15 @@ class AndroidFolderRepository implements MediaRepository {
           ? entity.uri.pathSegments.last
           : entity.path;
       final ext = _lowerExt(name);
-      if (!(ext == _pdfExt || _imageExt.contains(ext))) {
-        continue;
-      }
       try {
+        final kind = _mediaKindForExt(ext);
+        if (kind == null) continue;
         final stat = await entity.stat();
         items.add(
           MediaItem(
             id: entity.path,
             displayName: name,
-            kind: ext == _pdfExt ? MediaKind.pdf : MediaKind.image,
+            kind: kind,
             folderRaw: entity.parent.path,
             modified: stat.modified,
             sizeBytes: stat.size,
@@ -2009,6 +1997,7 @@ class AndroidFolderRepository implements MediaRepository {
 
   String _mimeFor({required String itemExt}) {
     if (itemExt == '.pdf') return 'application/pdf';
+    if (itemExt == '.epub') return 'application/epub+zip';
     return MediaFileTypes.imageMimeTypeForFileName(itemExt);
   }
 

@@ -188,6 +188,8 @@ extension _GallerySearch on _GalleryGridPageState {
         return '画像';
       case MediaKind.pdf:
         return 'PDF';
+      case MediaKind.epub:
+        return 'EPUB';
     }
   }
 
@@ -199,6 +201,8 @@ extension _GallerySearch on _GalleryGridPageState {
         return Icons.image_outlined;
       case MediaKind.pdf:
         return Icons.picture_as_pdf_outlined;
+      case MediaKind.epub:
+        return Icons.menu_book_outlined;
     }
   }
 

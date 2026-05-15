@@ -14,6 +14,7 @@ import '../models/tag.dart';
 import '../services/app_reading_progress_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/item_name_service.dart';
+import '../services/epub_text_extractor.dart';
 import '../widgets/controller_focusable.dart';
 import 'widgets/scene_ui.dart';
 import 'rename_item_dialog.dart';
@@ -84,9 +85,12 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   ReaderFitMode _fitMode = ReaderFitMode.vertical;
 
   late final DetailReaderController _readerController;
+  Future<EpubTextDocument>? _epubDocumentFuture;
+  String? _epubDocumentItemId;
 
   MediaItem get _item => _items[_index];
   bool get _isPdf => _item.kind == MediaKind.pdf;
+  bool get _isEpub => _item.kind == MediaKind.epub;
   bool get _canRenameCurrentItem => widget.repo.capabilities.canRename;
   String get _displayTitle =>
       ItemNameService.formatMediaTitle(_item.displayName, kind: _item.kind);
@@ -147,10 +151,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     }
     _candidateTabController.dispose();
     _tab.dispose();
+    _disposeEpubController();
     if (_fullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
     super.dispose();
+  }
+
+  void _disposeEpubController() {
+    _epubDocumentFuture = null;
+    _epubDocumentItemId = null;
   }
 
   @override
