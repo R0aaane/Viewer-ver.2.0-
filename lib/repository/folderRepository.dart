@@ -80,11 +80,13 @@ class _FsPageEntry {
   final String path;
   final String name;
   final MediaKind kind;
+  final String? mimeType;
 
   const _FsPageEntry({
     required this.path,
     required this.name,
     required this.kind,
+    this.mimeType,
   });
 }
 
@@ -340,12 +342,14 @@ class WindowsFolderRepository implements MediaRepository {
         final name = _fileName(
           e.path,
         ); // 隴鯉ｽ｢陝・･繝ｻ郢晏･ﾎ晉ｹ昜ｻ｣繝ｻ雎ｬ竏ｫ逡代・蝓溷ｿｰ陝・ｽｾ陷ｷ讎雁徐陟墓圜・ｼ繝ｻ
+        final isGifCollection = await _isGifCollectionDirectory(e);
         folders.add(
           MediaItem(
             id: e.path,
             displayName: name,
-            kind: MediaKind.folder,
+            kind: isGifCollection ? MediaKind.pdf : MediaKind.folder,
             folderRaw: folder.raw,
+            mimeType: isGifCollection ? 'application/x.gif-collection' : null,
             modified: stat.modified,
             tags: const [],
           ),
@@ -436,11 +440,13 @@ class WindowsFolderRepository implements MediaRepository {
 
     await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is Directory) {
+        final isGifCollection = await _isGifCollectionDirectory(ent);
         entries.add(
           _FsPageEntry(
             path: ent.path,
             name: _fileName(ent.path),
-            kind: MediaKind.folder,
+            kind: isGifCollection ? MediaKind.pdf : MediaKind.folder,
+            mimeType: isGifCollection ? 'application/x.gif-collection' : null,
           ),
         );
         continue;
@@ -493,14 +499,19 @@ class WindowsFolderRepository implements MediaRepository {
             displayName: entry.name,
             kind: MediaKind.folder,
             folderRaw: folder.raw,
+            mimeType: entry.mimeType,
             modified: stat.modified,
             tags: const [],
           ),
         );
       } else {
+        final isGifCollection =
+            entry.mimeType == 'application/x.gif-collection';
         final stat = await _withFsRetry(
           entry.path,
-          () => File(entry.path).stat(),
+          () => isGifCollection
+              ? Directory(entry.path).stat()
+              : File(entry.path).stat(),
         );
         items.add(
           MediaItem(
@@ -508,6 +519,7 @@ class WindowsFolderRepository implements MediaRepository {
             displayName: entry.name,
             kind: entry.kind,
             folderRaw: folder.raw,
+            mimeType: entry.mimeType,
             modified: stat.modified,
             sizeBytes: stat.size,
             tags: const [],
@@ -558,9 +570,32 @@ class WindowsFolderRepository implements MediaRepository {
 
     final items = <MediaItem>[];
     int processed = 0;
+    final gifCollectionDirs = <String>{};
 
     await for (final ent in dir.list(recursive: true, followLinks: false)) {
+      if (ent is Directory) {
+        if (await _isGifCollectionDirectory(ent)) {
+          final stat = await ent.stat();
+          final normalized = _normalizedFsPath(ent.path);
+          gifCollectionDirs.add(normalized);
+          items.add(
+            MediaItem(
+              id: ent.path,
+              displayName: _fileName(ent.path),
+              kind: MediaKind.pdf,
+              folderRaw: folder.raw,
+              mimeType: 'application/x.gif-collection',
+              modified: stat.modified,
+              tags: const [],
+            ),
+          );
+        }
+        continue;
+      }
       if (ent is! File) continue;
+      if (gifCollectionDirs.contains(_normalizedFsPath(ent.parent.path))) {
+        continue;
+      }
 
       final name = ent.uri.pathSegments.isNotEmpty
           ? ent.uri.pathSegments.last
@@ -705,6 +740,9 @@ class WindowsFolderRepository implements MediaRepository {
 
   @override
   Future<Uint8List> readBytes(MediaItem item) async {
+    if (ItemNameService.isGifCollection(item)) {
+      return renderPageBytes(item, 1);
+    }
     final rawId = item.id.trim();
     final sourceKind = rawId.startsWith('file://') ? 'file-uri' : 'path';
     late final String resolvedPath;
@@ -756,6 +794,9 @@ class WindowsFolderRepository implements MediaRepository {
     MediaItem item, {
     int maxWidth = 2800,
   }) async {
+    if (ItemNameService.isGifCollection(item)) {
+      return renderPageBytes(item, 1, maxWidth: maxWidth);
+    }
     if (_isAvifPath(item.id) || _isAvifPath(item.displayName)) {
       return renderPageBytes(item, 1, maxWidth: maxWidth);
     }
@@ -763,6 +804,56 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   bool _isAvifPath(String path) => _lowerExt(path) == '.avif';
+
+  String _normalizedFsPath(String path) {
+    return path.replaceAll('\\', '/').toLowerCase();
+  }
+
+  Future<bool> _isGifCollectionDirectory(Directory dir) async {
+    return (await _gifCollectionPageFiles(dir)).isNotEmpty;
+  }
+
+  Future<List<File>> _gifCollectionPageFiles(Directory dir) async {
+    if (!await dir.exists()) {
+      return const <File>[];
+    }
+    final pages = <File>[];
+    await for (final ent in dir.list(recursive: false, followLinks: false)) {
+      if (ent is! File) {
+        continue;
+      }
+      if (await _isGifCollectionMemberFile(ent)) {
+        pages.add(ent);
+      }
+    }
+    pages.sort(
+      (a, b) => _fileName(
+        a.path,
+      ).toLowerCase().compareTo(_fileName(b.path).toLowerCase()),
+    );
+    return pages;
+  }
+
+  Future<bool> _isGifCollectionMemberFile(File file) async {
+    final ext = _lowerExt(file.path);
+    if (ext == '.gif') {
+      return true;
+    }
+    if (ext != '.webp') {
+      return false;
+    }
+    try {
+      final bytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      try {
+        return codec.frameCount > 1;
+      } finally {
+        codec.dispose();
+      }
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<Uint8List> _makeImageThumb(Uint8List src, int targetWidth) async {
     if (src.isEmpty) return src;
@@ -801,6 +892,9 @@ class WindowsFolderRepository implements MediaRepository {
   @override
   Future<int> getPageCount(MediaItem item) async {
     if (item.kind != MediaKind.pdf) return 1;
+    if (ItemNameService.isGifCollection(item)) {
+      return (await _gifCollectionPageFiles(Directory(item.id))).length;
+    }
     final doc = await _openPdf(item.id);
     return doc.pagesCount;
   }
@@ -814,6 +908,13 @@ class WindowsFolderRepository implements MediaRepository {
   }) async {
     if (item.kind != MediaKind.pdf) {
       return _readImageBytesForDisplay(item, maxWidth: maxWidth);
+    }
+    if (ItemNameService.isGifCollection(item)) {
+      final pages = await _gifCollectionPageFiles(Directory(item.id));
+      if (page < 1 || page > pages.length) {
+        throw RangeError.range(page, 1, pages.length, 'page');
+      }
+      return pages[page - 1].readAsBytes();
     }
 
     final doc = await _openPdf(item.id);
@@ -830,8 +931,16 @@ class WindowsFolderRepository implements MediaRepository {
     MediaItem item,
     int page, {
     int maxWidth = 1600,
-  }) {
-    return renderPageBytes(item, page, maxWidth: maxWidth);
+  }) async {
+    final bytes = await renderPageBytes(item, page, maxWidth: maxWidth);
+    if (!ItemNameService.isGifCollection(item)) {
+      return bytes;
+    }
+    try {
+      return await _makeImageThumb(bytes, maxWidth);
+    } catch (_) {
+      return bytes;
+    }
   }
 
   @override
@@ -847,37 +956,43 @@ class WindowsFolderRepository implements MediaRepository {
     if (inflight != null) return inflight;
 
     // 菴懈・・・n-flight 逋ｻ骭ｲ・・
-    final future = (() async {
-      try {
-        final diskFile = await _thumbDiskFile(cacheKey);
-        if (await diskFile.exists()) {
-          final bytes = await diskFile.readAsBytes();
-          if (bytes.isNotEmpty) {
-            final pair = ThumbPair(front: bytes, back: null);
-            _thumbCache.put(cacheKey, pair);
-            return pair;
+    final future =
+        (() async {
+          try {
+            final diskFile = await _thumbDiskFile(cacheKey);
+            if (await diskFile.exists()) {
+              final bytes = await diskFile.readAsBytes();
+              if (bytes.isNotEmpty) {
+                final pair = ThumbPair(front: bytes, back: null);
+                _thumbCache.put(cacheKey, pair);
+                return pair;
+              }
+            }
+          } catch (_) {
+            // Fall through to fresh generation.
           }
-        }
-      } catch (_) {
-        // Fall through to fresh generation.
-      }
 
-      final pair = await _buildThumbPair(item, maxWidth);
-      _thumbCache.put(cacheKey, pair);
-      try {
-        final diskFile = await _thumbDiskFile(cacheKey);
-        await diskFile.writeAsBytes(pair.front, flush: false);
-      } catch (_) {}
-      return pair;
-    })().whenComplete(() {
-      _thumbInFlight.remove(cacheKey);
-    });
+          final pair = await _buildThumbPair(item, maxWidth);
+          _thumbCache.put(cacheKey, pair);
+          try {
+            final diskFile = await _thumbDiskFile(cacheKey);
+            await diskFile.writeAsBytes(pair.front, flush: false);
+          } catch (_) {}
+          return pair;
+        })().whenComplete(() {
+          _thumbInFlight.remove(cacheKey);
+        });
 
     _thumbInFlight[cacheKey] = future;
     return future;
   }
 
   Future<ThumbPair> _buildThumbPair(MediaItem item, int maxWidth) async {
+    if (ItemNameService.isGifCollection(item)) {
+      final bytes = await renderStaticPageBytes(item, 1, maxWidth: maxWidth);
+      return ThumbPair(front: bytes, back: null);
+    }
+
     if (item.kind == MediaKind.image) {
       final bytes = await _withFsRetry(
         item.id,
@@ -892,7 +1007,10 @@ class WindowsFolderRepository implements MediaRepository {
     }
 
     // PDF: 1繝壹・繧ｸ逶ｮ + 荳ｭ髢薙・繝ｼ繧ｸ・・oc繧ｭ繝｣繝・す繝･繧貞茜逕ｨ・・
-    final doc = await _withFsRetry(item.id, () => PdfDocument.openFile(item.id));
+    final doc = await _withFsRetry(
+      item.id,
+      () => PdfDocument.openFile(item.id),
+    );
     try {
       final front = await _renderPage(doc, 1, maxWidth);
       return ThumbPair(front: front, back: null);
