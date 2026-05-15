@@ -1006,10 +1006,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
   }
 
   DateTime _homeAddedTimestamp(MediaItem item) {
-    final added = _getAddedAt(item);
-    if (added.millisecondsSinceEpoch > 0) {
-      return added;
-    }
     final updated = item.modified ?? _getUpdatedAt(item);
     if (updated.millisecondsSinceEpoch > 0) {
       return updated;
@@ -1130,10 +1126,15 @@ extension _GalleryHomeView on _GalleryGridPageState {
           .toList(growable: false);
 
       final buildSw = Stopwatch()..start();
+      final addedTimestampByItem = <MediaItem, DateTime>{
+        for (final item in mediaItems) item: _homeAddedTimestamp(item),
+      };
+      int compareHomeAddedDesc(MediaItem a, MediaItem b) {
+        return addedTimestampByItem[b]!.compareTo(addedTimestampByItem[a]!);
+      }
+
       final recentAdded = mediaItems.toList(growable: true)
-        ..sort(
-          (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
-        );
+        ..sort(compareHomeAddedDesc);
 
       final itemByVariant = await _buildHomeItemLookup(
         mediaItems,
@@ -1168,9 +1169,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
       }
 
       final favorites = mediaItems.where(_isFavoriteItem).toList(growable: true)
-        ..sort(
-          (a, b) => _homeAddedTimestamp(b).compareTo(_homeAddedTimestamp(a)),
-        );
+        ..sort(compareHomeAddedDesc);
       final unreadItems = recentAdded
           .where(
             (item) =>
