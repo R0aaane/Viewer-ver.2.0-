@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from server.services.pillow_plugins import ensure_pillow_plugins
 from server.vendor.kemono_dl.hitomi import strip_hitomi_download_prefix
@@ -16,6 +16,7 @@ ensure_pillow_plugins()
 
 _UI_EVENT_PREFIX = "__KEMONO_DL_UI__"
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif"}
+_ANIMATED_IMAGE_EXTENSIONS = {".gif", ".webp"}
 
 
 def _emit_event(event_type: str, **data: object) -> None:
@@ -226,6 +227,29 @@ def _cleanup_hitomi_gallery_dir(gallery_dir: Path) -> None:
     shutil.rmtree(gallery_dir, ignore_errors=True)
 
 
+def _is_animated_image_path(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix == ".gif":
+        return True
+    if suffix != ".webp":
+        return False
+    try:
+        with Image.open(path) as image:
+            return bool(getattr(image, "is_animated", False)) or int(
+                getattr(image, "n_frames", 1) or 1
+            ) > 1
+    except (OSError, UnidentifiedImageError):
+        return False
+
+
+def _contains_animated_image(image_paths: list[Path]) -> bool:
+    return any(
+        path.suffix.lower() in _ANIMATED_IMAGE_EXTENSIONS
+        and _is_animated_image_path(path)
+        for path in image_paths
+    )
+
+
 def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
     image_paths = sorted(
         [
@@ -234,6 +258,8 @@ def _convert_gallery_to_pdf(gallery_dir: Path) -> bool:
         ]
     )
     if not image_paths:
+        return False
+    if _contains_animated_image(image_paths):
         return False
 
     legacy_pdf_path = gallery_dir.parent / f"{gallery_dir.name}.pdf"

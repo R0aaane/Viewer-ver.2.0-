@@ -46,6 +46,27 @@ class KemonoDownloadTaskTest(unittest.TestCase):
             self.assertTrue(pdf_path.exists())
             self.assertFalse(gallery_dir.exists())
 
+    def test_convert_gallery_to_pdf_keeps_gif_gallery_as_source_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artist_dir = Path(temp_dir) / "hitomi" / "[12345] ArtistName"
+            gallery_dir = artist_dir / "[20241105] [3114110] Animated Title"
+            gallery_dir.mkdir(parents=True, exist_ok=True)
+
+            gif_path = gallery_dir / "001.gif"
+            gif_path.write_bytes(
+                b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+                b"\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01"
+                b"\x00\x00\x02\x02D\x01\x00;"
+            )
+            Image.new("RGB", (32, 48), color="green").save(gallery_dir / "002.png")
+
+            converted = _convert_gallery_to_pdf(gallery_dir)
+
+            self.assertFalse(converted)
+            self.assertFalse((artist_dir / "Animated Title.pdf").exists())
+            self.assertTrue(gallery_dir.exists())
+            self.assertTrue(gif_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
