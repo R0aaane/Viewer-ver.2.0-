@@ -19,6 +19,13 @@ from server.models.dto import (
 from server.services.url_download_service import UrlDownloadError, UrlDownloadResult
 
 
+_GIF_1X1 = (
+    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+    b"\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
+    b"\x00\x02\x02D\x01\x00;"
+)
+
+
 class _RecordingMetadataStore:
     def __init__(
         self,
@@ -865,6 +872,69 @@ class ActionsRoutesTest(unittest.TestCase):
                     {'category': 'free', 'name': 'school uniform'},
                     {'category': 'mediaType', 'name': 'hitomi'},
                 ],
+            )
+
+    def test_download_url_keeps_multiple_gifs_as_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metadata_store = _UploadMetadataStore()
+            index_service = _RecordingIndexService()
+
+            def _create_downloaded_file(_: str, destination_folder: str) -> None:
+                gallery_dir = os.path.join(destination_folder, 'site', 'Sample GIF')
+                os.makedirs(gallery_dir, exist_ok=True)
+                with open(os.path.join(gallery_dir, '001.gif'), 'wb') as handle:
+                    handle.write(_GIF_1X1)
+                with open(os.path.join(gallery_dir, '002.gif'), 'wb') as handle:
+                    handle.write(_GIF_1X1)
+
+            downloader = _FakeUrlDownloadService(
+                result=UrlDownloadResult(
+                    imported_count=2,
+                    skipped_count=0,
+                    failed_count=0,
+                ),
+                on_call=_create_downloaded_file,
+            )
+            request = _request(
+                metadata_store,
+                index_service=index_service,
+                media_roots=[temp_dir],
+                url_download_service=downloader,
+            )
+
+            response = asyncio.run(
+                download_url(
+                    request,
+                    DownloadUrlRequest(
+                        folderRaw=temp_dir,
+                        url='https://example.test/gallery/animated',
+                    ),
+                )
+            )
+
+            collection_path = os.path.join(temp_dir, 'Sample GIF')
+            self.assertEqual(response.importedCount, 2)
+            self.assertEqual(response.taggedCount, 1)
+            self.assertEqual(response.organizedCount, 1)
+            self.assertEqual(response.rescannedCount, 2)
+            self.assertTrue(os.path.isdir(collection_path))
+            self.assertTrue(
+                os.path.exists(os.path.join(collection_path, '001.gif'))
+            )
+            self.assertTrue(
+                os.path.exists(os.path.join(collection_path, '002.gif'))
+            )
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, 'site')))
+            self.assertEqual(metadata_store.add_tag_calls[0]['media_id'], 'mid:Sample GIF')
+            self.assertEqual(
+                metadata_store.add_tag_calls[0]['tags'],
+                [
+                    {'category': 'mediaType', 'name': 'GIF'},
+                ],
+            )
+            self.assertEqual(
+                metadata_store.organize_calls[0]['media_ids'],
+                ['mid:Sample GIF'],
             )
 
     def test_download_url_renames_duplicate_hitomi_pdf_names_in_same_batch(self) -> None:

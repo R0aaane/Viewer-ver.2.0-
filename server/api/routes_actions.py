@@ -680,8 +680,7 @@ async def download_url(
                 folder_path=folder_path,
                 staging_dir=staging_dir,
                 overwrite_existing=payload.overwrite,
-                prefer_gif_collections=payload.preferHitomiOriginal
-                and not payload.convertHitomiToPdf,
+                prefer_gif_collections=True,
             )
     except UrlDownloadError as error:
         _set_url_download_status(request, request_id, status=f"失敗: {error}")
