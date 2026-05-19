@@ -149,6 +149,7 @@ class LocalPathOperationService {
   static Future<bool> moveItem({
     required String sourcePath,
     required String targetPath,
+    bool isDirectory = false,
     String logPrefix = 'MOVE',
   }) async {
     debugPrint('[$logPrefix] request old=$sourcePath new=$targetPath');
@@ -167,9 +168,12 @@ class LocalPathOperationService {
       throw _duplicateNameException(targetPath);
     }
 
-    final source = File(sourcePath);
     try {
-      await source.rename(targetPath);
+      if (isDirectory) {
+        await Directory(sourcePath).rename(targetPath);
+      } else {
+        await File(sourcePath).rename(targetPath);
+      }
       debugPrint('[$logPrefix] success old=$sourcePath new=$targetPath');
       return true;
     } on FileSystemException catch (error, stackTrace) {
@@ -177,6 +181,10 @@ class LocalPathOperationService {
         '[$logPrefix] rename fallback reason=$error old=$sourcePath new=$targetPath',
       );
       debugPrintStack(label: '[$logPrefix] stack', stackTrace: stackTrace);
+      if (isDirectory) {
+        rethrow;
+      }
+      final source = File(sourcePath);
       await source.copy(targetPath);
       await source.delete();
       debugPrint('[$logPrefix] success old=$sourcePath new=$targetPath');

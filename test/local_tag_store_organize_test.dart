@@ -323,6 +323,55 @@ void main() {
     expect(taggedItems.map((item) => item.id), contains(targetPath));
   });
 
+  test('organizeAppLibrary moves tagged GIF collection directories', () async {
+    final docsDir = await Directory.systemTemp.createTemp(
+      'local-tag-store-organize-gif',
+    );
+    addTearDown(() async {
+      if (await docsDir.exists()) {
+        await docsDir.delete(recursive: true);
+      }
+    });
+    PathProviderPlatform.instance = _FakePathProviderPlatform(docsDir.path);
+
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+
+    final libraryRoot = Directory(p.join(docsDir.path, 'library'));
+    await libraryRoot.create(recursive: true);
+
+    final sourceDir = Directory(p.join(libraryRoot.path, 'sample Gif'));
+    await sourceDir.create(recursive: true);
+    await File(p.join(sourceDir.path, '001.gif')).writeAsBytes(const <int>[9]);
+    final source = MediaItem(
+      id: sourceDir.path,
+      displayName: 'sample Gif',
+      kind: MediaKind.pdf,
+      folderRaw: libraryRoot.path,
+      mimeType: 'application/x.gif-collection',
+    );
+
+    await store.addTagToItem(
+      source,
+      const Tag(name: 'Todakenji', category: TagCategory.artist),
+    );
+
+    final moved = await store.organizeAppLibrary(libraryRoot: libraryRoot.path);
+    final targetPath = moved[sourceDir.path];
+    final expectedPath = p.join(
+      libraryRoot.path,
+      '\u4f5c\u8005',
+      'Todakenji',
+      'sample Gif',
+    );
+
+    expect(targetPath, expectedPath);
+    expect(await Directory(targetPath!).exists(), isTrue);
+    expect(await File(p.join(targetPath, '001.gif')).exists(), isTrue);
+    expect(await store.listTagsForItem(targetPath), isNotEmpty);
+  });
+
   test('organizeAppLibrary migrates legacy 作者別 folders into 作者', () async {
     final docsDir = await Directory.systemTemp.createTemp(
       'local-tag-store-legacy-author-dir',

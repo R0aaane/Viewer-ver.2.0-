@@ -504,8 +504,11 @@ class LocalTagStore {
       try {
         await Directory(destinationDir).create(recursive: true);
 
-        final sourceFile = File(sourcePath);
-        if (!await sourceFile.exists()) {
+        final sourceType = await FileSystemEntity.type(
+          sourcePath,
+          followLinks: false,
+        );
+        if (sourceType == FileSystemEntityType.notFound) {
           continue;
         }
 
@@ -531,6 +534,7 @@ class LocalTagStore {
         final movedFile = await LocalPathOperationService.moveItem(
           sourcePath: sourcePath,
           targetPath: targetPath,
+          isDirectory: sourceType == FileSystemEntityType.directory,
           logPrefix: 'TAG-ORGANIZE',
         );
         if (!movedFile) {
