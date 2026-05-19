@@ -1091,7 +1091,7 @@ class WebRemoteApiClient {
     try {
       await _ensurePdfJsReady();
       final pdfBytes = await _fetchPdfBytesForLocalRender(mediaId);
-      document = await PdfDocument.openData(pdfBytes);
+      document = await PdfDocument.openData(Uint8List.fromList(pdfBytes));
       if (pageNo > document.pagesCount) {
         throw const WebRemoteException(
           'pageNo is out of range',
