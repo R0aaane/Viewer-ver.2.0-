@@ -32,7 +32,7 @@ class HostSavedImagesService {
     if (!settings.isClientMode || settings.clientApiBaseUrl.trim().isEmpty) {
       return null;
     }
-    return 'Host Saved_images: ${settings.clientApiBaseUrl.trim()}';
+    return 'Host Xsaved_images endpoint: ${settings.clientApiBaseUrl.trim()}';
   }
 
   Future<HostSavedImageResult> saveImage({

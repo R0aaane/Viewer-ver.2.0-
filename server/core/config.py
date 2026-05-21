@@ -45,6 +45,12 @@ class Settings:
 def load_settings() -> Settings:
     project_root = Path(__file__).resolve().parents[2]
     data_dir = Path(os.getenv("MEDIA_SERVER_DATA_DIR", project_root / "data")).resolve()
+    media_roots = _parse_csv(os.getenv("MEDIA_SERVER_MEDIA_ROOTS"))
+    default_xviewer_saved_images_dir = (
+        Path(media_roots[0]).resolve().parent / "Xsaved_images"
+        if media_roots
+        else data_dir.parent / "Xsaved_images"
+    )
     sqlite_path = Path(
         os.getenv("MEDIA_SERVER_DB_PATH", data_dir / "metadata.db"),
     ).resolve()
@@ -64,7 +70,7 @@ def load_settings() -> Settings:
         cors_allow_origins=_parse_csv(
             os.getenv("MEDIA_SERVER_CORS_ORIGINS", "http://localhost;http://127.0.0.1"),
         ),
-        media_roots=_parse_csv(os.getenv("MEDIA_SERVER_MEDIA_ROOTS")),
+        media_roots=media_roots,
         log_level=os.getenv("MEDIA_SERVER_LOG_LEVEL", "INFO"),
         startup_rescan=_parse_bool(os.getenv("MEDIA_SERVER_STARTUP_RESCAN"), True),
         stream_chunk_size=int(os.getenv("MEDIA_SERVER_STREAM_CHUNK_SIZE", str(1024 * 1024))),
@@ -83,6 +89,9 @@ def load_settings() -> Settings:
             True,
         ),
         xviewer_saved_images_dir=Path(
-            os.getenv("MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR", data_dir.parent / "Saved_images"),
+            os.getenv(
+                "MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR",
+                default_xviewer_saved_images_dir,
+            ),
         ).resolve(),
     )

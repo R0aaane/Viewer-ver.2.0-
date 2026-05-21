@@ -244,7 +244,7 @@ class MediaSaveService {
     final privateRoot = await _fileStorageService.getBaseDirectoryPath();
     final hostDescription = await _hostSavedImagesService.getHostDescription();
     if (hostDescription != null) {
-      return '$hostDescription, Preview cache: $privateRoot/<twitter-id>';
+      return '$hostDescription, Local preview cache: $privateRoot/<twitter-id>';
     }
     if (!_shouldTryGallerySave()) {
       return '$privateRoot/<twitter-id>';

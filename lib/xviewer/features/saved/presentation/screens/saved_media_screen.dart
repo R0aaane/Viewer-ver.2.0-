@@ -157,7 +157,7 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
             tooltip: 'Search visible creators',
           ),
           PopupMenuButton<String>(
-            tooltip: 'Saved_images folder',
+            tooltip: 'Local preview cache folder',
             icon: const Icon(Icons.folder_open_rounded),
             onSelected: (value) {
               switch (value) {
@@ -172,11 +172,11 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
             itemBuilder: (context) => const [
               PopupMenuItem<String>(
                 value: 'change',
-                child: Text('Change Saved_images folder'),
+                child: Text('Change local preview cache'),
               ),
               PopupMenuItem<String>(
                 value: 'reset',
-                child: Text('Reset Saved_images folder'),
+                child: Text('Reset local preview cache'),
               ),
             ],
           ),
