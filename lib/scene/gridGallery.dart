@@ -39,6 +39,7 @@ import 'rename_item_dialog.dart';
 import 'TagResults.dart';
 import 'tag_management_page.dart';
 import 'url_import_dialog.dart';
+import 'xviewer_page.dart';
 
 part 'grid_gallery_models.dart';
 part 'gallery_grid_view.dart';
@@ -1902,6 +1903,19 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               _closeSidebar();
               _exitSelectMode();
               await _openDetailedBrowsePage();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.travel_explore_outlined),
+            title: const Text('XViewer'),
+            subtitle: const Text('Twitter画像ダウンロード / 作者検索'),
+            onTap: () async {
+              _closeSidebar();
+              await Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (context) => const XViewerPage(),
+                ),
+              );
             },
           ),
           const Divider(),

@@ -1,0 +1,20 @@
+name: permission_handler_windows
+description: Local stub Windows implementation for permission_handler.
+version: 0.2.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.10.0
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  permission_handler_platform_interface: ^4.3.0
+
+flutter:
+  plugin:
+    implements: permission_handler
+    platforms:
+      windows:
+        pluginClass: PermissionHandlerWindowsPlugin
