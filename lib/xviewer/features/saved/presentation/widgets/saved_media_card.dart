@@ -38,6 +38,8 @@ class SavedMediaCard extends StatelessWidget {
         aspectRatio: isGrid ? 1 : 1.15,
         child: previewFile.existsSync()
             ? Image.file(previewFile, fit: BoxFit.cover)
+            : record.imageUrl.startsWith('http')
+            ? Image.network(record.imageUrl, fit: BoxFit.cover)
             : const ColoredBox(
                 color: Color(0xFFE5E7EB),
                 child: Icon(Icons.image_not_supported_outlined),

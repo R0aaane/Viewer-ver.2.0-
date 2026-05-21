@@ -169,6 +169,7 @@ class _SavedMediaDetailScreenState
                       _buildReader(
                         context: context,
                         previewFile: previewFile,
+                        imageUrl: record.imageUrl,
                         hasPrev: hasPrev,
                         hasNext: hasNext,
                         onPrev: () => _prev(recordList),
@@ -346,6 +347,7 @@ class _SavedMediaDetailScreenState
   Widget _buildReader({
     required BuildContext context,
     required File previewFile,
+    required String imageUrl,
     required bool hasPrev,
     required bool hasNext,
     required VoidCallback onPrev,
@@ -360,6 +362,8 @@ class _SavedMediaDetailScreenState
             Positioned.fill(
               child: previewFile.existsSync()
                   ? Image.file(previewFile, fit: BoxFit.contain)
+                  : imageUrl.startsWith('http')
+                  ? Image.network(imageUrl, fit: BoxFit.contain)
                   : const ColoredBox(
                       color: Color(0xFFE5E7EB),
                       child: Icon(Icons.image_not_supported_outlined),

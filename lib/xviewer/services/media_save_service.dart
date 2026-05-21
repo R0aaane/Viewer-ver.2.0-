@@ -262,16 +262,33 @@ class MediaSaveService {
 
     for (final item in hostItems) {
       final mediaKey = 'host:${item.relativePath}';
+      final matchedRecord = _findHostSavedImageRecord(existingRecords, item);
+      if (matchedRecord != null) {
+        final previewFile = File(matchedRecord.previewFilePath);
+        if (!await previewFile.exists()) {
+          final previewPath = await _downloadHostPreview(item);
+          await _repository.save(
+            matchedRecord.copyWith(
+              mediaKey: mediaKey,
+              imageUrl: item.downloadUrl,
+              sourceImageUrl: item.downloadUrl,
+              localSavedPath: item.savedPath,
+              previewFilePath: previewPath,
+              saveLocationType: SaveLocationType.remoteHost,
+              galleryDisplayName: item.fileName,
+            ),
+          );
+          importedCount += 1;
+        }
+        existingMediaKeys.add(mediaKey);
+        continue;
+      }
+
       if (existingMediaKeys.contains(mediaKey)) {
         continue;
       }
 
-      final bytes = await _hostSavedImagesService.downloadSavedImage(item);
-      final previewPath = await _fileStorageService.saveBytes(
-        bytes: bytes,
-        fileName: item.fileName,
-        accountFolderName: _buildAccountFolderName(item.authorUsername),
-      );
+      final previewPath = await _downloadHostPreview(item);
       final recordId = _deduplicateRecordId(
         'host_${item.relativePath.hashCode.abs()}',
         existingRecordIds,
@@ -306,6 +323,36 @@ class MediaSaveService {
       );
     }
     return importedCount;
+  }
+
+  SavedMediaRecord? _findHostSavedImageRecord(
+    List<SavedMediaRecord> records,
+    HostSavedImageItem item,
+  ) {
+    final hostAuthor = _buildAccountFolderName(item.authorUsername);
+    final hostPath = p.normalize(item.savedPath);
+    for (final record in records) {
+      final sameHostPath = p.normalize(record.localSavedPath) == hostPath;
+      final sameAuthor =
+          _buildAccountFolderName(record.authorUsername) == hostAuthor;
+      final sameFileName =
+          p.basename(record.localSavedPath) == item.fileName ||
+          p.basename(record.previewFilePath) == item.fileName ||
+          (record.galleryDisplayName ?? '') == item.fileName;
+      if (sameHostPath || (sameAuthor && sameFileName)) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  Future<String> _downloadHostPreview(HostSavedImageItem item) async {
+    final bytes = await _hostSavedImagesService.downloadSavedImage(item);
+    return _fileStorageService.saveBytes(
+      bytes: bytes,
+      fileName: item.fileName,
+      accountFolderName: _buildAccountFolderName(item.authorUsername),
+    );
   }
 
   Future<String> getStorageDirectoryDescription() async {
