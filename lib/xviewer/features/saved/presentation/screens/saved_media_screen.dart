@@ -156,6 +156,15 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Search visible creators',
           ),
+          IconButton(
+            onPressed: () async {
+              await ref
+                  .read(savedMediaControllerProvider.notifier)
+                  .syncHostSavedImages();
+            },
+            icon: const Icon(Icons.cloud_sync_rounded),
+            tooltip: 'Sync host Xsaved_images',
+          ),
           PopupMenuButton<String>(
             tooltip: 'Local preview cache folder',
             icon: const Icon(Icons.folder_open_rounded),

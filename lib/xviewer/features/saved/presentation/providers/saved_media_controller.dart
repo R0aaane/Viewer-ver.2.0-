@@ -232,6 +232,11 @@ class SavedMediaController extends AsyncNotifier<List<SavedMediaRecord>> {
     state = AsyncData(await _getAllWithDisplayNameCompletion());
   }
 
+  Future<void> syncHostSavedImages() async {
+    await ref.read(mediaSaveServiceProvider).syncHostSavedImages();
+    state = AsyncData(await _getAllWithDisplayNameCompletion());
+  }
+
   Future<void> openGalleryApp() {
     return ref.read(mediaSaveServiceProvider).openGalleryApp();
   }

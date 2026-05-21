@@ -197,9 +197,10 @@ class MediaSaveService {
   }
 
   Future<int> importExistingSavedImageFiles() async {
+    final hostImported = await syncHostSavedImages();
     final files = await _fileStorageService.listSavedImageFiles();
     if (files.isEmpty) {
-      return 0;
+      return hostImported;
     }
 
     final baseDirectory = p.normalize(
@@ -235,6 +236,73 @@ class MediaSaveService {
     if (importedCount > 0) {
       debugPrint(
         '[xviewer][save] Imported $importedCount existing image files.',
+      );
+    }
+    return hostImported + importedCount;
+  }
+
+  Future<int> syncHostSavedImages() async {
+    if (!await _hostSavedImagesService.shouldSaveToHost()) {
+      return 0;
+    }
+
+    final hostItems = await _hostSavedImagesService.listSavedImages();
+    if (hostItems.isEmpty) {
+      return 0;
+    }
+
+    final existingRecords = await _repository.getAll();
+    final existingMediaKeys = existingRecords
+        .map((record) => record.mediaKey)
+        .toSet();
+    final existingRecordIds = existingRecords
+        .map((record) => record.recordId)
+        .toSet();
+    var importedCount = 0;
+
+    for (final item in hostItems) {
+      final mediaKey = 'host:${item.relativePath}';
+      if (existingMediaKeys.contains(mediaKey)) {
+        continue;
+      }
+
+      final bytes = await _hostSavedImagesService.downloadSavedImage(item);
+      final previewPath = await _fileStorageService.saveBytes(
+        bytes: bytes,
+        fileName: item.fileName,
+        accountFolderName: _buildAccountFolderName(item.authorUsername),
+      );
+      final recordId = _deduplicateRecordId(
+        'host_${item.relativePath.hashCode.abs()}',
+        existingRecordIds,
+      );
+      final authorUsername = _buildAccountFolderName(item.authorUsername);
+      final record = SavedMediaRecord(
+        recordId: recordId,
+        postId: p.basenameWithoutExtension(item.fileName),
+        mediaKey: mediaKey,
+        authorName: authorUsername,
+        authorUsername: authorUsername,
+        text: '',
+        imageUrl: item.downloadUrl,
+        sourceImageUrl: item.downloadUrl,
+        localSavedPath: item.savedPath,
+        previewFilePath: previewPath,
+        originalPostUrl: '',
+        createdAt: item.modifiedAt,
+        savedAt: item.modifiedAt,
+        saveLocationType: SaveLocationType.remoteHost,
+        galleryDisplayName: item.fileName,
+      );
+      await _repository.save(record);
+      existingMediaKeys.add(mediaKey);
+      existingRecordIds.add(recordId);
+      importedCount += 1;
+    }
+
+    if (importedCount > 0) {
+      debugPrint(
+        '[xviewer][save] Synced $importedCount host Saved_images files.',
       );
     }
     return importedCount;

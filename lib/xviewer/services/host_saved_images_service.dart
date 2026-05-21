@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import '../../services/app_settings_service.dart';
 import '../core/errors/app_exception.dart';
@@ -14,6 +15,24 @@ class HostSavedImageResult {
 
   final String savedPath;
   final String displayName;
+}
+
+class HostSavedImageItem {
+  const HostSavedImageItem({
+    required this.relativePath,
+    required this.fileName,
+    required this.authorUsername,
+    required this.savedPath,
+    required this.downloadUrl,
+    required this.modifiedAt,
+  });
+
+  final String relativePath;
+  final String fileName;
+  final String authorUsername;
+  final String savedPath;
+  final String downloadUrl;
+  final DateTime modifiedAt;
 }
 
 class HostSavedImagesService {
@@ -106,6 +125,84 @@ class HostSavedImagesService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<List<HostSavedImageItem>> listSavedImages() async {
+    final settings = await _settingsService.loadMetadataSettings();
+    if (!settings.isClientMode || settings.clientApiBaseUrl.trim().isEmpty) {
+      return const <HostSavedImageItem>[];
+    }
+
+    final baseUrl = settings.clientApiBaseUrl.trim().replaceAll(
+      RegExp(r'/+$'),
+      '',
+    );
+    final request = await _openGet('$baseUrl/xviewer/saved-images', settings);
+    final response = await request.close().timeout(const Duration(seconds: 30));
+    final payload = await response
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .join()
+        .timeout(const Duration(seconds: 30));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AppException('Host Saved_images list failed.', details: payload);
+    }
+
+    final json = jsonDecode(payload) as Map<String, dynamic>;
+    final rawItems = json['items'];
+    if (rawItems is! List) {
+      return const <HostSavedImageItem>[];
+    }
+
+    return rawItems
+        .whereType<Map>()
+        .map((raw) {
+          final downloadPath = raw['downloadPath']?.toString() ?? '';
+          final modifiedEpochMs =
+              int.tryParse(raw['modifiedEpochMs']?.toString() ?? '') ??
+              DateTime.now().millisecondsSinceEpoch;
+          return HostSavedImageItem(
+            relativePath: raw['relativePath']?.toString() ?? '',
+            fileName: raw['fileName']?.toString() ?? 'image.jpg',
+            authorUsername: raw['authorUsername']?.toString() ?? 'unknown_user',
+            savedPath: raw['savedPath']?.toString() ?? '',
+            downloadUrl: downloadPath.startsWith('http')
+                ? downloadPath
+                : '$baseUrl$downloadPath',
+            modifiedAt: DateTime.fromMillisecondsSinceEpoch(modifiedEpochMs),
+          );
+        })
+        .where((item) {
+          return item.relativePath.isNotEmpty && item.downloadUrl.isNotEmpty;
+        })
+        .toList(growable: false);
+  }
+
+  Future<Uint8List> downloadSavedImage(HostSavedImageItem item) async {
+    final settings = await _settingsService.loadMetadataSettings();
+    final request = await _openGet(item.downloadUrl, settings);
+    final response = await request.close().timeout(const Duration(minutes: 5));
+    final bytes = await consolidateHttpClientResponseBytes(
+      response,
+    ).timeout(const Duration(minutes: 5));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AppException(
+        'Host Saved_images download failed.',
+        details: item.relativePath,
+      );
+    }
+    return bytes;
+  }
+
+  Future<HttpClientRequest> _openGet(String url, dynamic settings) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 20)
+      ..idleTimeout = const Duration(minutes: 5);
+    final request = await client.getUrl(Uri.parse(url));
+    final token = settings.authToken?.trim();
+    if (token != null && token.isNotEmpty) {
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    }
+    return request;
   }
 
   String _escapeQuoted(String value) {

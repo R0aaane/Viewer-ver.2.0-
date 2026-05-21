@@ -9,8 +9,10 @@ import tempfile
 import time
 import unicodedata
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from server.core.errors import ApiError, bad_request, server_error
@@ -189,6 +191,45 @@ async def save_xviewer_saved_image(
         }
     finally:
         await file.close()
+
+
+@router.get("/xviewer/saved-images")
+def list_xviewer_saved_images(request: Request) -> dict[str, object]:
+    root = request.app.state.settings.xviewer_saved_images_dir
+    if not root.exists():
+        return {"items": []}
+
+    items: list[dict[str, object]] = []
+    for path in root.rglob("*"):
+      if not path.is_file() or not is_supported_image_extension(str(path)):
+          continue
+      relative_path = path.relative_to(root).as_posix()
+      parts = path.relative_to(root).parts
+      author = parts[0] if len(parts) > 1 else "unknown_user"
+      stat = path.stat()
+      items.append({
+          "relativePath": relative_path,
+          "fileName": path.name,
+          "authorUsername": author,
+          "savedPath": str(path),
+          "sizeBytes": stat.st_size,
+          "modifiedEpochMs": int(stat.st_mtime * 1000),
+          "downloadPath": f"/xviewer/saved-images/file?relativePath={quote(relative_path)}",
+      })
+
+    items.sort(key=lambda item: str(item["relativePath"]).lower())
+    return {"items": items}
+
+
+@router.get("/xviewer/saved-images/file")
+def get_xviewer_saved_image_file(request: Request, relativePath: str) -> FileResponse:
+    root = request.app.state.settings.xviewer_saved_images_dir.resolve()
+    target = (root / relativePath).resolve()
+    if not str(target).lower().startswith(str(root).lower()) or not target.is_file():
+        raise bad_request("Saved image file was not found")
+    if not is_supported_image_extension(str(target)):
+        raise bad_request("Unsupported saved image file")
+    return FileResponse(target)
 
 
 @router.post("/organize", response_model=OrganizeLibraryResponse)
