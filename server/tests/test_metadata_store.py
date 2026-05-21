@@ -684,6 +684,75 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertIsNotNone(record)
         self.assertEqual(record['display_name'], 'sample (2).pdf')
 
+    def test_organize_media_by_tags_removes_stale_target_record(self) -> None:
+        source = self.library_dir / 'stale-source.gif'
+        source.write_bytes(b'GIF89a')
+        source_media_id = build_media_id(
+            kind='image',
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name='stale-source.gif',
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                'media_id': source_media_id,
+                'folder_raw': str(self.library_dir),
+                'relative_hint': 'stale-source.gif',
+                'display_name': 'stale-source.gif',
+                'full_path': str(source),
+                'normalized_full_path': str(source).replace('/', '\\').casefold(),
+                'kind': 'image',
+                'mime_type': 'image/gif',
+                'size_bytes': 6,
+                'modified_at': None,
+                'modified_epoch_ms': 1,
+                'etag': None,
+                'is_deleted': 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [{'category': 'artist', 'name': 'Stale Artist'}],
+        )
+
+        stale_target = self.library_dir / '作者' / 'Stale Artist' / 'stale-source.gif'
+        stale_media_id = build_media_id(
+            kind='image',
+            full_path=str(stale_target),
+            folder_raw=str(stale_target.parent),
+            display_name='stale-source.gif',
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                'media_id': stale_media_id,
+                'folder_raw': str(stale_target.parent),
+                'relative_hint': 'stale-source.gif',
+                'display_name': 'stale-source.gif',
+                'full_path': str(stale_target),
+                'normalized_full_path': str(stale_target).replace('/', '\\').casefold(),
+                'kind': 'image',
+                'mime_type': 'image/gif',
+                'size_bytes': 6,
+                'modified_at': None,
+                'modified_epoch_ms': 1,
+                'etag': None,
+                'is_deleted': 1,
+            }
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        self.assertEqual(moved, {str(source): str(stale_target)})
+        self.assertTrue(stale_target.exists())
+        self.assertIsNone(self.sqlite.get_media_record(stale_media_id))
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -1085,6 +1085,10 @@ class MetadataStore:
                 logger.warning("[RENAME] failed reason=duplicate-name old=%s new=%s", old_full_path, target_full_path)
                 raise bad_request("A file or folder with the same name already exists")
 
+            self._remove_stale_path_conflict(
+                normalized_full_path=_normalize_path(target_full_path),
+                allowed_media_ids=set(),
+            )
             target_parent = os.path.dirname(target_full_path)
             if target_parent:
                 os.makedirs(target_parent, exist_ok=True)
@@ -1131,6 +1135,10 @@ class MetadataStore:
                     "etag": row.get("etag"),
                     "is_deleted": row.get("is_deleted", 0),
                 }
+                self._remove_stale_path_conflict(
+                    normalized_full_path=str(updated["normalized_full_path"]),
+                    allowed_media_ids={str(row["media_id"]), final_media_id},
+                )
                 self._db.upsert_media_record(updated)
                 self._db.replace_media_id_references(str(row["media_id"]), final_media_id)
                 if str(row["media_id"]) != final_media_id:
@@ -1158,6 +1166,10 @@ class MetadataStore:
                     logger.warning("[RENAME] failed reason=duplicate-name old=%s new=%s", old_full_path, target_full_path)
                     raise bad_request("A file or folder with the same name already exists")
             else:
+                self._remove_stale_path_conflict(
+                    normalized_full_path=_normalize_path(target_full_path),
+                    allowed_media_ids={str(current["media_id"])},
+                )
                 target_parent = os.path.dirname(target_full_path)
                 if target_parent:
                     os.makedirs(target_parent, exist_ok=True)
@@ -1210,12 +1222,38 @@ class MetadataStore:
             "etag": current.get("etag"),
             "is_deleted": 0,
         }
+        self._remove_stale_path_conflict(
+            normalized_full_path=str(updated["normalized_full_path"]),
+            allowed_media_ids={str(current["media_id"]), final_media_id},
+        )
         self._db.upsert_media_record(updated)
         self._db.replace_media_id_references(current["media_id"], final_media_id)
         if current["media_id"] != final_media_id:
             self._db.remove_media_record(current["media_id"])
         logger.info("[RENAME] success old=%s new=%s", old_full_path, target_full_path)
         return self._row_to_media_dict(updated)
+
+    def _remove_stale_path_conflict(
+        self,
+        *,
+        normalized_full_path: str,
+        allowed_media_ids: set[str],
+    ) -> None:
+        conflict = self._db.get_media_record_by_normalized_path(normalized_full_path)
+        if conflict is None:
+            return
+        conflict_media_id = str(conflict["media_id"])
+        if conflict_media_id in allowed_media_ids:
+            return
+        conflict_path = os.path.normpath(str(conflict["full_path"]))
+        if os.path.exists(conflict_path):
+            raise bad_request("A file or folder with the same name already exists")
+        logger.info(
+            "[RENAME] removing stale path conflict mediaId=%s path=%s",
+            conflict_media_id,
+            conflict_path,
+        )
+        self._db.remove_media_record(conflict_media_id)
 
     def apply_delete(self, items: list[dict[str, Any]], hard_delete: bool = False) -> int:
         target_ids: list[str] = []
