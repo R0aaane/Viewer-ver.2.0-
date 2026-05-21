@@ -43,15 +43,16 @@ class HostSavedImagesService {
 
   Future<bool> shouldSaveToHost() async {
     final settings = await _settingsService.loadMetadataSettings();
-    return settings.isClientMode && settings.clientApiBaseUrl.trim().isNotEmpty;
+    return _resolveHostApiBaseUrl(settings).isNotEmpty;
   }
 
   Future<String?> getHostDescription() async {
     final settings = await _settingsService.loadMetadataSettings();
-    if (!settings.isClientMode || settings.clientApiBaseUrl.trim().isEmpty) {
+    final baseUrl = _resolveHostApiBaseUrl(settings);
+    if (baseUrl.isEmpty) {
       return null;
     }
-    return 'Host Xsaved_images endpoint: ${settings.clientApiBaseUrl.trim()}';
+    return 'Host Xsaved_images endpoint: $baseUrl';
   }
 
   Future<HostSavedImageResult> saveImage({
@@ -61,13 +62,12 @@ class HostSavedImagesService {
     required String accountFolderName,
   }) async {
     final settings = await _settingsService.loadMetadataSettings();
-    if (!settings.isClientMode || settings.clientApiBaseUrl.trim().isEmpty) {
+    final baseUrl = _resolveHostApiBaseUrl(settings);
+    if (baseUrl.isEmpty) {
       throw const AppException('Host save is not configured.');
     }
 
-    final uri = Uri.parse(
-      '${settings.clientApiBaseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/xviewer/saved-images',
-    );
+    final uri = Uri.parse('$baseUrl/xviewer/saved-images');
     final boundary = '----xviewer-${DateTime.now().millisecondsSinceEpoch}';
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 20)
@@ -129,14 +129,11 @@ class HostSavedImagesService {
 
   Future<List<HostSavedImageItem>> listSavedImages() async {
     final settings = await _settingsService.loadMetadataSettings();
-    if (!settings.isClientMode || settings.clientApiBaseUrl.trim().isEmpty) {
+    final baseUrl = _resolveHostApiBaseUrl(settings);
+    if (baseUrl.isEmpty) {
       return const <HostSavedImageItem>[];
     }
 
-    final baseUrl = settings.clientApiBaseUrl.trim().replaceAll(
-      RegExp(r'/+$'),
-      '',
-    );
     final request = await _openGet('$baseUrl/xviewer/saved-images', settings);
     final response = await request.close().timeout(const Duration(seconds: 30));
     final payload = await response
@@ -207,5 +204,19 @@ class HostSavedImagesService {
 
   String _escapeQuoted(String value) {
     return value.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+  }
+
+  String _resolveHostApiBaseUrl(dynamic settings) {
+    final storedApi = settings.clientApiBaseUrl.trim();
+    if (storedApi.isNotEmpty) {
+      return storedApi.replaceAll(RegExp(r'/+$'), '');
+    }
+    if (settings.isHostMode) {
+      return settings.hostLoopbackApiBaseUrl.trim().replaceAll(
+        RegExp(r'/+$'),
+        '',
+      );
+    }
+    return '';
   }
 }
