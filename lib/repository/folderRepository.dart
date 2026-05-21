@@ -1203,6 +1203,7 @@ class WindowsFolderRepository implements MediaRepository {
       importedCount: result.importedCount,
       skippedCount: result.skippedCount,
       failedCount: result.failedCount,
+      logLines: result.logLines,
       hitomiMetadataByRelativePath: result.hitomiMetadataByRelativePath,
     );
   }

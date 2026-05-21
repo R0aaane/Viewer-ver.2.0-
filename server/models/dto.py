@@ -201,6 +201,7 @@ class DownloadUrlResponse(BaseModel):
     taggedCount: int = 0
     organizedCount: int = 0
     rescannedCount: int = 0
+    logLines: list[str] = Field(default_factory=list)
     targetCollection: str | None = None
 
 

@@ -1680,6 +1680,7 @@ class AndroidFolderRepository implements MediaRepository {
         importedCount: result.importedCount,
         skippedCount: result.skippedCount,
         failedCount: result.failedCount,
+        logLines: result.logLines,
         hitomiMetadataByRelativePath: result.hitomiMetadataByRelativePath,
       );
     }
@@ -1704,6 +1705,7 @@ class AndroidFolderRepository implements MediaRepository {
           importedCount: downloadResult.importedCount,
           skippedCount: downloadResult.skippedCount,
           failedCount: downloadResult.failedCount,
+          logLines: downloadResult.logLines,
           hitomiMetadataByRelativePath:
               downloadResult.hitomiMetadataByRelativePath,
         );
@@ -1737,6 +1739,7 @@ class AndroidFolderRepository implements MediaRepository {
         importedCount: importedCount,
         skippedCount: downloadResult.skippedCount + importedSkips,
         failedCount: downloadResult.failedCount,
+        logLines: downloadResult.logLines,
         hitomiMetadataByRelativePath:
             downloadResult.hitomiMetadataByRelativePath,
       );

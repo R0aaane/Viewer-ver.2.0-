@@ -782,6 +782,7 @@ async def download_url(
         taggedCount=tagged_count,
         organizedCount=organized_count,
         rescannedCount=rescanned_count,
+        logLines=download_result.log_lines[-20:],
         targetCollection=payload.targetCollection,
     )
 

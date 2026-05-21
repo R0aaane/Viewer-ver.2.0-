@@ -140,6 +140,31 @@ extension _GalleryImportActions on _GalleryGridPageState {
         uri.host.trim().isNotEmpty;
   }
 
+  String? _formatUrlImportFailureDetail(String? detail) {
+    final normalized = detail?.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    const maxLength = 240;
+    if (normalized.length <= maxLength) {
+      return normalized;
+    }
+    return '${normalized.substring(0, maxLength)}...';
+  }
+
+  String _urlImportFailureMessage({
+    required int failedCount,
+    required String fallback,
+    String? detail,
+  }) {
+    final formattedDetail = _formatUrlImportFailureDetail(detail);
+    final countPart = failedCount > 0 ? '（失敗: $failedCount 件）' : '';
+    if (formattedDetail == null) {
+      return '$fallback$countPart';
+    }
+    return '$fallback$countPart: $formattedDetail';
+  }
+
   Future<void> _drainSharedImportQueue() async {
     if (_processingSharedImport || _initializing || !mounted) {
       return;
@@ -1512,7 +1537,11 @@ extension _GalleryImportActions on _GalleryGridPageState {
 
       if (effectiveImportedCount <= 0) {
         final message = result.failedCount > 0
-            ? 'URL取り込みに失敗しました（失敗: ${result.failedCount} 件）'
+            ? _urlImportFailureMessage(
+                failedCount: result.failedCount,
+                fallback: 'URL取り込みに失敗しました',
+                detail: result.failureSummary,
+              )
             : result.skippedCount > 0
             ? '新規取り込みはありませんでした（スキップ: ${result.skippedCount} 件）'
             : '取り込み対象がありませんでした';
@@ -1577,7 +1606,14 @@ extension _GalleryImportActions on _GalleryGridPageState {
       final organizedSummary = result.organizedCount > 0
           ? ' / 整理 ${result.organizedCount} 件'
           : '';
-      final message = '$successLabel: ${parts.join(' / ')}$organizedSummary';
+      final failureSummary = result.failedCount > 0
+          ? _formatUrlImportFailureDetail(result.failureSummary)
+          : null;
+      final failureSummaryPart = failureSummary == null
+          ? ''
+          : ' / 原因: $failureSummary';
+      final message =
+          '$successLabel: ${parts.join(' / ')}$organizedSummary$failureSummaryPart';
       UrlImportDialog.clearBrowserSession();
       _updateUrlImportQueueEntry(
         queueId,
@@ -1687,7 +1723,11 @@ extension _GalleryImportActions on _GalleryGridPageState {
         ).showSnackBar(SnackBar(content: Text(message)));
         return;
       }
-      final message = 'URL取り込みに失敗しました: $e';
+      final message = _urlImportFailureMessage(
+        failedCount: 0,
+        fallback: 'URL取り込みに失敗しました',
+        detail: e.toString(),
+      );
       _updateUrlImportQueueEntry(
         queueId,
         (current) => current.copyWith(

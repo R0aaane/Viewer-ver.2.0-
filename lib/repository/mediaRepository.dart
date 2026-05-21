@@ -112,6 +112,7 @@ class UrlImportResult {
   final int taggedCount;
   final int organizedCount;
   final int rescannedCount;
+  final List<String> logLines;
   final Map<String, HitomiGalleryMetadata> hitomiMetadataByRelativePath;
 
   const UrlImportResult({
@@ -121,10 +122,27 @@ class UrlImportResult {
     this.taggedCount = 0,
     this.organizedCount = 0,
     this.rescannedCount = 0,
+    this.logLines = const <String>[],
     this.hitomiMetadataByRelativePath = const <String, HitomiGalleryMetadata>{},
   });
 
   bool get hasChanges => importedCount > 0;
+
+  String? get failureSummary {
+    for (final line in logLines.reversed) {
+      final lower = line.toLowerCase();
+      if (lower.contains('[error]') || lower.contains('[stderr]')) {
+        return line;
+      }
+    }
+    for (final line in logLines.reversed) {
+      final trimmed = line.trim();
+      if (trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+    return null;
+  }
 }
 
 enum ImportSourceKind { files, folder }

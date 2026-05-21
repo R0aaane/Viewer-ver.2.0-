@@ -1054,6 +1054,7 @@ class RemoteMediaRepository implements MediaRepository {
         importedCount: importedCount,
         skippedCount: localResult.skippedCount + uploadSkipCount,
         failedCount: localResult.failedCount,
+        logLines: localResult.logLines,
       );
     } finally {
       if (await stagingDir.exists()) {

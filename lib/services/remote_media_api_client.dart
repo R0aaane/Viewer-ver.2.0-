@@ -951,6 +951,7 @@ class RemoteMediaApiClient {
         taggedCount: _asInt(jsonBody['taggedCount']) ?? 0,
         organizedCount: _asInt(jsonBody['organizedCount']) ?? 0,
         rescannedCount: _asInt(jsonBody['rescannedCount']) ?? 0,
+        logLines: _asStringList(jsonBody['logLines']),
       );
     } finally {
       polling = false;
@@ -1436,6 +1437,16 @@ class RemoteMediaApiClient {
       return raw;
     }
     return int.tryParse(raw.toString());
+  }
+
+  List<String> _asStringList(dynamic raw) {
+    if (raw is! List) {
+      return const <String>[];
+    }
+    return raw
+        .map((entry) => entry?.toString().trim() ?? '')
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
   }
 
   double? _asDouble(dynamic raw) {

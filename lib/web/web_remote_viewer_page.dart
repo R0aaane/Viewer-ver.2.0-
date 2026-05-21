@@ -1285,11 +1285,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
+    final failureDetail = _formatUrlImportFailureDetail(result.failureSummary);
     final message =
         'URL 取り込み完了: 追加 ${result.importedCount} 件 / '
         '整理 ${result.organizedCount} 件 / '
         'スキップ ${result.skippedCount} 件 / '
-        '失敗 ${result.failedCount} 件';
+        '失敗 ${result.failedCount} 件'
+        '${failureDetail == null ? '' : ' / 原因: $failureDetail'}';
     setState(() {
       _statusMessage = message;
     });
@@ -2344,6 +2346,18 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     final local = value.toLocal();
     final two = (int number) => number.toString().padLeft(2, '0');
     return '${local.year}/${two(local.month)}/${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+  }
+
+  String? _formatUrlImportFailureDetail(String? detail) {
+    final normalized = detail?.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    const maxLength = 240;
+    if (normalized.length <= maxLength) {
+      return normalized;
+    }
+    return '${normalized.substring(0, maxLength)}...';
   }
 }
 

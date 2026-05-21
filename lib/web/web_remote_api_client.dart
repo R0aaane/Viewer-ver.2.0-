@@ -312,6 +312,7 @@ class WebRemoteUrlImportResult {
   final int taggedCount;
   final int organizedCount;
   final int rescannedCount;
+  final List<String> logLines;
   final String? targetCollection;
 
   const WebRemoteUrlImportResult({
@@ -321,10 +322,27 @@ class WebRemoteUrlImportResult {
     this.taggedCount = 0,
     this.organizedCount = 0,
     this.rescannedCount = 0,
+    this.logLines = const <String>[],
     this.targetCollection,
   });
 
   bool get hasChanges => importedCount > 0 || organizedCount > 0;
+
+  String? get failureSummary {
+    for (final line in logLines.reversed) {
+      final lower = line.toLowerCase();
+      if (lower.contains('[error]') || lower.contains('[stderr]')) {
+        return line;
+      }
+    }
+    for (final line in logLines.reversed) {
+      final trimmed = line.trim();
+      if (trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+    return null;
+  }
 }
 
 class WebSearchQuery {
@@ -839,6 +857,7 @@ class WebRemoteApiClient {
       taggedCount: _asInt(json['taggedCount']) ?? 0,
       organizedCount: _asInt(json['organizedCount']) ?? 0,
       rescannedCount: _asInt(json['rescannedCount']) ?? 0,
+      logLines: _asStringList(json['logLines']),
       targetCollection: json['targetCollection']?.toString(),
     );
     clearCaches();
@@ -1590,6 +1609,16 @@ class WebRemoteApiClient {
       return raw;
     }
     return int.tryParse(raw.toString());
+  }
+
+  List<String> _asStringList(dynamic raw) {
+    if (raw is! List) {
+      return const <String>[];
+    }
+    return raw
+        .map((entry) => entry?.toString().trim() ?? '')
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
   }
 
   double? _asDouble(dynamic raw) {
