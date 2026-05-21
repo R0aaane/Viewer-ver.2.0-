@@ -140,6 +140,7 @@ class UrlImportDownloaderService {
     'cg',
     'gamecg',
     'imageset',
+    'group',
     'galleries',
     'reader',
   };

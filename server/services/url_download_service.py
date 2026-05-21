@@ -69,6 +69,7 @@ _LAUNCHER_SUPPORTED_HITOMI_SEGMENTS = {
     "cg",
     "gamecg",
     "imageset",
+    "group",
     "galleries",
     "reader",
 }

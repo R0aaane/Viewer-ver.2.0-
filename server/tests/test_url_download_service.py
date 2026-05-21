@@ -151,6 +151,25 @@ class UrlDownloadServiceTest(unittest.TestCase):
         self.assertEqual(len(service.launcher_calls), 1)
         self.assertEqual(len(service.direct_calls), 1)
 
+    def test_routes_hitomi_group_url_to_launcher(self) -> None:
+        service = _RecordingUrlDownloadService()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service_loop(
+                service.download_url(
+                    source_url="https://hitomi.la/group/yoppu-japanese.html",
+                    destination_folder=temp_dir,
+                    options=UrlDownloadOptions(),
+                )
+            )
+
+        self.assertEqual(result.imported_count, 2)
+        self.assertEqual(len(service.launcher_calls), 1)
+        self.assertEqual(len(service.direct_calls), 0)
+        self.assertEqual(
+            service.launcher_calls[0]["source_url"],
+            "https://hitomi.la/group/yoppu-japanese.html",
+        )
+
     def test_expands_hitomi_search_url_into_gallery_urls(self) -> None:
         service = _HitomiSearchRecordingUrlDownloadService()
         with tempfile.TemporaryDirectory() as temp_dir:
