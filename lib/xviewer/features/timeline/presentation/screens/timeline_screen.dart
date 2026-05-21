@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/constants/app_routes.dart';
+import '../../../../app/xviewer_shell_controller.dart';
 import '../../../../core/constants/storage_keys.dart';
 import '../../../../domain/models/feed_mode.dart';
 import '../../../../domain/models/media_post.dart';
@@ -41,7 +42,8 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
   bool _dragSelecting = false;
   String? _dragSelectionAnchorId;
   Set<String> _selectedIds = <String>{};
-  Map<String, TimelineEntry> _visibleEntriesById = const <String, TimelineEntry>{};
+  Map<String, TimelineEntry> _visibleEntriesById =
+      const <String, TimelineEntry>{};
 
   @override
   void initState() {
@@ -108,14 +110,16 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('${_gridSizeLabel(draftValue)} (${draftValue.round()} px)'),
+                  Text(
+                    '${_gridSizeLabel(draftValue)} (${draftValue.round()} px)',
+                  ),
                   const SizedBox(height: 12),
                   Slider(
                     value: draftValue,
                     min: _minGridItemExtent,
                     max: _maxGridItemExtent,
-                    divisions:
-                        (_maxGridItemExtent - _minGridItemExtent).round(),
+                    divisions: (_maxGridItemExtent - _minGridItemExtent)
+                        .round(),
                     label: _gridSizeLabel(draftValue),
                     onChanged: (value) {
                       setDialogState(() {
@@ -163,10 +167,7 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
           clipBehavior: Clip.antiAlias,
           insetPadding: const EdgeInsets.all(20),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: 960,
-              maxHeight: 720,
-            ),
+            constraints: const BoxConstraints(maxWidth: 960, maxHeight: 720),
             child: Stack(
               children: [
                 Padding(
@@ -255,9 +256,9 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
 
   Future<void> _openPost(MediaPost post) async {
     try {
-      await ref.read(linkLauncherServiceProvider).openExternal(
-            post.originalPostUrl,
-          );
+      await ref
+          .read(linkLauncherServiceProvider)
+          .openExternal(post.originalPostUrl);
     } catch (error) {
       if (!mounted) {
         return;
@@ -270,10 +271,9 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
 
   Future<void> _saveImage(TimelineEntry entry) async {
     try {
-      final result = await ref.read(savedMediaControllerProvider.notifier).saveImage(
-            post: entry.post,
-            image: entry.image,
-          );
+      final result = await ref
+          .read(savedMediaControllerProvider.notifier)
+          .saveImage(post: entry.post, image: entry.image);
       if (!mounted) {
         return;
       }
@@ -289,9 +289,9 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
           'Gallery save failed, so the image was kept in app storage',
         _ => result.message ?? 'Saved to ${result.locationType.name}',
       };
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (error) {
       if (!mounted) {
         return;
@@ -409,7 +409,8 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
         final result = await ref
             .read(savedMediaControllerProvider.notifier)
             .saveImage(post: entry.post, image: entry.image);
-        if (result.isSuccess || result.failureReason == SaveFailureReason.duplicate) {
+        if (result.isSuccess ||
+            result.failureReason == SaveFailureReason.duplicate) {
           successCount++;
         } else {
           failureCount++;
@@ -508,6 +509,7 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
     final savedMediaKeys =
         savedState.valueOrNull?.map((record) => record.mediaKey).toSet() ??
         <String>{};
+    final closeXViewer = ref.watch(xViewerCloseHandlerProvider);
 
     return Scaffold(
       appBar: _isSelectionMode
@@ -520,14 +522,14 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
               title: Text('${_selectedIds.length} selected'),
               actions: [
                 IconButton(
-                  onPressed: _visibleEntriesById.isEmpty ? null : _selectAllVisible,
+                  onPressed: _visibleEntriesById.isEmpty
+                      ? null
+                      : _selectAllVisible,
                   icon: const Icon(Icons.select_all_rounded),
                   tooltip: 'Select all',
                 ),
                 IconButton(
-                  onPressed: _selectedIds.isEmpty
-                      ? null
-                      : _clearSelection,
+                  onPressed: _selectedIds.isEmpty ? null : _clearSelection,
                   icon: const Icon(Icons.clear_all_rounded),
                   tooltip: 'Clear selection',
                 ),
@@ -539,6 +541,13 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
               ],
             )
           : AppBar(
+              leading: closeXViewer == null
+                  ? null
+                  : IconButton(
+                      onPressed: closeXViewer,
+                      icon: const Icon(Icons.arrow_back_rounded),
+                      tooltip: 'Back to pdf_viewer',
+                    ),
               title: const Text('X Image Feed'),
               actions: [
                 IconButton(
@@ -595,24 +604,25 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
               if (_isSelectionMode) {
                 return;
               }
-              await ref.read(timelineControllerProvider.notifier).refreshSelected();
+              await ref
+                  .read(timelineControllerProvider.notifier)
+                  .refreshSelected();
             },
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final availableWidth =
-                    constraints.maxWidth.isFinite
-                        ? constraints.maxWidth
-                        : MediaQuery.sizeOf(context).width;
-                final widthLimitedExtent =
-                    (availableWidth - 32)
-                        .clamp(_minGridItemExtent, _maxGridItemExtent)
-                        .toDouble();
+                final availableWidth = constraints.maxWidth.isFinite
+                    ? constraints.maxWidth
+                    : MediaQuery.sizeOf(context).width;
+                final widthLimitedExtent = (availableWidth - 32)
+                    .clamp(_minGridItemExtent, _maxGridItemExtent)
+                    .toDouble();
                 final maxExtent = _gridItemExtent
                     .clamp(_minGridItemExtent, widthLimitedExtent)
                     .toDouble();
 
                 return Listener(
-                  onPointerMove: (event) => _handleDragSelectionAt(event.position),
+                  onPointerMove: (event) =>
+                      _handleDragSelectionAt(event.position),
                   onPointerUp: (_) => _finishDragSelection(),
                   onPointerCancel: (_) => _finishDragSelection(),
                   child: CustomScrollView(
@@ -676,12 +686,13 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
                         SliverPadding(
                           padding: const EdgeInsets.all(16),
                           sliver: SliverGrid(
-                            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: maxExtent,
-                              crossAxisSpacing: 12,
-                              mainAxisSpacing: 12,
-                              childAspectRatio: 0.56,
-                            ),
+                            gridDelegate:
+                                SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: maxExtent,
+                                  crossAxisSpacing: 12,
+                                  mainAxisSpacing: 12,
+                                  childAspectRatio: 0.56,
+                                ),
                             delegate: SliverChildBuilderDelegate(
                               (context, index) {
                                 final entry = items[index];
@@ -696,7 +707,9 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
                                     _enterSelectionMode(entryId);
                                   },
                                   onLongPressMoveUpdate: (details) {
-                                    _handleDragSelectionAt(details.globalPosition);
+                                    _handleDragSelectionAt(
+                                      details.globalPosition,
+                                    );
                                   },
                                   onLongPressEnd: (_) {
                                     _finishDragSelection();
@@ -712,7 +725,9 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
                                       isSaved: savedMediaKeys.contains(
                                         entry.image.mediaKey,
                                       ),
-                                      isSelected: _selectedIds.contains(entryId),
+                                      isSelected: _selectedIds.contains(
+                                        entryId,
+                                      ),
                                       onSave: _isSelectionMode
                                           ? () => _toggleSelection(entryId)
                                           : () => _saveImage(entry),
@@ -735,15 +750,15 @@ class _TimelineScreenState extends ConsumerState<TimelineScreen> {
                         ),
                       if (feed.hasFetched && items.isNotEmpty)
                         SliverToBoxAdapter(
-                        child: _TimelineFooter(
-                          isLoadingMore: feed.isLoadingMore,
-                          hasMore: feed.hasMore,
-                          loadingLabel: selectedMode == FeedMode.reposted
-                              ? 'Loading more and skipping non-image reposts if needed...'
-                              : 'Loading more...',
-                          errorMessage: items.isNotEmpty
-                              ? feed.errorMessage
-                              : null,
+                          child: _TimelineFooter(
+                            isLoadingMore: feed.isLoadingMore,
+                            hasMore: feed.hasMore,
+                            loadingLabel: selectedMode == FeedMode.reposted
+                                ? 'Loading more and skipping non-image reposts if needed...'
+                                : 'Loading more...',
+                            errorMessage: items.isNotEmpty
+                                ? feed.errorMessage
+                                : null,
                             onLoadMore: () {
                               ref
                                   .read(timelineControllerProvider.notifier)
@@ -780,11 +795,11 @@ class _BatchSaveProgress {
   });
 
   const _BatchSaveProgress.idle()
-      : current = 0,
-        total = 0,
-        successCount = 0,
-        failureCount = 0,
-        inProgress = false;
+    : current = 0,
+      total = 0,
+      successCount = 0,
+      failureCount = 0,
+      inProgress = false;
 
   final int current;
   final int total;
@@ -947,10 +962,7 @@ class _FeedErrorCard extends StatelessWidget {
           children: [
             Text(message),
             const SizedBox(height: 12),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),

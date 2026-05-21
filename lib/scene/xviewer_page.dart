@@ -35,7 +35,9 @@ class _XViewerPageState extends State<XViewerPage> {
           );
         }
 
-        return const ProviderScope(child: XViewerApp());
+        return ProviderScope(
+          child: XViewerApp(onClose: () => Navigator.of(context).pop()),
+        );
       },
     );
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../app/xviewer_shell_controller.dart';
 import '../../../../core/constants/app_routes.dart';
 import '../../../../widgets/async_value_view.dart';
 import '../providers/auth_controller.dart';
@@ -12,6 +13,7 @@ class LoginScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authControllerProvider);
+    final closeXViewer = ref.watch(xViewerCloseHandlerProvider);
     debugPrint(
       '[xviewer][flutter] LoginScreen build: authValueHasData=${authState.hasValue} currentIsLoggedIn=${authState.valueOrNull?.isAuthenticated == true}',
     );
@@ -28,6 +30,16 @@ class LoginScreen extends ConsumerWidget {
     });
 
     return Scaffold(
+      appBar: closeXViewer == null
+          ? null
+          : AppBar(
+              leading: IconButton(
+                onPressed: closeXViewer,
+                icon: const Icon(Icons.arrow_back_rounded),
+                tooltip: 'Back to pdf_viewer',
+              ),
+              title: const Text('XViewer'),
+            ),
       body: SafeArea(
         child: AsyncValueView(
           value: authState,
@@ -85,7 +97,9 @@ class LoginScreen extends ConsumerWidget {
                       const SizedBox(height: 16),
                       FilledButton.icon(
                         onPressed: () async {
-                          await ref.read(authControllerProvider.notifier).signIn();
+                          await ref
+                              .read(authControllerProvider.notifier)
+                              .signIn();
                         },
                         icon: const Icon(Icons.login_rounded),
                         label: const Text('Sign in with X'),
