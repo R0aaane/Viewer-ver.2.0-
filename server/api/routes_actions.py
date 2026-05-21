@@ -195,9 +195,13 @@ async def save_xviewer_saved_image(
 
 @router.get("/xviewer/saved-images")
 def list_xviewer_saved_images(request: Request) -> dict[str, object]:
-    root = request.app.state.settings.xviewer_saved_images_dir
+    root = _resolve_xviewer_saved_images_root(request)
     if not root.exists():
-        return {"items": []}
+        return {
+            "items": [],
+            "rootPath": str(root),
+            "rootExists": False,
+        }
 
     items: list[dict[str, object]] = []
     for path in root.rglob("*"):
@@ -218,18 +222,51 @@ def list_xviewer_saved_images(request: Request) -> dict[str, object]:
       })
 
     items.sort(key=lambda item: str(item["relativePath"]).lower())
-    return {"items": items}
+    return {
+        "items": items,
+        "rootPath": str(root),
+        "rootExists": True,
+        "itemCount": len(items),
+    }
 
 
 @router.get("/xviewer/saved-images/file")
 def get_xviewer_saved_image_file(request: Request, relativePath: str) -> FileResponse:
-    root = request.app.state.settings.xviewer_saved_images_dir.resolve()
+    root = _resolve_xviewer_saved_images_root(request).resolve()
     target = (root / relativePath).resolve()
     if not str(target).lower().startswith(str(root).lower()) or not target.is_file():
         raise bad_request("Saved image file was not found")
     if not is_supported_image_extension(target.suffix):
         raise bad_request("Unsupported saved image file")
     return FileResponse(target)
+
+
+def _resolve_xviewer_saved_images_root(request: Request) -> Path:
+    settings = request.app.state.settings
+    candidates = [
+        Path("D:/Xsaved_images"),
+        Path("D:/xSaved_images"),
+        settings.xviewer_saved_images_dir,
+    ]
+    for media_root in getattr(settings, "media_roots", []) or []:
+        try:
+            candidates.append(Path(media_root).resolve().parent / "Xsaved_images")
+        except Exception:
+            pass
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        root = candidate.resolve()
+        key = str(root).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if root.exists() and any(
+            path.is_file() and is_supported_image_extension(path.suffix)
+            for path in root.rglob("*")
+        ):
+            return root
+    return settings.xviewer_saved_images_dir
 
 
 @router.post("/organize", response_model=OrganizeLibraryResponse)
