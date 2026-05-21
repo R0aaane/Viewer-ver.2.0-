@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as im;
@@ -479,21 +478,79 @@ class RemoteMediaRepository implements MediaRepository {
       if (item.kind != MediaKind.pdf) {
         return true;
       }
-      if (stat.size < 5) {
+      if (stat.size < 10) {
         return false;
       }
-      final raf = await file.open();
-      try {
-        final header = await raf.read(5);
-        if (header.length < 5) {
-          return false;
-        }
-        return ascii.decode(header, allowInvalid: true).startsWith('%PDF-');
-      } finally {
-        await raf.close();
-      }
+      return _isCompletePdfFile(file, stat.size);
     } catch (_) {
       return false;
+    }
+  }
+
+  Future<bool> _isCompletePdfFile(File file, int fileSize) async {
+    final raf = await file.open();
+    try {
+      final headerLength = fileSize < 1024 ? fileSize : 1024;
+      final header = await raf.read(headerLength);
+      if (!_containsBytes(header, const <int>[0x25, 0x50, 0x44, 0x46, 0x2D])) {
+        return false;
+      }
+      final tailLength = fileSize < 2048 ? fileSize : 2048;
+      await raf.setPosition(fileSize - tailLength);
+      final tail = await raf.read(tailLength);
+      return _containsBytes(tail, const <int>[0x25, 0x25, 0x45, 0x4F, 0x46]);
+    } finally {
+      await raf.close();
+    }
+  }
+
+  bool _containsBytes(List<int> bytes, List<int> pattern) {
+    if (pattern.isEmpty || bytes.length < pattern.length) {
+      return false;
+    }
+    for (var index = 0; index <= bytes.length - pattern.length; index++) {
+      var matches = true;
+      for (var offset = 0; offset < pattern.length; offset++) {
+        if (bytes[index + offset] != pattern[offset]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _waitForRemotePdfCacheReady(File file, MediaItem item) async {
+    if (item.kind != MediaKind.pdf) {
+      return;
+    }
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (await _isValidCachedMediaFile(file, item)) {
+        return;
+      }
+      await Future<void>.delayed(Duration(milliseconds: 350 * (attempt + 1)));
+    }
+    if (!await _isValidCachedMediaFile(file, item)) {
+      throw const RemoteMediaException('キャッシュしたPDFファイルが不完全です');
+    }
+  }
+
+  Future<bool> _isOpenablePdfFile(File file) async {
+    PdfDocument? doc;
+    try {
+      doc = await PdfDocument.openFile(file.path);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      try {
+        await doc?.close();
+      } finally {
+        doc = null;
+      }
     }
   }
 
@@ -538,10 +595,16 @@ class RemoteMediaRepository implements MediaRepository {
         await _deleteFileQuietly(partialFile);
         await _deleteFileQuietly(file);
         await _client.downloadMediaToFile(mediaId, partialFile);
-        if (!await _isValidCachedMediaFile(partialFile, item)) {
+        await _waitForRemotePdfCacheReady(partialFile, item);
+        if (item.kind != MediaKind.pdf &&
+            !await _isValidCachedMediaFile(partialFile, item)) {
           throw const RemoteMediaException('キャッシュしたメディアファイルが不正です');
         }
         await partialFile.rename(file.path);
+        if (item.kind == MediaKind.pdf && !await _isOpenablePdfFile(file)) {
+          await _deleteFileQuietly(file);
+          throw const RemoteMediaException('キャッシュしたPDFファイルを開けません');
+        }
         await _trimCacheDirectory(fileDir, maxEntries: 48);
         return file;
       } catch (error) {
@@ -1330,11 +1393,11 @@ class RemoteMediaRepository implements MediaRepository {
     final doc = await _openCachedPdf(item);
     final totalPages = doc.pagesCount < 1 ? 1 : doc.pagesCount;
     final targetWidth = maxWidth.clamp(160, 480).toInt();
-    final candidatePages = <int>[
+    final candidatePages = {
       1,
       if (totalPages >= 2) 2,
       if (totalPages >= 3) (totalPages / 2).ceil(),
-    ].toSet().toList(growable: false);
+    }.toList(growable: false);
 
     Uint8List? fallback;
     for (final pageNumber in candidatePages) {
@@ -1763,7 +1826,7 @@ class RemoteMediaRepository implements MediaRepository {
         final sourceKind = _sourceKindNameForItem(item, rawId: rawItem.id);
         debugPrint(
           '[UPLOAD][CLIENT][req:$requestId] source '
-          'sourceKind=${sourceKind} '
+          'sourceKind=$sourceKind '
           'rawId=${rawItem.id} normalizedId=${item.id} '
           'display=${item.displayName} folder=${item.folderRaw}',
         );

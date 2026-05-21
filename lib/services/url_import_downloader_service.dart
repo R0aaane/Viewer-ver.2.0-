@@ -116,6 +116,7 @@ class UrlImportDownloaderService {
   static const String _uiEventPrefix = '__KEMONO_DL_UI__';
   static const String _contentDispositionHeader = 'content-disposition';
   static const String _standaloneUserAgent = 'pdf_viewer/standalone';
+  static const String _mediaAcceptHeader = 'application/pdf,image/*,*/*;q=0.8';
   static const String _dddSmartHost = 'ddd-smart.net';
   static const String _dddSmartCdnHost = 'cdn.ddd-smart.net';
   static const List<String> _hitomiNozomiHosts = <String>[
@@ -829,6 +830,7 @@ class UrlImportDownloaderService {
 
         request.followRedirects = true;
         request.headers.set(HttpHeaders.userAgentHeader, _standaloneUserAgent);
+        request.headers.set(HttpHeaders.acceptHeader, _mediaAcceptHeader);
 
         HttpClientResponse response;
         try {
@@ -879,13 +881,10 @@ class UrlImportDownloaderService {
 
         IOSink? sink;
         try {
-          sink = targetFile.openWrite();
-          await response.forEach(sink.add);
-          await sink.flush();
-          await sink.close();
+          sink = await _writeResponseToMediaFile(response, targetFile);
           importedCount++;
           appendLog('[ok] $rawUrl -> $fileName');
-        } catch (error) {
+        } on Exception catch (error) {
           failedCount++;
           appendLog('[error] write failed: $fileName ($error)');
           try {
@@ -995,6 +994,7 @@ class UrlImportDownloaderService {
 
         request.followRedirects = true;
         request.headers.set(HttpHeaders.userAgentHeader, _standaloneUserAgent);
+        request.headers.set(HttpHeaders.acceptHeader, _mediaAcceptHeader);
 
         HttpClientResponse response;
         try {
@@ -1045,13 +1045,10 @@ class UrlImportDownloaderService {
 
         IOSink? sink;
         try {
-          sink = targetFile.openWrite();
-          await response.forEach(sink.add);
-          await sink.flush();
-          await sink.close();
+          sink = await _writeResponseToMediaFile(response, targetFile);
           importedCount++;
           appendLog('[ok] $rawUrl -> $fileName');
-        } catch (error) {
+        } on Exception catch (error) {
           failedCount++;
           appendLog('[error] write failed: $fileName ($error)');
           try {
@@ -1681,6 +1678,71 @@ class UrlImportDownloaderService {
       logLines: logLines,
       hitomiMetadataByRelativePath: hitomiMetadataByRelativePath,
     );
+  }
+
+  Future<IOSink> _writeResponseToMediaFile(
+    HttpClientResponse response,
+    File targetFile,
+  ) async {
+    final sink = targetFile.openWrite();
+    await response.forEach(sink.add);
+    await sink.flush();
+    await sink.close();
+    await _validateSavedMediaFile(targetFile);
+    return sink;
+  }
+
+  Future<void> _validateSavedMediaFile(File file) async {
+    if (MediaFileTypes.extensionOf(file.path).toLowerCase() != '.pdf') {
+      return;
+    }
+    if (!await _isCompletePdfFile(file)) {
+      throw const UrlImportDownloaderException('PDF として読み込めない内容です');
+    }
+  }
+
+  Future<bool> _isCompletePdfFile(File file) async {
+    final stat = await file.stat();
+    if (stat.type != FileSystemEntityType.file || stat.size < 10) {
+      return false;
+    }
+    final raf = await file.open();
+    try {
+      final headerLength = stat.size < 1024 ? stat.size : 1024;
+      final header = await raf.read(headerLength);
+      final tailLength = stat.size < 2048 ? stat.size : 2048;
+      await raf.setPosition(stat.size - tailLength);
+      final tail = await raf.read(tailLength);
+      return _containsBytes(header, const <int>[
+            0x25,
+            0x50,
+            0x44,
+            0x46,
+            0x2D,
+          ]) &&
+          _containsBytes(tail, const <int>[0x25, 0x25, 0x45, 0x4F, 0x46]);
+    } finally {
+      await raf.close();
+    }
+  }
+
+  bool _containsBytes(List<int> bytes, List<int> pattern) {
+    if (pattern.isEmpty || bytes.length < pattern.length) {
+      return false;
+    }
+    for (var index = 0; index <= bytes.length - pattern.length; index++) {
+      var matches = true;
+      for (var offset = 0; offset < pattern.length; offset++) {
+        if (bytes[index + offset] != pattern[offset]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return true;
+      }
+    }
+    return false;
   }
 
   String _buildDownloadFileName(

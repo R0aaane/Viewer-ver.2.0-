@@ -21,6 +21,7 @@ from typing import Awaitable, Callable
 _UI_EVENT_PREFIX = "__KEMONO_DL_UI__"
 _CONTENT_DISPOSITION_HEADER = "Content-Disposition"
 _STANDALONE_USER_AGENT = "pdf_viewer/standalone"
+_MEDIA_ACCEPT_HEADER = "application/pdf,image/*,*/*;q=0.8"
 _DDD_SMART_HOST = "ddd-smart.net"
 _DDD_SMART_CDN_HOST = "cdn.ddd-smart.net"
 _HITOMI_NOZOMI_HOSTS = (
@@ -1107,7 +1108,10 @@ class UrlDownloadService:
 
             request = urllib.request.Request(
                 raw_url,
-                headers={"User-Agent": _STANDALONE_USER_AGENT},
+                headers={
+                    "User-Agent": _STANDALONE_USER_AGENT,
+                    "Accept": _MEDIA_ACCEPT_HEADER,
+                },
             )
             try:
                 with urllib.request.urlopen(request, timeout=120) as response:
@@ -1146,6 +1150,7 @@ class UrlDownloadService:
                     try:
                         with open(target_path, "wb") as handle:
                             shutil.copyfileobj(response, handle)
+                        self._validate_saved_media_file(target_path)
                         imported_count += 1
                         append_log(f"[ok] {raw_url} -> {file_name}")
                     except Exception as error:
@@ -1172,6 +1177,25 @@ class UrlDownloadService:
             log_lines=log_lines,
             hitomi_metadata_by_relative_path=hitomi_metadata_by_relative_path,
         )
+
+    def _validate_saved_media_file(self, path: str) -> None:
+        if os.path.splitext(path)[1].lower() != ".pdf":
+            return
+        if not self._is_complete_pdf_file(path):
+            raise UrlDownloadError("PDFとして読み込めない内容です")
+
+    def _is_complete_pdf_file(self, path: str) -> bool:
+        try:
+            size = os.path.getsize(path)
+            if size < 10:
+                return False
+            with open(path, "rb") as handle:
+                header = handle.read(1024)
+                handle.seek(max(size - 2048, 0))
+                tail = handle.read(2048)
+            return b"%PDF-" in header and b"%%EOF" in tail
+        except OSError:
+            return False
 
     def _resolve_special_direct_url(self, raw_url: str) -> _ResolvedDirectUrl | None:
         parsed = urllib.parse.urlparse(raw_url.strip())
