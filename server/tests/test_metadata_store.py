@@ -321,6 +321,48 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertEqual(moved, {str(source): str(target)})
         self.assertTrue(target.exists())
 
+    def test_organize_media_by_tags_moves_tagged_gif_file(self) -> None:
+        source = self.library_dir / "animated.gif"
+        source.write_bytes(b"GIF89a")
+        source_media_id = build_media_id(
+            kind="image",
+            full_path=str(source),
+            folder_raw=str(self.library_dir),
+            display_name="animated.gif",
+            size_bytes=6,
+            modified_epoch_ms=1,
+        )
+        self.sqlite.upsert_media_record(
+            {
+                "media_id": source_media_id,
+                "folder_raw": str(self.library_dir),
+                "relative_hint": "animated.gif",
+                "display_name": "animated.gif",
+                "full_path": str(source),
+                "normalized_full_path": str(source).replace("/", "\\").casefold(),
+                "kind": "image",
+                "mime_type": "image/gif",
+                "size_bytes": 6,
+                "modified_at": None,
+                "modified_epoch_ms": 1,
+                "etag": None,
+                "is_deleted": 0,
+            }
+        )
+        self.store.add_tags_to_media(
+            source_media_id,
+            [{"category": "artist", "name": "Gif Artist"}],
+        )
+
+        moved = self.store.organize_media_by_tags(
+            library_root=str(self.library_dir),
+            media_ids=[source_media_id],
+        )
+
+        target = self.library_dir / "作者" / "Gif Artist" / "animated.gif"
+        self.assertEqual(moved, {str(source): str(target)})
+        self.assertTrue(target.exists())
+
     def test_resolve_media_id_falls_back_to_identity_hints_after_move(self) -> None:
         source = self.library_dir / "identity-source.pdf"
         source.write_bytes(b"source")

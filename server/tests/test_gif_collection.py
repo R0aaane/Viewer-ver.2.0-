@@ -96,6 +96,18 @@ class GifCollectionTest(unittest.TestCase):
         self.assertEqual(records[0]["mime_type"], "application/x.gif-collection")
         self.assertEqual(Path(records[0]["full_path"]), collection)
 
+    def test_index_files_keeps_single_gif_as_image_file(self) -> None:
+        gif_file = self.library_dir / "animated.gif"
+        gif_file.write_bytes(_GIF_1X1)
+
+        self.index.index_files([str(gif_file)])
+        records = self.sqlite.list_media_records(include_deleted=False)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["kind"], "image")
+        self.assertEqual(records[0]["mime_type"], "image/gif")
+        self.assertEqual(Path(records[0]["full_path"]), gif_file)
+
     def test_animated_webp_folder_indexes_as_gif_collection(self) -> None:
         collection = self.library_dir / "Sample Animated WebP"
         collection.mkdir()

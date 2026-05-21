@@ -83,11 +83,17 @@ class MediaIndexService:
         indexed = 0
         indexed_media_ids: list[str] = []
         gif_member_paths: set[str] = set()
+        gif_member_counts: dict[str, int] = {}
+        for raw_path in paths:
+            normalized_path = os.path.normpath(raw_path)
+            if not os.path.isfile(normalized_path) or not _is_gif_collection_member(normalized_path):
+                continue
+            gif_dir = os.path.dirname(normalized_path)
+            gif_member_counts[gif_dir] = gif_member_counts.get(gif_dir, 0) + 1
         gif_dirs = {
-            os.path.dirname(os.path.normpath(raw_path))
-            for raw_path in paths
-            if os.path.isfile(os.path.normpath(raw_path))
-            and _is_gif_collection_member(os.path.normpath(raw_path))
+            gif_dir
+            for gif_dir, count in gif_member_counts.items()
+            if count > 1
         }
         for gif_dir in sorted(gif_dirs):
             try:
