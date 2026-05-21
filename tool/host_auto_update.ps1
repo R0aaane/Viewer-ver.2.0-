@@ -43,6 +43,22 @@ function Invoke-Checked {
     }
 }
 
+function Invoke-GitFetch {
+    param(
+        [string]$Remote,
+        [string]$Branch
+    )
+
+    & git fetch $Remote $Branch
+    if ($LASTEXITCODE -ne 0) {
+        $message = "git fetch failed; network unavailable or DNS could not resolve host. will retry."
+        Write-Warning $message
+        Write-HostUpdateStatus -State 'failed' -Message $message
+        return $false
+    }
+    return $true
+}
+
 function Add-ArgumentPair {
     param(
         [System.Collections.Generic.List[string]]$Arguments,
@@ -481,32 +497,39 @@ try {
             throw "Branch was not specified and the current branch could not be detected."
         }
     }
-    Invoke-Checked -FilePath 'git' -Arguments @('fetch', $Remote, $Branch)
-    Write-HostUpdateStatus -State 'checking' -Message 'checking host update'
     $remoteRef = "$Remote/$Branch"
-    $currentRevision = Get-Revision -Ref 'HEAD'
-    $remoteRevision = Get-Revision -Ref $remoteRef
+    $remoteRevision = Get-Revision -Ref 'HEAD'
+    $initialFetchSucceeded = Invoke-GitFetch -Remote $Remote -Branch $Branch
+    if ($initialFetchSucceeded) {
+        Write-HostUpdateStatus -State 'checking' -Message 'checking host update'
+        $currentRevision = Get-Revision -Ref 'HEAD'
+        $remoteRevision = Get-Revision -Ref $remoteRef
 
-    if ($currentRevision -ne $remoteRevision) {
-        Write-Host "update: $currentRevision -> $remoteRevision"
-        Write-HostUpdateStatus -State 'running' -Message 'pulling host update'
-        Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
-        Restart-IfUpdateScriptChanged -FromRevision $currentRevision -ToRevision $remoteRevision
-        Build-And-Restart
-    } else {
-        Write-Host "update: none"
-        if (-not $SkipInitialServerStartWhenNoUpdate) {
-            Start-HostServer
+        if ($currentRevision -ne $remoteRevision) {
+            Write-Host "update: $currentRevision -> $remoteRevision"
+            Write-HostUpdateStatus -State 'running' -Message 'pulling host update'
+            Invoke-Checked -FilePath 'git' -Arguments @('pull', '--ff-only', $Remote, $Branch)
+            Restart-IfUpdateScriptChanged -FromRevision $currentRevision -ToRevision $remoteRevision
+            Build-And-Restart
+        } else {
+            Write-Host "update: none"
+            if (-not $SkipInitialServerStartWhenNoUpdate) {
+                Start-HostServer
+            }
         }
+    } elseif (-not $SkipInitialServerStartWhenNoUpdate) {
+        Start-HostServer
     }
 
-    if ($Once) {
+    if ($Once -and $initialFetchSucceeded) {
         Write-HostUpdateStatus -State 'succeeded' -Message 'host update completed'
     }
 
     while (-not $Once) {
         Start-Sleep -Seconds $PollSeconds
-        Invoke-Checked -FilePath 'git' -Arguments @('fetch', $Remote, $Branch)
+        if (-not (Invoke-GitFetch -Remote $Remote -Branch $Branch)) {
+            continue
+        }
         Write-HostUpdateStatus -State 'checking' -Message 'checking host update'
         $latestRevision = Get-Revision -Ref $remoteRef
         if ($latestRevision -eq $remoteRevision) {
