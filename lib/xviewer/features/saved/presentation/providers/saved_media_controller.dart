@@ -232,9 +232,12 @@ class SavedMediaController extends AsyncNotifier<List<SavedMediaRecord>> {
     state = AsyncData(await _getAllWithDisplayNameCompletion());
   }
 
-  Future<void> syncHostSavedImages() async {
-    await ref.read(mediaSaveServiceProvider).syncHostSavedImages();
+  Future<int> syncHostSavedImages() async {
+    final count = await ref
+        .read(mediaSaveServiceProvider)
+        .syncHostSavedImages();
     state = AsyncData(await _getAllWithDisplayNameCompletion());
+    return count;
   }
 
   Future<void> openGalleryApp() {

@@ -46,7 +46,11 @@ def load_settings() -> Settings:
     project_root = Path(__file__).resolve().parents[2]
     data_dir = Path(os.getenv("MEDIA_SERVER_DATA_DIR", project_root / "data")).resolve()
     media_roots = _parse_csv(os.getenv("MEDIA_SERVER_MEDIA_ROOTS"))
+    default_drive_xsaved_images = Path("D:/Xsaved_images")
     default_xviewer_saved_images_dir = (
+        default_drive_xsaved_images
+        if default_drive_xsaved_images.exists()
+        else
         Path(media_roots[0]).resolve().parent / "Xsaved_images"
         if media_roots
         else data_dir.parent / "Xsaved_images"

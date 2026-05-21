@@ -158,9 +158,21 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
           ),
           IconButton(
             onPressed: () async {
-              await ref
+              final messenger = ScaffoldMessenger.of(context);
+              final count = await ref
                   .read(savedMediaControllerProvider.notifier)
                   .syncHostSavedImages();
+              if (context.mounted) {
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      count == 0
+                          ? 'Host Xsaved_images に同期対象がありません'
+                          : 'Host Xsaved_images から $count 件同期しました',
+                    ),
+                  ),
+                );
+              }
             },
             icon: const Icon(Icons.cloud_sync_rounded),
             tooltip: 'Sync host Xsaved_images',
