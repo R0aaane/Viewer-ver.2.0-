@@ -15,6 +15,7 @@ import '../domain/repositories/saved_media_repository.dart';
 import 'downloaded_image.dart';
 import 'file_storage_service.dart';
 import 'gallery_save_service.dart';
+import 'host_saved_images_service.dart';
 import 'image_download_service.dart';
 
 class MediaSaveService {
@@ -23,15 +24,18 @@ class MediaSaveService {
     required FileStorageService fileStorageService,
     required ImageDownloadService imageDownloadService,
     required GallerySaveService gallerySaveService,
+    required HostSavedImagesService hostSavedImagesService,
   }) : _repository = repository,
        _fileStorageService = fileStorageService,
        _imageDownloadService = imageDownloadService,
-       _gallerySaveService = gallerySaveService;
+       _gallerySaveService = gallerySaveService,
+       _hostSavedImagesService = hostSavedImagesService;
 
   final SavedMediaRepository _repository;
   final FileStorageService _fileStorageService;
   final ImageDownloadService _imageDownloadService;
   final GallerySaveService _gallerySaveService;
+  final HostSavedImagesService _hostSavedImagesService;
 
   Future<SaveImageResult> saveImage({
     required MediaPost post,
@@ -68,9 +72,21 @@ class MediaSaveService {
     }
 
     GallerySaveResult? gallerySave;
+    HostSavedImageResult? hostSave;
     SaveFailureReason? fallbackReason;
 
-    if (_shouldTryGallerySave()) {
+    if (await _hostSavedImagesService.shouldSaveToHost()) {
+      try {
+        hostSave = await _hostSavedImagesService.saveImage(
+          bytes: downloadedImage.bytes,
+          fileName: downloadedImage.fileName,
+          mimeType: downloadedImage.mimeType,
+          accountFolderName: accountFolderName,
+        );
+      } catch (_) {
+        fallbackReason = SaveFailureReason.writeFailed;
+      }
+    } else if (_shouldTryGallerySave()) {
       try {
         await _ensureGalleryPermissionIfNeeded();
         gallerySave = await _gallerySaveService.saveImage(
@@ -106,16 +122,22 @@ class MediaSaveService {
       text: post.text,
       imageUrl: image.imageUrl,
       sourceImageUrl: image.imageUrl,
-      localSavedPath: gallerySave?.savedPath ?? previewPath,
+      localSavedPath:
+          hostSave?.savedPath ?? gallerySave?.savedPath ?? previewPath,
       previewFilePath: previewPath,
       originalPostUrl: post.originalPostUrl,
       createdAt: post.createdAt,
       savedAt: now,
-      saveLocationType: gallerySave != null
+      saveLocationType: hostSave != null
+          ? SaveLocationType.remoteHost
+          : gallerySave != null
           ? SaveLocationType.gallery
           : SaveLocationType.appPrivate,
       galleryContentUri: gallerySave?.contentUri,
-      galleryDisplayName: gallerySave?.displayName ?? downloadedImage.fileName,
+      galleryDisplayName:
+          hostSave?.displayName ??
+          gallerySave?.displayName ??
+          downloadedImage.fileName,
     );
 
     await _repository.save(record);
@@ -124,19 +146,24 @@ class MediaSaveService {
       record: record,
       locationType: record.saveLocationType,
       wasDuplicate: false,
-      usedFallback: gallerySave == null,
+      usedFallback: hostSave == null && gallerySave == null,
       savedPath: record.localSavedPath,
       galleryContentUri: record.galleryContentUri,
-      failureReason: gallerySave == null ? fallbackReason : null,
-      message: gallerySave == null
-          ? 'Saved to app storage because gallery save was unavailable'
-          : 'Saved to gallery',
+      failureReason: hostSave == null && gallerySave == null
+          ? fallbackReason
+          : null,
+      message: hostSave != null
+          ? 'Saved to host Saved_images'
+          : gallerySave != null
+          ? 'Saved to gallery'
+          : 'Saved to app storage because host/gallery save was unavailable',
     );
   }
 
   Future<void> deleteRecord(SavedMediaRecord record) async {
     await _fileStorageService.deleteFile(record.previewFilePath);
-    if (record.localSavedPath != record.previewFilePath) {
+    if (record.saveLocationType == SaveLocationType.appPrivate &&
+        record.localSavedPath != record.previewFilePath) {
       await _fileStorageService.deleteFile(record.localSavedPath);
     }
     if (record.saveLocationType == SaveLocationType.gallery &&
@@ -206,13 +233,19 @@ class MediaSaveService {
     }
 
     if (importedCount > 0) {
-      debugPrint('[xviewer][save] Imported $importedCount existing image files.');
+      debugPrint(
+        '[xviewer][save] Imported $importedCount existing image files.',
+      );
     }
     return importedCount;
   }
 
   Future<String> getStorageDirectoryDescription() async {
     final privateRoot = await _fileStorageService.getBaseDirectoryPath();
+    final hostDescription = await _hostSavedImagesService.getHostDescription();
+    if (hostDescription != null) {
+      return '$hostDescription, Preview cache: $privateRoot/<twitter-id>';
+    }
     if (!_shouldTryGallerySave()) {
       return '$privateRoot/<twitter-id>';
     }
@@ -375,10 +408,9 @@ class MediaSaveService {
       return null;
     }
 
-    final targetFileName =
-        (record.galleryDisplayName ?? '').trim().isNotEmpty
-            ? record.galleryDisplayName!
-            : fallbackFileName;
+    final targetFileName = (record.galleryDisplayName ?? '').trim().isNotEmpty
+        ? record.galleryDisplayName!
+        : fallbackFileName;
     final migratedGallery = await _gallerySaveService.saveImage(
       bytes: await previewFile.readAsBytes(),
       fileName: targetFileName,

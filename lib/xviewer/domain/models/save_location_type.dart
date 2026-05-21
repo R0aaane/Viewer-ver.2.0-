@@ -1,1 +1,1 @@
-enum SaveLocationType { appPrivate, gallery }
+enum SaveLocationType { appPrivate, gallery, remoteHost }

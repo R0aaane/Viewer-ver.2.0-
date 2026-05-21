@@ -13,22 +13,13 @@ import 'app_storage_paths.dart';
 import 'app_settings_service.dart';
 import 'remote_tag_api_client.dart';
 
-enum HostServerState {
-  stopped,
-  starting,
-  running,
-  stopping,
-  error,
-}
+enum HostServerState { stopped, starting, running, stopping, error }
 
 class HostAccessEndpoint {
   final String label;
   final String url;
 
-  const HostAccessEndpoint({
-    required this.label,
-    required this.url,
-  });
+  const HostAccessEndpoint({required this.label, required this.url});
 }
 
 class HostServerStatus {
@@ -124,9 +115,7 @@ class HostApiServerService extends ChangeNotifier {
     }
 
     final docsDir = await getApplicationDocumentsDirectory();
-    return Directory(
-      '${docsDir.path}${Platform.pathSeparator}library',
-    ).path;
+    return Directory('${docsDir.path}${Platform.pathSeparator}library').path;
   }
 
   Future<void> migrateLibrary({
@@ -168,7 +157,9 @@ class HostApiServerService extends ChangeNotifier {
         final startedHealth = await _checkHealth(fromSettings);
         if (startedHealth.state != MetadataConnectionState.connected) {
           throw StateError(
-            _status.message.isNotEmpty ? _status.message : startedHealth.message,
+            _status.message.isNotEmpty
+                ? _status.message
+                : startedHealth.message,
           );
         }
         startedTemporarily = true;
@@ -178,10 +169,9 @@ class HostApiServerService extends ChangeNotifier {
         await targetDir.delete();
       }
 
-      await _loopbackClient(fromSettings).renamePath(
-        oldPath: sourcePath,
-        newPath: targetPath,
-      );
+      await _loopbackClient(
+        fromSettings,
+      ).renamePath(oldPath: sourcePath, newPath: targetPath);
     } finally {
       if (startedTemporarily) {
         await stopServer();
@@ -498,11 +488,11 @@ class HostApiServerService extends ChangeNotifier {
       return null;
     }
     try {
-      final result = await Process.run(
-        'netstat',
-        <String>['-ano', '-p', 'tcp'],
-        runInShell: true,
-      );
+      final result = await Process.run('netstat', <String>[
+        '-ano',
+        '-p',
+        'tcp',
+      ], runInShell: true);
       if (result.exitCode != 0) {
         return null;
       }
@@ -538,11 +528,12 @@ class HostApiServerService extends ChangeNotifier {
       return false;
     }
     try {
-      final result = await Process.run(
-        'taskkill',
-        <String>['/PID', '$pid', '/T', '/F'],
-        runInShell: true,
-      );
+      final result = await Process.run('taskkill', <String>[
+        '/PID',
+        '$pid',
+        '/T',
+        '/F',
+      ], runInShell: true);
       final stdout = _singleLine('${result.stdout}');
       final stderr = _singleLine('${result.stderr}');
       if (stdout.isNotEmpty) {
@@ -600,8 +591,26 @@ class HostApiServerService extends ChangeNotifier {
     final workdir = projectRoot?.path ?? Directory.current.path;
     final serverEnvironment = _withPythonPath(environment, workdir);
     final commands = <List<String>>[
-      <String>['python', '-m', 'uvicorn', 'server.main:app', '--host', '0.0.0.0', '--port', '$port'],
-      <String>['py', '-m', 'uvicorn', 'server.main:app', '--host', '0.0.0.0', '--port', '$port'],
+      <String>[
+        'python',
+        '-m',
+        'uvicorn',
+        'server.main:app',
+        '--host',
+        '0.0.0.0',
+        '--port',
+        '$port',
+      ],
+      <String>[
+        'py',
+        '-m',
+        'uvicorn',
+        'server.main:app',
+        '--host',
+        '0.0.0.0',
+        '--port',
+        '$port',
+      ],
     ];
 
     for (final command in commands) {
@@ -672,9 +681,10 @@ class HostApiServerService extends ChangeNotifier {
       'Release',
       'pdf_viewer.exe',
     ].join(Platform.pathSeparator);
-    final branch = Platform.environment['MEDIA_SERVER_HOST_UPDATE_BRANCH'] ?? '';
-    final remote = Platform.environment['MEDIA_SERVER_HOST_UPDATE_REMOTE'] ??
-        'origin';
+    final branch =
+        Platform.environment['MEDIA_SERVER_HOST_UPDATE_BRANCH'] ?? '';
+    final remote =
+        Platform.environment['MEDIA_SERVER_HOST_UPDATE_REMOTE'] ?? 'origin';
 
     final arguments = <String>[
       '-NoProfile',
@@ -696,9 +706,9 @@ class HostApiServerService extends ChangeNotifier {
       arguments.addAll(<String>['-Branch', branch.trim()]);
     }
     if ((Platform.environment['MEDIA_SERVER_HOST_UPDATE_BUILD_ANDROID_APK'] ??
-            'true')
-        .trim()
-        .toLowerCase() !=
+                'true')
+            .trim()
+            .toLowerCase() !=
         'false') {
       arguments.add('-BuildAndroidApk');
     }
@@ -842,6 +852,12 @@ class HostApiServerService extends ChangeNotifier {
     env['MEDIA_SERVER_MEDIA_ROOTS'] = roots.join(';');
     env['MEDIA_SERVER_AUTH_TOKEN'] = settings.authToken?.trim() ?? '';
     env['MEDIA_SERVER_DATA_DIR'] = dataDir.path;
+    final prefs = await SharedPreferences.getInstance();
+    final xviewerSavedImagesDir =
+        prefs.getString('xviewer_saved_images_directory')?.trim() ?? '';
+    if (xviewerSavedImagesDir.isNotEmpty) {
+      env['MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR'] = xviewerSavedImagesDir;
+    }
     env['MEDIA_SERVER_VERSION'] = await AppVersionService()
         .currentVersionLabel();
     _setDefaultEnv(env, 'MEDIA_SERVER_UPDATE_VERSION', defaultAppUpdateVersion);
@@ -862,8 +878,9 @@ class HostApiServerService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final settings = await _settingsService.loadMetadataSettings();
     final roots = <String>{
-      ...(prefs.getStringList(_foldersPrefsKey) ?? const <String>[])
-          .where((entry) => entry.trim().isNotEmpty && !entry.startsWith('content://')),
+      ...(prefs.getStringList(_foldersPrefsKey) ?? const <String>[]).where(
+        (entry) => entry.trim().isNotEmpty && !entry.startsWith('content://'),
+      ),
     }.toList(growable: true);
 
     final libraryPath = await resolveLibraryPath(settings);
@@ -909,10 +926,7 @@ class HostApiServerService extends ChangeNotifier {
     final endpoints = <HostAccessEndpoint>[
       HostAccessEndpoint(label: 'ローカル', url: 'http://127.0.0.1:$port'),
       if (hostname.trim().isNotEmpty)
-        HostAccessEndpoint(
-          label: 'ホスト名',
-          url: 'http://$hostname:$port',
-        ),
+        HostAccessEndpoint(label: 'ホスト名', url: 'http://$hostname:$port'),
       ...tailscaleIps.map(
         (ip) => HostAccessEndpoint(label: 'Tailscale', url: 'http://$ip:$port'),
       ),
@@ -984,7 +998,8 @@ class HostApiServerService extends ChangeNotifier {
   }
 
   bool _pathsEqual(String left, String right) {
-    return _normalizePathForComparison(left) == _normalizePathForComparison(right);
+    return _normalizePathForComparison(left) ==
+        _normalizePathForComparison(right);
   }
 
   bool _isChildPath({

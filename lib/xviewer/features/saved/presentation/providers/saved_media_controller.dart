@@ -9,6 +9,7 @@ import '../../../../domain/models/saved_media_record.dart';
 import '../../../../domain/repositories/saved_media_repository.dart';
 import '../../../../services/file_storage_service.dart';
 import '../../../../services/gallery_save_service.dart';
+import '../../../../services/host_saved_images_service.dart';
 import '../../../../services/image_download_service.dart';
 import '../../../../services/media_save_service.dart';
 import '../../../../services/service_providers.dart';
@@ -28,6 +29,10 @@ final gallerySaveServiceProvider = Provider<GallerySaveService>(
   (ref) => GallerySaveService(),
 );
 
+final hostSavedImagesServiceProvider = Provider<HostSavedImagesService>(
+  (ref) => HostSavedImagesService(),
+);
+
 final savedMediaRepositoryProvider = Provider<SavedMediaRepository>(
   (ref) => createSavedMediaRepository(),
 );
@@ -38,6 +43,7 @@ final mediaSaveServiceProvider = Provider<MediaSaveService>(
     fileStorageService: ref.watch(fileStorageServiceProvider),
     imageDownloadService: ref.watch(imageDownloadServiceProvider),
     gallerySaveService: ref.watch(gallerySaveServiceProvider),
+    hostSavedImagesService: ref.watch(hostSavedImagesServiceProvider),
   ),
 );
 
@@ -51,23 +57,27 @@ final savedMediaFilterProvider =
       SavedMediaFilterController.new,
     );
 
-final savedMediaFilteredRecordsProvider = Provider<List<SavedMediaRecord>>((ref) {
+final savedMediaFilteredRecordsProvider = Provider<List<SavedMediaRecord>>((
+  ref,
+) {
   final records =
       ref.watch(savedMediaControllerProvider).valueOrNull ??
       const <SavedMediaRecord>[];
   final filter = ref.watch(savedMediaFilterProvider);
 
-  final filtered = records.where((record) {
-    final authorMatch =
-        filter.authorUsername == null ||
-        filter.authorUsername == record.authorUsername;
-    final favoriteMatch = !filter.onlyFavorites || record.favorite;
-    final normalizedTagQuery = filter.tagQuery.trim().toLowerCase();
-    final tagMatch =
-        normalizedTagQuery.isEmpty ||
-        record.tags.any((tag) => tag.contains(normalizedTagQuery));
-    return authorMatch && favoriteMatch && tagMatch;
-  }).toList(growable: false);
+  final filtered = records
+      .where((record) {
+        final authorMatch =
+            filter.authorUsername == null ||
+            filter.authorUsername == record.authorUsername;
+        final favoriteMatch = !filter.onlyFavorites || record.favorite;
+        final normalizedTagQuery = filter.tagQuery.trim().toLowerCase();
+        final tagMatch =
+            normalizedTagQuery.isEmpty ||
+            record.tags.any((tag) => tag.contains(normalizedTagQuery));
+        return authorMatch && favoriteMatch && tagMatch;
+      })
+      .toList(growable: false);
 
   switch (filter.sort) {
     case SavedMediaSort.savedAtDesc:
@@ -80,8 +90,8 @@ final savedMediaAuthorsProvider = Provider<List<String>>((ref) {
   final records =
       ref.watch(savedMediaControllerProvider).valueOrNull ??
       const <SavedMediaRecord>[];
-  final authors = records.map((record) => record.authorUsername).toSet().toList()
-    ..sort();
+  final authors =
+      records.map((record) => record.authorUsername).toSet().toList()..sort();
   return authors;
 });
 
@@ -93,18 +103,20 @@ final savedMediaTagsProvider = Provider<List<String>>((ref) {
   return tags;
 });
 
-final savedMediaRecordProvider =
-    Provider.family<SavedMediaRecord?, String>((ref, recordId) {
-      final records =
-          ref.watch(savedMediaControllerProvider).valueOrNull ??
-          const <SavedMediaRecord>[];
-      for (final record in records) {
-        if (record.recordId == recordId) {
-          return record;
-        }
-      }
-      return null;
-    });
+final savedMediaRecordProvider = Provider.family<SavedMediaRecord?, String>((
+  ref,
+  recordId,
+) {
+  final records =
+      ref.watch(savedMediaControllerProvider).valueOrNull ??
+      const <SavedMediaRecord>[];
+  for (final record in records) {
+    if (record.recordId == recordId) {
+      return record;
+    }
+  }
+  return null;
+});
 
 class SavedMediaController extends AsyncNotifier<List<SavedMediaRecord>> {
   @override
@@ -187,10 +199,9 @@ class SavedMediaController extends AsyncNotifier<List<SavedMediaRecord>> {
       return;
     }
 
-    await ref.read(creatorDisplayNameServiceProvider).saveDisplayName(
-          authorUsername: username,
-          displayName: name,
-        );
+    await ref
+        .read(creatorDisplayNameServiceProvider)
+        .saveDisplayName(authorUsername: username, displayName: name);
 
     final repository = ref.read(savedMediaRepositoryProvider);
     final records = await repository.getAll();
@@ -209,6 +220,16 @@ class SavedMediaController extends AsyncNotifier<List<SavedMediaRecord>> {
 
   Future<String> getStorageDirectory() {
     return ref.read(mediaSaveServiceProvider).getStorageDirectoryDescription();
+  }
+
+  Future<void> setSavedImagesDirectory(String path) async {
+    await ref.read(fileStorageServiceProvider).setSavedImagesDirectory(path);
+    state = AsyncData(await _getAllWithDisplayNameCompletion());
+  }
+
+  Future<void> resetSavedImagesDirectory() async {
+    await ref.read(fileStorageServiceProvider).resetSavedImagesDirectory();
+    state = AsyncData(await _getAllWithDisplayNameCompletion());
   }
 
   Future<void> openGalleryApp() {
@@ -235,8 +256,9 @@ class SavedMediaController extends AsyncNotifier<List<SavedMediaRecord>> {
       knownNames[_normalizeUsername(record.authorUsername)] = record.authorName;
     }
 
-    final overrides =
-        await ref.read(creatorDisplayNameServiceProvider).getAllDisplayNames();
+    final overrides = await ref
+        .read(creatorDisplayNameServiceProvider)
+        .getAllDisplayNames();
     knownNames.addAll(overrides);
 
     var changed = false;

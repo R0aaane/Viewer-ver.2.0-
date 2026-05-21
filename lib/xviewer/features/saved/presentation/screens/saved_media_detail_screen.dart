@@ -57,15 +57,14 @@ class _SavedMediaDetailScreenState
 
   @override
   Widget build(BuildContext context) {
-    final allRecords = ref.watch(savedMediaControllerProvider).valueOrNull ??
+    final allRecords =
+        ref.watch(savedMediaControllerProvider).valueOrNull ??
         const <SavedMediaRecord>[];
     final recordsById = {
       for (final record in allRecords) record.recordId: record,
     };
-    final viewerRecordIds = widget.viewerContext?.recordIds ??
-        <String>[
-          widget.recordId,
-        ];
+    final viewerRecordIds =
+        widget.viewerContext?.recordIds ?? <String>[widget.recordId];
     final resolvedRecords = viewerRecordIds
         .map((id) => recordsById[id])
         .whereType<SavedMediaRecord>()
@@ -73,7 +72,9 @@ class _SavedMediaDetailScreenState
     final fallbackRecord = ref.watch(savedMediaRecordProvider(widget.recordId));
     final recordList = resolvedRecords.isNotEmpty
         ? resolvedRecords
-        : (fallbackRecord == null ? const <SavedMediaRecord>[] : [fallbackRecord]);
+        : (fallbackRecord == null
+              ? const <SavedMediaRecord>[]
+              : [fallbackRecord]);
     final safeIndex = recordList.isEmpty
         ? 0
         : _currentIndex.clamp(0, recordList.length - 1);
@@ -193,7 +194,9 @@ class _SavedMediaDetailScreenState
                                 const SizedBox(height: 4),
                                 Text(
                                   '@${record.authorUsername}',
-                                  style: Theme.of(context).textTheme.titleMedium,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
                                 ),
                                 CreatorSiteBadges(
                                   record: record,
@@ -219,7 +222,9 @@ class _SavedMediaDetailScreenState
                                   SaveLocationType.gallery)
                                 FilledButton.tonalIcon(
                                   onPressed: () => _openGallery(context, ref),
-                                  icon: const Icon(Icons.photo_library_outlined),
+                                  icon: const Icon(
+                                    Icons.photo_library_outlined,
+                                  ),
                                   label: const Text('Gallery'),
                                 ),
                             ],
@@ -247,7 +252,9 @@ class _SavedMediaDetailScreenState
                                   return InputChip(
                                     label: Text('#$tag'),
                                     onDeleted: () => ref
-                                        .read(savedMediaControllerProvider.notifier)
+                                        .read(
+                                          savedMediaControllerProvider.notifier,
+                                        )
                                         .removeTag(
                                           recordId: record.recordId,
                                           tag: tag,
@@ -276,11 +283,15 @@ class _SavedMediaDetailScreenState
                           children: [
                             _InfoRow(
                               label: 'Saved at',
-                              value: DateFormatter.shortDateTime(record.savedAt),
+                              value: DateFormatter.shortDateTime(
+                                record.savedAt,
+                              ),
                             ),
                             _InfoRow(
                               label: 'Post time',
-                              value: DateFormatter.shortDateTime(record.createdAt),
+                              value: DateFormatter.shortDateTime(
+                                record.createdAt,
+                              ),
                             ),
                             _InfoRow(
                               label: 'Favorite',
@@ -288,10 +299,9 @@ class _SavedMediaDetailScreenState
                             ),
                             _InfoRow(
                               label: 'Save location',
-                              value: record.saveLocationType ==
-                                      SaveLocationType.gallery
-                                  ? 'Gallery'
-                                  : 'App storage',
+                              value: _saveLocationLabel(
+                                record.saveLocationType,
+                              ),
                             ),
                             _InfoRow(
                               label: 'Saved path',
@@ -460,7 +470,11 @@ class _SavedMediaDetailScreenState
     }
   }
 
-  Future<void> _openPost(BuildContext context, WidgetRef ref, String url) async {
+  Future<void> _openPost(
+    BuildContext context,
+    WidgetRef ref,
+    String url,
+  ) async {
     try {
       await ref.read(linkLauncherServiceProvider).openExternal(url);
     } catch (error) {
@@ -483,6 +497,14 @@ class _SavedMediaDetailScreenState
       }
     }
   }
+
+  String _saveLocationLabel(SaveLocationType type) {
+    return switch (type) {
+      SaveLocationType.gallery => 'Gallery',
+      SaveLocationType.remoteHost => 'Host Saved_images',
+      SaveLocationType.appPrivate => 'App storage',
+    };
+  }
 }
 
 class _NavigatePreviousIntent extends Intent {
@@ -494,10 +516,7 @@ class _NavigateNextIntent extends Intent {
 }
 
 class _CreatorNameButton extends StatelessWidget {
-  const _CreatorNameButton({
-    required this.name,
-    required this.onPressed,
-  });
+  const _CreatorNameButton({required this.name, required this.onPressed});
 
   final String name;
   final VoidCallback onPressed;
@@ -517,10 +536,10 @@ class _CreatorNameButton extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: colorScheme.primary,
-                  decoration: TextDecoration.underline,
-                  decorationColor: colorScheme.primary,
-                ),
+              color: colorScheme.primary,
+              decoration: TextDecoration.underline,
+              decorationColor: colorScheme.primary,
+            ),
           ),
         ),
       ),

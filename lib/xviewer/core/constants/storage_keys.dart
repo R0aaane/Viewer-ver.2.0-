@@ -7,9 +7,9 @@ abstract final class StorageKeys {
   static const timelineCachePrefix = 'timeline_cache_';
   static const appBackgroundMode = 'app_background_mode';
   static const savedItemsLabel = 'saved_items_label';
+  static const savedImagesDirectory = 'xviewer_saved_images_directory';
   static const savedMediaPreferredColumnCount =
       'saved_media_preferred_column_count';
-  static const creatorDisplayNameOverrides =
-      'creator_display_name_overrides';
+  static const creatorDisplayNameOverrides = 'creator_display_name_overrides';
   static const creatorSearchMatches = 'creator_search_matches';
 }

@@ -3,6 +3,9 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/constants/storage_keys.dart';
 
 class FileStorageService {
   Future<String> saveBytes({
@@ -31,6 +34,30 @@ class FileStorageService {
       accountFolderName: accountFolderName,
     );
     return directory.path;
+  }
+
+  Future<void> setSavedImagesDirectory(String path) async {
+    final normalized = path.trim();
+    final prefs = await SharedPreferences.getInstance();
+    if (normalized.isEmpty) {
+      await prefs.remove(StorageKeys.savedImagesDirectory);
+      return;
+    }
+    await Directory(normalized).create(recursive: true);
+    await prefs.setString(StorageKeys.savedImagesDirectory, normalized);
+  }
+
+  Future<void> resetSavedImagesDirectory() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(StorageKeys.savedImagesDirectory);
+  }
+
+  Future<String?> _loadConfiguredDirectoryPath() async {
+    final prefs = await SharedPreferences.getInstance();
+    final configured = prefs
+        .getString(StorageKeys.savedImagesDirectory)
+        ?.trim();
+    return configured == null || configured.isEmpty ? null : configured;
   }
 
   Future<List<File>> listSavedImageFiles() async {
@@ -93,8 +120,11 @@ class FileStorageService {
   }
 
   Future<Directory> _ensureImageDirectory({String? accountFolderName}) async {
-    final baseDir = await getApplicationDocumentsDirectory();
-    final pathSegments = <String>[baseDir.path, 'saved_images'];
+    final configuredPath = await _loadConfiguredDirectoryPath();
+    final basePath =
+        configuredPath ??
+        p.join((await getApplicationDocumentsDirectory()).path, 'Saved_images');
+    final pathSegments = <String>[basePath];
     final normalizedFolderName = accountFolderName?.trim();
     if (normalizedFolderName != null && normalizedFolderName.isNotEmpty) {
       pathSegments.add(normalizedFolderName);

@@ -39,6 +39,7 @@ class Settings:
     host_update_remote: str
     host_update_branch: str | None
     host_update_build_android_apk: bool
+    xviewer_saved_images_dir: Path
 
 
 def load_settings() -> Settings:
@@ -81,4 +82,7 @@ def load_settings() -> Settings:
             os.getenv("MEDIA_SERVER_HOST_UPDATE_BUILD_ANDROID_APK"),
             True,
         ),
+        xviewer_saved_images_dir=Path(
+            os.getenv("MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR", data_dir.parent / "Saved_images"),
+        ).resolve(),
     )

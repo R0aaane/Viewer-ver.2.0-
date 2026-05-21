@@ -151,34 +151,32 @@ class _GridBody extends StatelessWidget {
           Wrap(
             spacing: 6,
             runSpacing: 6,
-            children: record.tags.take(2).map((tag) {
-              return Chip(
-                label: Text(
-                  '#$tag',
-                  overflow: TextOverflow.ellipsis,
-                ),
-                visualDensity: VisualDensity.compact,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              );
-            }).toList(growable: false),
+            children: record.tags
+                .take(2)
+                .map((tag) {
+                  return Chip(
+                    label: Text('#$tag', overflow: TextOverflow.ellipsis),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  );
+                })
+                .toList(growable: false),
           ),
         ],
         SizedBox(height: compactMode ? 4 : 8),
         Align(
           alignment: Alignment.centerRight,
           child: IconButton(
-            visualDensity:
-                compactMode ? VisualDensity.compact : VisualDensity.standard,
+            visualDensity: compactMode
+                ? VisualDensity.compact
+                : VisualDensity.standard,
             constraints: BoxConstraints.tightFor(
               width: compactMode ? 32 : 40,
               height: compactMode ? 32 : 40,
             ),
             padding: EdgeInsets.zero,
             onPressed: onOpenPost,
-            icon: Icon(
-              Icons.open_in_new_rounded,
-              size: compactMode ? 18 : 22,
-            ),
+            icon: Icon(Icons.open_in_new_rounded, size: compactMode ? 18 : 22),
             tooltip: 'Open post',
           ),
         ),
@@ -244,11 +242,7 @@ class _ListBody extends StatelessWidget {
               ),
               if (record.text.trim().isNotEmpty) ...[
                 const SizedBox(height: 8),
-                Text(
-                  record.text,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(record.text, maxLines: 3, overflow: TextOverflow.ellipsis),
               ],
               const SizedBox(height: 8),
               Text(
@@ -257,9 +251,7 @@ class _ListBody extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                record.saveLocationType == SaveLocationType.gallery
-                    ? 'Location: Gallery'
-                    : 'Location: App storage',
+                'Location: ${_saveLocationLabel(record.saveLocationType)}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 4),
@@ -274,12 +266,14 @@ class _ListBody extends StatelessWidget {
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: record.tags.map((tag) {
-                    return Chip(
-                      label: Text('#$tag'),
-                      visualDensity: VisualDensity.compact,
-                    );
-                  }).toList(growable: false),
+                  children: record.tags
+                      .map((tag) {
+                        return Chip(
+                          label: Text('#$tag'),
+                          visualDensity: VisualDensity.compact,
+                        );
+                      })
+                      .toList(growable: false),
                 ),
               ],
               const SizedBox(height: 12),
@@ -304,6 +298,14 @@ class _ListBody extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  String _saveLocationLabel(SaveLocationType type) {
+    return switch (type) {
+      SaveLocationType.gallery => 'Gallery',
+      SaveLocationType.remoteHost => 'Host Saved_images',
+      SaveLocationType.appPrivate => 'App storage',
+    };
   }
 }
 

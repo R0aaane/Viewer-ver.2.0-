@@ -153,6 +153,44 @@ async def upload_app_update(
         await file.close()
 
 
+@router.post("/xviewer/saved-images")
+async def save_xviewer_saved_image(
+    request: Request,
+    accountFolderName: str = Form(""),
+    file: UploadFile = File(...),
+) -> dict[str, object]:
+    settings = request.app.state.settings
+    folder_name = _sanitize_upload_display_name(accountFolderName or "") or "unknown_user"
+    file_name = _sanitize_upload_display_name(file.filename or "") or "image.jpg"
+    target_dir = settings.xviewer_saved_images_dir / folder_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    destination = target_dir / file_name
+
+    if destination.exists():
+        stem = destination.stem
+        suffix = destination.suffix
+        for index in range(2, 10000):
+            candidate = target_dir / f"{stem}_{index}{suffix}"
+            if not candidate.exists():
+                destination = candidate
+                break
+
+    try:
+        await _save_upload_file_atomic(
+            file,
+            destination,
+            index=0,
+            request_id="xviewer",
+        )
+        return {
+            "ok": True,
+            "savedPath": str(destination),
+            "displayName": destination.name,
+        }
+    finally:
+        await file.close()
+
+
 @router.post("/organize", response_model=OrganizeLibraryResponse)
 def organize_library(
     request: Request,

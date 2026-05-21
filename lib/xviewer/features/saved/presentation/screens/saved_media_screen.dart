@@ -2,6 +2,7 @@
 
 import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -56,17 +57,40 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
     );
   }
 
+  Future<void> _changeSavedImagesDirectory() async {
+    final path = await getDirectoryPath(confirmButtonText: 'Use this folder');
+    if (path == null || path.trim().isEmpty) {
+      return;
+    }
+    await ref
+        .read(savedMediaControllerProvider.notifier)
+        .setSavedImagesDirectory(path);
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _resetSavedImagesDirectory() async {
+    await ref
+        .read(savedMediaControllerProvider.notifier)
+        .resetSavedImagesDirectory();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   Future<void> _loadPreferredColumnCount() async {
     final prefs = await SharedPreferences.getInstance();
     final storedValue =
         prefs.getInt(StorageKeys.savedMediaPreferredColumnCount) ??
-            _defaultPreferredColumnCount;
+        _defaultPreferredColumnCount;
     if (!mounted) {
       return;
     }
     setState(() {
-      _preferredColumnCount =
-          storedValue.clamp(1, _maxPreferredColumnCount).toInt();
+      _preferredColumnCount = storedValue
+          .clamp(1, _maxPreferredColumnCount)
+          .toInt();
     });
   }
 
@@ -79,10 +103,7 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(
-      StorageKeys.savedMediaPreferredColumnCount,
-      normalized,
-    );
+    await prefs.setInt(StorageKeys.savedMediaPreferredColumnCount, normalized);
   }
 
   int _computeEffectiveColumnCount(double width) {
@@ -134,6 +155,30 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
             ),
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Search visible creators',
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Saved_images folder',
+            icon: const Icon(Icons.folder_open_rounded),
+            onSelected: (value) {
+              switch (value) {
+                case 'change':
+                  _changeSavedImagesDirectory();
+                  break;
+                case 'reset':
+                  _resetSavedImagesDirectory();
+                  break;
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'change',
+                child: Text('Change Saved_images folder'),
+              ),
+              PopupMenuItem<String>(
+                value: 'reset',
+                child: Text('Reset Saved_images folder'),
+              ),
+            ],
           ),
           PopupMenuButton<int>(
             tooltip: 'Columns',
@@ -238,7 +283,8 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
                 if (filteredRecords.isEmpty) {
                   return const SectionEmptyView(
                     title: 'No matching items',
-                    message: 'Try clearing the author, favorites, or tag filters.',
+                    message:
+                        'Try clearing the author, favorites, or tag filters.',
                   );
                 }
 
@@ -247,15 +293,16 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
                     final width = constraints.maxWidth.isFinite
                         ? constraints.maxWidth
                         : MediaQuery.sizeOf(context).width;
-                    final effectiveColumnCount =
-                        _computeEffectiveColumnCount(width);
+                    final effectiveColumnCount = _computeEffectiveColumnCount(
+                      width,
+                    );
                     final compactMode = effectiveColumnCount >= 4;
                     final authorGroups = _buildAuthorGroups(filteredRecords);
                     final childAspectRatio = effectiveColumnCount <= 1
                         ? 1.45
                         : effectiveColumnCount == 2
-                            ? 0.92
-                            : 0.82;
+                        ? 0.92
+                        : 0.82;
 
                     return GridView.builder(
                       padding: const EdgeInsets.all(16),
@@ -293,25 +340,22 @@ class _SavedMediaScreenState extends ConsumerState<SavedMediaScreen> {
       grouped.putIfAbsent(record.authorUsername, () => []).add(record);
     }
 
-    final groups = grouped.entries.map((entry) {
-      final records = entry.value
-        ..sort((a, b) => b.savedAt.compareTo(a.savedAt));
-      return _AuthorGroup(
-        authorUsername: entry.key,
-        records: records,
-      );
-    }).toList(growable: false)
-      ..sort((a, b) => b.latestSavedAt.compareTo(a.latestSavedAt));
+    final groups =
+        grouped.entries
+            .map((entry) {
+              final records = entry.value
+                ..sort((a, b) => b.savedAt.compareTo(a.savedAt));
+              return _AuthorGroup(authorUsername: entry.key, records: records);
+            })
+            .toList(growable: false)
+          ..sort((a, b) => b.latestSavedAt.compareTo(a.latestSavedAt));
 
     return groups;
   }
 }
 
 class _AuthorGroup {
-  const _AuthorGroup({
-    required this.authorUsername,
-    required this.records,
-  });
+  const _AuthorGroup({required this.authorUsername, required this.records});
 
   final String authorUsername;
   final List<SavedMediaRecord> records;
