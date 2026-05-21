@@ -1696,31 +1696,21 @@ class UrlImportDownloaderService {
     if (MediaFileTypes.extensionOf(file.path).toLowerCase() != '.pdf') {
       return;
     }
-    if (!await _isCompletePdfFile(file)) {
+    if (!await _hasPdfHeader(file)) {
       throw const UrlImportDownloaderException('PDF として読み込めない内容です');
     }
   }
 
-  Future<bool> _isCompletePdfFile(File file) async {
+  Future<bool> _hasPdfHeader(File file) async {
     final stat = await file.stat();
-    if (stat.type != FileSystemEntityType.file || stat.size < 10) {
+    if (stat.type != FileSystemEntityType.file || stat.size < 5) {
       return false;
     }
     final raf = await file.open();
     try {
       final headerLength = stat.size < 1024 ? stat.size : 1024;
       final header = await raf.read(headerLength);
-      final tailLength = stat.size < 2048 ? stat.size : 2048;
-      await raf.setPosition(stat.size - tailLength);
-      final tail = await raf.read(tailLength);
-      return _containsBytes(header, const <int>[
-            0x25,
-            0x50,
-            0x44,
-            0x46,
-            0x2D,
-          ]) &&
-          _containsBytes(tail, const <int>[0x25, 0x25, 0x45, 0x4F, 0x46]);
+      return _containsBytes(header, const <int>[0x25, 0x50, 0x44, 0x46, 0x2D]);
     } finally {
       await raf.close();
     }

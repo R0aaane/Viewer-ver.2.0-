@@ -1181,19 +1181,17 @@ class UrlDownloadService:
     def _validate_saved_media_file(self, path: str) -> None:
         if os.path.splitext(path)[1].lower() != ".pdf":
             return
-        if not self._is_complete_pdf_file(path):
+        if not self._has_pdf_header(path):
             raise UrlDownloadError("PDFとして読み込めない内容です")
 
-    def _is_complete_pdf_file(self, path: str) -> bool:
+    def _has_pdf_header(self, path: str) -> bool:
         try:
             size = os.path.getsize(path)
-            if size < 10:
+            if size < 5:
                 return False
             with open(path, "rb") as handle:
                 header = handle.read(1024)
-                handle.seek(max(size - 2048, 0))
-                tail = handle.read(2048)
-            return b"%PDF-" in header and b"%%EOF" in tail
+            return b"%PDF-" in header
         except OSError:
             return False
 

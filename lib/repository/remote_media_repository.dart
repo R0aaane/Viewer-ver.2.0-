@@ -478,27 +478,21 @@ class RemoteMediaRepository implements MediaRepository {
       if (item.kind != MediaKind.pdf) {
         return true;
       }
-      if (stat.size < 10) {
+      if (stat.size < 5) {
         return false;
       }
-      return _isCompletePdfFile(file, stat.size);
+      return _hasPdfHeader(file, stat.size);
     } catch (_) {
       return false;
     }
   }
 
-  Future<bool> _isCompletePdfFile(File file, int fileSize) async {
+  Future<bool> _hasPdfHeader(File file, int fileSize) async {
     final raf = await file.open();
     try {
       final headerLength = fileSize < 1024 ? fileSize : 1024;
       final header = await raf.read(headerLength);
-      if (!_containsBytes(header, const <int>[0x25, 0x50, 0x44, 0x46, 0x2D])) {
-        return false;
-      }
-      final tailLength = fileSize < 2048 ? fileSize : 2048;
-      await raf.setPosition(fileSize - tailLength);
-      final tail = await raf.read(tailLength);
-      return _containsBytes(tail, const <int>[0x25, 0x25, 0x45, 0x4F, 0x46]);
+      return _containsBytes(header, const <int>[0x25, 0x50, 0x44, 0x46, 0x2D]);
     } finally {
       await raf.close();
     }
