@@ -201,7 +201,7 @@ def list_xviewer_saved_images(request: Request) -> dict[str, object]:
 
     items: list[dict[str, object]] = []
     for path in root.rglob("*"):
-      if not path.is_file() or not is_supported_image_extension(str(path)):
+      if not path.is_file() or not is_supported_image_extension(path.suffix):
           continue
       relative_path = path.relative_to(root).as_posix()
       parts = path.relative_to(root).parts
@@ -227,7 +227,7 @@ def get_xviewer_saved_image_file(request: Request, relativePath: str) -> FileRes
     target = (root / relativePath).resolve()
     if not str(target).lower().startswith(str(root).lower()) or not target.is_file():
         raise bad_request("Saved image file was not found")
-    if not is_supported_image_extension(str(target)):
+    if not is_supported_image_extension(target.suffix):
         raise bad_request("Unsupported saved image file")
     return FileResponse(target)
 
