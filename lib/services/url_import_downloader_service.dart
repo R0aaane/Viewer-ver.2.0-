@@ -33,6 +33,38 @@ class LocalUrlDownloadResult {
   });
 }
 
+class HitomiSearchResult {
+  final int galleryId;
+  final String title;
+  final String? type;
+  final String? language;
+  final String? date;
+  final List<String> artists;
+  final List<String> groups;
+  final List<String> series;
+  final List<String> characters;
+  final List<String> tags;
+  final String galleryUrl;
+  final String? thumbnailUrl;
+  final List<String> thumbnailUrls;
+
+  const HitomiSearchResult({
+    required this.galleryId,
+    required this.title,
+    this.type,
+    this.language,
+    this.date,
+    this.artists = const <String>[],
+    this.groups = const <String>[],
+    this.series = const <String>[],
+    this.characters = const <String>[],
+    this.tags = const <String>[],
+    required this.galleryUrl,
+    this.thumbnailUrl,
+    this.thumbnailUrls = const <String>[],
+  });
+}
+
 class _PreparedUrlImportSources {
   final List<String> launcherUrls;
   final List<String> directUrls;
@@ -123,6 +155,10 @@ class UrlImportDownloaderService {
     'ltn.gold-usergeneratedcontent.net',
     'ltn.hitomi.la',
   ];
+  static const List<String> _hitomiGalleryInfoHosts = <String>[
+    'ltn.gold-usergeneratedcontent.net',
+    'ltn.hitomi.la',
+  ];
   static const Set<String> _supportedHitomiSearchNamespaces = <String>{
     'artist',
     'group',
@@ -144,6 +180,235 @@ class UrlImportDownloaderService {
     'galleries',
     'reader',
   };
+
+  Future<List<HitomiSearchResult>> searchHitomiGalleries({
+    required String query,
+    int limit = 50,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      return const <HitomiSearchResult>[];
+    }
+    final ids = await _resolveHitomiSearchGalleryIds(trimmed);
+    final limitedIds = ids.take(limit.clamp(1, 100)).toList(growable: false);
+    return _mapConcurrent<int, HitomiSearchResult>(
+      limitedIds,
+      concurrency: 6,
+      mapper: _fetchHitomiSearchResult,
+    );
+  }
+
+  Future<HitomiSearchResult> _fetchHitomiSearchResult(int galleryId) async {
+    final galleryUrl = 'https://hitomi.la/galleries/$galleryId.html';
+    for (final host in _hitomiGalleryInfoHosts) {
+      try {
+        final uri = Uri.https(host, '/galleries/$galleryId.js');
+        final payload = await _downloadHtml(uri);
+        final info = _decodeHitomiGalleryInfo(payload);
+        if (info != null) {
+          return _hitomiSearchResultFromInfo(
+            galleryId: galleryId,
+            galleryUrl: galleryUrl,
+            info: info,
+          );
+        }
+      } on Object {
+        // Try the next Hitomi asset host.
+      }
+    }
+    return HitomiSearchResult(
+      galleryId: galleryId,
+      title: 'Gallery $galleryId',
+      galleryUrl: galleryUrl,
+    );
+  }
+
+  HitomiSearchResult _hitomiSearchResultFromInfo({
+    required int galleryId,
+    required String galleryUrl,
+    required Map<String, Object?> info,
+  }) {
+    final files = info['files'];
+    String? thumbnailUrl;
+    var thumbnailUrls = const <String>[];
+    if (files is List && files.isNotEmpty && files.first is Map) {
+      final firstFile = (files.first as Map).cast<Object?, Object?>();
+      thumbnailUrls = _buildHitomiThumbnailUrls(firstFile);
+      thumbnailUrl = thumbnailUrls.isEmpty ? null : thumbnailUrls.first;
+    }
+    return HitomiSearchResult(
+      galleryId: galleryId,
+      title:
+          _trimmedOrNull(info['japanese_title']) ??
+          _trimmedOrNull(info['title']) ??
+          _trimmedOrNull(info['english_title']) ??
+          'Gallery $galleryId',
+      type: _trimmedOrNull(info['type']),
+      language:
+          _trimmedOrNull(info['language_localname']) ??
+          _firstHitomiFieldName(info['languages']) ??
+          _trimmedOrNull(info['language']),
+      date: _trimmedOrNull(info['date']),
+      artists: _hitomiFieldNames(info['artists']),
+      groups: _hitomiFieldNames(info['groups']),
+      series: _hitomiFieldNames(info['series']).isNotEmpty
+          ? _hitomiFieldNames(info['series'])
+          : _hitomiFieldNames(info['parodys']),
+      characters: _hitomiFieldNames(info['characters']),
+      tags: _hitomiFieldNames(info['tags']),
+      galleryUrl: galleryUrl,
+      thumbnailUrl: thumbnailUrl,
+      thumbnailUrls: thumbnailUrls,
+    );
+  }
+
+  Map<String, Object?>? _decodeHitomiGalleryInfo(String payload) {
+    final startMarker = RegExp(r'galleryinfo\s*=').firstMatch(payload);
+    if (startMarker == null) {
+      return null;
+    }
+    final braceStart = payload.indexOf('{', startMarker.end);
+    if (braceStart < 0) {
+      return null;
+    }
+    var depth = 0;
+    var inString = false;
+    var escaped = false;
+    for (var index = braceStart; index < payload.length; index += 1) {
+      final char = payload.codeUnitAt(index);
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char == 0x5c) {
+          escaped = true;
+        } else if (char == 0x22) {
+          inString = false;
+        }
+        continue;
+      }
+      if (char == 0x22) {
+        inString = true;
+      } else if (char == 0x7b) {
+        depth += 1;
+      } else if (char == 0x7d) {
+        depth -= 1;
+        if (depth == 0) {
+          final decoded = jsonDecode(payload.substring(braceStart, index + 1));
+          if (decoded is Map) {
+            return decoded.cast<String, Object?>();
+          }
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  List<String> _buildHitomiThumbnailUrls(Map<Object?, Object?> file) {
+    final hash = _trimmedOrNull(file['hash']);
+    if (hash == null || hash.length < 3) {
+      return const <String>[];
+    }
+    final name = _trimmedOrNull(file['name']);
+    final originalExt = name == null
+        ? 'jpg'
+        : (name.split('.').lastOrNull ?? 'jpg').toLowerCase();
+    final left = hash.substring(hash.length - 1);
+    final right = hash.substring(hash.length - 3, hash.length - 1);
+    final thumbPath = '$left/$right/$hash';
+    final out = <String>[];
+    for (final subdomain in const <String>['atn', 'btn', 'ctn']) {
+      out.add(
+        'https://$subdomain.gold-usergeneratedcontent.net/webpsmalltn/$thumbPath.webp',
+      );
+    }
+    if (_trimmedOrNull(file['hasavif']) == '1') {
+      for (final subdomain in const <String>['atn', 'btn', 'ctn']) {
+        out.add(
+          'https://$subdomain.gold-usergeneratedcontent.net/avifsmalltn/$thumbPath.avif',
+        );
+      }
+    }
+    for (final subdomain in const <String>['atn', 'btn', 'ctn']) {
+      out.add(
+        'https://$subdomain.gold-usergeneratedcontent.net/smalltn/$thumbPath.$originalExt',
+      );
+    }
+    return out;
+  }
+
+  String? _firstHitomiFieldName(Object? value) {
+    final values = _hitomiFieldNames(value);
+    return values.isEmpty ? null : values.first;
+  }
+
+  List<String> _hitomiFieldNames(Object? value) {
+    final out = <String>[];
+    final seen = <String>{};
+    void add(Object? raw) {
+      final text = _trimmedOrNull(raw);
+      if (text != null && seen.add(text.toLowerCase())) {
+        out.add(text);
+      }
+    }
+
+    if (value is List) {
+      for (final entry in value) {
+        if (entry is Map) {
+          add(
+            entry['name'] ??
+                entry['artist'] ??
+                entry['group'] ??
+                entry['parody'] ??
+                entry['character'] ??
+                entry['tag'] ??
+                entry['language_localname'],
+          );
+        } else {
+          add(entry);
+        }
+      }
+    } else if (value is Map) {
+      add(
+        value['name'] ??
+            value['artist'] ??
+            value['group'] ??
+            value['parody'] ??
+            value['character'] ??
+            value['tag'] ??
+            value['language_localname'],
+      );
+    } else {
+      add(value);
+    }
+    return out;
+  }
+
+  Future<List<R>> _mapConcurrent<T, R>(
+    List<T> items, {
+    required int concurrency,
+    required Future<R> Function(T item) mapper,
+  }) async {
+    if (items.isEmpty) {
+      return <R>[];
+    }
+    final results = List<R?>.filled(items.length, null);
+    var nextIndex = 0;
+    Future<void> worker() async {
+      while (nextIndex < items.length) {
+        final index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index]);
+      }
+    }
+
+    await Future.wait<void>(
+      List<Future<void>>.generate(concurrency.clamp(1, items.length), (_) {
+        return worker();
+      }),
+    );
+    return results.cast<R>();
+  }
 
   Future<LocalUrlDownloadResult> downloadUrl({
     required String sourceUrl,
@@ -431,11 +696,7 @@ class UrlImportDownloaderService {
 
   _HitomiParsedSearchQuery _parseHitomiSearchQuery(String queryText) {
     var state = const _HitomiSearchState();
-    final rawTerms = queryText.toLowerCase().trim().split(RegExp(r'\s+'));
-    final terms = rawTerms
-        .where((term) => term.trim().isNotEmpty)
-        .map((term) => term.replaceAll('_', ' '))
-        .toList(growable: false);
+    final terms = _normalizeHitomiSearchTerms(queryText);
     final positiveTerms = <String>[];
     final negativeTerms = <String>[];
     var orTerms = <List<String>>[<String>[]];
@@ -490,6 +751,38 @@ class UrlImportDownloaderService {
     );
   }
 
+  List<String> _normalizeHitomiSearchTerms(String queryText) {
+    final rawTerms = queryText
+        .toLowerCase()
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((term) => term.trim().isNotEmpty)
+        .toList(growable: false);
+    final terms = <String>[];
+    for (var index = 0; index < rawTerms.length; index += 1) {
+      var term = rawTerms[index];
+      if (_isHitomiNamespacedTerm(term) || term.startsWith('-')) {
+        while (index + 1 < rawTerms.length) {
+          final next = rawTerms[index + 1];
+          if (next == 'or' ||
+              next.startsWith('-') ||
+              _isHitomiNamespacedTerm(next) ||
+              _nextHitomiSearchStateForOrderingTerm(
+                    next,
+                    const _HitomiSearchState(),
+                  ) !=
+                  null) {
+            break;
+          }
+          term = '$term ${next.replaceAll('_', ' ')}';
+          index += 1;
+        }
+      }
+      terms.add(term.replaceAll('_', ' '));
+    }
+    return terms;
+  }
+
   _HitomiSearchState? _nextHitomiSearchStateForOrderingTerm(
     String term,
     _HitomiSearchState current,
@@ -512,8 +805,18 @@ class UrlImportDownloaderService {
       case 'sortbykey':
       case 'orderkey':
       case 'sortkey':
+        final orderByKey = rightSide.replaceAll(RegExp(r'[^0-9a-z]'), '');
         return current.copyWith(
-          orderByKey: rightSide.replaceAll(RegExp(r'[^0-9a-z]'), ''),
+          orderByKey: orderByKey,
+          orderBy:
+              const <String>{
+                'week',
+                'month',
+                'year',
+                'all',
+              }.contains(orderByKey)
+              ? 'popular'
+              : current.orderBy,
         );
       case 'orderby':
       case 'sortby':

@@ -4,7 +4,7 @@ part of 'gridGallery.dart';
 
 enum _SortMode { name, updatedAt, addedAt }
 
-enum _MainPage { home, gallery, search }
+enum _MainPage { home, gallery, search, hitomiSearch }
 
 enum _HomeMenuAction {
   addFolder,

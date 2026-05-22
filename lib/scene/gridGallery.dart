@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app/app_content_mode.dart';
 import '../database/tag_service.dart';
@@ -26,6 +27,7 @@ import '../services/media_id_resolver.dart';
 import '../services/reading_progress_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/external_share_service.dart';
+import '../services/url_import_downloader_service.dart';
 import 'import_to_host_dialog.dart';
 import 'tag_assign_after_import.dart';
 
@@ -48,6 +50,7 @@ part 'gallery_home_view.dart';
 part 'gallery_import_actions.dart';
 part 'gallery_thumbnail_cache.dart';
 part 'gallery_search.dart';
+part 'gallery_hitomi_search.dart';
 part 'gallery_folder_actions.dart';
 
 class GalleryGridPage extends StatefulWidget {
@@ -69,6 +72,8 @@ class GalleryGridPage extends StatefulWidget {
 class _GalleryGridPageState extends State<GalleryGridPage> {
   final ExternalShareService _externalShareService = ExternalShareService();
   final AppVersionService _appVersionService = AppVersionService();
+  final UrlImportDownloaderService _urlImportDownloaderService =
+      UrlImportDownloaderService();
   final MediaIdResolver _homeMediaIdResolver = MediaIdResolver();
   final AppReadingProgressService _readingProgressService =
       AppReadingProgressService();
@@ -140,6 +145,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _twoPage = false;
 
   final TextEditingController _homeSearchCtrl = TextEditingController();
+  final TextEditingController _hitomiSearchCtrl = TextEditingController(
+    text: 'language:japanese',
+  );
+  final FocusNode _hitomiSearchFocusNode = FocusNode();
   String _homeQuery = '';
   bool _homeSearching = false;
   List<MediaItem> _homeSearchResults = const [];
@@ -149,6 +158,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   String _homeSearchCorpusSignature = '';
   _SortMode _homeSearchSortMode = _SortMode.updatedAt;
   int _homeSearchPageIndex = 0;
+  bool _hitomiSearching = false;
+  List<HitomiSearchResult> _hitomiSearchResults = const <HitomiSearchResult>[];
+  String? _hitomiSearchErrorMessage;
+  int _hitomiSearchLoadVersion = 0;
 
   bool _shouldShowItem(MediaItem item) {
     if (item.kind == MediaKind.folder) {
@@ -1463,6 +1476,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ..dispose();
     _searchCtrl.dispose();
     _homeSearchCtrl.dispose();
+    _hitomiSearchCtrl.dispose();
+    _hitomiSearchFocusNode.dispose();
     super.dispose();
   }
 
@@ -1906,6 +1921,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.manage_search_outlined),
+            title: const Text('検索ページ'),
+            selected: _page == _MainPage.hitomiSearch,
+            onTap: () {
+              _closeSidebar();
+              _exitSelectMode();
+              setState(() => _page = _MainPage.hitomiSearch);
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.travel_explore_outlined),
             title: const Text('XViewer'),
             subtitle: const Text('Twitter画像ダウンロード / 作者検索'),
@@ -2145,6 +2170,24 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             _withSidebar(
               context,
               _buildGuardedBody('search-body', _buildHomeSearchGalleryBody),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_page == _MainPage.hitomiSearch) {
+      return ControllerNavigationRegion(
+        key: const ValueKey<String>('hitomi-search'),
+        debugLabel: 'hitomi-search',
+        autofocusFirstFocusable: true,
+        child: Scaffold(
+          drawer: _isWideLayout(context) ? null : _buildSidebar(),
+          appBar: AppBar(title: const Text('検索ページ')),
+          body: _wrapBodyWithUrlImportQueue(
+            _withSidebar(
+              context,
+              _buildGuardedBody('hitomi-search-body', _buildHitomiSearchBody),
             ),
           ),
         ),

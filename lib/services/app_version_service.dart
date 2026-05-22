@@ -10,7 +10,7 @@ import '../models/metadata_settings.dart';
 
 const String _fallbackAppVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.64+74',
+  defaultValue: '1.0.101+111',
 );
 const String defaultAppUpdateVersion = String.fromEnvironment(
   'PDF_VIEWER_UPDATE_VERSION',
