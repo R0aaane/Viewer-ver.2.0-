@@ -264,6 +264,23 @@ extension _DetailTagPanel on _ImageDetailPageState {
     }
   }
 
+  Future<void> _openAssignedTagResults(Tag tag) async {
+    final scopeRaw = (_folder?.raw.trim().isNotEmpty ?? false)
+        ? _folder!.raw
+        : _item.folderRaw;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TagResultsPage(
+          tagService: widget.tagService,
+          repo: widget.repo,
+          folderRaws: <String>[scopeRaw],
+          category: tag.category,
+          tagName: tag.name,
+        ),
+      ),
+    );
+  }
+
   List<TagCategory> get _orderedTagCategories =>
       _tagController.orderedTagCategories;
 
@@ -701,6 +718,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
       ),
       backgroundColor: _ImageDetailPageState._uiChip,
       deleteIconColor: Colors.white70,
+      onPressed: () => _openAssignedTagResults(entry.tag),
       onDeleted: _tagEditMode ? () => _removeTagFromUi(entry) : null,
     );
   }
@@ -731,6 +749,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
             : _categoryLongLabel(entry.tag.category),
         style: const TextStyle(color: Colors.white70),
       ),
+      onTap: () => _openAssignedTagResults(entry.tag),
       trailing: _tagEditMode
           ? IconButton(
               tooltip: '削除',

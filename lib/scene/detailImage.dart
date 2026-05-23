@@ -19,6 +19,7 @@ import '../services/epub_text_extractor.dart';
 import '../widgets/controller_focusable.dart';
 import 'widgets/scene_ui.dart';
 import 'rename_item_dialog.dart';
+import 'TagResults.dart';
 
 part 'image_detail_page.dart';
 part 'reader_view.dart';

@@ -165,6 +165,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   String? _hitomiSearchErrorMessage;
   int _hitomiSearchLoadVersion = 0;
   bool _hitomiInitialSearchStarted = false;
+  Set<int> _hitomiImportedGalleryIds = <int>{};
+  Set<String> _hitomiImportedTitleKeys = <String>{};
 
   bool _shouldShowItem(MediaItem item) {
     if (item.kind == MediaKind.folder) {
@@ -218,6 +220,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _homeRatingShelfItems = const [];
   List<MediaItem> _homeRecentViewedItems = const [];
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
+      <String, ReadingProgressEntry>{};
+  Map<String, ReadingProgressEntry> _readingProgressByItemId =
       <String, ReadingProgressEntry>{};
   _HomeResumeCardData? _homeResumeCard;
   int _homeShowcaseLoadVersion = 0;
@@ -1060,6 +1064,57 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       );
       _currentPageMetadataAvailable = true;
     });
+  }
+
+  Future<void> _refreshCurrentPageReadingProgress([
+    List<MediaItem>? source,
+  ]) async {
+    final targets = (source ?? _items)
+        .where((item) => item.kind == MediaKind.pdf)
+        .toList(growable: false);
+
+    if (targets.isEmpty) {
+      if (!mounted) return;
+      setState(
+        () => _readingProgressByItemId = <String, ReadingProgressEntry>{},
+      );
+      return;
+    }
+
+    try {
+      final recentProgress = await _readingProgressService.fetchRecent(
+        limit: 5000,
+      );
+      final itemByVariant = await _buildHomeItemLookup(targets, recentProgress);
+      final progressByItemId = <String, ReadingProgressEntry>{};
+
+      for (final entry in recentProgress) {
+        final resolved =
+            itemByVariant[entry.mediaId] ??
+            itemByVariant[_readingProgressLookupKey(
+              entry.folderRaw,
+              entry.title,
+            )];
+        if (resolved == null) continue;
+
+        progressByItemId[resolved.id] = entry;
+        for (final variant in _idVariants(resolved.id)) {
+          progressByItemId[variant] = entry;
+        }
+        final lookupKey = _readingProgressLookupKey(
+          resolved.folderRaw,
+          resolved.displayName,
+        );
+        if (lookupKey.isNotEmpty) {
+          progressByItemId[lookupKey] = entry;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() => _readingProgressByItemId = progressByItemId);
+    } catch (error, stackTrace) {
+      _logUiError('current-page-reading-progress', error, stackTrace);
+    }
   }
 
   Future<void> _organizeLibrary() async {
@@ -2360,6 +2415,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                   DropdownMenuItem(
                                     value: _SortMode.addedAt,
                                     child: Text('追加日'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: _SortMode.unreadFirst,
+                                    child: Text('未読'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: _SortMode.readFirst,
+                                    child: Text('既読'),
                                   ),
                                 ],
                                 onChanged: (value) {

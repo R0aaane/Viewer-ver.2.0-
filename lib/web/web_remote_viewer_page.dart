@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:typed_data';
 
@@ -78,6 +79,7 @@ class WebRemoteViewerPage extends StatefulWidget {
 class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   static const int _threeUpPageSize = 30;
   static const Duration _remoteRefreshInterval = Duration(seconds: 15);
+  static const String _ratingsPrefsKey = 'web.remoteViewer.ratingsJson.v1';
 
   late MetadataSettings _settings;
   late final TextEditingController _apiController;
@@ -106,6 +108,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   _WebRemoteSurface _surface = _WebRemoteSurface.home;
   _WebBrowserSortMode _browserSortMode = _WebBrowserSortMode.newest;
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
+  int _homeRatingShelfRating = 5;
+  Map<String, int> _ratingsById = const <String, int>{};
   int _threeUpPage = 1;
   Timer? _remoteRefreshTimer;
   Future<void>? _webViewerVersionFuture;
@@ -120,11 +124,58 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     _searchController = TextEditingController();
     _webViewerVersionFuture = _loadWebViewerVersion();
     unawaited(_webViewerVersionFuture);
+    unawaited(_loadRatings());
     if (_settings.clientApiBaseUrl.trim().isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _saveAndConnect(showSuccessMessage: false);
       });
     }
+  }
+
+  Map<String, int> _decodeRatings(String? raw) {
+    if (raw == null || raw.isEmpty) return <String, int>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return <String, int>{};
+      final ratings = <String, int>{};
+      for (final entry in decoded.entries) {
+        final key = entry.key?.toString();
+        final value = entry.value;
+        final rating = value is int ? value : int.tryParse(value.toString());
+        if (key == null || rating == null || rating < 3 || rating > 5) {
+          continue;
+        }
+        ratings[key] = rating;
+      }
+      return ratings;
+    } catch (_) {
+      return <String, int>{};
+    }
+  }
+
+  Future<void> _loadRatings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ratings = _decodeRatings(prefs.getString(_ratingsPrefsKey));
+    if (!mounted) return;
+    setState(() => _ratingsById = ratings);
+  }
+
+  int? _ratingForEntry(WebRemoteEntry entry) {
+    return _ratingsById[entry.stableId];
+  }
+
+  Future<void> _setRatingForEntry(WebRemoteEntry entry, int? rating) async {
+    if (rating != null && (rating < 3 || rating > 5)) return;
+    final next = Map<String, int>.from(_ratingsById);
+    if (rating == null) {
+      next.remove(entry.stableId);
+    } else {
+      next[entry.stableId] = rating;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_ratingsPrefsKey, jsonEncode(next));
+    if (!mounted) return;
+    setState(() => _ratingsById = next);
   }
 
   @override
@@ -1144,6 +1195,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               child: WebMediaDetailView(
                 client: client,
                 entry: entry,
+                rating: _ratingForEntry(entry),
+                onRatingChanged: (rating) => _setRatingForEntry(entry, rating),
                 onApplyTagQuery: (query) async {
                   _searchController.text = query;
                   await _loadEntries();
@@ -1635,6 +1688,42 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return null;
   }
 
+  Widget _buildHomeRatingSection(List<WebRemoteEntry> entries) {
+    final rating = _homeRatingShelfRating;
+    final ratingEntries =
+        entries
+            .where((entry) => _ratingForEntry(entry) == rating)
+            .toList(growable: true)
+          ..sort(
+            (left, right) =>
+                _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
+          );
+
+    return _WebHomeSection(
+      section: _WebHomeSectionData(
+        title: '評価別',
+        subtitle: '選択した評価のPDFを表示します。',
+        icon: Icons.star_rate_rounded,
+        entries: ratingEntries.take(12).toList(growable: false),
+        emptyMessage: '評価$ratingのPDFはまだありません。',
+      ),
+      client: _client,
+      trailing: DropdownButton<int>(
+        value: rating,
+        items: const [
+          DropdownMenuItem(value: 5, child: Text('評価5')),
+          DropdownMenuItem(value: 4, child: Text('評価4')),
+          DropdownMenuItem(value: 3, child: Text('評価3')),
+        ],
+        onChanged: (value) {
+          if (value == null || value == _homeRatingShelfRating) return;
+          setState(() => _homeRatingShelfRating = value);
+        },
+      ),
+      onOpen: _openPdfFromHome,
+    );
+  }
+
   List<_WebHomeSectionData> _buildHomeSections(List<WebRemoteEntry> entries) {
     final recentActivityById = _homeRecentActivityById;
     final recentlyAdded = entries.toList(growable: false)
@@ -1819,6 +1908,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   onOpen: _openPdfFromHome,
                 ),
               ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 18),
+              child: _buildHomeRatingSection(entries),
+            ),
             Padding(
               padding: const EdgeInsets.only(bottom: 18),
               child: _WebHomeContinueReadingCard(
@@ -2233,6 +2326,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return WebMediaDetailView(
       client: _client!,
       entry: _selectedEntry!,
+      rating: _ratingForEntry(_selectedEntry!),
+      onRatingChanged: (rating) => _setRatingForEntry(_selectedEntry!, rating),
       onApplyTagQuery: _applyTagQuery,
       onOpenPdfViewerPage: _selectedEntry!.isPdf
           ? () => _openPdfViewerPage(_selectedEntry!)
@@ -2368,6 +2463,7 @@ class _WebHomeSectionData {
   final List<WebRemoteEntry> entries;
   final Map<String, ReadingProgressEntry> activityByStableId;
   final bool resumeFromActivity;
+  final String emptyMessage;
 
   const _WebHomeSectionData({
     required this.title,
@@ -2376,6 +2472,7 @@ class _WebHomeSectionData {
     required this.entries,
     this.activityByStableId = const <String, ReadingProgressEntry>{},
     this.resumeFromActivity = false,
+    this.emptyMessage = 'このセクションに一致する PDF はまだありません。',
   });
 }
 
@@ -2683,6 +2780,7 @@ class _WebHomeContinueReadingCard extends StatelessWidget {
 class _WebHomeSection extends StatelessWidget {
   final _WebHomeSectionData section;
   final WebRemoteApiClient? client;
+  final Widget? trailing;
   final Future<void> Function(
     WebRemoteEntry entry, {
     ReadingProgressEntry? activity,
@@ -2693,6 +2791,7 @@ class _WebHomeSection extends StatelessWidget {
   const _WebHomeSection({
     required this.section,
     required this.client,
+    this.trailing,
     required this.onOpen,
   });
 
@@ -2725,6 +2824,7 @@ class _WebHomeSection extends StatelessWidget {
                 ],
               ),
             ),
+            if (trailing != null) ...[const SizedBox(width: 12), trailing!],
           ],
         ),
         const SizedBox(height: 12),
@@ -2734,7 +2834,7 @@ class _WebHomeSection extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: Text(
-                'このセクションに一致する PDF はまだありません。',
+                section.emptyMessage,
                 style: const TextStyle(color: Colors.white60),
               ),
             ),
@@ -5031,6 +5131,8 @@ class _EntrySummaryData {
 class WebMediaDetailView extends StatefulWidget {
   final WebRemoteApiClient client;
   final WebRemoteEntry entry;
+  final int? rating;
+  final Future<void> Function(int? rating)? onRatingChanged;
   final Future<void> Function(String query) onApplyTagQuery;
   final VoidCallback? onOpenPdfViewerPage;
 
@@ -5038,6 +5140,8 @@ class WebMediaDetailView extends StatefulWidget {
     super.key,
     required this.client,
     required this.entry,
+    this.rating,
+    this.onRatingChanged,
     required this.onApplyTagQuery,
     this.onOpenPdfViewerPage,
   });
@@ -5057,19 +5161,25 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   String? _pdfPageError;
   int _pdfPageNo = 1;
   int? _pdfTotalPages;
+  int? _rating;
   bool _loadingPdfPage = false;
   int _pdfPageRequestSerial = 0;
 
   @override
   void initState() {
     super.initState();
+    _rating = widget.rating;
     _refresh();
   }
 
   @override
   void didUpdateWidget(covariant WebMediaDetailView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.rating != widget.rating) {
+      _rating = widget.rating;
+    }
     if (oldWidget.entry.stableId != widget.entry.stableId) {
+      _rating = widget.rating;
       _refresh();
     }
   }
@@ -5275,6 +5385,54 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     );
   }
 
+  Widget _buildRatingSelector() {
+    final current = _rating;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF121A26),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        children: <Widget>[
+          const Icon(Icons.star_rate_rounded, color: Colors.amber),
+          const SizedBox(width: 8),
+          const Text('評価', style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(width: 12),
+          for (final value in const <int>[3, 4, 5])
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ChoiceChip(
+                label: Text('$value'),
+                selected: current == value,
+                avatar: Icon(
+                  current == value ? Icons.star : Icons.star_border,
+                  size: 16,
+                  color: current == value ? Colors.black87 : Colors.amber,
+                ),
+                onSelected: (_) {
+                  setState(() => _rating = value);
+                  unawaited(widget.onRatingChanged?.call(value));
+                },
+              ),
+            ),
+          const Spacer(),
+          IconButton(
+            tooltip: '評価をクリア',
+            onPressed: current == null
+                ? null
+                : () {
+                    setState(() => _rating = null);
+                    unawaited(widget.onRatingChanged?.call(null));
+                  },
+            icon: const Icon(Icons.clear),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final canOpenPreviousPdfPage = _pdfPageNo > 1;
@@ -5311,6 +5469,8 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            _buildRatingSelector(),
             const SizedBox(height: 16),
             if (widget.entry.isPdf)
               Column(

@@ -333,7 +333,7 @@ extension _DetailActions on _ImageDetailPageState {
     Navigator.pop(context, true);
   }
 
-  Future<void> _deleteCurrentPdfPageWithWarning() async {
+  Future<void> _deleteCurrentPdfPageWithWarning({int? pageNumber}) async {
     if (!_isPdf || !widget.repo.capabilities.canEditPdfPages) return;
     if (_totalPages <= 1) {
       ScaffoldMessenger.of(
@@ -343,7 +343,7 @@ extension _DetailActions on _ImageDetailPageState {
     }
 
     final item = _item;
-    final page = _page;
+    final page = (pageNumber ?? _page).clamp(1, _totalPages);
     final ok = await showControllerDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(

@@ -491,6 +491,8 @@ extension _GalleryGridView on _GalleryGridPageState {
   }
 
   DateTime _getUpdatedAt(MediaItem item) {
+    final modified = item.modified;
+    if (modified != null) return modified;
     final o = item as dynamic;
     try {
       return _safeDateFromDynamic(o.updatedAt);
@@ -524,7 +526,43 @@ extension _GalleryGridView on _GalleryGridPageState {
     try {
       return _safeDateFromDynamic(o.dateAdded);
     } catch (_) {}
+    final modified = item.modified;
+    if (modified != null) return modified;
     return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  ReadingProgressEntry? _readingProgressForItem(MediaItem item) {
+    final direct = _readingProgressByItemId[item.id];
+    if (direct != null) return direct;
+    for (final variant in _idVariants(item.id)) {
+      final progress = _readingProgressByItemId[variant];
+      if (progress != null) return progress;
+    }
+    final lookupKey = _readingProgressLookupKey(
+      item.folderRaw,
+      item.displayName,
+    );
+    if (lookupKey.isNotEmpty) {
+      return _readingProgressByItemId[lookupKey];
+    }
+    return null;
+  }
+
+  bool _isReadItem(MediaItem item) {
+    return item.kind == MediaKind.pdf && _readingProgressForItem(item) != null;
+  }
+
+  int _compareByReadStatus(
+    MediaItem a,
+    MediaItem b, {
+    required bool readFirst,
+  }) {
+    final aRank = _isReadItem(a) ? (readFirst ? 0 : 1) : (readFirst ? 1 : 0);
+    final bRank = _isReadItem(b) ? (readFirst ? 0 : 1) : (readFirst ? 1 : 0);
+    if (aRank != bRank) return aRank.compareTo(bRank);
+    final updated = _getUpdatedAt(b).compareTo(_getUpdatedAt(a));
+    if (updated != 0) return updated;
+    return _compareNaturalName(a.displayName, b.displayName);
   }
 
   int _compareNaturalName(String left, String right) {
@@ -574,6 +612,12 @@ extension _GalleryGridView on _GalleryGridPageState {
         break;
       case _SortMode.addedAt:
         sorted.sort((a, b) => _getAddedAt(b).compareTo(_getAddedAt(a)));
+        break;
+      case _SortMode.unreadFirst:
+        sorted.sort((a, b) => _compareByReadStatus(a, b, readFirst: false));
+        break;
+      case _SortMode.readFirst:
+        sorted.sort((a, b) => _compareByReadStatus(a, b, readFirst: true));
         break;
     }
     return sorted.toList(growable: false);
@@ -656,6 +700,12 @@ extension _GalleryGridView on _GalleryGridPageState {
         break;
       case _SortMode.addedAt:
         list.sort((a, b) => _getAddedAt(b).compareTo(_getAddedAt(a)));
+        break;
+      case _SortMode.unreadFirst:
+        list.sort((a, b) => _compareByReadStatus(a, b, readFirst: false));
+        break;
+      case _SortMode.readFirst:
+        list.sort((a, b) => _compareByReadStatus(a, b, readFirst: true));
         break;
     }
 

@@ -27,6 +27,8 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     setState(() {
       _hitomiSearching = true;
       _hitomiSearchErrorMessage = null;
+      _hitomiImportedGalleryIds = <int>{};
+      _hitomiImportedTitleKeys = <String>{};
     });
 
     try {
@@ -39,6 +41,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
         _hitomiSearching = false;
         _hitomiSearchResults = results;
       });
+      unawaited(_refreshHitomiImportedMatches(results, loadVersion));
     } catch (error, stackTrace) {
       _logUiError('hitomi-search', error, stackTrace);
       if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
@@ -212,6 +215,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
 
   Widget _buildHitomiResultCard(HitomiSearchResult result) {
     final theme = Theme.of(context);
+    final imported = _isHitomiResultImported(result);
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -242,6 +246,17 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall,
                     ),
+                    if (imported) ...[
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Chip(
+                          visualDensity: VisualDensity.compact,
+                          avatar: const Icon(Icons.check_circle, size: 18),
+                          label: const Text('取り込み済み'),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     _buildHitomiTagWrap(result),
                     const SizedBox(height: 8),
@@ -254,11 +269,11 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                         ),
                         const SizedBox(width: 6),
                         TextButton.icon(
-                          onPressed: _currentFolderRaw == null
+                          onPressed: _currentFolderRaw == null || imported
                               ? null
                               : () => _importHitomiResult(result),
                           icon: const Icon(Icons.download_outlined),
-                          label: const Text('取り込み'),
+                          label: Text(imported ? '取り込み済み' : '取り込み'),
                         ),
                       ],
                     ),
@@ -286,12 +301,16 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
   }
 
   Widget _buildHitomiTagWrap(HitomiSearchResult result) {
-    final tags = <String>[
-      ...result.artists.take(2),
-      ...result.groups.take(2),
-      ...result.series.take(2),
-      ...result.characters.take(2),
-      ...result.tags.take(8),
+    final tags = <({String prefix, String value})>[
+      for (final value in result.artists.take(2))
+        (prefix: 'artist', value: value),
+      for (final value in result.groups.take(2))
+        (prefix: 'group', value: value),
+      for (final value in result.series.take(2))
+        (prefix: 'series', value: value),
+      for (final value in result.characters.take(2))
+        (prefix: 'character', value: value),
+      for (final value in result.tags.take(8)) (prefix: 'tag', value: value),
     ];
     if (tags.isEmpty) {
       return const SizedBox.shrink();
@@ -301,9 +320,12 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       runSpacing: 4,
       children: [
         for (final tag in tags)
-          Chip(
+          ActionChip(
             visualDensity: VisualDensity.compact,
-            label: Text(tag, overflow: TextOverflow.ellipsis),
+            label: Text(tag.value, overflow: TextOverflow.ellipsis),
+            onPressed: () => _appendHitomiSearchTerm(
+              '${tag.prefix}:${_hitomiTerm(tag.value)}',
+            ),
           ),
       ],
     );
@@ -336,6 +358,103 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       successLabel: '取り込み',
       initialSourceText: result.galleryUrl,
     );
+    _markHitomiResultImported(result);
+  }
+
+  Future<void> _refreshHitomiImportedMatches(
+    List<HitomiSearchResult> results,
+    int loadVersion,
+  ) async {
+    final folderRaw = _currentFolderRaw;
+    if (folderRaw == null || results.isEmpty) {
+      if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
+      setState(() {
+        _hitomiImportedGalleryIds = <int>{};
+        _hitomiImportedTitleKeys = <String>{};
+      });
+      return;
+    }
+
+    List<MediaItem> items;
+    try {
+      items = await widget.repo.listMediaRecursiveFiles(
+        FolderHandle(folderRaw),
+      );
+    } catch (_) {
+      items = _items.where((item) => item.kind != MediaKind.folder).toList();
+    }
+    if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
+
+    final ids = <int>{};
+    final titleKeys = <String>{};
+    for (final result in results) {
+      final titleKey = _hitomiImportedTitleKey(result.title);
+      for (final item in items) {
+        if (item.kind == MediaKind.folder) continue;
+        if (_hitomiItemMatchesResult(item, result, titleKey: titleKey)) {
+          ids.add(result.galleryId);
+          if (titleKey.isNotEmpty) {
+            titleKeys.add(titleKey);
+          }
+          break;
+        }
+      }
+    }
+
+    setState(() {
+      _hitomiImportedGalleryIds = ids;
+      _hitomiImportedTitleKeys = titleKeys;
+    });
+  }
+
+  bool _hitomiItemMatchesResult(
+    MediaItem item,
+    HitomiSearchResult result, {
+    required String titleKey,
+  }) {
+    if (_containsHitomiGalleryId(item.displayName, result.galleryId) ||
+        _containsHitomiGalleryId(item.id, result.galleryId)) {
+      return true;
+    }
+    if (titleKey.isEmpty) {
+      return false;
+    }
+    return _hitomiImportedTitleKey(item.displayName) == titleKey;
+  }
+
+  bool _containsHitomiGalleryId(String value, int galleryId) {
+    return RegExp(
+      '(^|[^0-9])${RegExp.escape('$galleryId')}([^0-9]|\$)',
+    ).hasMatch(value);
+  }
+
+  bool _isHitomiResultImported(HitomiSearchResult result) {
+    return _hitomiImportedGalleryIds.contains(result.galleryId) ||
+        _hitomiImportedTitleKeys.contains(
+          _hitomiImportedTitleKey(result.title),
+        );
+  }
+
+  void _markHitomiResultImported(HitomiSearchResult result) {
+    if (!mounted) return;
+    setState(() {
+      _hitomiImportedGalleryIds = <int>{
+        ..._hitomiImportedGalleryIds,
+        result.galleryId,
+      };
+      _hitomiImportedTitleKeys = <String>{
+        ..._hitomiImportedTitleKeys,
+        _hitomiImportedTitleKey(result.title),
+      }..remove('');
+    });
+  }
+
+  String _hitomiImportedTitleKey(String value) {
+    return p
+        .basenameWithoutExtension(value)
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s_\-]+'), ' ');
   }
 
   Iterable<String> _hitomiSuggestionsFor(String raw) {
@@ -343,20 +462,62 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     if (token.isEmpty) {
       return const <String>[];
     }
-    final dynamicValues = <String>{
-      for (final result in _hitomiSearchResults) ...[
-        for (final value in result.artists) 'artist:${_hitomiTerm(value)}',
-        for (final value in result.groups) 'group:${_hitomiTerm(value)}',
-        for (final value in result.series) 'series:${_hitomiTerm(value)}',
-        for (final value in result.characters)
-          'character:${_hitomiTerm(value)}',
-        for (final value in result.tags.take(20)) 'tag:${_hitomiTerm(value)}',
-      ],
-    };
+    final dynamicCounts = <String, int>{};
+    void addDynamic(String value) {
+      dynamicCounts[value] = (dynamicCounts[value] ?? 0) + 1;
+    }
+
+    for (final result in _hitomiSearchResults) {
+      for (final value in result.artists) {
+        addDynamic('artist:${_hitomiTerm(value)}');
+      }
+      for (final value in result.groups) {
+        addDynamic('group:${_hitomiTerm(value)}');
+      }
+      for (final value in result.series) {
+        addDynamic('series:${_hitomiTerm(value)}');
+      }
+      for (final value in result.characters) {
+        addDynamic('character:${_hitomiTerm(value)}');
+      }
+      for (final value in result.tags) {
+        addDynamic('tag:${_hitomiTerm(value)}');
+      }
+    }
+
+    final dynamicValues =
+        dynamicCounts.keys
+            .where((value) => _hitomiSuggestionMatches(value, token))
+            .toList(growable: false)
+          ..sort((a, b) {
+            final count = (dynamicCounts[b] ?? 0).compareTo(
+              dynamicCounts[a] ?? 0,
+            );
+            if (count != 0) return count;
+            return a.compareTo(b);
+          });
+
     return <String>[
-      ..._hitomiStaticSuggestions,
+      ..._hitomiStaticSuggestions.where(
+        (value) => value.toLowerCase().startsWith(token),
+      ),
       ...dynamicValues,
-    ].where((value) => value.toLowerCase().startsWith(token)).take(12);
+    ].take(12);
+  }
+
+  bool _hitomiSuggestionMatches(String value, String token) {
+    final lower = value.toLowerCase();
+    if (lower.startsWith(token)) return true;
+    final separatorIndex = token.indexOf(':');
+    if (separatorIndex <= 0) {
+      return lower.contains(token);
+    }
+    final namespace = token.substring(0, separatorIndex);
+    final query = token.substring(separatorIndex + 1);
+    if (query.isEmpty || !lower.startsWith('$namespace:')) {
+      return false;
+    }
+    return lower.substring(namespace.length + 1).contains(query);
   }
 
   String _hitomiCurrentToken(String raw) {
@@ -386,6 +547,21 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     _hitomiSearchCtrl.value = TextEditingValue(
       text: nextText,
       selection: TextSelection.collapsed(offset: nextCursor),
+    );
+  }
+
+  void _appendHitomiSearchTerm(String term) {
+    final text = _hitomiSearchCtrl.text.trim();
+    final terms = text.isEmpty
+        ? <String>[]
+        : text.split(RegExp(r'\s+')).where((value) => value.isNotEmpty);
+    if (terms.contains(term)) {
+      return;
+    }
+    final nextText = <String>[...terms, term].join(' ');
+    _hitomiSearchCtrl.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
     );
   }
 

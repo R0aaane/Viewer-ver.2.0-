@@ -684,43 +684,76 @@ extension _ReaderView on _ImageDetailPageState {
                 width: 2,
               ),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: FutureBuilder<Uint8List>(
-                future: _loadThumbBytes(item, page),
-                builder: (context, snap) {
-                  if (snap.hasError) {
-                    return _buildLoadError(
-                      'ページ $page のサムネイル取得に失敗しました。',
-                      onRetry: () {
-                        setState(() {
-                          _readerController.removeThumbPage(page);
-                        });
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: FutureBuilder<Uint8List>(
+                      future: _loadThumbBytes(item, page),
+                      builder: (context, snap) {
+                        if (snap.hasError) {
+                          return _buildLoadError(
+                            'ページ $page のサムネイル取得に失敗しました。',
+                            onRetry: () {
+                              setState(() {
+                                _readerController.removeThumbPage(page);
+                              });
+                            },
+                          );
+                        }
+                        if (!snap.hasData) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+                        final bytes = snap.data!;
+                        if (bytes.isEmpty) {
+                          return _buildLoadError(
+                            'ページ $page のサムネイル取得に失敗しました。',
+                            onRetry: () {
+                              setState(() {
+                                _readerController.removeThumbPage(page);
+                              });
+                            },
+                          );
+                        }
+                        return Image.memory(
+                          bytes,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          filterQuality: FilterQuality.low,
+                        );
                       },
-                    );
-                  }
-                  if (!snap.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  final bytes = snap.data!;
-                  if (bytes.isEmpty) {
-                    return _buildLoadError(
-                      'ページ $page のサムネイル取得に失敗しました。',
-                      onRetry: () {
-                        setState(() {
-                          _readerController.removeThumbPage(page);
-                        });
-                      },
-                    );
-                  }
-                  return Image.memory(
-                    bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    filterQuality: FilterQuality.low,
-                  );
-                },
-              ),
+                    ),
+                  ),
+                ),
+                if (widget.repo.capabilities.canEditPdfPages)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Material(
+                      color: Colors.black.withValues(alpha: 0.62),
+                      borderRadius: BorderRadius.circular(999),
+                      child: IconButton(
+                        tooltip: '$page ページ目を削除',
+                        visualDensity: VisualDensity.compact,
+                        constraints: const BoxConstraints(
+                          minWidth: 36,
+                          minHeight: 36,
+                        ),
+                        iconSize: 18,
+                        color: Colors.white,
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: _totalPages <= 1
+                            ? null
+                            : () => _deleteCurrentPdfPageWithWarning(
+                                pageNumber: page,
+                              ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         );

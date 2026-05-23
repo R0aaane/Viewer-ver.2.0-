@@ -280,6 +280,7 @@ extension _GalleryFolderActions on _GalleryGridPageState {
       _folder = folder;
       _loading = true;
       _items = const [];
+      _readingProgressByItemId = <String, ReadingProgressEntry>{};
       _galleryLoadErrorMessage = null;
       _loadProcessed = 0;
       _loadTotal = 0;
@@ -328,6 +329,7 @@ extension _GalleryFolderActions on _GalleryGridPageState {
 
       widget.tagService.rememberItems(filteredItems);
       unawaited(_refreshCurrentPageTags(filteredItems));
+      unawaited(_refreshCurrentPageReadingProgress(filteredItems));
       _prepareVisibleMedia(filteredItems);
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -370,6 +372,7 @@ extension _GalleryFolderActions on _GalleryGridPageState {
       _thumbsEnabled = false;
       _loading = true;
       _items = const [];
+      _readingProgressByItemId = <String, ReadingProgressEntry>{};
       _galleryLoadErrorMessage = null;
       _loadProcessed = 0;
       _loadTotal = 0;
@@ -411,6 +414,7 @@ extension _GalleryFolderActions on _GalleryGridPageState {
 
       widget.tagService.rememberItems(filteredItems);
       unawaited(_refreshCurrentPageTags(filteredItems));
+      unawaited(_refreshCurrentPageReadingProgress(filteredItems));
       _prepareVisibleMedia(filteredItems);
 
       WidgetsBinding.instance.addPostFrameCallback((_) async {
