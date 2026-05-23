@@ -1,6 +1,19 @@
 part of 'gridGallery.dart';
 
 extension _GalleryGridHitomiSearch on _GalleryGridPageState {
+  void _ensureHitomiInitialSearchStarted() {
+    if (_hitomiInitialSearchStarted || _hitomiSearchCtrl.text.trim().isEmpty) {
+      return;
+    }
+    _hitomiInitialSearchStarted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _page != _MainPage.hitomiSearch || _hitomiSearching) {
+        return;
+      }
+      unawaited(_runHitomiSearch());
+    });
+  }
+
   Future<void> _runHitomiSearch() async {
     final query = _hitomiSearchCtrl.text.trim();
     if (query.isEmpty) {
@@ -38,6 +51,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
   }
 
   Widget _buildHitomiSearchBody() {
+    _ensureHitomiInitialSearchStarted();
     return Column(
       children: [
         Padding(
@@ -45,6 +59,8 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
           child: Row(
             children: [
               Expanded(child: _buildHitomiSearchField()),
+              const SizedBox(width: 8),
+              _buildHitomiOrderingDropdown(),
               const SizedBox(width: 8),
               FilledButton.icon(
                 onPressed: _hitomiSearching ? null : _runHitomiSearch,
@@ -57,6 +73,51 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
         if (_hitomiSearching) const LinearProgressIndicator(),
         Expanded(child: _buildHitomiSearchResults()),
       ],
+    );
+  }
+
+  Widget _buildHitomiOrderingDropdown() {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _hitomiSearchCtrl,
+      builder: (context, value, child) {
+        return DropdownButton<String>(
+          value: _selectedHitomiOrderingQuery(),
+          items: const <DropdownMenuItem<String>>[
+            DropdownMenuItem<String>(
+              value: 'orderby:date orderbykey:added',
+              child: Text('Date Added'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:datepublished',
+              child: Text('Date Published'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:today',
+              child: Text('Popular: Today'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:week',
+              child: Text('Popular: Week'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:month',
+              child: Text('Popular: Month'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:year',
+              child: Text('Popular: Year'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:random',
+              child: Text('Random'),
+            ),
+          ],
+          onChanged: (query) {
+            if (query == null) return;
+            _setHitomiOrderingQuery(query);
+          },
+        );
+      },
     );
   }
 
@@ -328,6 +389,42 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     );
   }
 
+  String _selectedHitomiOrderingQuery() {
+    final lower = _hitomiSearchCtrl.text.toLowerCase();
+    for (final option in _hitomiOrderingOptions) {
+      final terms = option.query.split(RegExp(r'\s+'));
+      if (terms.every(lower.contains)) {
+        return option.query;
+      }
+    }
+    return _hitomiOrderingOptions.first.query;
+  }
+
+  void _setHitomiOrderingQuery(String orderingQuery) {
+    final terms = _hitomiSearchCtrl.text
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((term) => term.isNotEmpty && !_isHitomiOrderingTerm(term))
+        .toList(growable: false);
+    final nextText = <String>[orderingQuery, ...terms].join(' ').trim();
+    _hitomiSearchCtrl.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+    );
+  }
+
+  bool _isHitomiOrderingTerm(String term) {
+    final key = term.split(':').first.toLowerCase();
+    return key == 'sortby' ||
+        key == 'orderby' ||
+        key == 'sortbykey' ||
+        key == 'orderbykey' ||
+        key == 'sortkey' ||
+        key == 'orderkey' ||
+        key == 'sortbydirection' ||
+        key == 'orderbydirection';
+  }
+
   IconData _hitomiSuggestionIcon(String value) {
     final name = value.split(':').first;
     return switch (name) {
@@ -369,6 +466,24 @@ const List<String> _hitomiStaticSuggestions = <String>[
   'orderbydirection:asc',
   'orderbydirection:desc',
 ];
+
+const List<_HitomiOrderingOption>
+_hitomiOrderingOptions = <_HitomiOrderingOption>[
+  _HitomiOrderingOption('Date Added', 'orderby:date orderbykey:added'),
+  _HitomiOrderingOption('Date Published', 'orderby:datepublished'),
+  _HitomiOrderingOption('Popular: Today', 'orderby:popular orderbykey:today'),
+  _HitomiOrderingOption('Popular: Week', 'orderby:popular orderbykey:week'),
+  _HitomiOrderingOption('Popular: Month', 'orderby:popular orderbykey:month'),
+  _HitomiOrderingOption('Popular: Year', 'orderby:popular orderbykey:year'),
+  _HitomiOrderingOption('Random', 'orderby:random'),
+];
+
+class _HitomiOrderingOption {
+  final String label;
+  final String query;
+
+  const _HitomiOrderingOption(this.label, this.query);
+}
 
 class _HitomiThumbnailImage extends StatefulWidget {
   final List<String> urls;

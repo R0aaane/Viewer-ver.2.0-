@@ -146,7 +146,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   final TextEditingController _homeSearchCtrl = TextEditingController();
   final TextEditingController _hitomiSearchCtrl = TextEditingController(
-    text: 'language:japanese',
+    text: 'orderby:popular orderbykey:week language:japanese',
   );
   final FocusNode _hitomiSearchFocusNode = FocusNode();
   String _homeQuery = '';
@@ -162,6 +162,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<HitomiSearchResult> _hitomiSearchResults = const <HitomiSearchResult>[];
   String? _hitomiSearchErrorMessage;
   int _hitomiSearchLoadVersion = 0;
+  bool _hitomiInitialSearchStarted = false;
 
   bool _shouldShowItem(MediaItem item) {
     if (item.kind == MediaKind.folder) {

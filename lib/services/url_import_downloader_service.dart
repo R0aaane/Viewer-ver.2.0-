@@ -814,6 +814,7 @@ class UrlImportDownloaderService {
                 'month',
                 'year',
                 'all',
+                'today',
               }.contains(orderByKey)
               ? 'popular'
               : current.orderBy,
