@@ -181,6 +181,7 @@ extension _ReaderView on _ImageDetailPageState {
         _hasMovedPdfPageSinceLoad = false;
         _readerController.gifAnimationPaused = false;
         _isFavorite = false;
+        _rating = null;
         _tags = const [];
         _tagsLoading = false;
         if (_tagUsageScopeRaw != item.folderRaw) {
@@ -195,6 +196,7 @@ extension _ReaderView on _ImageDetailPageState {
     }
 
     unawaited(_loadFavoriteForCurrent(loadVersion: loadVersion));
+    unawaited(_loadRatingForCurrent(loadVersion: loadVersion));
     if (item.kind == MediaKind.pdf) {
       unawaited(_loadReadingProgressForCurrent(item, loadVersion));
       unawaited(_loadPageCountForCurrent(item, loadVersion));

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -51,6 +52,8 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   bool _isFavorite = false;
   bool _favChanged = false;
+  int? _rating;
+  bool _ratingChanged = false;
   bool _itemChanged = false;
 
   // tag・医ち繧ｰ・・

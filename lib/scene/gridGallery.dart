@@ -130,6 +130,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       <String, Future<int>>{};
 
   Set<String> _favorites = <String>{};
+  Map<String, int> _ratingsById = <String, int>{};
 
   // tags（タグID付き）
   Map<String, List<String>> _tagsById = <String, List<String>>{};
@@ -157,6 +158,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       <String, List<TagWithId>>{};
   String _homeSearchCorpusSignature = '';
   _SortMode _homeSearchSortMode = _SortMode.updatedAt;
+  int? _homeRatingFilter;
   int _homeSearchPageIndex = 0;
   bool _hitomiSearching = false;
   List<HitomiSearchResult> _hitomiSearchResults = const <HitomiSearchResult>[];
@@ -212,6 +214,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _homeRecentAddedItems = const [];
   List<MediaItem> _homeUnreadItems = const [];
   List<MediaItem> _homeFavoriteShowcaseItems = const [];
+  List<MediaItem> _homeRating5Items = const [];
+  List<MediaItem> _homeRating4Items = const [];
+  List<MediaItem> _homeRating3Items = const [];
   List<MediaItem> _homeRecentViewedItems = const [];
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
       <String, ReadingProgressEntry>{};
@@ -626,6 +631,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
       final favList =
           prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+      final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
       _tagsById = <String, List<String>>{};
       _tagDetailsById = <String, List<TagWithId>>{};
       final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
@@ -675,6 +681,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             }
             if (two != null) _twoPage = two;
             _favorites = favList.toSet();
+            _ratingsById = ratings;
             _foldersRaw = const <String>[];
             _currentFolderRaw = null;
             _folderAliases = aliases;
@@ -703,6 +710,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
           if (two != null) _twoPage = two;
           _favorites = favList.toSet();
+          _ratingsById = ratings;
           _foldersRaw = remoteRaws;
           _currentFolderRaw = current;
           _folderAliases = aliases;
@@ -797,6 +805,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
         if (two != null) _twoPage = two;
         _favorites = favList.toSet();
+        _ratingsById = ratings;
         _foldersRaw = existsFolders.toList(growable: false);
         _currentFolderRaw = current;
         _folderAliases = aliases;
@@ -854,6 +863,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       await _reloadFavorites();
     }
 
+    await _reloadRatings();
     await _refreshAllFavoritesItems();
     await _reloadArtistTagMasters();
     await _refreshArtistTagCounts();
@@ -947,6 +957,68 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() => _detailedBrowseViewMode = m);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_PrefsKeys.detailedBrowseViewMode, m.index);
+  }
+
+  Map<String, int> _decodeRatings(String? raw) {
+    if (raw == null || raw.isEmpty) return <String, int>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return <String, int>{};
+      final ratings = <String, int>{};
+      for (final entry in decoded.entries) {
+        final key = entry.key?.toString();
+        final value = entry.value;
+        final rating = value is int ? value : int.tryParse(value.toString());
+        if (key == null || rating == null || rating < 3 || rating > 5) {
+          continue;
+        }
+        ratings[key] = rating;
+      }
+      return ratings;
+    } catch (_) {
+      return <String, int>{};
+    }
+  }
+
+  Future<void> _reloadRatings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    if (!mounted) return;
+    setState(() => _ratingsById = ratings);
+  }
+
+  int? _ratingForItem(MediaItem item) {
+    for (final variant in _idVariants(item.id)) {
+      final rating = _ratingsById[variant];
+      if (rating != null) return rating;
+    }
+    return null;
+  }
+
+  Future<void> _replaceRatingId(String oldId, String newId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final rating = ratings.remove(oldId);
+    if (rating == null) return;
+    ratings[newId] = rating;
+    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    if (!mounted) return;
+    setState(() => _ratingsById = ratings);
+  }
+
+  Future<void> _removeRatingsFromPrefs(Iterable<String> itemIds) async {
+    final ids = itemIds.where((entry) => entry.trim().isNotEmpty).toSet();
+    if (ids.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    var changed = false;
+    for (final id in ids) {
+      changed = ratings.remove(id) != null || changed;
+    }
+    if (!changed) return;
+    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    if (!mounted) return;
+    setState(() => _ratingsById = ratings);
   }
 
   // ----------------
@@ -1171,6 +1243,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       await _replaceFavoriteId(item.id, updated.id);
+      await _replaceRatingId(item.id, updated.id);
       await _refreshVisibleContent();
       if (!mounted) {
         return;
@@ -1382,6 +1455,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
 
       await _removeFavoritesFromPrefs([
+        ...targets.map((item) => item.id),
+        ...metadataTargets.map((item) => item.id),
+      ]);
+      await _removeRatingsFromPrefs([
         ...targets.map((item) => item.id),
         ...metadataTargets.map((item) => item.id),
       ]);

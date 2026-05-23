@@ -264,11 +264,17 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     try {
       final all = await _ensureHomeSearchCorpusLoaded();
-      final filtered = q.isEmpty
+      var filtered = q.isEmpty
           ? all.toList(growable: false)
           : all
                 .where((item) => _matchHomeQuery(item, q))
                 .toList(growable: false);
+      final ratingFilter = _homeRatingFilter;
+      if (ratingFilter != null) {
+        filtered = filtered
+            .where((item) => _ratingForItem(item) == ratingFilter)
+            .toList(growable: false);
+      }
       final sorted = _sortItemsByMode(filtered, sortMode: _homeSearchSortMode);
 
       if (!mounted) return;
@@ -794,6 +800,22 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       _saveDetailedBrowseViewMode(value);
                     },
                   );
+                  final ratingDropdown = DropdownButton<int?>(
+                    value: _homeRatingFilter,
+                    items: const [
+                      DropdownMenuItem<int?>(value: null, child: Text('すべて')),
+                      DropdownMenuItem<int?>(value: 5, child: Text('評価5')),
+                      DropdownMenuItem<int?>(value: 4, child: Text('評価4')),
+                      DropdownMenuItem<int?>(value: 3, child: Text('評価3')),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        _homeRatingFilter = value;
+                        _homeSearchPageIndex = 0;
+                      });
+                      _runHomeSearch(includeAllWhenEmpty: true);
+                    },
+                  );
 
                   if (constraints.maxWidth < 520) {
                     return Column(
@@ -811,6 +833,13 @@ extension _GalleryHomeView on _GalleryGridPageState {
                             viewDropdown,
                           ],
                         ),
+                        Row(
+                          children: [
+                            const Text('評価'),
+                            const SizedBox(width: 8),
+                            ratingDropdown,
+                          ],
+                        ),
                       ],
                     );
                   }
@@ -826,6 +855,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       const Text('表示'),
                       const SizedBox(width: 8),
                       viewDropdown,
+                      const SizedBox(width: 16),
+                      const Text('評価'),
+                      const SizedBox(width: 8),
+                      ratingDropdown,
                     ],
                   );
                 },
@@ -1107,6 +1140,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
           _homeRecentAddedItems = const <MediaItem>[];
           _homeUnreadItems = const <MediaItem>[];
           _homeFavoriteShowcaseItems = const <MediaItem>[];
+          _homeRating5Items = const <MediaItem>[];
+          _homeRating4Items = const <MediaItem>[];
+          _homeRating3Items = const <MediaItem>[];
           _homeRecentViewedItems = const <MediaItem>[];
           _homeRecentViewEntriesByItemId = <String, ReadingProgressEntry>{};
           _homeResumeCard = null;
@@ -1178,6 +1214,21 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
       final favorites = mediaItems.where(_isFavoriteItem).toList(growable: true)
         ..sort(compareHomeAddedDesc);
+      final rating5 =
+          mediaItems
+              .where((item) => _ratingForItem(item) == 5)
+              .toList(growable: true)
+            ..sort(compareHomeAddedDesc);
+      final rating4 =
+          mediaItems
+              .where((item) => _ratingForItem(item) == 4)
+              .toList(growable: true)
+            ..sort(compareHomeAddedDesc);
+      final rating3 =
+          mediaItems
+              .where((item) => _ratingForItem(item) == 3)
+              .toList(growable: true)
+            ..sort(compareHomeAddedDesc);
       final unreadItems = recentAdded
           .where(
             (item) =>
@@ -1197,6 +1248,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
         _homeRecentAddedItems = recentAdded.take(10).toList(growable: false);
         _homeUnreadItems = unreadItems.take(10).toList(growable: false);
         _homeFavoriteShowcaseItems = favorites.take(10).toList(growable: false);
+        _homeRating5Items = rating5.take(10).toList(growable: false);
+        _homeRating4Items = rating4.take(10).toList(growable: false);
+        _homeRating3Items = rating3.take(10).toList(growable: false);
         _homeRecentViewedItems = recentViewedItems
             .take(10)
             .toList(growable: false);
@@ -1521,6 +1575,31 @@ extension _GalleryHomeView on _GalleryGridPageState {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildHomeRatingShelf({
+    required int rating,
+    required List<MediaItem> items,
+  }) {
+    return _buildHomeMediaShelf(
+      title: '評価$rating',
+      subtitle: '評価$ratingを付けた作品を表示します。',
+      items: items,
+      emptyTitle: '評価$ratingの作品はまだありません',
+      emptyMessage: '詳細画面で評価$ratingを付けるとここに表示されます。',
+      itemBuilder: (item) => _buildHomeMediaShelfCard(
+        item: item,
+        footerText: '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
+        footerIcon: Icons.schedule_outlined,
+        badgeText: '評価$rating',
+        badgeIcon: Icons.star_rounded,
+        badgeBackgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+        badgeForegroundColor: Theme.of(
+          context,
+        ).colorScheme.onSecondaryContainer,
+        onTap: () => _openDetailFromHome(item),
       ),
     );
   }
@@ -1903,6 +1982,12 @@ extension _GalleryHomeView on _GalleryGridPageState {
               );
             },
           ),
+          const SizedBox(height: 12),
+          _buildHomeRatingShelf(rating: 5, items: _homeRating5Items),
+          const SizedBox(height: 12),
+          _buildHomeRatingShelf(rating: 4, items: _homeRating4Items),
+          const SizedBox(height: 12),
+          _buildHomeRatingShelf(rating: 3, items: _homeRating3Items),
           const SizedBox(height: 12),
           _buildHomeMediaShelf(
             title: '最近追加',

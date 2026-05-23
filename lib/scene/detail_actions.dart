@@ -17,7 +17,9 @@ extension _DetailActions on _ImageDetailPageState {
     }
     if (!mounted) return;
     debugPrint('[detail-back] Navigator.pop');
-    Navigator.of(context).pop(_favChanged || _tagsChanged || _itemChanged);
+    Navigator.of(
+      context,
+    ).pop(_favChanged || _ratingChanged || _tagsChanged || _itemChanged);
   }
 
   Future<void> _initAsync() async {
@@ -70,6 +72,52 @@ extension _DetailActions on _ImageDetailPageState {
     final fav = lookupIds.any(favList.contains);
     if (!_isCurrentLoad(version, item)) return;
     setState(() => _isFavorite = fav);
+  }
+
+  Map<String, int> _decodeRatings(String? raw) {
+    if (raw == null || raw.isEmpty) return <String, int>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return <String, int>{};
+      final ratings = <String, int>{};
+      for (final entry in decoded.entries) {
+        final key = entry.key?.toString();
+        final value = entry.value;
+        final rating = value is int ? value : int.tryParse(value.toString());
+        if (key == null || rating == null || rating < 3 || rating > 5) {
+          continue;
+        }
+        ratings[key] = rating;
+      }
+      return ratings;
+    } catch (_) {
+      return <String, int>{};
+    }
+  }
+
+  Future<void> _loadRatingForCurrent({int? loadVersion}) async {
+    final item = _item;
+    final version = loadVersion ?? _detailLoadVersion;
+    final prefs = await SharedPreferences.getInstance();
+    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final rating = ratings[item.id];
+    if (!_isCurrentLoad(version, item)) return;
+    setState(() => _rating = rating);
+  }
+
+  Future<void> _setRating(int? rating) async {
+    if (rating != null && (rating < 3 || rating > 5)) return;
+    final prefs = await SharedPreferences.getInstance();
+    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    if (rating == null) {
+      ratings.remove(_item.id);
+    } else {
+      ratings[_item.id] = rating;
+    }
+    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    if (!mounted) return;
+    setState(() => _rating = rating);
+    _ratingChanged = true;
   }
 
   Future<void> _toggleFavorite() async {
@@ -134,11 +182,18 @@ extension _DetailActions on _ImageDetailPageState {
           favorites.toList(growable: false),
         );
       }
+      final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+      final rating = ratings.remove(item.id);
+      if (rating != null) {
+        ratings[updated.id] = rating;
+        await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+      }
       if (!mounted) return;
 
       setState(() {
         _items[_index] = updated;
         _isFavorite = favorites.contains(updated.id);
+        _rating = rating;
       });
       _itemChanged = true;
 
@@ -263,6 +318,9 @@ extension _DetailActions on _ImageDetailPageState {
       _PrefsKeys.favorites,
       fav.toList(growable: false),
     );
+    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    ratings.remove(item.id);
+    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
 
     if (metadataWarning != null && mounted) {
       ScaffoldMessenger.of(

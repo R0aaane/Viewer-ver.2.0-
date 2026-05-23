@@ -398,6 +398,8 @@ extension _DetailWidgets on _ImageDetailPageState {
       children: [
         _buildCompactMetadataCard(item),
         const SizedBox(height: 12),
+        _buildRatingSection(),
+        const SizedBox(height: 12),
         _buildAssignedTagsSection(),
         const SizedBox(height: 12),
         _buildCandidateTagsSection(),
@@ -473,6 +475,45 @@ extension _DetailWidgets on _ImageDetailPageState {
 
   Widget _buildMetaPill({required IconData icon, required String label}) {
     return _DetailMetaPill(icon: icon, label: label);
+  }
+
+  Widget _buildRatingSection() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.star_rate_rounded, color: Colors.amber),
+          const SizedBox(width: 8),
+          const Text('評価', style: TextStyle(color: Colors.white)),
+          const SizedBox(width: 12),
+          for (final value in const [3, 4, 5])
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ChoiceChip(
+                label: Text('$value'),
+                selected: _rating == value,
+                avatar: Icon(
+                  _rating == value ? Icons.star : Icons.star_border,
+                  size: 16,
+                  color: _rating == value ? Colors.black87 : Colors.amber,
+                ),
+                onSelected: (_) => _setRating(value),
+              ),
+            ),
+          const Spacer(),
+          IconButton(
+            tooltip: '評価をクリア',
+            onPressed: _rating == null ? null : () => _setRating(null),
+            icon: const Icon(Icons.clear, color: Colors.white70),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _infoRow(String k, String v) {

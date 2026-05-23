@@ -42,6 +42,7 @@ class _PrefsKeys {
   static const String twoPage = 'prefs.readerTwoPage';
 
   static const String favorites = 'prefs.favorites';
+  static const String ratingsJson = 'prefs.ratingsJson.v1';
 
   static const String folderAliasesJson = 'prefs.folderAliasesJson';
   static const String folderTileMode = 'prefs.folderTileMode';
