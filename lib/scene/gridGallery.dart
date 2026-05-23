@@ -214,9 +214,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _homeRecentAddedItems = const [];
   List<MediaItem> _homeUnreadItems = const [];
   List<MediaItem> _homeFavoriteShowcaseItems = const [];
-  List<MediaItem> _homeRating5Items = const [];
-  List<MediaItem> _homeRating4Items = const [];
-  List<MediaItem> _homeRating3Items = const [];
+  int _homeRatingShelfRating = 5;
+  List<MediaItem> _homeRatingShelfItems = const [];
   List<MediaItem> _homeRecentViewedItems = const [];
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
       <String, ReadingProgressEntry>{};
