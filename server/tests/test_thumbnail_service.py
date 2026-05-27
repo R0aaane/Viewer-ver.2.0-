@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pypdfium2 as pdfium
+from PIL import Image
 
 from server.services.thumbnail_service import ThumbnailService
 
@@ -77,12 +78,45 @@ class ThumbnailServiceTest(unittest.TestCase):
                     "mid:broken.pdf",
                     page_no=1,
                     width=800,
+                    image_format="jpg",
                 )
 
-        self.assertEqual(result.mime, "image/png")
-        self.assertTrue(result.payload.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(result.mime, "image/jpeg")
+        self.assertTrue(result.payload.startswith(b"\xff\xd8"))
         self.assertGreater(len(result.payload), 0)
         self.assertTrue(result.is_placeholder)
+
+    def test_render_pdf_page_reuses_cached_page_image(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "sample.pdf"
+            pdf_path.write_bytes(b"%PDF-1.7\n")
+            service = ThumbnailService(
+                _FakeMetadataStore(self._record_for(pdf_path)),
+                Path(temp_dir) / "thumbs",
+            )
+
+            with patch.object(
+                service,
+                "_render_pdf_page",
+                return_value=(Image.new("RGB", (32, 48), "white"), False, None),
+            ) as render_mock:
+                first = service.render_pdf_page(
+                    "mid:broken.pdf",
+                    page_no=1,
+                    width=320,
+                    image_format="jpg",
+                )
+                second = service.render_pdf_page(
+                    "mid:broken.pdf",
+                    page_no=1,
+                    width=320,
+                    image_format="jpg",
+                )
+
+        self.assertEqual(first.mime, "image/jpeg")
+        self.assertEqual(second.mime, "image/jpeg")
+        self.assertEqual(first.payload, second.payload)
+        self.assertEqual(render_mock.call_count, 1)
 
     def test_get_pdf_page_count_returns_none_for_pdfium_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

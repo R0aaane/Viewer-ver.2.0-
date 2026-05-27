@@ -344,20 +344,20 @@ extension _ReaderView on _ImageDetailPageState {
           ),
         ),
 
-        // 遶ｯ譛ｫ繧ｿ繝・・縺ｧ繝壹・繧ｸ驕ｷ遘ｻ・亥ｷｦ=蜑・/ 蜿ｳ=谺｡・・
+        // Edge taps move pages: left=previous, right=next.
         Positioned.fill(
           child: LayoutBuilder(
             builder: (context, c) {
               return GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onTapUp: (details) {
-                  // 髢ｲ隕ｧ逕ｨ繧ｿ繝紋ｻ･螟悶・辟｡隕悶☆繧・
+                  // Ignore taps outside the reader tab.
                   if (_tab.index != 0) return;
 
                   final dx = details.localPosition.dx;
                   final w = c.maxWidth;
 
-                  // 荳ｭ螟ｮ縺ｯ辟｡蜿榊ｿ懊↓
+                  // The center area toggles animation instead of paging.
                   final leftEdge = w * 0.35;
                   final rightEdge = w * 0.65;
 
@@ -503,12 +503,10 @@ extension _ReaderView on _ImageDetailPageState {
           );
         }
 
-        // 隕矩幕縺阪・縲檎ｸｦ蜷医ｏ縺帙搾ｼ九檎ｶｴ縺伜・蟇・○縲阪′荳逡ｪ螳牙ｮ壹＠繧・☆縺九▲縺・
         final fit = _fullscreen
             ? BoxFit.contain
             : (isSpread ? BoxFit.fitHeight : _boxFit);
 
-        //pdf縺ｮ閭梧勹縺ｫ逋ｽ繧定ｿｽ蜉・磯乗・縺ｧ騾上￠縺ｦ隕九∴繧具ｼ・
         final img = Image.memory(
           bytes,
           fit: fit,
@@ -559,7 +557,7 @@ extension _ReaderView on _ImageDetailPageState {
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
-          tooltip: '谺｡',
+          tooltip: '次',
           onPressed: canNext ? _next : null,
           icon: const Icon(Icons.chevron_right),
           visualDensity: VisualDensity.compact,
@@ -579,7 +577,7 @@ extension _ReaderView on _ImageDetailPageState {
           ),
         ),
 
-        // 隕矩幕縺阪・PDF縺縺・
+        // PDF two-page spread toggle.
         if (_isPdf)
           TextButton.icon(
             style: TextButton.styleFrom(
@@ -603,7 +601,7 @@ extension _ReaderView on _ImageDetailPageState {
 
         const SizedBox(width: 6),
 
-        // Fit ・亥・菴薙ｒ陦ｨ遉ｺ縺吶ｋ繝｢繝ｼ繝会ｼ・
+        // Page selector.
         if (_isPdf)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),

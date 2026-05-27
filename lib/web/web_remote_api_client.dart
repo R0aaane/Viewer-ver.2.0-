@@ -1023,10 +1023,18 @@ class WebRemoteApiClient {
     }
   }
 
-  Future<Uint8List> fetchPdfPage(String mediaId, int pageNo, {int? width}) {
+  Future<Uint8List> fetchPdfPage(
+    String mediaId,
+    int pageNo, {
+    int? width,
+    String? format,
+  }) {
     return _getBytes(
       '/media/${Uri.encodeComponent(mediaId)}/page/$pageNo',
-      queryParameters: <String, String>{if (width != null) 'width': '$width'},
+      queryParameters: <String, String>{
+        if (width != null) 'width': '$width',
+        if (format != null && format.trim().isNotEmpty) 'format': format.trim(),
+      },
     );
   }
 
@@ -1067,7 +1075,12 @@ class WebRemoteApiClient {
 
     for (final candidateWidth in widthCandidates) {
       try {
-        return await fetchPdfPage(mediaId, pageNo, width: candidateWidth);
+        return await fetchPdfPage(
+          mediaId,
+          pageNo,
+          width: candidateWidth,
+          format: 'jpg',
+        );
       } on WebRemoteException catch (error) {
         lastError = error;
       }

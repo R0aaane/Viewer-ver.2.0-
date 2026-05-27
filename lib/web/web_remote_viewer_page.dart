@@ -5801,15 +5801,20 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _pruneViewerPageCaches() {
-    final keepPages = <int>{_page};
-    if (_page > 1) {
-      keepPages.add(_page - 1);
-    }
-    if (!_pageCountReliable || _page + 1 <= _totalPages) {
-      keepPages.add(_page + 1);
-    }
-    if (_twoPage && (!_pageCountReliable || _page + 2 <= _totalPages)) {
-      keepPages.add(_page + 2);
+    final keepPages = <int>{};
+    final forwardWindow = _twoPage ? 4 : 3;
+    for (
+      var pageNumber = _page - 2;
+      pageNumber <= _page + forwardWindow;
+      pageNumber += 1
+    ) {
+      if (pageNumber < 1) {
+        continue;
+      }
+      if (_pageCountReliable && pageNumber > _totalPages) {
+        continue;
+      }
+      keepPages.add(pageNumber);
     }
 
     final cachedPages = <int>{
@@ -6031,20 +6036,22 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
           return bytes;
         });
     _pageFutureCache[pageNo] = future;
-    unawaited(future.catchError((_) {
-      if (_isCurrentViewerRequest(
-        generation: generation,
-        mediaId: mediaId,
-        stableId: stableId,
-      )) {
-        if (identical(_pageFutureCache[pageNo], future)) {
-          _pageFutureCache.remove(pageNo);
+    unawaited(
+      future.catchError((_) {
+        if (_isCurrentViewerRequest(
+          generation: generation,
+          mediaId: mediaId,
+          stableId: stableId,
+        )) {
+          if (identical(_pageFutureCache[pageNo], future)) {
+            _pageFutureCache.remove(pageNo);
+          }
+          _pageBytesCache.remove(pageNo);
+          _evictPageImageProvider(pageNo);
         }
-        _pageBytesCache.remove(pageNo);
-        _evictPageImageProvider(pageNo);
-      }
-      return Uint8List(0);
-    }));
+        return Uint8List(0);
+      }),
+    );
     return future;
   }
 
@@ -6056,7 +6063,26 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     } else {
       _rightFuture = null;
     }
+    _prefetchAdjacentPages();
     _pruneViewerPageCaches();
+  }
+
+  void _prefetchAdjacentPages() {
+    final pages = <int>{_page - 1, _page + 1, _page + 2};
+    if (_twoPage) {
+      pages.add(_page + 3);
+    }
+    for (final pageNumber in pages) {
+      if (pageNumber < 1) {
+        continue;
+      }
+      if (_pageCountReliable && pageNumber > _totalPages) {
+        continue;
+      }
+      unawaited(
+        _loadPageBytes(pageNumber).then<void>((_) {}, onError: (_, _) {}),
+      );
+    }
   }
 
   void _setCurrentPage(int page) {

@@ -23,7 +23,8 @@ import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
 /// ------------------------------
-/// LRU 郢晢ｽ｡郢晢ｽ｢郢晢ｽｪ郢ｧ・ｭ郢晢ｽ｣郢昴・縺咏ｹ晢ｽ･繝ｻ莠･・ｮ・ｹ鬩･繝ｻ闔会ｽｶ隰ｨ・ｰ陋ｻ・ｶ鬮ｯ謦ｰ・ｼ繝ｻ/// ------------------------------
+/// LRU cache by entry count and byte size.
+/// ------------------------------
 class _LruCache<K, V> {
   final int maxBytes;
   final int maxEntries;
@@ -41,7 +42,7 @@ class _LruCache<K, V> {
   V? get(K key) {
     final v = _map.remove(key);
     if (v == null) return null;
-    // 郢ｧ・｢郢ｧ・ｯ郢ｧ・ｻ郢ｧ・ｹ邵ｺ霈費ｽ檎ｸｺ貅假ｽらｸｺ・ｮ郢ｧ蜻亥ｿｰ陝・ｽｾ邵ｺ・ｸ
+    // Reinsert as the newest entry.
     _map[key] = v;
     return v;
   }
@@ -59,7 +60,7 @@ class _LruCache<K, V> {
   }
 
   void _evictIfNeeded() {
-    // 莉ｶ謨ｰ or 螳ｹ驥上ｒ貅縺溘☆縺ｾ縺ｧ蜿､縺・ｂ縺ｮ縺九ｉ謐ｨ縺ｦ繧・
+    // Evict oldest entries until both limits are satisfied.
     while (_map.isNotEmpty && (_map.length > maxEntries || _bytes > maxBytes)) {
       final oldestKey = _map.keys.first;
       final oldestVal = _map.remove(oldestKey)!;
@@ -148,10 +149,10 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   // ------------------------------
-  // 郢ｧ・ｵ郢晢｣ｰ郢晞亂縺・ｹ晢ｽｫ繝ｻ螢ｹﾎ鍋ｹ晢ｽ｢郢晢ｽｪLRU郢ｧ・ｭ郢晢ｽ｣郢昴・縺咏ｹ晢ｽ･
+  // Thumbnail LRU cache.
   // ------------------------------
-  // 騾ｶ・ｮ陞ｳ繝ｻ 64MB / 隴崢陞滂ｽｧ400闔会ｽｶ
-  // ・医←縺｡繧峨°蜈医↓驕斐＠縺溘ｉ蜿､縺・ｂ縺ｮ縺九ｉ遐ｴ譽・ｼ・
+  // Upper bounds: 64MB / 400 entries.
+  // Older entries are removed when either limit is exceeded.
   final _LruCache<String, ThumbPair> _thumbCache = _LruCache<String, ThumbPair>(
     maxBytes: 64 * 1024 * 1024,
     maxEntries: 400,
@@ -159,10 +160,10 @@ class WindowsFolderRepository implements MediaRepository {
         pair.front.lengthInBytes + (pair.back?.lengthInBytes ?? 0),
   );
 
-  // 陷ｷ蠕｡・ｸﾂ郢ｧ・ｵ郢晢｣ｰ郢晞亂繝ｻ陷ｷ譴ｧ蜃ｾ髫補扱・ｱ繧・ｽ・陜玲ｧｭ竊鍋ｸｺ・ｾ邵ｺ・ｨ郢ｧ竏堋竏ｵﾂ・･邵ｺ・ｪ郢ｧ・ｹ郢ｧ・ｯ郢晢ｽｭ郢晢ｽｼ郢晢ｽｫ邵ｺ・ｫ陝・ｽｾ陟｢諛翫堤ｸｺ髦ｪ・狗ｹｧ蛹ｻ竕ｧ邵ｺ・ｫ
+  // Share in-flight thumbnail builds for the same cache key.
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
 
-  // PDF 繧ｭ繝｣繝・す繝･・医・繝ｼ繧ｸ騾√ｊ鬮倬溷喧・・
+  // PDF document cache for faster page rendering.
   final Map<String, PdfDocument> _pdfCache = {};
   Directory? _thumbDiskDir;
 
@@ -326,7 +327,7 @@ class WindowsFolderRepository implements MediaRepository {
           ext == _epubExt;
     }
 
-    // 髯ｦ・ｨ驕会ｽｺ騾包ｽｨ邵ｺ・ｯ邵ｲ讙主ｳｩ闕ｳ荵昴・邵ｺ・ｿ邵ｲ謳ｾ・ｼ繝ｻDirectory 郢ｧ繧奇ｽｿ譁絶・
+    // Read entries once so progress can use a stable total.
     final entries = <FileSystemEntity>[];
     await for (final e in dir.list(recursive: false, followLinks: false)) {
       entries.add(e);
@@ -339,12 +340,10 @@ class WindowsFolderRepository implements MediaRepository {
     final files = <MediaItem>[];
 
     for (final e in entries) {
-      // 騾ｶ・ｴ闕ｳ荵昴＠郢晄じ繝ｵ郢ｧ・ｩ郢晢ｽｫ郢敖
+      // Directories are shown before files.
       if (e is Directory) {
         final stat = await e.stat();
-        final name = _fileName(
-          e.path,
-        ); // 隴鯉ｽ｢陝・･繝ｻ郢晏･ﾎ晉ｹ昜ｻ｣繝ｻ雎ｬ竏ｫ逡代・蝓溷ｿｰ陝・ｽｾ陷ｷ讎雁徐陟墓圜・ｼ繝ｻ
+        final name = _fileName(e.path);
         final isGifCollection = await _isGifCollectionDirectory(e);
         folders.add(
           MediaItem(
@@ -363,7 +362,7 @@ class WindowsFolderRepository implements MediaRepository {
         continue;
       }
 
-      // 逶ｴ荳九ヵ繧｡繧､繝ｫ・育判蜒・PDF・・
+      // Skip unsupported direct child files.
       if (!isMediaFile(e)) {
         processed++;
         if (onProgress != null) onProgress(processed, total);
@@ -394,7 +393,7 @@ class WindowsFolderRepository implements MediaRepository {
       if (onProgress != null) onProgress(processed, total);
     }
 
-    // 隕九ｄ縺吶￥・壹ヵ繧ｩ繝ｫ繝竊偵ヵ繧｡繧､繝ｫ縲∝推縲・錐蜑埼・
+    // Sort folders first, then files, by display name.
     folders.sort(
       (a, b) =>
           a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
@@ -415,12 +414,12 @@ class WindowsFolderRepository implements MediaRepository {
     int total = 0;
     await for (final ent in dir.list(recursive: false, followLinks: false)) {
       if (ent is Directory) {
-        total++; // 郢晁ｼ斐°郢晢ｽｫ郢敖郢ｧ繧奇ｽ｡・ｨ驕会ｽｺ陝・ｽｾ髮趣ｽ｡
+        total++;
       } else if (ent is File) {
         final name = ent.uri.pathSegments.isNotEmpty
             ? ent.uri.pathSegments.last
             : ent.path;
-        if (_isTargetFileName(name)) total++; // 騾包ｽｻ陷偵・PDF邵ｺ・ｮ邵ｺ・ｿ
+        if (_isTargetFileName(name)) total++;
       }
     }
     return total;
@@ -539,7 +538,7 @@ class WindowsFolderRepository implements MediaRepository {
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
-    // Windows邵ｺ・ｯ陝ｶ・ｸ邵ｺ・ｫ郢晁ｼ斐＜郢ｧ・､郢晢ｽｫ郢昜ｻ｣縺幄恆閧ｴ鄂ｲ
+    // Windows uses direct filesystem traversal.
     return _listMediaFsRecursiveFiles(folder, onProgress: onProgress);
   }
 
@@ -610,7 +609,7 @@ class WindowsFolderRepository implements MediaRepository {
           id: ent.path,
           displayName: name,
           kind: kind,
-          folderRaw: folder.raw, // 笘・､懃ｴ｢蜈・Ν繝ｼ繝・
+          folderRaw: folder.raw,
           modified: stat.modified,
           sizeBytes: stat.size,
           tags: const [],
@@ -885,7 +884,7 @@ class WindowsFolderRepository implements MediaRepository {
     }
   }
 
-  // ---- 郢晏｣ｹ繝ｻ郢ｧ・ｸ隰ｨ・ｰ郢ｧ雋槫徐陟輔・----
+  // ---- PDF page count ----
   @override
   Future<int> getPageCount(MediaItem item) async {
     if (item.kind != MediaKind.pdf) return 1;
@@ -896,7 +895,7 @@ class WindowsFolderRepository implements MediaRepository {
     return doc.pagesCount;
   }
 
-  // ---- 闔会ｽｻ隲｢荳翫・郢晢ｽｼ郢ｧ・ｸ郢ｧ蜊朗G邵ｺ・ｨ邵ｺ蜉ｱ窶ｻ陷ｿ髢・ｾ蜉ｱ縲堤ｸｺ髦ｪ・狗ｹｧ蛹ｻ竕ｧ邵ｺ・ｫ ----
+  // ---- PDF/image page rendering ----
   @override
   Future<Uint8List> renderPageBytes(
     MediaItem item,
@@ -944,11 +943,11 @@ class WindowsFolderRepository implements MediaRepository {
   Future<ThumbPair> readThumbPair(MediaItem item, {int maxWidth = 360}) async {
     final cacheKey = _thumbCacheKey(item, maxWidth);
 
-    // LRU 繧ｭ繝｣繝・す繝･繧偵≠縺溘▲縺ｦ縺ｿ繧・
+    // Try the in-memory LRU cache first.
     final cached = _thumbCache.get(cacheKey);
     if (cached != null) return cached;
 
-    // 蜷御ｸ繧ｭ繝ｼ縺ｮ in-flight 繧貞・譛・
+    // Reuse an in-flight build for the same key.
     final inflight = _thumbInFlight[cacheKey];
     if (inflight != null) return inflight;
 
@@ -1003,7 +1002,7 @@ class WindowsFolderRepository implements MediaRepository {
       }
     }
 
-    // PDF: 1繝壹・繧ｸ逶ｮ + 荳ｭ髢薙・繝ｼ繧ｸ・・oc繧ｭ繝｣繝・す繝･繧貞茜逕ｨ・・
+    // PDF: render the first page for the thumbnail.
     final doc = await _withFsRetry(
       item.id,
       () => PdfDocument.openFile(item.id),
@@ -1052,7 +1051,7 @@ class WindowsFolderRepository implements MediaRepository {
     return img.bytes;
   }
 
-  /// 郢晁ｼ斐°郢晢ｽｫ郢敖陋ｻ繝ｻ蟠帷ｹ晢ｽｻ郢ｧ・｢郢晏干ﾎ憺お繧・ｽｺ繝ｻ蜃ｾ邵ｺ・ｫ陷ｻ・ｼ邵ｺ・ｶ邵ｺ・ｨ郢晢ｽ｡郢晢ｽ｢郢晢ｽｪ郢晢ｽｪ郢晢ｽｼ郢ｧ・ｯ邵ｺ蜉ｱ竊鍋ｸｺ荳奇ｼ・
+  /// Releases cached PDF documents and thumbnail state.
   Future<void> dispose() async {
     _thumbInFlight.clear();
     _thumbCache.clear();

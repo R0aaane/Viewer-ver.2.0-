@@ -198,11 +198,13 @@ def render_pdf_page(
     media_id: str,
     page_no: int,
     width: int | None = None,
+    format: str | None = None,
 ) -> Response:
     result = request.app.state.thumbnail_service.render_pdf_page(
         media_id,
         page_no=page_no,
         width=width,
+        image_format=format,
     )
     headers = {
         "X-Thumbnail-Status": "placeholder" if result.is_placeholder else "ok",

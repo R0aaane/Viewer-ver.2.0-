@@ -4,8 +4,10 @@ import io
 import logging
 import os
 import tempfile
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 
 import pypdfium2 as pdfium
 from PIL import Image, ImageDraw
@@ -45,10 +47,14 @@ def _head_hex_preview(payload: bytes, limit: int = 16) -> str:
 
 
 class ThumbnailService:
+    _max_open_pdf_documents = 4
+
     def __init__(self, metadata_store: MetadataStore, thumbs_dir: Path) -> None:
         self._metadata = metadata_store
         self._thumbs_dir = Path(thumbs_dir)
         self._thumbs_dir.mkdir(parents=True, exist_ok=True)
+        self._pdf_lock = RLock()
+        self._pdf_cache: OrderedDict[str, pdfium.PdfDocument] = OrderedDict()
 
     def build_thumbnail(
         self,
@@ -150,6 +156,7 @@ class ThumbnailService:
         *,
         page_no: int,
         width: int | None = None,
+        image_format: str | None = None,
     ) -> "ThumbnailBuildResult":
         if page_no < 1:
             raise bad_request("pageNo must be greater than or equal to 1")
@@ -175,6 +182,27 @@ class ThumbnailService:
             )
 
         target_width = max(128, width or 1600)
+        output_format, output_mime, output_suffix = self._normalize_page_image_format(
+            image_format
+        )
+        cache_key = _hash_key(
+            f"page-v1|{media_id}|{record['etag']}|{page_no}|{target_width}|{output_suffix}"
+        )
+        cache_path = self._thumbs_dir / f"{cache_key}.{output_suffix}"
+        if cache_path.exists():
+            try:
+                return ThumbnailBuildResult(
+                    payload=cache_path.read_bytes(),
+                    mime=output_mime,
+                    is_placeholder=False,
+                )
+            except OSError:
+                logger.exception(
+                    "[thumbnail][page_cache_read_failed] media_id=%s cache_path=%s",
+                    media_id,
+                    cache_path,
+                )
+
         is_placeholder = False
         detail: str | None = None
         try:
@@ -205,13 +233,23 @@ class ThumbnailService:
             detail = f"page {page_no}"
 
         with io.BytesIO() as output:
-            image.save(output, format="PNG")
-            return ThumbnailBuildResult(
-                payload=output.getvalue(),
-                mime="image/png",
-                is_placeholder=is_placeholder,
-                detail=detail,
-            )
+            save_kwargs: dict[str, object] = {}
+            if output_format == "JPEG":
+                save_kwargs = {"quality": 88, "optimize": True}
+            elif output_format == "WEBP":
+                save_kwargs = {"quality": 86, "method": 4}
+            image.save(output, format=output_format, **save_kwargs)
+            data = output.getvalue()
+        if is_placeholder:
+            self._remove_cache_file(cache_path)
+        else:
+            self._write_bytes_atomic(cache_path, data)
+        return ThumbnailBuildResult(
+            payload=data,
+            mime=output_mime,
+            is_placeholder=is_placeholder,
+            detail=detail,
+        )
 
     def get_pdf_page_count(self, media_id: str) -> int | None:
         try:
@@ -240,10 +278,10 @@ class ThumbnailService:
             )
             return None
 
-        pdf: pdfium.PdfDocument | None = None
         try:
-            pdf = self._open_pdf_document(path)
-            return len(pdf)
+            with self._pdf_lock:
+                pdf = self._open_cached_pdf_document(path)
+                return len(pdf)
         except pdfium.PdfiumError:
             logger.exception(
                 "[thumbnail][page_count_pdfium_error] media_id=%s path=%s",
@@ -258,8 +296,6 @@ class ThumbnailService:
                 path,
             )
             return None
-        finally:
-            self._close_pdf(pdf, media_id=media_id, path=path, context="page_count")
 
     def _render_pdf_page(
         self,
@@ -272,81 +308,80 @@ class ThumbnailService:
     ) -> tuple[Image.Image, bool, str | None]:
         self._log_pdf_probe(media_id, path, context="render_pdf_page")
 
-        pdf: pdfium.PdfDocument | None = None
-        page: pdfium.PdfPage | None = None
-        rendered = None
-        try:
-            pdf = self._open_pdf_document(path)
-            if page_no < 1 or page_no > len(pdf):
-                raise bad_request("pageNo is out of range")
-            page = pdf[page_no - 1]
-            page_width, _ = page.get_size()
-            scale = max(width / max(float(page_width), 1.0), 0.2)
-            rendered = page.render(scale=scale)
-            return rendered.to_pil().convert("RGB"), False, None
-        except ApiError:
-            raise
-        except pdfium.PdfiumError:
-            logger.exception(
-                "[thumbnail][pdfium_error] media_id=%s path=%s page=%s width=%s",
-                media_id,
-                path,
-                page_no,
-                width,
-            )
-            detail = Path(path).suffix or "invalid pdf"
-            return (
-                self._build_placeholder_image(
+        with self._pdf_lock:
+            page: pdfium.PdfPage | None = None
+            rendered = None
+            try:
+                pdf = self._open_cached_pdf_document(path)
+                if page_no < 1 or page_no > len(pdf):
+                    raise bad_request("pageNo is out of range")
+                page = pdf[page_no - 1]
+                page_width, _ = page.get_size()
+                scale = max(width / max(float(page_width), 1.0), 0.2)
+                rendered = page.render(scale=scale)
+                return rendered.to_pil().convert("RGB"), False, None
+            except ApiError:
+                raise
+            except pdfium.PdfiumError:
+                logger.exception(
+                    "[thumbnail][pdfium_error] media_id=%s path=%s page=%s width=%s",
+                    media_id,
+                    path,
+                    page_no,
                     width,
-                    height_hint or self._default_pdf_height(width),
-                    "PDF ERROR",
-                    detail=detail,
-                ),
-                True,
-                detail,
-            )
-        except Exception:
-            logger.exception(
-                "[thumbnail][render_pdf_page_unexpected_error] media_id=%s path=%s page=%s width=%s",
-                media_id,
-                path,
-                page_no,
-                width,
-            )
-            detail = "unexpected"
-            return (
-                self._build_placeholder_image(
+                )
+                detail = Path(path).suffix or "invalid pdf"
+                return (
+                    self._build_placeholder_image(
+                        width,
+                        height_hint or self._default_pdf_height(width),
+                        "PDF ERROR",
+                        detail=detail,
+                    ),
+                    True,
+                    detail,
+                )
+            except Exception:
+                logger.exception(
+                    "[thumbnail][render_pdf_page_unexpected_error] media_id=%s path=%s page=%s width=%s",
+                    media_id,
+                    path,
+                    page_no,
                     width,
-                    height_hint or self._default_pdf_height(width),
-                    "PDF ERROR",
-                    detail=detail,
-                ),
-                True,
-                detail,
-            )
-        finally:
-            if rendered is not None:
-                try:
-                    rendered.close()
-                except Exception:
-                    logger.warning(
-                        "[thumbnail][render_close_failed] media_id=%s path=%s",
-                        media_id,
-                        path,
-                        exc_info=True,
-                    )
-            if page is not None:
-                try:
-                    page.close()
-                except Exception:
-                    logger.warning(
-                        "[thumbnail][page_close_failed] media_id=%s path=%s page=%s",
-                        media_id,
-                        path,
-                        page_no,
-                        exc_info=True,
-                    )
-            self._close_pdf(pdf, media_id=media_id, path=path, context="render_pdf_page")
+                )
+                detail = "unexpected"
+                return (
+                    self._build_placeholder_image(
+                        width,
+                        height_hint or self._default_pdf_height(width),
+                        "PDF ERROR",
+                        detail=detail,
+                    ),
+                    True,
+                    detail,
+                )
+            finally:
+                if rendered is not None:
+                    try:
+                        rendered.close()
+                    except Exception:
+                        logger.warning(
+                            "[thumbnail][render_close_failed] media_id=%s path=%s",
+                            media_id,
+                            path,
+                            exc_info=True,
+                        )
+                if page is not None:
+                    try:
+                        page.close()
+                    except Exception:
+                        logger.warning(
+                            "[thumbnail][page_close_failed] media_id=%s path=%s page=%s",
+                            media_id,
+                            path,
+                            page_no,
+                            exc_info=True,
+                        )
 
     def _log_media_resolution(
         self,
@@ -384,6 +419,35 @@ class ThumbnailService:
         except Exception:
             handle.close()
             raise
+
+    def _open_cached_pdf_document(self, path: str) -> pdfium.PdfDocument:
+        cached = self._pdf_cache.pop(path, None)
+        if cached is not None:
+            self._pdf_cache[path] = cached
+            return cached
+
+        document = self._open_pdf_document(path)
+        self._pdf_cache[path] = document
+        while len(self._pdf_cache) > self._max_open_pdf_documents:
+            old_path, old_document = self._pdf_cache.popitem(last=False)
+            self._close_pdf(
+                old_document,
+                media_id="<cache-evict>",
+                path=old_path,
+                context="pdf_lru_evict",
+            )
+        return document
+
+    def _normalize_page_image_format(
+        self,
+        image_format: str | None,
+    ) -> tuple[str, str, str]:
+        normalized = (image_format or "png").strip().lower()
+        if normalized in {"jpg", "jpeg"}:
+            return "JPEG", "image/jpeg", "jpg"
+        if normalized == "webp":
+            return "WEBP", "image/webp", "webp"
+        return "PNG", "image/png", "png"
 
     def _log_pdf_probe(self, media_id: str, path: str, *, context: str) -> None:
         exists = os.path.exists(path)
