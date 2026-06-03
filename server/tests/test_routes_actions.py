@@ -98,6 +98,14 @@ class _RecordingMetadataStore:
         return {'removedAliasCount': 0, 'migratedLinkCount': 0}
 
 
+class _RecordingThumbnailService:
+    def __init__(self) -> None:
+        self.close_cached_pdf_documents_calls: list[list[str]] = []
+
+    def close_cached_pdf_documents(self, paths: list[str]) -> None:
+        self.close_cached_pdf_documents_calls.append(paths)
+
+
 class _RecordingIndexService:
     def __init__(
         self,
@@ -283,6 +291,7 @@ def _request(
     *,
     index_service: object | None = None,
     media_roots: list[str] | None = None,
+    thumbnail_service: object | None = None,
     url_download_service: object | None = None,
 ):
     return SimpleNamespace(
@@ -290,6 +299,7 @@ def _request(
             state=SimpleNamespace(
                 metadata_store=metadata_store,
                 index_service=index_service,
+                thumbnail_service=thumbnail_service,
                 settings=SimpleNamespace(media_roots=media_roots or []),
                 url_download_service=url_download_service or _FakeUrlDownloadService(),
             )
@@ -337,7 +347,8 @@ class ActionsRoutesTest(unittest.TestCase):
 
     def test_apply_delete_passes_all_items_to_metadata_store(self) -> None:
         store = _RecordingMetadataStore(deleted_count=2)
-        request = _request(store)
+        thumbnail_service = _RecordingThumbnailService()
+        request = _request(store, thumbnail_service=thumbnail_service)
         payload = DeleteRequest(
             hardDelete=True,
             items=[
@@ -352,6 +363,10 @@ class ActionsRoutesTest(unittest.TestCase):
         self.assertEqual(len(store.delete_calls), 1)
         self.assertTrue(store.delete_calls[0]['hard_delete'])
         self.assertEqual(len(store.delete_calls[0]['items']), 2)
+        self.assertEqual(
+            thumbnail_service.close_cached_pdf_documents_calls,
+            [[r'C:\library\one.jpg', r'C:\library\two.jpg']],
+        )
 
     def test_apply_delete_propagates_metadata_errors(self) -> None:
         store = _RecordingMetadataStore(delete_error=bad_request('delete failed'))

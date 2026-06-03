@@ -438,6 +438,36 @@ class ThumbnailService:
             )
         return document
 
+    def close_cached_pdf_documents(self, paths: list[str]) -> None:
+        normalized_targets = [
+            os.path.normcase(os.path.normpath(path))
+            for path in paths
+            if str(path or "").strip()
+        ]
+        if not normalized_targets:
+            return
+
+        with self._pdf_lock:
+            cached_paths = list(self._pdf_cache.keys())
+            for cached_path in cached_paths:
+                normalized_cached = os.path.normcase(os.path.normpath(cached_path))
+                should_close = any(
+                    normalized_cached == target
+                    or normalized_cached.startswith(f"{target}{os.sep}")
+                    or normalized_cached.startswith(f"{target}\\")
+                    or normalized_cached.startswith(f"{target}/")
+                    for target in normalized_targets
+                )
+                if not should_close:
+                    continue
+                document = self._pdf_cache.pop(cached_path, None)
+                self._close_pdf(
+                    document,
+                    media_id="<delete>",
+                    path=cached_path,
+                    context="pdf_delete_evict",
+                )
+
     def _normalize_page_image_format(
         self,
         image_format: str | None,

@@ -929,6 +929,21 @@ def apply_delete(request: Request, payload: DeleteRequest) -> MessageResponse:
                 "hardDelete": payload.hardDelete,
             }
         ]
+    thumbnail_service = getattr(request.app.state, "thumbnail_service", None)
+    if thumbnail_service is not None:
+        close_cached_pdf_documents = getattr(
+            thumbnail_service,
+            "close_cached_pdf_documents",
+            None,
+        )
+        if close_cached_pdf_documents is not None:
+            close_cached_pdf_documents(
+                [
+                    str(item.get("path") or "")
+                    for item in items
+                    if str(item.get("path") or "").strip()
+                ]
+            )
     deleted = request.app.state.metadata_store.apply_delete(
         items=items,
         hard_delete=payload.hardDelete,
