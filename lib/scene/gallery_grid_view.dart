@@ -623,6 +623,10 @@ extension _GalleryGridView on _GalleryGridPageState {
     return sorted.toList(growable: false);
   }
 
+  bool _sortModeUsesReadingProgress(_SortMode sortMode) {
+    return sortMode == _SortMode.unreadFirst || sortMode == _SortMode.readFirst;
+  }
+
   List<MediaItem> _applyFilter(
     List<MediaItem> input, {
     required bool? pdfOnly,

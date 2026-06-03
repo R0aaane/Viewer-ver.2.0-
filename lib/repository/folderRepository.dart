@@ -633,13 +633,6 @@ class WindowsFolderRepository implements MediaRepository {
   Future<bool> deleteItem(MediaItem item) async {
     try {
       if (item.kind == MediaKind.folder) {
-        final dir = Directory(item.id);
-        if (await dir.exists()) {
-          await dir.delete(recursive: true);
-        }
-
-        _thumbCache.clear();
-
         final keys = _pdfCache.keys.toList(growable: false);
         for (final k in keys) {
           if (_isInsideLibrary(k, item.id)) {
@@ -651,7 +644,21 @@ class WindowsFolderRepository implements MediaRepository {
             }
           }
         }
+
+        final dir = Directory(item.id);
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+
+        _thumbCache.clear();
         return true;
+      }
+
+      final doc = _pdfCache.remove(item.id);
+      if (doc != null) {
+        try {
+          await doc.close();
+        } catch (_) {}
       }
 
       final f = File(item.id);
@@ -660,12 +667,6 @@ class WindowsFolderRepository implements MediaRepository {
       }
 
       _thumbCache.clear();
-      final doc = _pdfCache.remove(item.id);
-      if (doc != null) {
-        try {
-          await doc.close();
-        } catch (_) {}
-      }
 
       return true;
     } catch (_) {

@@ -310,6 +310,12 @@ extension _ReaderView on _ImageDetailPageState {
 
               final isSpread = _twoPage && _isPdf;
               final pageW = isSpread ? (c.maxWidth - gap) / 2.0 : c.maxWidth;
+              final leftPage = isSpread ? _page + 1 : _page;
+              final rightPage = _page;
+              final leftFuture = isSpread
+                  ? _readerController.rightFuture
+                  : _readerController.leftFuture;
+              final rightFuture = _readerController.leftFuture;
 
               return Row(
                 mainAxisSize: MainAxisSize.min,
@@ -318,12 +324,12 @@ extension _ReaderView on _ImageDetailPageState {
                   SizedBox(
                     width: pageW,
                     child: _pageImage(
-                      _readerController.leftFuture,
+                      leftFuture,
                       align: isSpread
                           ? Alignment.centerRight
                           : Alignment.center,
                       isSpread: isSpread,
-                      pageNumber: _page,
+                      pageNumber: leftPage,
                     ),
                   ),
                   if (isSpread) ...[
@@ -331,10 +337,10 @@ extension _ReaderView on _ImageDetailPageState {
                     SizedBox(
                       width: pageW,
                       child: _pageImage(
-                        _readerController.rightFuture,
+                        rightFuture,
                         align: Alignment.centerLeft,
                         isSpread: isSpread,
-                        pageNumber: _page + 1,
+                        pageNumber: rightPage,
                       ),
                     ),
                   ],
@@ -344,7 +350,7 @@ extension _ReaderView on _ImageDetailPageState {
           ),
         ),
 
-        // Edge taps move pages: left=previous, right=next.
+        // Edge taps move PDF pages right-to-left.
         Positioned.fill(
           child: LayoutBuilder(
             builder: (context, c) {
@@ -362,9 +368,17 @@ extension _ReaderView on _ImageDetailPageState {
                   final rightEdge = w * 0.65;
 
                   if (dx < leftEdge) {
-                    _prev();
+                    if (_isPdf) {
+                      _next();
+                    } else {
+                      _prev();
+                    }
                   } else if (dx > rightEdge) {
-                    _next();
+                    if (_isPdf) {
+                      _prev();
+                    } else {
+                      _next();
+                    }
                   } else {
                     _toggleGifAnimation();
                   }
@@ -549,16 +563,20 @@ extension _ReaderView on _ImageDetailPageState {
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
-          tooltip: '前',
-          onPressed: canPrev ? _prev : null,
+          tooltip: _isPdf ? '次' : '前',
+          onPressed: _isPdf
+              ? (canNext ? _next : null)
+              : (canPrev ? _prev : null),
           icon: const Icon(Icons.chevron_left),
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
-          tooltip: '次',
-          onPressed: canNext ? _next : null,
+          tooltip: _isPdf ? '前' : '次',
+          onPressed: _isPdf
+              ? (canPrev ? _prev : null)
+              : (canNext ? _next : null),
           icon: const Icon(Icons.chevron_right),
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,

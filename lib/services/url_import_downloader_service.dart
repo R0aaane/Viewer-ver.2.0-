@@ -65,6 +65,20 @@ class HitomiSearchResult {
   });
 }
 
+class HitomiSearchSuggestion {
+  final String value;
+  final int? count;
+  final String namespace;
+
+  const HitomiSearchSuggestion({
+    required this.value,
+    required this.namespace,
+    this.count,
+  });
+
+  String get query => '$namespace:${value.replaceAll(RegExp(r'\s+'), '_')}';
+}
+
 class _PreparedUrlImportSources {
   final List<String> launcherUrls;
   final List<String> directUrls;
@@ -153,11 +167,9 @@ class UrlImportDownloaderService {
   static const String _dddSmartCdnHost = 'cdn.ddd-smart.net';
   static const List<String> _hitomiNozomiHosts = <String>[
     'ltn.gold-usergeneratedcontent.net',
-    'ltn.hitomi.la',
   ];
   static const List<String> _hitomiGalleryInfoHosts = <String>[
     'ltn.gold-usergeneratedcontent.net',
-    'ltn.hitomi.la',
   ];
   static const Set<String> _supportedHitomiSearchNamespaces = <String>{
     'artist',
@@ -196,6 +208,52 @@ class UrlImportDownloaderService {
       concurrency: 6,
       mapper: _fetchHitomiSearchResult,
     );
+  }
+
+  Future<List<HitomiSearchSuggestion>> searchHitomiSuggestions(
+    String query, {
+    int limit = 20,
+  }) async {
+    final parsed = _parseHitomiSuggestionQuery(query);
+    if (parsed == null) {
+      return const <HitomiSearchSuggestion>[];
+    }
+    final uri = Uri.https(
+      'tagindex.hitomi.la',
+      '/${parsed.field}/${parsed.pathSegments.join('/')}.json',
+    );
+    try {
+      final bytes = await _downloadBytes(
+        uri,
+        accept: 'application/json,text/plain,*/*;q=0.8',
+      );
+      final decoded = jsonDecode(const Utf8Decoder().convert(bytes));
+      if (decoded is! List) {
+        return const <HitomiSearchSuggestion>[];
+      }
+      final suggestions = <HitomiSearchSuggestion>[];
+      for (final entry in decoded.take(limit.clamp(1, 100))) {
+        if (entry is! List || entry.length < 3) {
+          continue;
+        }
+        final value = _trimmedOrNull(entry[0]);
+        final namespace = _trimmedOrNull(entry[2]);
+        if (value == null || namespace == null) {
+          continue;
+        }
+        final count = entry[1] is num ? (entry[1] as num).toInt() : null;
+        suggestions.add(
+          HitomiSearchSuggestion(
+            value: value,
+            namespace: namespace,
+            count: count,
+          ),
+        );
+      }
+      return suggestions;
+    } on Object {
+      return const <HitomiSearchSuggestion>[];
+    }
   }
 
   Future<HitomiSearchResult> _fetchHitomiSearchResult(int galleryId) async {
@@ -751,6 +809,43 @@ class UrlImportDownloaderService {
     );
   }
 
+  ({String field, List<String> pathSegments})? _parseHitomiSuggestionQuery(
+    String query,
+  ) {
+    final normalized = query
+        .trim()
+        .toLowerCase()
+        .replaceFirst(RegExp(r'^-'), '')
+        .replaceAll('_', ' ');
+    if (normalized.isEmpty) {
+      return null;
+    }
+    var field = 'global';
+    var term = normalized;
+    final separatorIndex = normalized.indexOf(':');
+    if (separatorIndex > 0) {
+      field = normalized.substring(0, separatorIndex);
+      term = normalized.substring(separatorIndex + 1).trim();
+    }
+    if (term.isEmpty) {
+      return null;
+    }
+    final pathSegments = term
+        .split('')
+        .map(_encodeHitomiSuggestionPathSegment)
+        .toList(growable: false);
+    return (field: field, pathSegments: pathSegments);
+  }
+
+  String _encodeHitomiSuggestionPathSegment(String value) {
+    return switch (value) {
+      ' ' => '_',
+      '/' => 'slash',
+      '.' => 'dot',
+      _ => value,
+    };
+  }
+
   List<String> _normalizeHitomiSearchTerms(String queryText) {
     final rawTerms = queryText
         .toLowerCase()
@@ -870,13 +965,14 @@ class UrlImportDownloaderService {
     _assertSupportedHitomiSearchTerms(<String>[term]);
     final separatorIndex = term.indexOf(':');
     final leftSide = term.substring(0, separatorIndex);
-    final rightSide = term.substring(separatorIndex + 1);
+    final rightSide = term.substring(separatorIndex + 1).trim();
+    final normalizedTerm = '$leftSide:$rightSide';
 
     switch (leftSide) {
       case 'female':
       case 'male':
         return _downloadHitomiNozomiGalleryIds(
-          state.copyWith(area: 'tag', tag: term).normalized(),
+          state.copyWith(area: 'tag', tag: normalizedTerm).normalized(),
         );
       case 'language':
         return _downloadHitomiNozomiGalleryIds(

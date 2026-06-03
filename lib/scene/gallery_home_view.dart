@@ -275,6 +275,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
             .where((item) => _ratingForItem(item) == ratingFilter)
             .toList(growable: false);
       }
+      if (_sortModeUsesReadingProgress(_homeSearchSortMode)) {
+        await _refreshCurrentPageReadingProgress(filtered);
+      }
       final sorted = _sortItemsByMode(filtered, sortMode: _homeSearchSortMode);
 
       if (!mounted) return;
@@ -298,6 +301,21 @@ extension _GalleryHomeView on _GalleryGridPageState {
         context,
       ).showSnackBar(SnackBar(content: Text('全フォルダ検索でエラー: $e')));
     }
+  }
+
+  Future<void> _applyDetailedBrowseSortMode(_SortMode value) async {
+    if (_sortModeUsesReadingProgress(value)) {
+      await _refreshCurrentPageReadingProgress(_homeSearchResults);
+    }
+    if (!mounted) return;
+    setState(() {
+      _homeSearchSortMode = value;
+      _homeSearchResults = _sortItemsByMode(
+        _homeSearchResults,
+        sortMode: _homeSearchSortMode,
+      );
+      _homeSearchPageIndex = 0;
+    });
   }
 
   Future<void> _openDetailedBrowsePage() async {
@@ -770,17 +788,18 @@ extension _GalleryHomeView on _GalleryGridPageState {
                         value: _SortMode.name,
                         child: Text('名前'),
                       ),
+                      DropdownMenuItem(
+                        value: _SortMode.unreadFirst,
+                        child: Text('未読'),
+                      ),
+                      DropdownMenuItem(
+                        value: _SortMode.readFirst,
+                        child: Text('既読'),
+                      ),
                     ],
                     onChanged: (value) {
                       if (value == null) return;
-                      setState(() {
-                        _homeSearchSortMode = value;
-                        _homeSearchResults = _sortItemsByMode(
-                          _homeSearchResults,
-                          sortMode: _homeSearchSortMode,
-                        );
-                        _homeSearchPageIndex = 0;
-                      });
+                      unawaited(_applyDetailedBrowseSortMode(value));
                     },
                   );
                   final viewDropdown = DropdownButton<DetailedBrowseViewMode>(

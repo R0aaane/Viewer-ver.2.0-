@@ -222,14 +222,28 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.arrowLeft ||
-        key == LogicalKeyboardKey.pageUp ||
         key == LogicalKeyboardKey.gameButtonLeft1) {
+      if (_isPdf) {
+        _next();
+      } else {
+        _prev();
+      }
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.pageUp) {
       _prev();
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.pageDown ||
         key == LogicalKeyboardKey.gameButtonRight1) {
+      if (_isPdf) {
+        _prev();
+      } else {
+        _next();
+      }
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.pageDown) {
       _next();
       return KeyEventResult.handled;
     }

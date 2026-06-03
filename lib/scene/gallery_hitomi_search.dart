@@ -125,9 +125,10 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
   }
 
   Widget _buildHitomiSearchField() {
-    return RawAutocomplete<String>(
+    return RawAutocomplete<_HitomiSearchOption>(
       textEditingController: _hitomiSearchCtrl,
       focusNode: _hitomiSearchFocusNode,
+      displayStringForOption: (option) => option.query,
       optionsBuilder: (value) => _hitomiSuggestionsFor(value.text),
       onSelected: (_) {},
       fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
@@ -158,12 +159,21 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                 shrinkWrap: true,
                 itemCount: values.length,
                 itemBuilder: (context, index) {
-                  final value = values[index];
+                  final option = values[index];
                   return ListTile(
                     dense: true,
-                    leading: Icon(_hitomiSuggestionIcon(value), size: 20),
-                    title: Text(value),
-                    onTap: () => _replaceHitomiCurrentToken(value),
+                    leading: Icon(
+                      _hitomiSuggestionIcon(option.query),
+                      size: 20,
+                    ),
+                    title: Text(option.label),
+                    subtitle: option.namespace == null
+                        ? null
+                        : Text('(${option.namespace})'),
+                    trailing: option.count == null
+                        ? null
+                        : Text('${option.count}'),
+                    onTap: () => _replaceHitomiCurrentToken(option.query),
                   );
                 },
               ),
@@ -457,10 +467,10 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
         .replaceAll(RegExp(r'[\s_\-]+'), ' ');
   }
 
-  Iterable<String> _hitomiSuggestionsFor(String raw) {
+  Iterable<_HitomiSearchOption> _hitomiSuggestionsFor(String raw) {
     final token = _hitomiCurrentToken(raw).toLowerCase();
     if (token.isEmpty) {
-      return const <String>[];
+      return const <_HitomiSearchOption>[];
     }
     final dynamicCounts = <String, int>{};
     void addDynamic(String value) {
@@ -497,12 +507,65 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
             return a.compareTo(b);
           });
 
-    return <String>[
-      ..._hitomiStaticSuggestions.where(
-        (value) => value.toLowerCase().startsWith(token),
-      ),
-      ...dynamicValues,
-    ].take(12);
+    final options = <String, _HitomiSearchOption>{};
+    for (final value in _hitomiStaticSuggestions.where(
+      (value) => value.toLowerCase().startsWith(token),
+    )) {
+      options[value] = _HitomiSearchOption.staticValue(value);
+    }
+    for (final suggestion in _hitomiRemoteSuggestions) {
+      if (!_hitomiSuggestionMatches(suggestion.query, token)) {
+        continue;
+      }
+      options[suggestion.query] = _HitomiSearchOption(
+        query: suggestion.query,
+        label: suggestion.value,
+        namespace: suggestion.namespace,
+        count: suggestion.count,
+      );
+    }
+    for (final value in dynamicValues) {
+      options.putIfAbsent(value, () => _HitomiSearchOption.staticValue(value));
+    }
+    return options.values.take(20);
+  }
+
+  void _handleHitomiSearchTextChanged() {
+    final token = _hitomiCurrentToken(_hitomiSearchCtrl.text).toLowerCase();
+    if (token.isEmpty || token.endsWith(':') || _isHitomiOrderingTerm(token)) {
+      _hitomiSuggestionDebounce?.cancel();
+      if (_hitomiRemoteSuggestions.isNotEmpty) {
+        _setHitomiRemoteSuggestions(const <HitomiSearchSuggestion>[]);
+      }
+      return;
+    }
+    final cacheKey = token.replaceAll('_', ' ');
+    final cached = _hitomiSuggestionCache[cacheKey];
+    if (cached != null) {
+      if (_hitomiRemoteSuggestions != cached) {
+        _setHitomiRemoteSuggestions(cached);
+      }
+      return;
+    }
+    _hitomiSuggestionDebounce?.cancel();
+    final loadVersion = ++_hitomiSuggestionLoadVersion;
+    _hitomiSuggestionDebounce = Timer(const Duration(milliseconds: 180), () {
+      unawaited(_loadHitomiRemoteSuggestions(cacheKey, token, loadVersion));
+    });
+  }
+
+  Future<void> _loadHitomiRemoteSuggestions(
+    String cacheKey,
+    String token,
+    int loadVersion,
+  ) async {
+    final suggestions = await _urlImportDownloaderService
+        .searchHitomiSuggestions(token);
+    _hitomiSuggestionCache[cacheKey] = suggestions;
+    if (!mounted || loadVersion != _hitomiSuggestionLoadVersion) {
+      return;
+    }
+    _setHitomiRemoteSuggestions(suggestions);
   }
 
   bool _hitomiSuggestionMatches(String value, String token) {
@@ -659,6 +722,24 @@ class _HitomiOrderingOption {
   final String query;
 
   const _HitomiOrderingOption(this.label, this.query);
+}
+
+class _HitomiSearchOption {
+  final String query;
+  final String label;
+  final String? namespace;
+  final int? count;
+
+  const _HitomiSearchOption({
+    required this.query,
+    required this.label,
+    this.namespace,
+    this.count,
+  });
+
+  factory _HitomiSearchOption.staticValue(String value) {
+    return _HitomiSearchOption(query: value, label: value);
+  }
 }
 
 class _HitomiThumbnailImage extends StatefulWidget {

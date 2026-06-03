@@ -150,6 +150,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     text: 'orderby:popular orderbykey:week language:japanese',
   );
   final FocusNode _hitomiSearchFocusNode = FocusNode();
+  Timer? _hitomiSuggestionDebounce;
+  int _hitomiSuggestionLoadVersion = 0;
+  List<HitomiSearchSuggestion> _hitomiRemoteSuggestions =
+      const <HitomiSearchSuggestion>[];
+  final Map<String, List<HitomiSearchSuggestion>> _hitomiSuggestionCache =
+      <String, List<HitomiSearchSuggestion>>{};
   String _homeQuery = '';
   bool _homeSearching = false;
   List<MediaItem> _homeSearchResults = const [];
@@ -347,6 +353,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   void initState() {
     super.initState();
     _searchFocusNode.addListener(_handleGallerySearchFocusChange);
+    _hitomiSearchCtrl.addListener(_handleHitomiSearchTextChanged);
     _loadPrefsAndAutoOpenFolder();
     unawaited(_initializeHostServerAndCheckVersion());
     _bindExternalSharePayloads();
@@ -439,6 +446,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   void _logUiError(String label, Object error, StackTrace stackTrace) {
     debugPrint('[GalleryGridPage][$label] $error');
     debugPrintStack(label: '[GalleryGridPage][$label]', stackTrace: stackTrace);
+  }
+
+  void _setHitomiRemoteSuggestions(List<HitomiSearchSuggestion> suggestions) {
+    if (!mounted) {
+      _hitomiRemoteSuggestions = suggestions;
+      return;
+    }
+    setState(() {
+      _hitomiRemoteSuggestions = suggestions;
+    });
   }
 
   Widget _buildStatusBody({
@@ -1602,12 +1619,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   void dispose() {
     _thumbResumeDebounce?.cancel();
     _homeSearchDebounce?.cancel();
+    _hitomiSuggestionDebounce?.cancel();
     _externalShareSubscription?.cancel();
     _searchFocusNode
       ..removeListener(_handleGallerySearchFocusChange)
       ..dispose();
     _searchCtrl.dispose();
     _homeSearchCtrl.dispose();
+    _hitomiSearchCtrl.removeListener(_handleHitomiSearchTextChanged);
     _hitomiSearchCtrl.dispose();
     _hitomiSearchFocusNode.dispose();
     super.dispose();
