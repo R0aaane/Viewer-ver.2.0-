@@ -43,6 +43,7 @@ class AppReadingProgressService {
     int? totalPages,
     DateTime? lastReadAt,
     DateTime? updatedAt,
+    bool? isBookmarked,
   }) async {
     if (item.kind != MediaKind.pdf) {
       return null;
@@ -59,6 +60,7 @@ class AppReadingProgressService {
       totalPages: totalPages,
       lastReadAt: lastReadAt,
       updatedAt: updatedAt,
+      isBookmarked: isBookmarked,
     );
   }
 

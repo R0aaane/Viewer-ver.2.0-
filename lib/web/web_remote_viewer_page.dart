@@ -109,6 +109,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   _WebBrowserSortMode _browserSortMode = _WebBrowserSortMode.newest;
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
   int _homeRatingShelfRating = 5;
+  Set<String> _favorites = const <String>{};
   Map<String, int> _ratingsById = const <String, int>{};
   int _threeUpPage = 1;
   Timer? _remoteRefreshTimer;
@@ -155,22 +156,79 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   Future<void> _loadRatings() async {
     final prefs = await SharedPreferences.getInstance();
-    final ratings = _decodeRatings(prefs.getString(_ratingsPrefsKey));
+    var ratings = _decodeRatings(prefs.getString(_ratingsPrefsKey));
+    final client = _client;
+    if (client != null) {
+      try {
+        ratings = await client.fetchRatings();
+        await prefs.setString(_ratingsPrefsKey, jsonEncode(ratings));
+      } catch (_) {}
+    }
     if (!mounted) return;
     setState(() => _ratingsById = ratings);
   }
 
+  Future<void> _loadFavorites() async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      final favorites = await client.fetchFavoriteIds();
+      if (!mounted) return;
+      setState(() => _favorites = favorites);
+    } catch (_) {}
+  }
+
+  bool _isFavoriteEntry(WebRemoteEntry entry) {
+    return _favorites.contains(entry.mediaId) ||
+        _favorites.contains(entry.stableId);
+  }
+
+  Future<void> _setFavoriteForEntry(
+    WebRemoteEntry entry,
+    bool isFavorite,
+  ) async {
+    final client = _client;
+    if (client == null) return;
+    final favoriteId = entry.mediaId ?? entry.stableId;
+    final next = Set<String>.from(_favorites);
+    if (isFavorite) {
+      next.add(favoriteId);
+    } else {
+      next
+        ..remove(favoriteId)
+        ..remove(entry.stableId);
+    }
+    setState(() => _favorites = next);
+    final remoteId = await client.setFavorite(favoriteId, isFavorite);
+    if (remoteId != favoriteId) {
+      if (isFavorite) {
+        next
+          ..remove(favoriteId)
+          ..add(remoteId);
+      } else {
+        next.remove(remoteId);
+      }
+      if (mounted) setState(() => _favorites = next);
+    }
+  }
+
   int? _ratingForEntry(WebRemoteEntry entry) {
-    return _ratingsById[entry.stableId];
+    return _ratingsById[entry.mediaId] ?? _ratingsById[entry.stableId];
   }
 
   Future<void> _setRatingForEntry(WebRemoteEntry entry, int? rating) async {
     if (rating != null && (rating < 3 || rating > 5)) return;
     final next = Map<String, int>.from(_ratingsById);
+    final ratingId = entry.mediaId ?? entry.stableId;
     if (rating == null) {
+      next.remove(ratingId);
       next.remove(entry.stableId);
     } else {
-      next[entry.stableId] = rating;
+      next[ratingId] = rating;
+    }
+    final client = _client;
+    if (client != null) {
+      await client.setRating(ratingId, rating);
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_ratingsPrefsKey, jsonEncode(next));
@@ -392,6 +450,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _surface = _WebRemoteSurface.home;
         _statusMessage = '接続済み: ${_settings.clientApiBaseUrl}';
       });
+      await _loadFavorites();
+      await _loadRatings();
       _restartRemoteRefreshTimer();
       if (selectedFolder != null) {
         await _refreshHomeEntries(force: true);
@@ -1195,6 +1255,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               child: WebMediaDetailView(
                 client: client,
                 entry: entry,
+                isFavorite: _isFavoriteEntry(entry),
+                onFavoriteChanged: (isFavorite) =>
+                    _setFavoriteForEntry(entry, isFavorite),
                 rating: _ratingForEntry(entry),
                 onRatingChanged: (rating) => _setRatingForEntry(entry, rating),
                 onApplyTagQuery: (query) async {
@@ -2326,6 +2389,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return WebMediaDetailView(
       client: _client!,
       entry: _selectedEntry!,
+      isFavorite: _isFavoriteEntry(_selectedEntry!),
+      onFavoriteChanged: (isFavorite) =>
+          _setFavoriteForEntry(_selectedEntry!, isFavorite),
       rating: _ratingForEntry(_selectedEntry!),
       onRatingChanged: (rating) => _setRatingForEntry(_selectedEntry!, rating),
       onApplyTagQuery: _applyTagQuery,
@@ -5131,6 +5197,8 @@ class _EntrySummaryData {
 class WebMediaDetailView extends StatefulWidget {
   final WebRemoteApiClient client;
   final WebRemoteEntry entry;
+  final bool isFavorite;
+  final Future<void> Function(bool isFavorite)? onFavoriteChanged;
   final int? rating;
   final Future<void> Function(int? rating)? onRatingChanged;
   final Future<void> Function(String query) onApplyTagQuery;
@@ -5140,6 +5208,8 @@ class WebMediaDetailView extends StatefulWidget {
     super.key,
     required this.client,
     required this.entry,
+    this.isFavorite = false,
+    this.onFavoriteChanged,
     this.rating,
     this.onRatingChanged,
     required this.onApplyTagQuery,
@@ -5161,6 +5231,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   String? _pdfPageError;
   int _pdfPageNo = 1;
   int? _pdfTotalPages;
+  late bool _isFavorite;
   int? _rating;
   bool _loadingPdfPage = false;
   int _pdfPageRequestSerial = 0;
@@ -5168,6 +5239,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   @override
   void initState() {
     super.initState();
+    _isFavorite = widget.isFavorite;
     _rating = widget.rating;
     _refresh();
   }
@@ -5178,7 +5250,11 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     if (oldWidget.rating != widget.rating) {
       _rating = widget.rating;
     }
+    if (oldWidget.isFavorite != widget.isFavorite) {
+      _isFavorite = widget.isFavorite;
+    }
     if (oldWidget.entry.stableId != widget.entry.stableId) {
+      _isFavorite = widget.isFavorite;
       _rating = widget.rating;
       _refresh();
     }
@@ -5433,6 +5509,37 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     );
   }
 
+  Widget _buildFavoriteSelector() {
+    final isFavorite = _isFavorite;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF121A26),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            isFavorite ? Icons.star : Icons.star_border,
+            color: Colors.amber,
+          ),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text('お気に入り', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          Switch(
+            value: isFavorite,
+            onChanged: (value) {
+              setState(() => _isFavorite = value);
+              unawaited(widget.onFavoriteChanged?.call(value));
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final canOpenPreviousPdfPage = _pdfPageNo > 1;
@@ -5469,6 +5576,8 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            _buildFavoriteSelector(),
             const SizedBox(height: 16),
             _buildRatingSelector(),
             const SizedBox(height: 16),

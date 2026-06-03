@@ -20,10 +20,7 @@ class RemoteTagRecord {
   final String rawId;
   final Tag tag;
 
-  const RemoteTagRecord({
-    required this.rawId,
-    required this.tag,
-  });
+  const RemoteTagRecord({required this.rawId, required this.tag});
 }
 
 class RemoteTagApiClient {
@@ -80,7 +77,10 @@ class RemoteTagApiClient {
       '/tags/item/${Uri.encodeComponent(mediaId)}',
       queryParameters: _identityQueryParameters(identity),
     );
-    final rows = _unwrapList(json, preferredKeys: const ['tags', 'items', 'results']);
+    final rows = _unwrapList(
+      json,
+      preferredKeys: const ['tags', 'items', 'results'],
+    );
     return rows.map(_parseRemoteTagRecord).toList(growable: false);
   }
 
@@ -137,7 +137,10 @@ class RemoteTagApiClient {
           'contains': contains.trim(),
       },
     );
-    final rows = _unwrapList(json, preferredKeys: const ['tags', 'items', 'results']);
+    final rows = _unwrapList(
+      json,
+      preferredKeys: const ['tags', 'items', 'results'],
+    );
     return rows.map(_parseRemoteTagRecord).toList(growable: false);
   }
 
@@ -145,10 +148,7 @@ class RemoteTagApiClient {
     await _deleteJson('/tags/master/${Uri.encodeComponent(tagId)}');
   }
 
-  Future<Set<String>> searchItemIds({
-    String? artist,
-    String? series,
-  }) async {
+  Future<Set<String>> searchItemIds({String? artist, String? series}) async {
     final queryParameters = <String, String>{
       if (artist != null && artist.trim().isNotEmpty) 'artist': artist.trim(),
       if (series != null && series.trim().isNotEmpty) 'series': series.trim(),
@@ -162,14 +162,16 @@ class RemoteTagApiClient {
     return _extractItemIdSet(json);
   }
 
-  Future<void> addTagBatch(List<ResolvedMediaIdentity> identities, Tag tag) async {
-    await _postJson(
-      '/tags/batch',
-      <String, dynamic>{
-        'tag': _tagToJson(tag),
-        'items': identities.map((identity) => identity.toJson()).toList(growable: false),
-      },
-    );
+  Future<void> addTagBatch(
+    List<ResolvedMediaIdentity> identities,
+    Tag tag,
+  ) async {
+    await _postJson('/tags/batch', <String, dynamic>{
+      'tag': _tagToJson(tag),
+      'items': identities
+          .map((identity) => identity.toJson())
+          .toList(growable: false),
+    });
   }
 
   Future<void> requestRescan() async {
@@ -216,11 +218,45 @@ class RemoteTagApiClient {
     return mediaId;
   }
 
-  Future<Map<String, String>> organizeLibrary(String folderRaw) async {
-    final json = await _postJson(
-      '/organize',
-      <String, dynamic>{'folderRaw': folderRaw},
+  Future<Map<String, int>> fetchRatings() async {
+    final json = await _getJson('/ratings');
+    final rows = json is Map ? json['items'] : json;
+    if (rows is! Map) {
+      return const <String, int>{};
+    }
+    final ratings = <String, int>{};
+    rows.forEach((key, value) {
+      final mediaId = key?.toString().trim() ?? '';
+      final rating = value is int ? value : int.tryParse(value.toString());
+      if (mediaId.isNotEmpty && rating != null && rating >= 3 && rating <= 5) {
+        ratings[mediaId] = rating;
+      }
+    });
+    return ratings;
+  }
+
+  Future<String> setRating(
+    String mediaId,
+    int? rating, {
+    ResolvedMediaIdentity? identity,
+  }) async {
+    final json = await _putJson(
+      '/ratings/${Uri.encodeComponent(mediaId)}',
+      <String, dynamic>{
+        'rating': rating,
+        if (identity != null) 'identity': identity.toJson(),
+      },
     );
+    if (json is Map && json['mediaId'] != null) {
+      return json['mediaId'].toString();
+    }
+    return mediaId;
+  }
+
+  Future<Map<String, String>> organizeLibrary(String folderRaw) async {
+    final json = await _postJson('/organize', <String, dynamic>{
+      'folderRaw': folderRaw,
+    });
     if (json is! Map<String, dynamic>) {
       throw const MetadataException('整理結果の形式が不正です');
     }
@@ -246,13 +282,10 @@ class RemoteTagApiClient {
     required String oldPath,
     required String newPath,
   }) async {
-    await _postJson(
-      '/rename',
-      <String, dynamic>{
-        'oldPath': oldPath,
-        'newPath': newPath,
-      },
-    );
+    await _postJson('/rename', <String, dynamic>{
+      'oldPath': oldPath,
+      'newPath': newPath,
+    });
   }
 
   Future<void> notifyRename({
@@ -261,46 +294,40 @@ class RemoteTagApiClient {
     required ResolvedMediaIdentity before,
     required ResolvedMediaIdentity after,
   }) async {
-    await _postJson(
-      '/rename',
-      <String, dynamic>{
-        'before': <String, dynamic>{
-          ...before.toJson(),
-          'path': beforeItem.id,
-          'folderRaw': beforeItem.folderRaw,
-          'displayName': beforeItem.displayName,
-        },
-        'after': <String, dynamic>{
-          ...after.toJson(),
-          'path': afterItem.id,
-          'folderRaw': afterItem.folderRaw,
-          'displayName': afterItem.displayName,
-        },
+    await _postJson('/rename', <String, dynamic>{
+      'before': <String, dynamic>{
+        ...before.toJson(),
+        'path': beforeItem.id,
+        'folderRaw': beforeItem.folderRaw,
+        'displayName': beforeItem.displayName,
       },
-    );
+      'after': <String, dynamic>{
+        ...after.toJson(),
+        'path': afterItem.id,
+        'folderRaw': afterItem.folderRaw,
+        'displayName': afterItem.displayName,
+      },
+    });
   }
 
   Future<void> notifyDelete(
     List<(MediaItem, ResolvedMediaIdentity)> items, {
     required bool hardDelete,
   }) async {
-    await _postJson(
-      '/delete',
-      <String, dynamic>{
-        'hardDelete': hardDelete,
-        'items': items
-            .map(
-              (entry) => <String, dynamic>{
-                ...entry.$2.toJson(),
-                'path': entry.$1.id,
-                'folderRaw': entry.$1.folderRaw,
-                'displayName': entry.$1.displayName,
-                'hardDelete': hardDelete,
-              },
-            )
-            .toList(growable: false),
-      },
-    );
+    await _postJson('/delete', <String, dynamic>{
+      'hardDelete': hardDelete,
+      'items': items
+          .map(
+            (entry) => <String, dynamic>{
+              ...entry.$2.toJson(),
+              'path': entry.$1.id,
+              'folderRaw': entry.$1.folderRaw,
+              'displayName': entry.$1.displayName,
+              'hardDelete': hardDelete,
+            },
+          )
+          .toList(growable: false),
+    });
   }
 
   Future<dynamic> _getJson(
@@ -334,7 +361,9 @@ class RemoteTagApiClient {
     final baseUri = _parseBaseUri();
     final uri = baseUri.replace(
       path: _joinPath(baseUri.path, path),
-      queryParameters: queryParameters?.isEmpty == true ? null : queryParameters,
+      queryParameters: queryParameters?.isEmpty == true
+          ? null
+          : queryParameters,
     );
 
     final client = HttpClient()
@@ -345,7 +374,8 @@ class RemoteTagApiClient {
       final request = await _openRequest(client, method, uri);
       request.headers.contentType = ContentType.json;
 
-      final headers = await defaultHeadersProvider?.call() ?? const <String, String>{};
+      final headers =
+          await defaultHeadersProvider?.call() ?? const <String, String>{};
       headers.forEach(request.headers.set);
 
       if (body != null) {
@@ -354,14 +384,16 @@ class RemoteTagApiClient {
 
       final response = await request.close().timeout(timeout);
       final payload = await response.transform(utf8.decoder).join();
-      final isJson = response.headers.contentType?.mimeType == ContentType.json.mimeType;
+      final isJson =
+          response.headers.contentType?.mimeType == ContentType.json.mimeType;
       final jsonBody = payload.trim().isEmpty
           ? null
           : (isJson ? jsonDecode(payload) : _tryDecodeJson(payload));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message =
-            _extractErrorMessage(jsonBody) ?? 'API エラー: HTTP ${response.statusCode}';
+            _extractErrorMessage(jsonBody) ??
+            'API エラー: HTTP ${response.statusCode}';
         throw MetadataException(message);
       }
 
@@ -427,7 +459,10 @@ class RemoteTagApiClient {
 
   RemoteTagRecord _parseRemoteTagRecord(dynamic raw) {
     if (raw is String) {
-      return RemoteTagRecord(rawId: raw, tag: Tag(name: raw));
+      return RemoteTagRecord(
+        rawId: raw,
+        tag: Tag(name: raw),
+      );
     }
 
     if (raw is! Map) {
@@ -442,10 +477,7 @@ class RemoteTagApiClient {
 
     return RemoteTagRecord(
       rawId: tagId.toString(),
-      tag: Tag(
-        name: name,
-        category: _parseCategory(categoryRaw),
-      ),
+      tag: Tag(name: name, category: _parseCategory(categoryRaw)),
     );
   }
 
@@ -460,13 +492,12 @@ class RemoteTagApiClient {
   }
 
   Map<String, dynamic> _tagToJson(Tag tag) {
-    return <String, dynamic>{
-      'name': tag.name,
-      'category': tag.category.name,
-    };
+    return <String, dynamic>{'name': tag.name, 'category': tag.category.name};
   }
 
-  Map<String, String>? _identityQueryParameters(ResolvedMediaIdentity? identity) {
+  Map<String, String>? _identityQueryParameters(
+    ResolvedMediaIdentity? identity,
+  ) {
     if (identity == null) {
       return null;
     }

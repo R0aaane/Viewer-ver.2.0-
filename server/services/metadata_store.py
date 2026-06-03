@@ -394,6 +394,7 @@ class MetadataStore:
         progress: float | None = None,
         last_read_at: datetime | None = None,
         updated_at: datetime | None = None,
+        is_bookmarked: bool | None = None,
     ) -> dict[str, Any]:
         media = self.resolve_media_record(media_id, identity=identity)
         if str(media.get("kind") or "") != "pdf":
@@ -466,11 +467,12 @@ class MetadataStore:
             progress=merged_progress,
             last_read_at=_ensure_utc_datetime(merged_last_read_at).isoformat(),
             updated_at=_ensure_utc_datetime(merged_updated_at).isoformat(),
+            is_bookmarked=is_bookmarked,
         )
         return self._reading_progress_row_to_dict(media, row)
 
     def list_recent_reading_progress(self, *, limit: int = 24) -> list[dict[str, Any]]:
-        rows = self._db.list_reading_progress(limit=max(1, min(limit, 200)))
+        rows = self._db.list_reading_progress(limit=max(1, min(limit, 5000)))
         items: list[dict[str, Any]] = []
         for row in rows:
             media_id = str(row.get("media_id") or "").strip()
@@ -756,6 +758,22 @@ class MetadataStore:
     ) -> str:
         resolved_media_id = self.resolve_media_id(media_id, identity=identity)
         self._db.set_media_favorite(resolved_media_id, is_favorite, _utcnow_iso())
+        return resolved_media_id
+
+    def list_media_ratings(self) -> dict[str, int]:
+        return self._db.list_media_ratings()
+
+    def set_media_rating(
+        self,
+        media_id: str,
+        rating: int | None,
+        *,
+        identity: dict[str, Any] | None = None,
+    ) -> str:
+        if rating is not None and rating not in (3, 4, 5):
+            raise bad_request("Rating must be 3, 4, 5, or null")
+        resolved_media_id = self.resolve_media_id(media_id, identity=identity)
+        self._db.set_media_rating(resolved_media_id, rating, _utcnow_iso())
         return resolved_media_id
 
     def ensure_exact_tag_id(
@@ -1522,6 +1540,7 @@ class MetadataStore:
             "lastReadAt": last_read_at,
             "updatedAt": updated_at,
             "thumbnailUrl": f"/media/{quote(media_id, safe='')}/thumb",
+            "isBookmarked": bool(row.get("is_bookmarked")),
         }
 
     def _stats_row_to_dict(self, row: dict[str, Any] | None) -> dict[str, Any] | None:

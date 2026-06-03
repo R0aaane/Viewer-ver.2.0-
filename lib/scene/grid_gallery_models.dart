@@ -2,7 +2,14 @@
 
 part of 'gridGallery.dart';
 
-enum _SortMode { name, updatedAt, addedAt, unreadFirst, readFirst }
+enum _SortMode {
+  name,
+  updatedAt,
+  addedAt,
+  unreadFirst,
+  readFirst,
+  bookmarkedFirst,
+}
 
 enum _MainPage { home, gallery, search, hitomiSearch }
 

@@ -141,6 +141,7 @@ extension _ReaderView on _ImageDetailPageState {
 
       setState(() {
         _canPersistReadingProgress = true;
+        _isBookmarked = entry?.isBookmarked ?? false;
         if (effectiveTotalPages > 0) {
           _totalPages = effectiveTotalPages;
           _page = nextPage.clamp(1, _totalPages);
@@ -181,6 +182,7 @@ extension _ReaderView on _ImageDetailPageState {
         _hasMovedPdfPageSinceLoad = false;
         _readerController.gifAnimationPaused = false;
         _isFavorite = false;
+        _isBookmarked = false;
         _rating = null;
         _tags = const [];
         _tagsLoading = false;

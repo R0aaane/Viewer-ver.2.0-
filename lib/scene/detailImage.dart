@@ -52,6 +52,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _leaving = false;
 
   bool _isFavorite = false;
+  bool _isBookmarked = false;
   bool _favChanged = false;
   int? _rating;
   bool _ratingChanged = false;
@@ -329,6 +330,16 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                 onPressed: _toggleFavorite,
                 icon: Icon(_isFavorite ? Icons.star : Icons.star_border),
               ),
+              if (_isPdf)
+                IconButton(
+                  tooltip: _isBookmarked ? 'しおりを外す' : 'しおりを挟む',
+                  onPressed: _toggleBookmark,
+                  icon: Icon(
+                    _isBookmarked
+                        ? Icons.bookmark
+                        : Icons.bookmark_border,
+                  ),
+                ),
               IconButton(
                 tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
                 onPressed: _toggleFullscreen,

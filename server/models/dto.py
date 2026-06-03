@@ -67,8 +67,17 @@ class FavoriteListResponse(BaseModel):
     items: list[str] = Field(default_factory=list)
 
 
+class RatingListResponse(BaseModel):
+    items: dict[str, int] = Field(default_factory=dict)
+
+
 class SetFavoriteRequest(BaseModel):
     isFavorite: bool
+    identity: ResolvedIdentityDto | None = None
+
+
+class SetRatingRequest(BaseModel):
+    rating: int | None = None
     identity: ResolvedIdentityDto | None = None
 
 
@@ -110,6 +119,7 @@ class ReadingProgressDto(BaseModel):
     lastReadAt: datetime
     updatedAt: datetime
     thumbnailUrl: str | None = None
+    isBookmarked: bool = False
 
 
 class ReadingProgressListResponse(BaseModel):
@@ -122,6 +132,7 @@ class UpdateReadingProgressRequest(BaseModel):
     progress: float | None = None
     lastReadAt: datetime | None = None
     updatedAt: datetime | None = None
+    isBookmarked: bool | None = None
     identity: ResolvedIdentityDto | None = None
 
 

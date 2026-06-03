@@ -99,8 +99,20 @@ extension _DetailActions on _ImageDetailPageState {
     final item = _item;
     final version = loadVersion ?? _detailLoadVersion;
     final prefs = await SharedPreferences.getInstance();
-    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
-    final rating = ratings[item.id];
+    var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final remoteRatings = await widget.tagService
+        .listRemoteRatings()
+        .catchError((_) => null);
+    if (remoteRatings != null) {
+      ratings = remoteRatings;
+      await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    }
+    final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
+    int? rating;
+    for (final id in lookupIds) {
+      rating = ratings[id];
+      if (rating != null) break;
+    }
     if (!_isCurrentLoad(version, item)) return;
     setState(() => _rating = rating);
   }
@@ -113,6 +125,16 @@ extension _DetailActions on _ImageDetailPageState {
       ratings.remove(_item.id);
     } else {
       ratings[_item.id] = rating;
+    }
+    final remoteId = await widget.tagService
+        .setRemoteRating(_item, rating)
+        .catchError((_) => null);
+    if (remoteId != null && remoteId != _item.id) {
+      if (rating == null) {
+        ratings.remove(remoteId);
+      } else if (ratings.remove(_item.id) != null) {
+        ratings[remoteId] = rating;
+      }
     }
     await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
     if (!mounted) return;
@@ -149,6 +171,31 @@ extension _DetailActions on _ImageDetailPageState {
       _PrefsKeys.favorites,
       next.toList(growable: false),
     );
+  }
+
+  Future<void> _toggleBookmark() async {
+    if (!_isPdf) return;
+    final next = !_isBookmarked;
+    setState(() => _isBookmarked = next);
+    try {
+      await _readingProgressService.saveProgressForItem(
+        _item,
+        currentPage: _page < 1 ? 1 : _page,
+        totalPages: _totalPages > 0 ? _totalPages : null,
+        isBookmarked: next,
+      );
+      _itemChanged = true;
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(next ? 'しおりを挟みました' : 'しおりを外しました')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _isBookmarked = !next);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('しおりの更新に失敗しました: $error')));
+    }
   }
 
   Future<void> _saveLastFolder(FolderHandle folder) async {

@@ -317,6 +317,7 @@ class RemoteMediaApiClient {
     DateTime? lastReadAt,
     DateTime? updatedAt,
     Map<String, dynamic>? identity,
+    bool? isBookmarked,
   }) async {
     final jsonBody = await _sendJsonRequest(
       'PUT',
@@ -328,6 +329,7 @@ class RemoteMediaApiClient {
         if (lastReadAt != null)
           'lastReadAt': lastReadAt.toUtc().toIso8601String(),
         if (updatedAt != null) 'updatedAt': updatedAt.toUtc().toIso8601String(),
+        if (isBookmarked != null) 'isBookmarked': isBookmarked,
         if (identity != null) 'identity': identity,
       },
     );
@@ -1281,6 +1283,7 @@ class RemoteMediaApiClient {
       lastReadAt: lastReadAt,
       updatedAt: updatedAt,
       thumbnailUrl: json['thumbnailUrl']?.toString(),
+      isBookmarked: json['isBookmarked'] == true,
     );
   }
 

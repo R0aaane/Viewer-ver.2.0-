@@ -131,6 +131,7 @@ def update_reading_progress(
         progress=payload.progress,
         last_read_at=payload.lastReadAt,
         updated_at=payload.updatedAt,
+        is_bookmarked=payload.isBookmarked,
     )
     return ReadingProgressDto(**item)
 

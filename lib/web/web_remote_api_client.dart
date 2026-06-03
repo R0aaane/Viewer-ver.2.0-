@@ -758,6 +758,57 @@ class WebRemoteApiClient {
     });
   }
 
+  Future<Map<String, int>> fetchRatings() async {
+    final json = await _getJson('/ratings');
+    final rows = json is Map ? json['items'] : json;
+    if (rows is! Map) {
+      return const <String, int>{};
+    }
+    final ratings = <String, int>{};
+    rows.forEach((key, value) {
+      final mediaId = key?.toString().trim() ?? '';
+      final rating = value is int ? value : int.tryParse(value.toString());
+      if (mediaId.isNotEmpty && rating != null && rating >= 3 && rating <= 5) {
+        ratings[mediaId] = rating;
+      }
+    });
+    return ratings;
+  }
+
+  Future<Set<String>> fetchFavoriteIds() async {
+    final json = await _getJson('/favorites');
+    final rows = json is Map ? json['items'] : json;
+    if (rows is! List) {
+      return const <String>{};
+    }
+    return rows
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toSet();
+  }
+
+  Future<String> setFavorite(String mediaId, bool isFavorite) async {
+    final json = await _putJson(
+      '/favorites/${Uri.encodeComponent(mediaId)}',
+      <String, dynamic>{'isFavorite': isFavorite},
+    );
+    if (json is Map && json['mediaId'] != null) {
+      return json['mediaId'].toString();
+    }
+    return mediaId;
+  }
+
+  Future<String> setRating(String mediaId, int? rating) async {
+    final json = await _putJson(
+      '/ratings/${Uri.encodeComponent(mediaId)}',
+      <String, dynamic>{'rating': rating},
+    );
+    if (json is Map && json['mediaId'] != null) {
+      return json['mediaId'].toString();
+    }
+    return mediaId;
+  }
+
   Future<void> requestRescan({String? folderRaw}) async {
     final trimmedFolder = folderRaw?.trim();
     await _postJson('/rescan', <String, dynamic>{
@@ -961,6 +1012,7 @@ class WebRemoteApiClient {
     DateTime? lastReadAt,
     DateTime? updatedAt,
     Map<String, dynamic>? identity,
+    bool? isBookmarked,
   }) async {
     final json = await _putJson(
       '/progress/${Uri.encodeComponent(mediaId)}',
@@ -971,6 +1023,7 @@ class WebRemoteApiClient {
         if (lastReadAt != null)
           'lastReadAt': lastReadAt.toUtc().toIso8601String(),
         if (updatedAt != null) 'updatedAt': updatedAt.toUtc().toIso8601String(),
+        if (isBookmarked != null) 'isBookmarked': isBookmarked,
         if (identity != null) 'identity': identity,
       },
     );
@@ -1586,6 +1639,7 @@ class WebRemoteApiClient {
       lastReadAt: lastReadAt,
       updatedAt: updatedAt,
       thumbnailUrl: raw['thumbnailUrl']?.toString(),
+      isBookmarked: raw['isBookmarked'] == true,
     );
   }
 

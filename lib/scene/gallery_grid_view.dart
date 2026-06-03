@@ -552,6 +552,11 @@ extension _GalleryGridView on _GalleryGridPageState {
     return item.kind == MediaKind.pdf && _readingProgressForItem(item) != null;
   }
 
+  bool _isBookmarkedReadingItem(MediaItem item) {
+    return item.kind == MediaKind.pdf &&
+        (_readingProgressForItem(item)?.isBookmarked ?? false);
+  }
+
   int _compareByReadStatus(
     MediaItem a,
     MediaItem b, {
@@ -562,6 +567,19 @@ extension _GalleryGridView on _GalleryGridPageState {
     if (aRank != bRank) return aRank.compareTo(bRank);
     final updated = _getUpdatedAt(b).compareTo(_getUpdatedAt(a));
     if (updated != 0) return updated;
+    return _compareNaturalName(a.displayName, b.displayName);
+  }
+
+  int _compareByBookmark(MediaItem a, MediaItem b) {
+    final aProgress = _readingProgressForItem(a);
+    final bProgress = _readingProgressForItem(b);
+    final aRank = aProgress?.isBookmarked == true ? 0 : 1;
+    final bRank = bProgress?.isBookmarked == true ? 0 : 1;
+    if (aRank != bRank) return aRank.compareTo(bRank);
+    final lastRead = (bProgress?.lastReadAt ?? _getUpdatedAt(b)).compareTo(
+      aProgress?.lastReadAt ?? _getUpdatedAt(a),
+    );
+    if (lastRead != 0) return lastRead;
     return _compareNaturalName(a.displayName, b.displayName);
   }
 
@@ -619,12 +637,17 @@ extension _GalleryGridView on _GalleryGridPageState {
       case _SortMode.readFirst:
         sorted.sort((a, b) => _compareByReadStatus(a, b, readFirst: true));
         break;
+      case _SortMode.bookmarkedFirst:
+        sorted.sort(_compareByBookmark);
+        break;
     }
     return sorted.toList(growable: false);
   }
 
   bool _sortModeUsesReadingProgress(_SortMode sortMode) {
-    return sortMode == _SortMode.unreadFirst || sortMode == _SortMode.readFirst;
+    return sortMode == _SortMode.unreadFirst ||
+        sortMode == _SortMode.readFirst ||
+        sortMode == _SortMode.bookmarkedFirst;
   }
 
   List<MediaItem> _applyFilter(
@@ -710,6 +733,9 @@ extension _GalleryGridView on _GalleryGridPageState {
         break;
       case _SortMode.readFirst:
         list.sort((a, b) => _compareByReadStatus(a, b, readFirst: true));
+        break;
+      case _SortMode.bookmarkedFirst:
+        list.sort(_compareByBookmark);
         break;
     }
 

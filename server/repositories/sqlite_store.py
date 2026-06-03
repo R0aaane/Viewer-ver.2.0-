@@ -89,6 +89,7 @@ class SqliteStore:
                     progress REAL NOT NULL DEFAULT 0,
                     last_read_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    is_bookmarked INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY (media_id) REFERENCES media_records(media_id) ON DELETE CASCADE
                 );
 
@@ -96,7 +97,6 @@ class SqliteStore:
                     ON reading_progress(last_read_at);
                 CREATE INDEX IF NOT EXISTS idx_reading_progress_updated_at
                     ON reading_progress(updated_at);
-
                 CREATE TABLE IF NOT EXISTS tag_master (
                     tag_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -129,13 +129,24 @@ class SqliteStore:
                 CREATE INDEX IF NOT EXISTS idx_media_favorites_updated_at
                     ON media_favorites(updated_at);
 
+                CREATE TABLE IF NOT EXISTS media_ratings (
+                    media_id TEXT PRIMARY KEY,
+                    rating INTEGER NOT NULL CHECK (rating BETWEEN 3 AND 5),
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (media_id) REFERENCES media_records(media_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_media_ratings_rating
+                    ON media_ratings(rating, updated_at);
+
                 INSERT INTO reading_progress (
                     media_id,
                     current_page,
                     total_pages,
                     progress,
                     last_read_at,
-                    updated_at
+                    updated_at,
+                    is_bookmarked
                 )
                 SELECT
                     legacy.media_id,
@@ -146,12 +157,26 @@ class SqliteStore:
                     NULL,
                     0,
                     legacy.last_viewed_at,
-                    legacy.last_viewed_at
+                    legacy.last_viewed_at,
+                    0
                 FROM media_activity AS legacy
                 LEFT JOIN reading_progress AS progress
                     ON progress.media_id = legacy.media_id
                 WHERE progress.media_id IS NULL;
                 """
+            )
+            columns = {
+                str(row["name"])
+                for row in cur.execute("PRAGMA table_info(reading_progress)").fetchall()
+            }
+            if "is_bookmarked" not in columns:
+                cur.execute(
+                    "ALTER TABLE reading_progress "
+                    "ADD COLUMN is_bookmarked INTEGER NOT NULL DEFAULT 0"
+                )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reading_progress_bookmarked "
+                "ON reading_progress(is_bookmarked, last_read_at)"
             )
 
     def close(self) -> None:
@@ -432,7 +457,8 @@ class SqliteStore:
                     total_pages,
                     progress,
                     last_read_at,
-                    updated_at
+                    updated_at,
+                    is_bookmarked
                   FROM reading_progress
                  WHERE media_id = ?
                 """,
@@ -449,6 +475,7 @@ class SqliteStore:
         progress: float,
         last_read_at: str,
         updated_at: str,
+        is_bookmarked: bool | None = None,
     ) -> dict[str, Any]:
         with self._cursor() as cur:
             cur.execute(
@@ -459,15 +486,20 @@ class SqliteStore:
                     total_pages,
                     progress,
                     last_read_at,
-                    updated_at
+                    updated_at,
+                    is_bookmarked
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, 0))
                 ON CONFLICT(media_id) DO UPDATE SET
                     current_page = excluded.current_page,
                     total_pages = excluded.total_pages,
                     progress = excluded.progress,
                     last_read_at = excluded.last_read_at,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    is_bookmarked = CASE
+                        WHEN ? IS NULL THEN reading_progress.is_bookmarked
+                        ELSE excluded.is_bookmarked
+                    END
                 """,
                 (
                     media_id,
@@ -476,6 +508,8 @@ class SqliteStore:
                     progress,
                     last_read_at,
                     updated_at,
+                    1 if is_bookmarked else (0 if is_bookmarked is not None else None),
+                    None if is_bookmarked is None else 1,
                 ),
             )
             row = cur.execute(
@@ -486,7 +520,8 @@ class SqliteStore:
                     total_pages,
                     progress,
                     last_read_at,
-                    updated_at
+                    updated_at,
+                    is_bookmarked
                   FROM reading_progress
                  WHERE media_id = ?
                 """,
@@ -510,6 +545,7 @@ class SqliteStore:
                     progress.progress,
                     progress.last_read_at,
                     progress.updated_at,
+                    progress.is_bookmarked,
                     records.folder_raw,
                     records.display_name
                   FROM reading_progress AS progress
@@ -726,6 +762,43 @@ class SqliteStore:
                     (media_id,),
                 )
 
+    def list_media_ratings(self) -> dict[str, int]:
+        with self._cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT ratings.media_id, ratings.rating
+                  FROM media_ratings AS ratings
+                  JOIN media_records AS records
+                    ON records.media_id = ratings.media_id
+                 WHERE records.is_deleted = 0
+                """
+            ).fetchall()
+        return {str(row["media_id"]): int(row["rating"]) for row in rows}
+
+    def set_media_rating(
+        self,
+        media_id: str,
+        rating: int | None,
+        updated_at: str,
+    ) -> None:
+        with self._cursor() as cur:
+            if rating is None:
+                cur.execute(
+                    "DELETE FROM media_ratings WHERE media_id = ?",
+                    (media_id,),
+                )
+                return
+            cur.execute(
+                """
+                INSERT INTO media_ratings (media_id, rating, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    rating = excluded.rating,
+                    updated_at = excluded.updated_at
+                """,
+                (media_id, rating, updated_at),
+            )
+
     def list_tag_links_for_media_ids(self, media_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         if not media_ids:
             return {}
@@ -842,7 +915,8 @@ class SqliteStore:
                     total_pages,
                     progress,
                     last_read_at,
-                    updated_at
+                    updated_at,
+                    is_bookmarked
                   FROM reading_progress
                  WHERE media_id = ?
                 """,
@@ -857,9 +931,10 @@ class SqliteStore:
                         total_pages,
                         progress,
                         last_read_at,
-                        updated_at
+                        updated_at,
+                        is_bookmarked
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(media_id) DO UPDATE SET
                         current_page = CASE
                             WHEN reading_progress.updated_at IS NULL THEN excluded.current_page
@@ -892,6 +967,10 @@ class SqliteStore:
                             WHEN excluded.updated_at IS NULL THEN reading_progress.updated_at
                             WHEN reading_progress.updated_at >= excluded.updated_at THEN reading_progress.updated_at
                             ELSE excluded.updated_at
+                        END,
+                        is_bookmarked = CASE
+                            WHEN excluded.is_bookmarked = 1 THEN 1
+                            ELSE reading_progress.is_bookmarked
                         END
                     """,
                     (
@@ -901,6 +980,7 @@ class SqliteStore:
                         progress_row["progress"],
                         progress_row["last_read_at"],
                         progress_row["updated_at"],
+                        progress_row["is_bookmarked"],
                     ),
                 )
                 cur.execute(

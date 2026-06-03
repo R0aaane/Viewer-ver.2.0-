@@ -8,6 +8,7 @@ class ReadingProgressEntry {
   final DateTime lastReadAt;
   final DateTime updatedAt;
   final String? thumbnailUrl;
+  final bool isBookmarked;
 
   const ReadingProgressEntry({
     required this.mediaId,
@@ -19,6 +20,7 @@ class ReadingProgressEntry {
     required this.lastReadAt,
     required this.updatedAt,
     required this.thumbnailUrl,
+    this.isBookmarked = false,
   });
 
   bool get hasResumePosition => currentPage > 1;
@@ -35,6 +37,7 @@ class ReadingProgressSaveRequest {
   final DateTime lastReadAt;
   final DateTime updatedAt;
   final Map<String, dynamic>? identity;
+  final bool? isBookmarked;
 
   const ReadingProgressSaveRequest({
     required this.mediaId,
@@ -44,5 +47,6 @@ class ReadingProgressSaveRequest {
     required this.lastReadAt,
     required this.updatedAt,
     this.identity,
+    this.isBookmarked,
   });
 }

@@ -225,6 +225,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _homeRatingShelfRating = 5;
   List<MediaItem> _homeRatingShelfItems = const [];
   List<MediaItem> _homeRecentViewedItems = const [];
+  List<MediaItem> _homeBookmarkedReadingItems = const [];
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
       <String, ReadingProgressEntry>{};
   Map<String, ReadingProgressEntry> _readingProgressByItemId =
@@ -651,7 +652,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       }
       final favList =
           prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
-      final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+      var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+      final remoteRatings = await widget.tagService
+          .listRemoteRatings()
+          .catchError((_) => null);
+      if (remoteRatings != null) {
+        ratings = remoteRatings;
+        await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+      }
       _tagsById = <String, List<String>>{};
       _tagDetailsById = <String, List<TagWithId>>{};
       final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
@@ -1002,7 +1010,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _reloadRatings() async {
     final prefs = await SharedPreferences.getInstance();
-    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final remoteRatings = await widget.tagService
+        .listRemoteRatings()
+        .catchError((_) => null);
+    if (remoteRatings != null) {
+      ratings = remoteRatings;
+      await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    }
     if (!mounted) return;
     setState(() => _ratingsById = ratings);
   }
@@ -2442,6 +2457,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                                   DropdownMenuItem(
                                     value: _SortMode.readFirst,
                                     child: Text('既読'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: _SortMode.bookmarkedFirst,
+                                    child: Text('しおり'),
                                   ),
                                 ],
                                 onChanged: (value) {

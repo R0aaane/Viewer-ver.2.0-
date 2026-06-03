@@ -21,6 +21,7 @@ class ReadingProgressService {
     DateTime? lastReadAt,
     DateTime? updatedAt,
     Map<String, dynamic>? identity,
+    bool? isBookmarked,
   }) {
     final normalizedTotalPages =
         totalPages != null && totalPages > 0 ? totalPages : null;
@@ -46,6 +47,7 @@ class ReadingProgressService {
         lastReadAt: normalizedLastReadAt,
         updatedAt: normalizedUpdatedAt,
         identity: identity,
+        isBookmarked: isBookmarked,
       ),
     );
   }

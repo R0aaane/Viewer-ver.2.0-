@@ -27,6 +27,7 @@ class RemoteReadingProgressRepository implements ReadingProgressRepository {
       lastReadAt: request.lastReadAt,
       updatedAt: request.updatedAt,
       identity: request.identity,
+      isBookmarked: request.isBookmarked,
     );
   }
 }

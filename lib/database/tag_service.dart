@@ -157,6 +157,28 @@ class TagService {
     );
   }
 
+  Future<Map<String, int>?> listRemoteRatings() async {
+    await initialize();
+    if (!isRemoteMode && !isHostMode) {
+      return null;
+    }
+    return _requireApiClient().fetchRatings();
+  }
+
+  Future<String?> setRemoteRating(MediaItem item, int? rating) async {
+    await initialize();
+    if (!isRemoteMode && !isHostMode) {
+      return null;
+    }
+    rememberItem(item);
+    final identity = await _idResolver.resolve(item);
+    return _requireApiClient().setRating(
+      identity.stableId,
+      rating,
+      identity: identity,
+    );
+  }
+
   Future<Set<String>> favoriteLookupIdsForItem(MediaItem item) async {
     final ids = <String>{
       item.id,

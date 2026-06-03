@@ -130,6 +130,18 @@ extension _GalleryHomeView on _GalleryGridPageState {
     return const <TagWithId>[];
   }
 
+  bool _homeItemHasReadingProgress(MediaItem item, Set<String> readItemKeys) {
+    if (readItemKeys.contains(item.id)) return true;
+    for (final variant in _idVariants(item.id)) {
+      if (readItemKeys.contains(variant)) return true;
+    }
+    final lookupKey = _readingProgressLookupKey(
+      item.folderRaw,
+      item.displayName,
+    );
+    return lookupKey.isNotEmpty && readItemKeys.contains(lookupKey);
+  }
+
   String _buildHomeSearchCorpusSignature(List<MediaItem> items) {
     var hash = 0x811C9DC5;
     for (final item in items) {
@@ -203,6 +215,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
       if (t == 'untagged' || t == '未分類') {
         return detailedTags.isEmpty;
       }
+      if (t == 'しおり' || t == 'bookmark' || t == 'bookmarked') {
+        return _isBookmarkedReadingItem(item);
+      }
       final separator = t.indexOf(':');
       if (separator > 0 && separator < t.length - 1) {
         final key = t.substring(0, separator);
@@ -264,6 +279,18 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     try {
       final all = await _ensureHomeSearchCorpusLoaded();
+      final needsProgressForQuery = q
+          .toLowerCase()
+          .split(RegExp(r'\s+'))
+          .any(
+            (token) =>
+                token == 'しおり' ||
+                token == 'bookmark' ||
+                token == 'bookmarked',
+          );
+      if (needsProgressForQuery) {
+        await _refreshCurrentPageReadingProgress(all);
+      }
       var filtered = q.isEmpty
           ? all.toList(growable: false)
           : all
@@ -796,6 +823,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
                         value: _SortMode.readFirst,
                         child: Text('既読'),
                       ),
+                      DropdownMenuItem(
+                        value: _SortMode.bookmarkedFirst,
+                        child: Text('しおり'),
+                      ),
                     ],
                     onChanged: (value) {
                       if (value == null) return;
@@ -1161,6 +1192,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
           _homeFavoriteShowcaseItems = const <MediaItem>[];
           _homeRatingShelfItems = const <MediaItem>[];
           _homeRecentViewedItems = const <MediaItem>[];
+          _homeBookmarkedReadingItems = const <MediaItem>[];
           _homeRecentViewEntriesByItemId = <String, ReadingProgressEntry>{};
           _homeResumeCard = null;
           _homeShowcaseErrorMessage = null;
@@ -1171,7 +1203,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
       final fetchSw = Stopwatch()..start();
       debugPrint('[home-refresh] remote API fetch start');
       final recentProgress = await _readingProgressService.fetchRecent(
-        limit: 200,
+        limit: 5000,
       );
       debugPrint(
         '[home-refresh] remote API fetch end ${fetchSw.elapsedMilliseconds}ms',
@@ -1203,7 +1235,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
       );
 
       final recentViewedItems = <MediaItem>[];
+      final bookmarkedReadingItems = <MediaItem>[];
       final recentViewEntriesByItemId = <String, ReadingProgressEntry>{};
+      final readItemKeys = <String>{};
       _HomeResumeCardData? resumeCard;
 
       for (final entry in recentProgress) {
@@ -1218,8 +1252,27 @@ extension _GalleryHomeView on _GalleryGridPageState {
         }
 
         if (!recentViewEntriesByItemId.containsKey(resolved.id)) {
-          recentViewEntriesByItemId[resolved.id] = entry;
           recentViewedItems.add(resolved);
+        }
+        recentViewEntriesByItemId[resolved.id] = entry;
+        readItemKeys.add(resolved.id);
+        readItemKeys.add(entry.mediaId);
+        for (final variant in _idVariants(resolved.id)) {
+          recentViewEntriesByItemId[variant] = entry;
+          readItemKeys.add(variant);
+        }
+        final lookupKey = _readingProgressLookupKey(
+          resolved.folderRaw,
+          resolved.displayName,
+        );
+        if (lookupKey.isNotEmpty) {
+          recentViewEntriesByItemId[lookupKey] = entry;
+          readItemKeys.add(lookupKey);
+        }
+        if (entry.isBookmarked &&
+            resolved.kind == MediaKind.pdf &&
+            ReadingProgressService.shouldShowContinueCard(entry)) {
+          bookmarkedReadingItems.add(resolved);
         }
 
         if (resumeCard == null &&
@@ -1240,7 +1293,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
           .where(
             (item) =>
                 item.kind == MediaKind.pdf &&
-                !recentViewEntriesByItemId.containsKey(item.id),
+                !_homeItemHasReadingProgress(item, readItemKeys),
           )
           .toList(growable: false);
       debugPrint(
@@ -1257,6 +1310,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
         _homeFavoriteShowcaseItems = favorites.take(10).toList(growable: false);
         _homeRatingShelfItems = ratingItems.take(10).toList(growable: false);
         _homeRecentViewedItems = recentViewedItems
+            .take(10)
+            .toList(growable: false);
+        _homeBookmarkedReadingItems = bookmarkedReadingItems
             .take(10)
             .toList(growable: false);
         _homeRecentViewEntriesByItemId = recentViewEntriesByItemId;
@@ -2074,6 +2130,45 @@ extension _GalleryHomeView on _GalleryGridPageState {
           ),
           const SizedBox(height: 12),
           _buildContinueReadingCard(),
+          const SizedBox(height: 12),
+          _buildHomeMediaShelf(
+            title: 'しおり',
+            subtitle: 'しおりを挟んだ読みかけの PDF を表示します。',
+            items: _homeBookmarkedReadingItems,
+            emptyTitle: 'しおり付きの読みかけ PDF はありません',
+            emptyMessage: '詳細ページでしおりを挟むと、ここに表示されます。',
+            itemBuilder: (item) {
+              final activity = recentViewedEntries[item.id];
+              final page = activity?.currentPage;
+              final totalPages = activity?.totalPages;
+              final pageText = page == null
+                  ? null
+                  : totalPages != null
+                  ? 'p.$page / $totalPages'
+                  : 'p.$page';
+              return _buildHomeMediaShelfCard(
+                item: item,
+                footerText: pageText != null
+                    ? 'しおり ${_formatHomeDateTime(activity?.updatedAt)} / $pageText'
+                    : 'しおり ${_formatHomeDateTime(activity?.updatedAt)}',
+                footerIcon: Icons.bookmark,
+                badgeText: pageText ?? 'しおり',
+                badgeIcon: Icons.bookmark,
+                badgeBackgroundColor: Theme.of(
+                  context,
+                ).colorScheme.primaryContainer,
+                badgeForegroundColor: Theme.of(
+                  context,
+                ).colorScheme.onPrimaryContainer,
+                onTap: () => _openDetailFromHome(
+                  item,
+                  initialPdfPage: item.kind == MediaKind.pdf && page != null
+                      ? page
+                      : 1,
+                ),
+              );
+            },
+          ),
           const SizedBox(height: 12),
           _buildHomeMediaShelf(
             title: '最近閲覧',

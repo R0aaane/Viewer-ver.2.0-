@@ -147,6 +147,27 @@ class MediaStatsTest(unittest.TestCase):
         self.assertEqual(second["totalPages"], 40)
         self.assertEqual(second["updatedAt"], newer)
 
+    def test_upsert_reading_progress_preserves_bookmark_when_omitted(self) -> None:
+        timestamp = datetime(2026, 1, 4, tzinfo=timezone.utc)
+        first = self.store.upsert_reading_progress(
+            self.pdf_media_id,
+            current_page=4,
+            total_pages=20,
+            last_read_at=timestamp,
+            updated_at=timestamp,
+            is_bookmarked=True,
+        )
+        second = self.store.upsert_reading_progress(
+            self.pdf_media_id,
+            current_page=5,
+            total_pages=20,
+            last_read_at=timestamp + timedelta(minutes=1),
+            updated_at=timestamp + timedelta(minutes=1),
+        )
+
+        self.assertTrue(first["isBookmarked"])
+        self.assertTrue(second["isBookmarked"])
+
     def test_list_recent_reading_progress_returns_home_card_fields(self) -> None:
         timestamp = datetime(2026, 1, 4, tzinfo=timezone.utc)
         self.store.upsert_reading_progress(

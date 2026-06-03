@@ -9,7 +9,9 @@ from server.models.dto import (
     FavoriteListResponse,
     FavoriteMediaListResponse,
     ItemTagsResponse,
+    RatingListResponse,
     SetFavoriteRequest,
+    SetRatingRequest,
     TagListResponse,
 )
 from server.services.auth_service import require_bearer_token
@@ -108,6 +110,26 @@ def set_favorite(
     resolved_media_id = request.app.state.metadata_store.set_media_favorite(
         media_id,
         payload.isFavorite,
+        identity=identity,
+    )
+    return AddItemTagsResponse(mediaId=resolved_media_id)
+
+
+@router.get("/ratings", response_model=RatingListResponse)
+def list_ratings(request: Request) -> RatingListResponse:
+    return RatingListResponse(items=request.app.state.metadata_store.list_media_ratings())
+
+
+@router.put("/ratings/{media_id}", response_model=AddItemTagsResponse)
+def set_rating(
+    request: Request,
+    media_id: str,
+    payload: SetRatingRequest,
+) -> AddItemTagsResponse:
+    identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
+    resolved_media_id = request.app.state.metadata_store.set_media_rating(
+        media_id,
+        payload.rating,
         identity=identity,
     )
     return AddItemTagsResponse(mediaId=resolved_media_id)
