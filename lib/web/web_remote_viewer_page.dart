@@ -1291,6 +1291,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           client: client,
           entry: entry,
           initialPage: initialPage,
+          rating: _ratingForEntry(entry),
+          onRatingChanged: (rating) => _setRatingForEntry(entry, rating),
           onOpenDetail: () => _openDetailPage(entry, allowOpenPdfViewer: false),
         ),
       ),
@@ -5807,6 +5809,8 @@ class WebPdfViewerPage extends StatefulWidget {
   final WebRemoteApiClient client;
   final WebRemoteEntry entry;
   final int? initialPage;
+  final int? rating;
+  final Future<void> Function(int? rating)? onRatingChanged;
   final Future<void> Function()? onOpenDetail;
 
   const WebPdfViewerPage({
@@ -5814,6 +5818,8 @@ class WebPdfViewerPage extends StatefulWidget {
     required this.client,
     required this.entry,
     this.initialPage,
+    this.rating,
+    this.onRatingChanged,
     this.onOpenDetail,
   });
 
@@ -5846,11 +5852,13 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   String? _lastPersistedProgressKey;
   bool _canPersistReadingProgress = false;
   bool _hasMovedPageSinceLoad = false;
+  int? _rating;
   StreamSubscription<html.Event>? _visibilitySubscription;
 
   @override
   void initState() {
     super.initState();
+    _rating = widget.rating;
     _visibilitySubscription = html.document.onVisibilityChange.listen((_) {
       if (html.document.visibilityState == 'hidden') {
         unawaited(_persistCurrentActivity(force: true));
@@ -5874,6 +5882,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _leftFuture = null;
       _rightFuture = null;
       _loadViewer();
+    }
+    if (oldWidget.rating != widget.rating) {
+      _rating = widget.rating;
     }
   }
 
@@ -5961,7 +5972,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       return;
     }
 
-    final page = _twoPage ? (_page + 1).clamp(1, _totalPages) : _page;
+    final page = (_twoPage ? _page + 1 : _page).clamp(1, _totalPages);
     final currentPage = page < 1 ? 1 : page;
     final totalPages = _totalPages > 0 ? _totalPages : null;
     final progressKey = '$currentPage/${totalPages ?? 0}';
@@ -6165,7 +6176,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _syncPageFutures() {
-    _leftFuture = _loadPageBytes(_page);
+    _leftFuture = _isRatingPage(_page) ? null : _loadPageBytes(_page);
     if (_twoPage) {
       final nextPage = _page + 1;
       _rightFuture = nextPage <= _totalPages ? _loadPageBytes(nextPage) : null;
@@ -6194,10 +6205,15 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     }
   }
 
+  int get _ratingPage => _totalPages + 1;
+
+  bool _isRatingPage(int page) => _pageCountReliable && page == _ratingPage;
+
   void _setCurrentPage(int page) {
     setState(() {
       _hasMovedPageSinceLoad = true;
-      _page = page.clamp(1, _totalPages);
+      final maxPage = _pageCountReliable ? _ratingPage : _totalPages;
+      _page = page.clamp(1, maxPage);
       _syncPageFutures();
     });
     _schedulePersistCurrentActivity();
@@ -6207,8 +6223,12 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     if (page < 1) {
       return false;
     }
-    if (_pageCountReliable && page > _totalPages) {
+    if (_pageCountReliable && page > _ratingPage) {
       return false;
+    }
+    if (_isRatingPage(page)) {
+      _setCurrentPage(page);
+      return true;
     }
     if (page <= _totalPages) {
       _setCurrentPage(page);
@@ -6284,6 +6304,10 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   void _next() {
     final step = _twoPage && _rightFuture == null ? 1 : (_twoPage ? 2 : 1);
     final next = _page + step;
+    if (_pageCountReliable && next <= _ratingPage) {
+      _setCurrentPage(next);
+      return;
+    }
     if (next <= _totalPages) {
       _setCurrentPage(next);
       return;
@@ -6420,6 +6444,81 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     );
   }
 
+  Widget _buildRatingPage() {
+    final current = _rating;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFF121A26),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Icon(
+                  Icons.star_rate_rounded,
+                  color: Colors.amber,
+                  size: 36,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  _entryDisplayTitle(widget.entry),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('評価', style: TextStyle(color: Colors.white70)),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  children: <Widget>[
+                    for (final value in const <int>[3, 4, 5])
+                      ChoiceChip(
+                        label: Text('$value'),
+                        selected: current == value,
+                        avatar: Icon(
+                          current == value ? Icons.star : Icons.star_border,
+                          size: 16,
+                          color: current == value
+                              ? Colors.black87
+                              : Colors.amber,
+                        ),
+                        onSelected: (_) {
+                          setState(() => _rating = value);
+                          unawaited(widget.onRatingChanged?.call(value));
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: current == null
+                      ? null
+                      : () {
+                          setState(() => _rating = null);
+                          unawaited(widget.onRatingChanged?.call(null));
+                        },
+                  icon: const Icon(Icons.clear),
+                  label: const Text('評価をクリア'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildViewerBody() {
     if (_loading && _leftFuture == null) {
       return const Center(child: CircularProgressIndicator());
@@ -6430,11 +6529,15 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         onRetry: _loadViewer,
       );
     }
+    final showsRatingPage = _isRatingPage(_page) || _isRatingPage(_page + 1);
     return Stack(
       children: <Widget>[
         Center(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              if (_isRatingPage(_page)) {
+                return _buildRatingPage();
+              }
               final gap = constraints.maxWidth < 720 ? 6.0 : 12.0;
               final isSpread = _twoPage;
               final pageWidth = isSpread
@@ -6460,12 +6563,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                     SizedBox(width: gap),
                     SizedBox(
                       width: pageWidth,
-                      child: _buildPageImage(
-                        _rightFuture,
-                        align: Alignment.centerLeft,
-                        isSpread: isSpread,
-                        pageNumber: _page + 1,
-                      ),
+                      child: _isRatingPage(_page + 1)
+                          ? _buildRatingPage()
+                          : _buildPageImage(
+                              _rightFuture,
+                              align: Alignment.centerLeft,
+                              isSpread: isSpread,
+                              pageNumber: _page + 1,
+                            ),
                     ),
                   ],
                 ],
@@ -6473,36 +6578,39 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             },
           ),
         ),
-        Positioned.fill(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTapUp: (details) {
-                  final dx = details.localPosition.dx;
-                  final width = constraints.maxWidth;
-                  final leftEdge = width * 0.35;
-                  final rightEdge = width * 0.65;
-                  if (dx < leftEdge) {
-                    _prev();
-                  } else if (dx > rightEdge) {
-                    _next();
-                  }
-                },
-              );
-            },
+        if (!showsRatingPage)
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapUp: (details) {
+                    final dx = details.localPosition.dx;
+                    final width = constraints.maxWidth;
+                    final leftEdge = width * 0.35;
+                    final rightEdge = width * 0.65;
+                    if (dx < leftEdge) {
+                      _prev();
+                    } else if (dx > rightEdge) {
+                      _next();
+                    }
+                  },
+                );
+              },
+            ),
           ),
-        ),
       ],
     );
   }
 
   Widget _buildPageSelector({required bool compact}) {
     final totalPagesText = _pageCountReliable
-        ? '$_totalPages'
+        ? '$_totalPages + 評価'
         : '$_totalPages+';
-    final pageText = '$_page / $totalPagesText';
-    final selectedPage = _page <= _totalPages ? _page : _totalPages;
+    final pageText = _isRatingPage(_page) ? '評価' : '$_page / $totalPagesText';
+    final selectedPage = _pageCountReliable
+        ? _page.clamp(1, _ratingPage)
+        : (_page <= _totalPages ? _page : _totalPages);
 
     if (!_pageCountReliable || _totalPages <= 1) {
       return Container(
@@ -6545,7 +6653,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             fontWeight: FontWeight.w700,
           ),
           selectedItemBuilder: (context) =>
-              List<Widget>.generate(_totalPages, (index) {
+              List<Widget>.generate(_ratingPage, (index) {
                 final pageNumber = index + 1;
                 return Align(
                   alignment: Alignment.centerLeft,
@@ -6554,15 +6662,19 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                       horizontal: compact ? 4 : 6,
                       vertical: compact ? 6 : 8,
                     ),
-                    child: Text('$pageNumber / $_totalPages'),
+                    child: Text(
+                      pageNumber == _ratingPage
+                          ? '評価'
+                          : '$pageNumber / $_totalPages',
+                    ),
                   ),
                 );
               }),
-          items: List<DropdownMenuItem<int>>.generate(_totalPages, (index) {
+          items: List<DropdownMenuItem<int>>.generate(_ratingPage, (index) {
             final pageNumber = index + 1;
             return DropdownMenuItem<int>(
               value: pageNumber,
-              child: Text('ページ $pageNumber'),
+              child: Text(pageNumber == _ratingPage ? '評価' : 'ページ $pageNumber'),
             );
           }),
           onChanged: _loading
@@ -6582,7 +6694,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     final canPrev = _page > 1;
     final canNext =
         !_loading &&
-        (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _totalPages);
+        (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _ratingPage);
 
     return Wrap(
       spacing: 8,
@@ -6613,7 +6725,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     final canPrev = _page > 1;
     final canNext =
         !_loading &&
-        (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _totalPages);
+        (!_pageCountReliable || _page + (_twoPage ? 2 : 1) <= _ratingPage);
     final canReturn =
         Navigator.of(context).canPop() || widget.onOpenDetail != null;
 
