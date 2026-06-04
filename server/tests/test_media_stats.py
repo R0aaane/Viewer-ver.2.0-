@@ -234,6 +234,72 @@ class MediaStatsTest(unittest.TestCase):
         finally:
             sqlite.close()
 
+    def test_init_schema_adds_bookmark_column_before_legacy_progress_migration(self) -> None:
+        legacy_db_path = Path(self._temp_dir.name) / "legacy-progress.db"
+        media_id = "existing-media"
+        conn = sqlite3.connect(legacy_db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE media_records (
+                    media_id TEXT PRIMARY KEY,
+                    folder_raw TEXT NOT NULL,
+                    relative_hint TEXT,
+                    display_name TEXT NOT NULL,
+                    full_path TEXT NOT NULL UNIQUE,
+                    normalized_full_path TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL,
+                    mime_type TEXT,
+                    size_bytes INTEGER,
+                    modified_at TEXT,
+                    modified_epoch_ms INTEGER,
+                    etag TEXT,
+                    is_deleted INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE media_activity (
+                    media_id TEXT PRIMARY KEY,
+                    last_viewed_at TEXT NOT NULL,
+                    last_page INTEGER
+                );
+                CREATE TABLE reading_progress (
+                    media_id TEXT PRIMARY KEY,
+                    current_page INTEGER NOT NULL,
+                    total_pages INTEGER,
+                    progress REAL NOT NULL DEFAULT 0,
+                    last_read_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO media_records (
+                    media_id, folder_raw, relative_hint, display_name,
+                    full_path, normalized_full_path, kind
+                ) VALUES (?, 'folder', NULL, 'sample.pdf', 'folder/sample.pdf',
+                    'folder/sample.pdf', 'pdf')
+                """,
+                (media_id,),
+            )
+            conn.execute(
+                "INSERT INTO media_activity (media_id, last_viewed_at, last_page) "
+                "VALUES (?, '2026-01-01T00:00:00+00:00', 3)",
+                (media_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        sqlite = SqliteStore(legacy_db_path)
+        try:
+            sqlite.init_schema()
+
+            progress = sqlite.get_reading_progress(media_id)
+            self.assertIsNotNone(progress)
+            self.assertEqual(progress["is_bookmarked"], 0)
+        finally:
+            sqlite.close()
+
 
 if __name__ == "__main__":
     unittest.main()

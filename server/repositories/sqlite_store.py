@@ -139,6 +139,19 @@ class SqliteStore:
                 CREATE INDEX IF NOT EXISTS idx_media_ratings_rating
                     ON media_ratings(rating, updated_at);
 
+                """
+            )
+            columns = {
+                str(row["name"])
+                for row in cur.execute("PRAGMA table_info(reading_progress)").fetchall()
+            }
+            if "is_bookmarked" not in columns:
+                cur.execute(
+                    "ALTER TABLE reading_progress "
+                    "ADD COLUMN is_bookmarked INTEGER NOT NULL DEFAULT 0"
+                )
+            cur.execute(
+                """
                 INSERT INTO reading_progress (
                     media_id,
                     current_page,
@@ -167,15 +180,6 @@ class SqliteStore:
                 WHERE progress.media_id IS NULL;
                 """
             )
-            columns = {
-                str(row["name"])
-                for row in cur.execute("PRAGMA table_info(reading_progress)").fetchall()
-            }
-            if "is_bookmarked" not in columns:
-                cur.execute(
-                    "ALTER TABLE reading_progress "
-                    "ADD COLUMN is_bookmarked INTEGER NOT NULL DEFAULT 0"
-                )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_reading_progress_bookmarked "
                 "ON reading_progress(is_bookmarked, last_read_at)"

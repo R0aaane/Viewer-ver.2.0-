@@ -201,8 +201,8 @@ class HostApiServerService extends ChangeNotifier {
           ? health.message
           : (externalRunning
                 ? (managedPid != null
-                      ? '??? API ????????????'
-                      : '??? API ????????????')
+                      ? 'ホスト API サーバーに接続済みです'
+                      : '外部 API サーバーに接続済みです')
                 : _status.message),
       pid: effectivePid,
       port: settings.hostPort,
@@ -365,7 +365,7 @@ class HostApiServerService extends ChangeNotifier {
       _setStatus(
         _status.copyWith(
           state: HostServerState.stopped,
-          message: '????????????',
+          message: 'サーバーは停止しています',
           clearPid: true,
         ),
       );
@@ -375,7 +375,7 @@ class HostApiServerService extends ChangeNotifier {
     _setStatus(
       _status.copyWith(
         state: HostServerState.stopping,
-        message: 'API ????????????...',
+        message: 'API サーバーを停止しています...',
       ),
     );
 
@@ -406,7 +406,7 @@ class HostApiServerService extends ChangeNotifier {
       _setStatus(
         _status.copyWith(
           state: HostServerState.error,
-          message: 'API ????????????????',
+          message: 'API サーバーを停止できませんでした',
           pid: managedPid,
           port: settings.hostPort,
           hostname: networkInfo.hostname,
@@ -421,7 +421,7 @@ class HostApiServerService extends ChangeNotifier {
     _setStatus(
       _status.copyWith(
         state: HostServerState.stopped,
-        message: '???????????',
+        message: 'サーバーを停止しました',
         clearPid: true,
       ),
     );
@@ -449,7 +449,7 @@ class HostApiServerService extends ChangeNotifier {
       _status.copyWith(
         state: exitCode == 0 ? HostServerState.stopped : HostServerState.error,
         message: exitCode == 0
-            ? '???????????'
+            ? 'サーバーを停止しました'
             : _deriveProcessFailureMessage(exitCode),
         clearPid: true,
       ),
