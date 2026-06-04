@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -190,6 +191,48 @@ class MediaStatsTest(unittest.TestCase):
         self.assertEqual(recent[0]["lastReadAt"], timestamp)
         self.assertEqual(recent[0]["updatedAt"], timestamp)
         self.assertTrue(str(recent[0]["thumbnailUrl"]).endswith("/thumb"))
+
+    def test_init_schema_skips_orphan_legacy_activity_rows(self) -> None:
+        orphan_db_path = Path(self._temp_dir.name) / "orphan-legacy.db"
+        conn = sqlite3.connect(orphan_db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE media_records (
+                    media_id TEXT PRIMARY KEY,
+                    folder_raw TEXT NOT NULL,
+                    relative_hint TEXT,
+                    display_name TEXT NOT NULL,
+                    full_path TEXT NOT NULL UNIQUE,
+                    normalized_full_path TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL,
+                    mime_type TEXT,
+                    size_bytes INTEGER,
+                    modified_at TEXT,
+                    modified_epoch_ms INTEGER,
+                    etag TEXT,
+                    is_deleted INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE media_activity (
+                    media_id TEXT PRIMARY KEY,
+                    last_viewed_at TEXT NOT NULL,
+                    last_page INTEGER
+                );
+                INSERT INTO media_activity (media_id, last_viewed_at, last_page)
+                VALUES ('missing-media', '2026-01-01T00:00:00+00:00', 3);
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        sqlite = SqliteStore(orphan_db_path)
+        try:
+            sqlite.init_schema()
+
+            self.assertIsNone(sqlite.get_reading_progress("missing-media"))
+        finally:
+            sqlite.close()
 
 
 if __name__ == "__main__":

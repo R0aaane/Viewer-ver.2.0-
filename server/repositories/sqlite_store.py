@@ -160,6 +160,8 @@ class SqliteStore:
                     legacy.last_viewed_at,
                     0
                 FROM media_activity AS legacy
+                JOIN media_records AS records
+                    ON records.media_id = legacy.media_id
                 LEFT JOIN reading_progress AS progress
                     ON progress.media_id = legacy.media_id
                 WHERE progress.media_id IS NULL;
