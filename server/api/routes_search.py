@@ -4,7 +4,12 @@ import os
 
 from fastapi import APIRouter, Depends, Request
 
-from server.models.dto import FolderChildrenResponse, FolderListResponse, SearchResponse
+from server.models.dto import (
+    FolderChildrenResponse,
+    FolderListResponse,
+    HitomiSearchResponse,
+    SearchResponse,
+)
 from server.services.auth_service import require_bearer_token
 from server.services.metadata_store import SearchQuery
 
@@ -76,6 +81,20 @@ def search_media(
         )
     )
     return SearchResponse(items=items, total=total, limit=safe_limit, offset=safe_offset)
+
+
+@router.get("/hitomi/search", response_model=HitomiSearchResponse)
+async def search_hitomi(
+    request: Request,
+    q: str,
+    limit: int = 50,
+) -> HitomiSearchResponse:
+    safe_limit = max(1, min(limit, 100))
+    items = await request.app.state.url_download_service.search_hitomi_galleries(
+        query=q,
+        limit=safe_limit,
+    )
+    return HitomiSearchResponse(items=items, total=len(items), limit=safe_limit)
 
 
 @router.get("/untagged", response_model=SearchResponse)

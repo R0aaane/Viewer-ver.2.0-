@@ -14,6 +14,7 @@ import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 import '../models/reading_progress.dart';
 import '../models/tag.dart';
+import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
 import '../services/reading_progress_service.dart';
@@ -28,7 +29,7 @@ enum _WebMediaFilter {
   const _WebMediaFilter(this.label);
 }
 
-enum _WebRemoteSurface { home, browse }
+enum _WebRemoteSurface { home, browse, hitomiSearch }
 
 enum _WebBrowserDisplayMode {
   list(label: 'リスト', compactLabel: '一覧', icon: Icons.view_agenda_outlined),
@@ -85,11 +86,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   late final TextEditingController _apiController;
   late final TextEditingController _tokenController;
   late final TextEditingController _searchController;
+  late final TextEditingController _hitomiSearchController;
+  final FocusNode _hitomiSearchFocusNode = FocusNode();
 
   WebRemoteApiClient? _client;
   List<WebRemoteFolder> _folders = const <WebRemoteFolder>[];
   List<WebRemoteEntry> _entries = const <WebRemoteEntry>[];
   List<WebRemoteEntry> _homeEntries = const <WebRemoteEntry>[];
+  Set<String> _webSeriesSuggestions = const <String>{};
   Map<String, ReadingProgressEntry> _homeRecentActivityById =
       const <String, ReadingProgressEntry>{};
   ReadingProgressService? _readingProgressService;
@@ -112,9 +116,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Set<String> _favorites = const <String>{};
   Map<String, int> _ratingsById = const <String, int>{};
   int _browserPage = 1;
+  int _hitomiSearchPage = 0;
   Timer? _remoteRefreshTimer;
   Future<void>? _webViewerVersionFuture;
   DateTime? _latestObservedLibraryScanAt;
+  int _webSeriesSuggestionLoadVersion = 0;
+  int _hitomiSearchLoadVersion = 0;
+  bool _hitomiSearching = false;
+  String? _hitomiSearchErrorMessage;
+  List<WebHitomiSearchResult> _hitomiSearchResults =
+      const <WebHitomiSearchResult>[];
 
   @override
   void initState() {
@@ -123,6 +134,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     _apiController = TextEditingController(text: _settings.clientApiBaseUrl);
     _tokenController = TextEditingController(text: _settings.authToken ?? '');
     _searchController = TextEditingController();
+    _hitomiSearchController = TextEditingController(
+      text: 'orderby:popular orderbykey:week language:japanese',
+    );
     _webViewerVersionFuture = _loadWebViewerVersion();
     unawaited(_webViewerVersionFuture);
     unawaited(_loadRatings());
@@ -242,6 +256,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     _apiController.dispose();
     _tokenController.dispose();
     _searchController.dispose();
+    _hitomiSearchController.dispose();
+    _hitomiSearchFocusNode.dispose();
     super.dispose();
   }
 
@@ -543,6 +559,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             ? 'PDF 一覧: ${filtered.length}件'
             : 'PDF 検索: ${filtered.length}件';
       });
+      unawaited(_refreshWebSeriesSuggestions(filtered));
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -820,6 +837,38 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       name: parsed.name,
       untagged: parsed.untagged,
     );
+  }
+
+  Future<void> _refreshWebSeriesSuggestions(
+    List<WebRemoteEntry> entries,
+  ) async {
+    final client = _client;
+    if (client == null || entries.isEmpty) {
+      if (mounted) {
+        setState(() => _webSeriesSuggestions = const <String>{});
+      }
+      return;
+    }
+
+    final loadVersion = ++_webSeriesSuggestionLoadVersion;
+    final next = <String>{};
+    for (final entry in entries.take(300)) {
+      final mediaId = entry.mediaId?.trim();
+      if (mediaId == null || mediaId.isEmpty) continue;
+      try {
+        final tags = await client.fetchItemTags(mediaId);
+        if (!mounted || loadVersion != _webSeriesSuggestionLoadVersion) {
+          return;
+        }
+        for (final tag in tags) {
+          if (tag.category != TagCategory.series) continue;
+          final name = tag.name.trim();
+          if (name.isNotEmpty) next.add(name);
+        }
+      } catch (_) {}
+    }
+    if (!mounted || loadVersion != _webSeriesSuggestionLoadVersion) return;
+    setState(() => _webSeriesSuggestions = next);
   }
 
   List<WebRemoteEntry> _applyFilter(List<WebRemoteEntry> items) {
@@ -1336,6 +1385,130 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     await _loadEntries();
   }
 
+  Future<void> _runHitomiSearch() async {
+    final client = _client;
+    final query = _hitomiSearchController.text.trim();
+    if (client == null || query.isEmpty) {
+      setState(() {
+        _hitomiSearchResults = const <WebHitomiSearchResult>[];
+        _hitomiSearchPage = 0;
+        _hitomiSearchErrorMessage = null;
+      });
+      return;
+    }
+
+    final loadVersion = ++_hitomiSearchLoadVersion;
+    setState(() {
+      _hitomiSearching = true;
+      _hitomiSearchPage = 0;
+      _hitomiSearchErrorMessage = null;
+    });
+    try {
+      final results = await client.searchHitomiGalleries(
+        query: query,
+        limit: 50,
+      );
+      if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
+      setState(() {
+        _hitomiSearching = false;
+        _hitomiSearchResults = results;
+        _hitomiSearchPage = 0;
+      });
+    } catch (error) {
+      if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
+      setState(() {
+        _hitomiSearching = false;
+        _hitomiSearchResults = const <WebHitomiSearchResult>[];
+        _hitomiSearchPage = 0;
+        _hitomiSearchErrorMessage = error.toString();
+      });
+    }
+  }
+
+  Future<void> _importHitomiResult(WebHitomiSearchResult result) async {
+    final folderRaw = _urlImportTargetFolderRaw();
+    if (folderRaw == null || folderRaw.isEmpty) {
+      return;
+    }
+    final importResult = await _runRemoteAction<WebRemoteUrlImportResult>(
+      workingStatus: 'Hitomi import is running...',
+      action: (client) => client.downloadUrl(
+        folderRaw: folderRaw,
+        sourceUrl: result.galleryUrl,
+        options: const UrlImportOptions(convertHitomiToPdf: true),
+      ),
+    );
+    if (importResult == null || !mounted) {
+      return;
+    }
+    await _refreshHomeEntries(force: true);
+    await _loadEntries();
+    if (!mounted) {
+      return;
+    }
+    final message =
+        'Hitomi import completed: ${importResult.importedCount} imported / '
+        '${importResult.skippedCount} skipped / ${importResult.failedCount} failed';
+    setState(() => _statusMessage = message);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _setHitomiOrderingQuery(String query) {
+    final tokens = _hitomiSearchController.text
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where(
+          (token) =>
+              token.isNotEmpty &&
+              !token.toLowerCase().startsWith('orderby') &&
+              !token.toLowerCase().startsWith('sortby') &&
+              !token.toLowerCase().startsWith('orderkey') &&
+              !token.toLowerCase().startsWith('sortkey') &&
+              !token.toLowerCase().startsWith('orderdirection') &&
+              !token.toLowerCase().startsWith('sortdirection'),
+        )
+        .toList(growable: false);
+    _hitomiSearchController.text = <String>[query, ...tokens].join(' ').trim();
+  }
+
+  String _selectedHitomiOrderingQuery() {
+    final lower = _hitomiSearchController.text.toLowerCase();
+    if (lower.contains('orderby:datepublished')) {
+      return 'orderby:datepublished';
+    }
+    if (lower.contains('orderby:popular') &&
+        lower.contains('orderbykey:today')) {
+      return 'orderby:popular orderbykey:today';
+    }
+    if (lower.contains('orderby:popular') &&
+        lower.contains('orderbykey:month')) {
+      return 'orderby:popular orderbykey:month';
+    }
+    if (lower.contains('orderby:popular') &&
+        lower.contains('orderbykey:year')) {
+      return 'orderby:popular orderbykey:year';
+    }
+    if (lower.contains('orderby:random')) {
+      return 'orderby:random';
+    }
+    if (lower.contains('orderby:popular') &&
+        lower.contains('orderbykey:week')) {
+      return 'orderby:popular orderbykey:week';
+    }
+    return 'orderby:date orderbykey:added';
+  }
+
+  int _hitomiTotalPages(int total) {
+    if (total <= 0) return 1;
+    return (total + _browserPageSize - 1) ~/ _browserPageSize;
+  }
+
+  String _hitomiTerm(String value) {
+    return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '_');
+  }
+
   Future<T?> _runRemoteAction<T>({
     required String workingStatus,
     required Future<T> Function(WebRemoteApiClient client) action,
@@ -1510,6 +1683,407 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Widget _buildHitomiSearchPane() {
+    return Column(
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(child: _buildHitomiSearchField()),
+            const SizedBox(width: 8),
+            _buildHitomiOrderingDropdown(),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: _hitomiSearching ? null : _runHitomiSearch,
+              icon: const Icon(Icons.search),
+              label: const Text('検索'),
+            ),
+          ],
+        ),
+        if (_hitomiSearching)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: LinearProgressIndicator(),
+          ),
+        const SizedBox(height: 12),
+        Expanded(child: _buildHitomiSearchResults()),
+      ],
+    );
+  }
+
+  Widget _buildHitomiSearchField() {
+    return RawAutocomplete<String>(
+      textEditingController: _hitomiSearchController,
+      focusNode: _hitomiSearchFocusNode,
+      optionsBuilder: (value) {
+        final token = _hitomiCurrentToken(value.text).toLowerCase();
+        if (token.isEmpty) {
+          return const <String>[];
+        }
+        final values = <String>{};
+        for (final result in _hitomiSearchResults) {
+          for (final value in result.artists) {
+            values.add('artist:${_hitomiTerm(value)}');
+          }
+          for (final value in result.groups) {
+            values.add('group:${_hitomiTerm(value)}');
+          }
+          for (final value in result.series) {
+            values.add('series:${_hitomiTerm(value)}');
+          }
+          for (final value in result.characters) {
+            values.add('character:${_hitomiTerm(value)}');
+          }
+          for (final value in result.tags) {
+            values.add('tag:${_hitomiTerm(value)}');
+          }
+        }
+        const presets = <String>[
+          'language:japanese',
+          'language:english',
+          'type:doujinshi',
+          'type:manga',
+          'type:cg',
+          'type:gamecg',
+          'type:imageset',
+        ];
+        values.addAll(presets);
+        return values
+            .where((value) => value.toLowerCase().contains(token))
+            .take(20);
+      },
+      onSelected: _replaceHitomiCurrentToken,
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search),
+            labelText: 'Hitomi 検索',
+            hintText: 'group:yoppu language:japanese',
+            border: OutlineInputBorder(),
+          ),
+          textInputAction: TextInputAction.search,
+          onSubmitted: (_) => _runHitomiSearch(),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final values = options.toList(growable: false);
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520, maxHeight: 280),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: values.length,
+                itemBuilder: (context, index) {
+                  final value = values[index];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.sell_outlined, size: 20),
+                    title: Text(value),
+                    onTap: () => onSelected(value),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHitomiOrderingDropdown() {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _hitomiSearchController,
+      builder: (context, value, child) {
+        return DropdownButton<String>(
+          value: _selectedHitomiOrderingQuery(),
+          items: const <DropdownMenuItem<String>>[
+            DropdownMenuItem<String>(
+              value: 'orderby:date orderbykey:added',
+              child: Text('Date Added'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:datepublished',
+              child: Text('Date Published'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:today',
+              child: Text('Popular: Today'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:week',
+              child: Text('Popular: Week'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:month',
+              child: Text('Popular: Month'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:popular orderbykey:year',
+              child: Text('Popular: Year'),
+            ),
+            DropdownMenuItem<String>(
+              value: 'orderby:random',
+              child: Text('Random'),
+            ),
+          ],
+          onChanged: (query) {
+            if (query == null) return;
+            setState(() => _setHitomiOrderingQuery(query));
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildHitomiSearchResults() {
+    if (_hitomiSearchErrorMessage != null) {
+      return _buildCenteredMessage(
+        Icons.error_outline,
+        _hitomiSearchErrorMessage!,
+      );
+    }
+    if (_hitomiSearchResults.isEmpty) {
+      return _buildCenteredMessage(Icons.search, 'Hitomi の検索条件を入力してください。');
+    }
+    final totalPages = _hitomiTotalPages(_hitomiSearchResults.length);
+    final page = _hitomiSearchPage.clamp(0, totalPages - 1).toInt();
+    final start = page * _browserPageSize;
+    final end = (start + _browserPageSize).clamp(
+      0,
+      _hitomiSearchResults.length,
+    );
+    final pageItems = _hitomiSearchResults.sublist(start, end);
+    return ListView.separated(
+      itemCount: pageItems.length + (totalPages > 1 ? 1 : 0),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        if (index == 0 && totalPages > 1) {
+          return _buildHitomiPager(
+            currentPage: page,
+            totalPages: totalPages,
+            start: start + 1,
+            end: end,
+            total: _hitomiSearchResults.length,
+          );
+        }
+        final itemIndex = index - (totalPages > 1 ? 1 : 0);
+        return _buildHitomiResultCard(pageItems[itemIndex]);
+      },
+    );
+  }
+
+  Widget _buildHitomiPager({
+    required int currentPage,
+    required int totalPages,
+    required int start,
+    required int end,
+    required int total,
+  }) {
+    return Row(
+      children: <Widget>[
+        Text('$start-$end / $total'),
+        const Spacer(),
+        IconButton(
+          tooltip: '前へ',
+          onPressed: currentPage <= 0
+              ? null
+              : () => setState(() => _hitomiSearchPage = currentPage - 1),
+          icon: const Icon(Icons.chevron_left),
+        ),
+        DropdownButton<int>(
+          value: currentPage,
+          items: List.generate(
+            totalPages,
+            (index) => DropdownMenuItem<int>(
+              value: index,
+              child: Text('${index + 1} / $totalPages'),
+            ),
+          ),
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => _hitomiSearchPage = value);
+          },
+        ),
+        IconButton(
+          tooltip: '次へ',
+          onPressed: currentPage >= totalPages - 1
+              ? null
+              : () => setState(() => _hitomiSearchPage = currentPage + 1),
+          icon: const Icon(Icons.chevron_right),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHitomiResultCard(WebHitomiSearchResult result) {
+    final theme = Theme.of(context);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            _buildHitomiThumbnail(result),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    result.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _hitomiResultSubtitle(result),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  _buildHitomiTagWrap(result),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: <Widget>[
+                      TextButton.icon(
+                        onPressed: () =>
+                            html.window.open(result.galleryUrl, '_blank'),
+                        icon: const Icon(Icons.open_in_new),
+                        label: const Text('開く'),
+                      ),
+                      TextButton.icon(
+                        onPressed:
+                            _urlImportTargetFolderRaw() == null || _actionBusy
+                            ? null
+                            : () => _importHitomiResult(result),
+                        icon: const Icon(Icons.download_outlined),
+                        label: const Text('取り込み'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHitomiThumbnail(WebHitomiSearchResult result) {
+    final urls = result.thumbnailUrls.isEmpty && result.thumbnailUrl != null
+        ? <String>[result.thumbnailUrl!]
+        : result.thumbnailUrls;
+    return Container(
+      width: 112,
+      height: 156,
+      color: Colors.black26,
+      child: urls.isEmpty
+          ? const Icon(Icons.image_not_supported_outlined)
+          : Image.network(urls.first, fit: BoxFit.cover),
+    );
+  }
+
+  Widget _buildHitomiTagWrap(WebHitomiSearchResult result) {
+    final tags = <({String prefix, String value})>[
+      for (final value in result.artists.take(2))
+        (prefix: 'artist', value: value),
+      for (final value in result.groups.take(2))
+        (prefix: 'group', value: value),
+      for (final value in result.series.take(2))
+        (prefix: 'series', value: value),
+      for (final value in result.characters.take(2))
+        (prefix: 'character', value: value),
+      for (final value in result.tags.take(8)) (prefix: 'tag', value: value),
+    ];
+    if (tags.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: <Widget>[
+        for (final tag in tags)
+          ActionChip(
+            visualDensity: VisualDensity.compact,
+            label: Text(tag.value, overflow: TextOverflow.ellipsis),
+            onPressed: () => _appendHitomiSearchTerm(
+              '${tag.prefix}:${_hitomiTerm(tag.value)}',
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _hitomiResultSubtitle(WebHitomiSearchResult result) {
+    final parts = <String>[
+      '#${result.galleryId}',
+      if (result.type?.isNotEmpty == true) result.type!,
+      if (result.language?.isNotEmpty == true) result.language!,
+      if (result.date?.isNotEmpty == true) result.date!,
+    ];
+    return parts.join(' / ');
+  }
+
+  void _appendHitomiSearchTerm(String term) {
+    final text = _hitomiSearchController.text.trim();
+    _hitomiSearchController.text = text.isEmpty ? term : '$text $term';
+  }
+
+  String _hitomiCurrentToken(String value) {
+    final selection = _hitomiSearchController.selection;
+    final cursor = selection.isValid ? selection.baseOffset : value.length;
+    final beforeCursor = value.substring(0, cursor.clamp(0, value.length));
+    final match = RegExp(r'(\S+)$').firstMatch(beforeCursor);
+    return match?.group(1) ?? '';
+  }
+
+  void _replaceHitomiCurrentToken(String replacement) {
+    final value = _hitomiSearchController.text;
+    final selection = _hitomiSearchController.selection;
+    final cursor = selection.isValid ? selection.baseOffset : value.length;
+    final safeCursor = cursor.clamp(0, value.length).toInt();
+    final before = value.substring(0, safeCursor);
+    final after = value.substring(safeCursor);
+    final match = RegExp(r'(\S+)$').firstMatch(before);
+    final prefix = match == null ? before : before.substring(0, match.start);
+    final next = '$prefix$replacement $after'.replaceAll(RegExp(r'\s+'), ' ');
+    _hitomiSearchController.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(
+        offset: (prefix.length + replacement.length + 1).clamp(0, next.length),
+      ),
+    );
+  }
+
+  Widget _buildCenteredMessage(IconData icon, String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(icon, size: 40),
+            const SizedBox(height: 12),
+            Text(message, textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -1529,17 +2103,20 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           compactScreen ? 10 : 16,
           keyboardVisible ? 10 : 16,
         );
-        final mainContent = _surface == _WebRemoteSurface.home
-            ? _buildHomePane()
-            : splitView
-            ? Row(
-                children: <Widget>[
-                  Expanded(flex: 6, child: _buildBrowserPane(splitView)),
-                  const SizedBox(width: 16),
-                  SizedBox(width: 420, child: _buildDetailPane()),
-                ],
-              )
-            : _buildBrowserPane(splitView);
+        final mainContent = switch (_surface) {
+          _WebRemoteSurface.home => _buildHomePane(),
+          _WebRemoteSurface.hitomiSearch => _buildHitomiSearchPane(),
+          _WebRemoteSurface.browse =>
+            splitView
+                ? Row(
+                    children: <Widget>[
+                      Expanded(flex: 6, child: _buildBrowserPane(splitView)),
+                      const SizedBox(width: 16),
+                      SizedBox(width: 420, child: _buildDetailPane()),
+                    ],
+                  )
+                : _buildBrowserPane(splitView),
+        };
 
         return Scaffold(
           resizeToAvoidBottomInset: true,
@@ -1666,6 +2243,18 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   onTap: () {
                     setState(() {
                       _surface = _WebRemoteSurface.browse;
+                    });
+                  },
+                ),
+                ListTile(
+                  selected: _surface == _WebRemoteSurface.hitomiSearch,
+                  selectedTileColor: const Color(0xFF1B2D47),
+                  leading: const Icon(Icons.travel_explore_outlined),
+                  title: const Text('Hitomi検索'),
+                  subtitle: const Text('Hitomi を検索して取り込み'),
+                  onTap: () {
+                    setState(() {
+                      _surface = _WebRemoteSurface.hitomiSearch;
                     });
                   },
                 ),
@@ -2034,6 +2623,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       children: <Widget>[
         _PinnedBrowserSearchBar(
           searchController: _searchController,
+          seriesSuggestions: _webSeriesSuggestions,
           isLoading: _isLoading,
           onSearch: _loadEntries,
         ),
@@ -2043,6 +2633,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           folderPath: currentFolderRaw,
           itemCount: _entries.length,
           searchController: _searchController,
+          seriesSuggestions: _webSeriesSuggestions,
           isLoading: _isLoading,
           actionsBusy: _actionBusy,
           onGoRoot:
@@ -3299,6 +3890,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
   final String? folderPath;
   final int itemCount;
   final TextEditingController searchController;
+  final Set<String> seriesSuggestions;
   final bool isLoading;
   final bool actionsBusy;
   final VoidCallback? onGoRoot;
@@ -3319,6 +3911,7 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
     required this.folderPath,
     required this.itemCount,
     required this.searchController,
+    required this.seriesSuggestions,
     required this.isLoading,
     required this.actionsBusy,
     required this.onGoRoot,
@@ -3617,11 +4210,13 @@ class _ResponsiveBrowserHeader extends StatelessWidget {
 
 class _PinnedBrowserSearchBar extends StatelessWidget {
   final TextEditingController searchController;
+  final Set<String> seriesSuggestions;
   final bool isLoading;
   final Future<void> Function() onSearch;
 
   const _PinnedBrowserSearchBar({
     required this.searchController,
+    required this.seriesSuggestions,
     required this.isLoading,
     required this.onSearch,
   });
@@ -3636,8 +4231,9 @@ class _PinnedBrowserSearchBar extends StatelessWidget {
         child: Row(
           children: <Widget>[
             Expanded(
-              child: TextField(
+              child: _WebSeriesSearchField(
                 controller: searchController,
+                seriesSuggestions: seriesSuggestions,
                 textInputAction: TextInputAction.search,
                 onSubmitted: (_) => onSearch(),
                 decoration: InputDecoration(
@@ -3665,6 +4261,125 @@ class _PinnedBrowserSearchBar extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _WebSeriesSearchField extends StatefulWidget {
+  final TextEditingController controller;
+  final Set<String> seriesSuggestions;
+  final TextInputAction? textInputAction;
+  final ValueChanged<String>? onSubmitted;
+  final InputDecoration decoration;
+
+  const _WebSeriesSearchField({
+    required this.controller,
+    required this.seriesSuggestions,
+    required this.decoration,
+    this.textInputAction,
+    this.onSubmitted,
+  });
+
+  @override
+  State<_WebSeriesSearchField> createState() => _WebSeriesSearchFieldState();
+}
+
+class _WebSeriesSearchFieldState extends State<_WebSeriesSearchField> {
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RawAutocomplete<String>(
+      textEditingController: widget.controller,
+      focusNode: _focusNode,
+      optionsBuilder: (value) => _seriesOptions(value.text),
+      onSelected: _replaceCurrentToken,
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          textInputAction: widget.textInputAction,
+          onSubmitted: widget.onSubmitted,
+          decoration: widget.decoration,
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final values = options.toList(growable: false);
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420, maxHeight: 260),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: values.length,
+                itemBuilder: (context, index) {
+                  final value = values[index];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.collections_bookmark_outlined),
+                    title: Text(value),
+                    onTap: () => onSelected(value),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Iterable<String> _seriesOptions(String raw) {
+    final token = _currentToken(raw).toLowerCase();
+    if (token.isEmpty || widget.seriesSuggestions.isEmpty) {
+      return const <String>[];
+    }
+    final needle = token.startsWith('series:') ? token.substring(7) : token;
+    return widget.seriesSuggestions
+        .where((name) => name.toLowerCase().contains(needle))
+        .take(20)
+        .map((name) => 'series:${_quoteSearchValue(name)}');
+  }
+
+  String _currentToken(String raw) {
+    final selection = widget.controller.selection;
+    final caret = selection.isValid ? selection.baseOffset : raw.length;
+    final safeCaret = caret.clamp(0, raw.length).toInt();
+    final before = raw.substring(0, safeCaret);
+    final start = before.lastIndexOf(RegExp(r'\s')) + 1;
+    final endMatch = RegExp(r'\s').firstMatch(raw.substring(safeCaret));
+    final end = endMatch == null ? raw.length : safeCaret + endMatch.start;
+    return raw.substring(start, end);
+  }
+
+  void _replaceCurrentToken(String option) {
+    final text = widget.controller.text;
+    final selection = widget.controller.selection;
+    final caret = selection.isValid ? selection.baseOffset : text.length;
+    final safeCaret = caret.clamp(0, text.length).toInt();
+    final before = text.substring(0, safeCaret);
+    final start = before.lastIndexOf(RegExp(r'\s')) + 1;
+    final endMatch = RegExp(r'\s').firstMatch(text.substring(safeCaret));
+    final end = endMatch == null ? text.length : safeCaret + endMatch.start;
+    final next = '${text.substring(0, start)}$option ${text.substring(end)}';
+    widget.controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + option.length + 1),
+    );
+  }
+
+  String _quoteSearchValue(String value) {
+    final escaped = value.replaceAll('"', r'\"');
+    return value.contains(RegExp(r'\s')) ? '"$escaped"' : escaped;
   }
 }
 

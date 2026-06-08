@@ -391,31 +391,132 @@ extension _GalleryHomeView on _GalleryGridPageState {
     required bool includeAllWhenEmpty,
     String? hintText,
   }) {
-    return TextField(
-      controller: _homeSearchCtrl,
-      decoration: InputDecoration(
-        prefixIcon: const Icon(Icons.search),
-        hintText: hintText ?? 'タイトル / #タグ / artist:xxx / series:yyy',
-        border: const OutlineInputBorder(),
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(vertical: 10),
-        suffixIcon: (_homeQuery.trim().isEmpty)
-            ? null
-            : IconButton(
-                tooltip: 'クリア',
-                icon: const Icon(Icons.clear),
-                onPressed: () {
-                  _homeSearchCtrl.clear();
-                  setState(() => _homeQuery = '');
-                  _runHomeSearch(includeAllWhenEmpty: includeAllWhenEmpty);
+    return RawAutocomplete<String>(
+      textEditingController: _homeSearchCtrl,
+      focusNode: _homeSearchFocusNode,
+      optionsBuilder: (value) => _homeSeriesSuggestions(value.text),
+      displayStringForOption: (option) => option,
+      onSelected: _replaceHomeSearchCurrentToken,
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search),
+            hintText: hintText ?? 'タイトル / #タグ / artist:xxx / series:yyy',
+            border: const OutlineInputBorder(),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+            suffixIcon: (_homeQuery.trim().isEmpty)
+                ? null
+                : IconButton(
+                    tooltip: 'クリア',
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      _homeSearchCtrl.clear();
+                      setState(() => _homeQuery = '');
+                      _runHomeSearch(includeAllWhenEmpty: includeAllWhenEmpty);
+                    },
+                  ),
+          ),
+          textInputAction: TextInputAction.search,
+          onTap: () {
+            if (_homeSearchCorpusSignature.isEmpty) {
+              unawaited(_ensureHomeSearchCorpusLoaded());
+            }
+          },
+          onSubmitted: (_) =>
+              _runHomeSearch(includeAllWhenEmpty: includeAllWhenEmpty),
+          onChanged: (value) => _handleHomeSearchTextChanged(
+            value: value,
+            includeAllWhenEmpty: includeAllWhenEmpty,
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final values = options.toList(growable: false);
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420, maxHeight: 260),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: values.length,
+                itemBuilder: (context, index) {
+                  final value = values[index];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.collections_bookmark_outlined),
+                    title: Text(value),
+                    onTap: () => onSelected(value),
+                  );
                 },
               ),
-      ),
-      onChanged: (value) => _handleHomeSearchTextChanged(
-        value: value,
-        includeAllWhenEmpty: includeAllWhenEmpty,
-      ),
+            ),
+          ),
+        );
+      },
     );
+  }
+
+  Iterable<String> _homeSeriesSuggestions(String raw) {
+    final token = _homeSearchCurrentToken(raw);
+    final lower = token.toLowerCase();
+    if (lower.isEmpty) return const <String>[];
+
+    final seriesByKey = <String, String>{};
+    for (final details in _dbTagDetailsByItemId.values) {
+      for (final entry in details) {
+        if (entry.tag.category != TagCategory.series) continue;
+        final name = entry.tag.name.trim();
+        if (name.isEmpty) continue;
+        seriesByKey.putIfAbsent(name.toLowerCase(), () => name);
+      }
+    }
+
+    if (seriesByKey.isEmpty) return const <String>[];
+    final needle = lower.startsWith('series:') ? lower.substring(7) : lower;
+    return seriesByKey.values
+        .where((name) => name.toLowerCase().contains(needle))
+        .take(20)
+        .map((name) => 'series:${_quoteHomeSearchValue(name)}');
+  }
+
+  String _homeSearchCurrentToken(String raw) {
+    final selection = _homeSearchCtrl.selection;
+    final caret = selection.isValid ? selection.baseOffset : raw.length;
+    final safeCaret = caret.clamp(0, raw.length).toInt();
+    final before = raw.substring(0, safeCaret);
+    final start = before.lastIndexOf(RegExp(r'\s')) + 1;
+    final endMatch = RegExp(r'\s').firstMatch(raw.substring(safeCaret));
+    final end = endMatch == null ? raw.length : safeCaret + endMatch.start;
+    return raw.substring(start, end);
+  }
+
+  void _replaceHomeSearchCurrentToken(String option) {
+    final text = _homeSearchCtrl.text;
+    final selection = _homeSearchCtrl.selection;
+    final caret = selection.isValid ? selection.baseOffset : text.length;
+    final safeCaret = caret.clamp(0, text.length).toInt();
+    final before = text.substring(0, safeCaret);
+    final start = before.lastIndexOf(RegExp(r'\s')) + 1;
+    final endMatch = RegExp(r'\s').firstMatch(text.substring(safeCaret));
+    final end = endMatch == null ? text.length : safeCaret + endMatch.start;
+    final next = '${text.substring(0, start)}$option ${text.substring(end)}';
+    _homeSearchCtrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + option.length + 1),
+    );
+    _handleHomeSearchTextChanged(value: next, includeAllWhenEmpty: true);
+  }
+
+  String _quoteHomeSearchValue(String value) {
+    final escaped = value.replaceAll('"', r'\"');
+    return value.contains(RegExp(r'\s')) ? '"$escaped"' : escaped;
   }
 
   List<String> _homeSearchValuesForCategory(

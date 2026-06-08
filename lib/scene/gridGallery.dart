@@ -123,6 +123,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   static const int _pageSize = 20;
   static const int _detailedBrowsePageSize = 10;
   static const int _gallerySearchPageSize = 10;
+  static const int _hitomiSearchPageSize = 10;
   int _galleryPageIndex = 0;
   int _galleryTotal = 0;
   int _gallerySearchPageIndex = 0;
@@ -149,6 +150,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _twoPage = false;
 
   final TextEditingController _homeSearchCtrl = TextEditingController();
+  final FocusNode _homeSearchFocusNode = FocusNode();
   final TextEditingController _hitomiSearchCtrl = TextEditingController(
     text: 'orderby:popular orderbykey:week language:japanese',
   );
@@ -171,6 +173,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _homeSearchPageIndex = 0;
   bool _hitomiSearching = false;
   List<HitomiSearchResult> _hitomiSearchResults = const <HitomiSearchResult>[];
+  int _hitomiSearchPageIndex = 0;
   String? _hitomiSearchErrorMessage;
   int _hitomiSearchLoadVersion = 0;
   bool _hitomiInitialSearchStarted = false;
@@ -1644,6 +1647,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       ..dispose();
     _searchCtrl.dispose();
     _homeSearchCtrl.dispose();
+    _homeSearchFocusNode.dispose();
     _hitomiSearchCtrl.removeListener(_handleHitomiSearchTextChanged);
     _hitomiSearchCtrl.dispose();
     _hitomiSearchFocusNode.dispose();

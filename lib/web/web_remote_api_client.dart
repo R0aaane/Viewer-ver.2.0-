@@ -345,6 +345,38 @@ class WebRemoteUrlImportResult {
   }
 }
 
+class WebHitomiSearchResult {
+  final int galleryId;
+  final String title;
+  final String? type;
+  final String? language;
+  final String? date;
+  final List<String> artists;
+  final List<String> groups;
+  final List<String> series;
+  final List<String> characters;
+  final List<String> tags;
+  final String galleryUrl;
+  final String? thumbnailUrl;
+  final List<String> thumbnailUrls;
+
+  const WebHitomiSearchResult({
+    required this.galleryId,
+    required this.title,
+    this.type,
+    this.language,
+    this.date,
+    this.artists = const <String>[],
+    this.groups = const <String>[],
+    this.series = const <String>[],
+    this.characters = const <String>[],
+    this.tags = const <String>[],
+    required this.galleryUrl,
+    this.thumbnailUrl,
+    this.thumbnailUrls = const <String>[],
+  });
+}
+
 class WebSearchQuery {
   final String raw;
   final String? q;
@@ -913,6 +945,27 @@ class WebRemoteApiClient {
     );
     clearCaches();
     return result;
+  }
+
+  Future<List<WebHitomiSearchResult>> searchHitomiGalleries({
+    required String query,
+    int limit = 50,
+  }) async {
+    final json = await _getJson(
+      '/hitomi/search',
+      queryParameters: <String, String>{'q': query, 'limit': '$limit'},
+    );
+    if (json is! Map<String, dynamic>) {
+      throw const WebRemoteException('Hitomi search response was invalid');
+    }
+    final rawItems = json['items'];
+    if (rawItems is! List) {
+      return const <WebHitomiSearchResult>[];
+    }
+    return rawItems
+        .whereType<Map>()
+        .map(_parseHitomiSearchResult)
+        .toList(growable: false);
   }
 
   Future<WebRemoteMediaMeta> fetchMediaMeta(String mediaId) async {
@@ -1584,6 +1637,28 @@ class WebRemoteApiClient {
       sizeBytes: _asInt(raw['sizeBytes']),
       modifiedAt: _parseDateTime(raw['modifiedAt']),
       stats: _parseMediaStats(raw['stats']),
+    );
+  }
+
+  WebHitomiSearchResult _parseHitomiSearchResult(Map raw) {
+    final galleryId = _asInt(raw['galleryId']) ?? 0;
+    final galleryUrl =
+        raw['galleryUrl']?.toString() ??
+        'https://hitomi.la/galleries/$galleryId.html';
+    return WebHitomiSearchResult(
+      galleryId: galleryId,
+      title: raw['title']?.toString() ?? 'Gallery $galleryId',
+      type: raw['type']?.toString(),
+      language: raw['language']?.toString(),
+      date: raw['date']?.toString(),
+      artists: _asStringList(raw['artists']),
+      groups: _asStringList(raw['groups']),
+      series: _asStringList(raw['series']),
+      characters: _asStringList(raw['characters']),
+      tags: _asStringList(raw['tags']),
+      galleryUrl: galleryUrl,
+      thumbnailUrl: raw['thumbnailUrl']?.toString(),
+      thumbnailUrls: _asStringList(raw['thumbnailUrls']),
     );
   }
 

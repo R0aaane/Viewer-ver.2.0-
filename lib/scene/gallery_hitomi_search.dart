@@ -19,6 +19,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     if (query.isEmpty) {
       setState(() {
         _hitomiSearchResults = const <HitomiSearchResult>[];
+        _hitomiSearchPageIndex = 0;
         _hitomiSearchErrorMessage = null;
       });
       return;
@@ -27,6 +28,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     setState(() {
       _hitomiSearching = true;
       _hitomiSearchErrorMessage = null;
+      _hitomiSearchPageIndex = 0;
       _hitomiImportedGalleryIds = <int>{};
       _hitomiImportedTitleKeys = <String>{};
     });
@@ -40,6 +42,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       setState(() {
         _hitomiSearching = false;
         _hitomiSearchResults = results;
+        _hitomiSearchPageIndex = 0;
       });
       unawaited(_refreshHitomiImportedMatches(results, loadVersion));
     } catch (error, stackTrace) {
@@ -48,6 +51,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       setState(() {
         _hitomiSearching = false;
         _hitomiSearchResults = const <HitomiSearchResult>[];
+        _hitomiSearchPageIndex = 0;
         _hitomiSearchErrorMessage = '$error';
       });
     }
@@ -194,13 +198,109 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     if (_hitomiSearchResults.isEmpty) {
       return const _HitomiSearchEmptyState();
     }
+    final totalPages = _hitomiSearchTotalPages(_hitomiSearchResults.length);
+    final clamped = _hitomiSearchPageIndex.clamp(0, totalPages - 1).toInt();
+    final start = clamped * _GalleryGridPageState._hitomiSearchPageSize;
+    final end = (start + _GalleryGridPageState._hitomiSearchPageSize).clamp(
+      0,
+      _hitomiSearchResults.length,
+    );
+    final pageItems = _hitomiSearchResults.sublist(start, end);
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      itemCount: _hitomiSearchResults.length,
+      itemCount: pageItems.length + (totalPages > 1 ? 1 : 0),
       separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
-        return _buildHitomiResultCard(_hitomiSearchResults[index]);
+        if (index == 0 && totalPages > 1) {
+          return _buildHitomiSearchPager(
+            currentPage: clamped,
+            totalPages: totalPages,
+            start: start + 1,
+            end: end,
+            total: _hitomiSearchResults.length,
+          );
+        }
+        final itemIndex = index - (totalPages > 1 ? 1 : 0);
+        return _buildHitomiResultCard(pageItems[itemIndex]);
       },
+    );
+  }
+
+  int _hitomiSearchTotalPages(int total) {
+    if (total <= 0) return 1;
+    return (total + _GalleryGridPageState._hitomiSearchPageSize - 1) ~/
+        _GalleryGridPageState._hitomiSearchPageSize;
+  }
+
+  Widget _buildHitomiSearchPager({
+    required int currentPage,
+    required int totalPages,
+    required int start,
+    required int end,
+    required int total,
+  }) {
+    final useDropdown = totalPages > 10;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        children: [
+          Text('$start-$end / $total'),
+          const Spacer(),
+          IconButton(
+            tooltip: '前へ',
+            onPressed: currentPage <= 0
+                ? null
+                : () =>
+                      setState(() => _hitomiSearchPageIndex = currentPage - 1),
+            icon: const Icon(Icons.chevron_left),
+          ),
+          if (useDropdown)
+            DropdownButton<int>(
+              value: currentPage,
+              items: List.generate(
+                totalPages,
+                (index) => DropdownMenuItem<int>(
+                  value: index,
+                  child: Text('ページ ${index + 1}'),
+                ),
+              ),
+              onChanged: (value) {
+                if (value == null || value == currentPage) return;
+                setState(() => _hitomiSearchPageIndex = value);
+              },
+            )
+          else
+            Flexible(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(totalPages, (index) {
+                    final selected = index == currentPage;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: ChoiceChip(
+                        label: Text('${index + 1}'),
+                        selected: selected,
+                        onSelected: (_) {
+                          if (selected) return;
+                          setState(() => _hitomiSearchPageIndex = index);
+                        },
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+          IconButton(
+            tooltip: '次へ',
+            onPressed: currentPage >= totalPages - 1
+                ? null
+                : () =>
+                      setState(() => _hitomiSearchPageIndex = currentPage + 1),
+            icon: const Icon(Icons.chevron_right),
+          ),
+        ],
+      ),
     );
   }
 

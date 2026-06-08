@@ -160,6 +160,28 @@ class SearchResponse(BaseModel):
     offset: int
 
 
+class HitomiSearchResultDto(BaseModel):
+    galleryId: int
+    title: str
+    type: str | None = None
+    language: str | None = None
+    date: str | None = None
+    artists: list[str] = Field(default_factory=list)
+    groups: list[str] = Field(default_factory=list)
+    series: list[str] = Field(default_factory=list)
+    characters: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    galleryUrl: str
+    thumbnailUrl: str | None = None
+    thumbnailUrls: list[str] = Field(default_factory=list)
+
+
+class HitomiSearchResponse(BaseModel):
+    items: list[HitomiSearchResultDto]
+    total: int
+    limit: int
+
+
 class RescanRequest(BaseModel):
     folderRaw: str | None = None
 

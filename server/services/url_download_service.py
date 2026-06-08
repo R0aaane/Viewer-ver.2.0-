@@ -422,6 +422,195 @@ class UrlDownloadService:
             raise UrlDownloadError("Downloader progress events were not received")
         return result
 
+    async def search_hitomi_galleries(
+        self,
+        *,
+        query: str,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        trimmed = (query or "").strip()
+        if not trimmed:
+            return []
+        safe_limit = max(1, min(int(limit or 50), 100))
+        return await asyncio.to_thread(
+            self._search_hitomi_galleries_sync,
+            trimmed,
+            safe_limit,
+        )
+
+    def _search_hitomi_galleries_sync(
+        self,
+        query: str,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        gallery_ids = self._resolve_hitomi_search_gallery_ids(query)[:limit]
+        return [
+            self._fetch_hitomi_search_result(gallery_id)
+            for gallery_id in gallery_ids
+        ]
+
+    def _fetch_hitomi_search_result(self, gallery_id: int) -> dict[str, object]:
+        gallery_url = f"https://hitomi.la/galleries/{gallery_id}.html"
+        url = f"https://{_HITOMI_INDEX_HOST}/galleries/{gallery_id}.js"
+        try:
+            payload = self._download_html(url)
+            info = self._decode_hitomi_gallery_info(payload)
+            if info is not None:
+                return self._hitomi_search_result_from_info(
+                    gallery_id=gallery_id,
+                    gallery_url=gallery_url,
+                    info=info,
+                )
+        except Exception:
+            pass
+        return {
+            "galleryId": gallery_id,
+            "title": f"Gallery {gallery_id}",
+            "galleryUrl": gallery_url,
+        }
+
+    def _decode_hitomi_gallery_info(self, payload: str) -> dict[str, object] | None:
+        marker = re.search(r"galleryinfo\s*=", payload)
+        if marker is None:
+            return None
+        brace_start = payload.find("{", marker.end())
+        if brace_start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(brace_start, len(payload)):
+            char = payload[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    decoded = json.loads(payload[brace_start : index + 1])
+                    return decoded if isinstance(decoded, dict) else None
+        return None
+
+    def _hitomi_search_result_from_info(
+        self,
+        *,
+        gallery_id: int,
+        gallery_url: str,
+        info: dict[str, object],
+    ) -> dict[str, object]:
+        thumbnail_urls: list[str] = []
+        files = info.get("files")
+        if isinstance(files, list) and files and isinstance(files[0], dict):
+            thumbnail_urls = self._build_hitomi_thumbnail_urls(files[0])
+        series = self._hitomi_field_names(info.get("series"))
+        if not series:
+            series = self._hitomi_field_names(info.get("parodys"))
+        return {
+            "galleryId": gallery_id,
+            "title": (
+                self._trimmed(info.get("japanese_title"))
+                or self._trimmed(info.get("title"))
+                or self._trimmed(info.get("english_title"))
+                or f"Gallery {gallery_id}"
+            ),
+            "type": self._trimmed(info.get("type")),
+            "language": (
+                self._trimmed(info.get("language_localname"))
+                or self._first_hitomi_field_name(info.get("languages"))
+                or self._trimmed(info.get("language"))
+            ),
+            "date": self._trimmed(info.get("date")),
+            "artists": self._hitomi_field_names(info.get("artists")),
+            "groups": self._hitomi_field_names(info.get("groups")),
+            "series": series,
+            "characters": self._hitomi_field_names(info.get("characters")),
+            "tags": self._hitomi_field_names(info.get("tags")),
+            "galleryUrl": gallery_url,
+            "thumbnailUrl": thumbnail_urls[0] if thumbnail_urls else None,
+            "thumbnailUrls": thumbnail_urls,
+        }
+
+    def _build_hitomi_thumbnail_urls(self, file_info: dict[object, object]) -> list[str]:
+        file_hash = self._trimmed(file_info.get("hash"))
+        if file_hash is None or len(file_hash) < 3:
+            return []
+        name = self._trimmed(file_info.get("name")) or "image.jpg"
+        original_ext = name.rsplit(".", 1)[-1].lower() if "." in name else "jpg"
+        left = file_hash[-1:]
+        right = file_hash[-3:-1]
+        thumb_path = f"{left}/{right}/{file_hash}"
+        urls: list[str] = []
+        for subdomain in ("atn", "btn", "ctn"):
+            urls.append(
+                f"https://{subdomain}.gold-usergeneratedcontent.net/webpsmalltn/{thumb_path}.webp"
+            )
+        if self._trimmed(file_info.get("hasavif")) == "1":
+            for subdomain in ("atn", "btn", "ctn"):
+                urls.append(
+                    f"https://{subdomain}.gold-usergeneratedcontent.net/avifsmalltn/{thumb_path}.avif"
+                )
+        for subdomain in ("atn", "btn", "ctn"):
+            urls.append(
+                f"https://{subdomain}.gold-usergeneratedcontent.net/smalltn/{thumb_path}.{original_ext}"
+            )
+        return urls
+
+    def _first_hitomi_field_name(self, value: object) -> str | None:
+        values = self._hitomi_field_names(value)
+        return values[0] if values else None
+
+    def _hitomi_field_names(self, value: object) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+
+        def add(raw: object) -> None:
+            text = self._trimmed(raw)
+            key = text.lower() if text is not None else ""
+            if text is not None and key not in seen:
+                seen.add(key)
+                out.append(text)
+
+        if isinstance(value, list):
+            for entry in value:
+                if isinstance(entry, dict):
+                    add(
+                        entry.get("name")
+                        or entry.get("artist")
+                        or entry.get("group")
+                        or entry.get("parody")
+                        or entry.get("character")
+                        or entry.get("tag")
+                        or entry.get("language_localname")
+                    )
+                else:
+                    add(entry)
+        elif isinstance(value, dict):
+            add(
+                value.get("name")
+                or value.get("artist")
+                or value.get("group")
+                or value.get("parody")
+                or value.get("character")
+                or value.get("tag")
+                or value.get("language_localname")
+            )
+        else:
+            add(value)
+        return out
+
+    def _trimmed(self, value: object) -> str | None:
+        text = "" if value is None else str(value).strip()
+        return text or None
+
     async def _prepare_import_sources(
         self,
         source_url: str,

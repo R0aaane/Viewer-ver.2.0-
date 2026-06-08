@@ -84,6 +84,13 @@ class _HitomiSearchRecordingUrlDownloadService(_RecordingUrlDownloadService):
             ("type", "doujinshi", "all", "date", "added"): [500, 300, 200],
         }.get(key, [])
 
+    def _fetch_hitomi_search_result(self, gallery_id: int) -> dict[str, object]:
+        return {
+            "galleryId": gallery_id,
+            "title": f"Gallery {gallery_id}",
+            "galleryUrl": f"https://hitomi.la/galleries/{gallery_id}.html",
+        }
+
 
 class UrlDownloadServiceTest(unittest.TestCase):
     def test_uses_metadata_title_when_download_name_is_all(self) -> None:
@@ -191,6 +198,18 @@ class UrlDownloadServiceTest(unittest.TestCase):
             service.launcher_calls[0]["source_url"],
             "https://hitomi.la/galleries/300.html\n"
             "https://hitomi.la/galleries/200.html",
+        )
+
+    def test_search_hitomi_galleries_returns_limited_results(self) -> None:
+        service = _HitomiSearchRecordingUrlDownloadService()
+
+        results = service_loop(
+            service.search_hitomi_galleries(query="artist:chilt", limit=2)
+        )
+
+        self.assertEqual(
+            [item["galleryId"] for item in results],
+            [400, 300],
         )
 
 
