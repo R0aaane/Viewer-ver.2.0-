@@ -973,21 +973,12 @@ extension _GalleryGridView on _GalleryGridPageState {
     final galleryItems = _gallerySelectionView(0);
     final untaggedItems = _gallerySelectionView(1);
     final favoriteItems = _gallerySelectionView(2);
-    final showPager = !_isGallerySearchActive;
 
     return TabBarView(
       children: [
-        _buildGrid(
-          galleryItems,
-          showPager: showPager,
-          onRefresh: _handlePullToRefresh,
-        ),
+        _buildGrid(galleryItems, onRefresh: _handlePullToRefresh),
         _currentPageMetadataAvailable
-            ? _buildGrid(
-                untaggedItems,
-                showPager: showPager,
-                onRefresh: _handlePullToRefresh,
-              )
+            ? _buildGrid(untaggedItems, onRefresh: _handlePullToRefresh)
             : _buildRefreshableStatusBody(
                 onRefresh: _handlePullToRefresh,
                 child: _buildEmptyBody(
@@ -1081,13 +1072,21 @@ extension _GalleryGridView on _GalleryGridPageState {
       );
     }
 
+    final useSearchPager = _isGallerySearchActive && showPager;
+    final visibleItems = useSearchPager
+        ? _gallerySearchPageItems(items)
+        : items;
+
     return RefreshIndicator(
       onRefresh: onRefresh,
       child: CustomScrollView(
         physics: _refreshScrollPhysics,
         cacheExtent: 200,
         slivers: [
-          if (showPager && _galleryTotal > _GalleryGridPageState._pageSize)
+          if (useSearchPager &&
+              items.length > _GalleryGridPageState._gallerySearchPageSize)
+            SliverToBoxAdapter(child: _buildGallerySearchPager(items.length))
+          else if (showPager && _galleryTotal > _GalleryGridPageState._pageSize)
             SliverToBoxAdapter(child: _buildPager()),
           SliverPadding(
             padding: const EdgeInsets.all(12),
@@ -1099,15 +1098,93 @@ extension _GalleryGridView on _GalleryGridPageState {
                 childAspectRatio: 0.75,
               ),
               delegate: SliverChildBuilderDelegate((context, index) {
-                final item = items[index];
+                final item = visibleItems[index];
                 return _buildGridTile(
                   item,
                   showFolderLabel: showFolderLabel,
                   detailItemsSource: items,
                 );
-              }, childCount: items.length),
+              }, childCount: visibleItems.length),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  int _gallerySearchTotalPages(int total) {
+    if (total <= 0) return 1;
+    return (total + _GalleryGridPageState._gallerySearchPageSize - 1) ~/
+        _GalleryGridPageState._gallerySearchPageSize;
+  }
+
+  List<MediaItem> _gallerySearchPageItems(List<MediaItem> items) {
+    if (items.isEmpty) return const <MediaItem>[];
+    final totalPages = _gallerySearchTotalPages(items.length);
+    final clamped = _gallerySearchPageIndex.clamp(0, totalPages - 1);
+    final start = clamped * _GalleryGridPageState._gallerySearchPageSize;
+    final end = (start + _GalleryGridPageState._gallerySearchPageSize).clamp(
+      0,
+      items.length,
+    );
+    return items.sublist(start, end);
+  }
+
+  Widget _buildGallerySearchPager(int total) {
+    if (total <= _GalleryGridPageState._gallerySearchPageSize) {
+      return const SizedBox.shrink();
+    }
+
+    final totalPages = _gallerySearchTotalPages(total);
+    final clamped = _gallerySearchPageIndex.clamp(0, totalPages - 1);
+    final start = clamped * _GalleryGridPageState._gallerySearchPageSize + 1;
+    final end = ((clamped + 1) * _GalleryGridPageState._gallerySearchPageSize)
+        .clamp(0, total);
+    final useDropdown = totalPages > 10;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      child: Row(
+        children: [
+          Text('$start-$end / $total'),
+          const Spacer(),
+          if (useDropdown)
+            DropdownButton<int>(
+              value: clamped,
+              items: List.generate(
+                totalPages,
+                (index) => DropdownMenuItem<int>(
+                  value: index,
+                  child: Text('ページ ${index + 1}'),
+                ),
+              ),
+              onChanged: (value) {
+                if (value == null || value == clamped) return;
+                setState(() => _gallerySearchPageIndex = value);
+              },
+            )
+          else
+            Flexible(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(totalPages, (index) {
+                    final selected = index == clamped;
+                    return Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: ChoiceChip(
+                        label: Text('${index + 1}'),
+                        selected: selected,
+                        onSelected: (_) {
+                          if (selected) return;
+                          setState(() => _gallerySearchPageIndex = index);
+                        },
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
         ],
       ),
     );

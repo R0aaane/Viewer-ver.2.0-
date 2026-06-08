@@ -122,8 +122,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   static const int _pageSize = 20;
   static const int _detailedBrowsePageSize = 10;
+  static const int _gallerySearchPageSize = 10;
   int _galleryPageIndex = 0;
   int _galleryTotal = 0;
+  int _gallerySearchPageIndex = 0;
 
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
   DetailedBrowseViewMode _detailedBrowseViewMode = DetailedBrowseViewMode.grid;

@@ -318,6 +318,7 @@ extension _GallerySearch on _GalleryGridPageState {
 
     setState(() {
       _query = value;
+      _gallerySearchPageIndex = 0;
       _gallerySearchSuggestionsEnabled =
           enableSuggestions && _searchFocusNode.hasFocus;
     });
