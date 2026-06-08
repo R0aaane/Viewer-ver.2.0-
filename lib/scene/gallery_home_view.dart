@@ -693,7 +693,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
   int _detailedBrowseTotalPages() {
     if (_homeSearchResults.isEmpty) return 0;
-    final pageSize = _detailedBrowsePageSize;
+    final pageSize = _GalleryGridPageState._detailedBrowsePageSize;
     return (_homeSearchResults.length + pageSize - 1) ~/ pageSize;
   }
 
@@ -706,7 +706,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
   List<MediaItem> _currentDetailedBrowsePageItems() {
     if (_homeSearchResults.isEmpty) return const <MediaItem>[];
 
-    final pageSize = _detailedBrowsePageSize;
+    final pageSize = _GalleryGridPageState._detailedBrowsePageSize;
     final pageIndex = _detailedBrowseClampedPageIndex();
     final start = pageIndex * pageSize;
     final end = start + pageSize;
@@ -718,7 +718,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
   }
 
   Widget _buildDetailedBrowsePager() {
-    final pageSize = _detailedBrowsePageSize;
+    final pageSize = _GalleryGridPageState._detailedBrowsePageSize;
     if (_homeSearchResults.length <= pageSize) {
       return const SizedBox.shrink();
     }
@@ -930,7 +930,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
       builder: (context, constraints) {
         const crossAxisCount = 3;
         final pageItems = _currentDetailedBrowsePageItems();
-        final showPager = _homeSearchResults.length > _detailedBrowsePageSize;
+        final showPager =
+            _homeSearchResults.length >
+            _GalleryGridPageState._detailedBrowsePageSize;
         final crossSpacing = constraints.maxWidth < 420 ? 8.0 : 12.0;
         final mainSpacing = constraints.maxWidth < 420 ? 14.0 : 18.0;
         final contentWidth = constraints.maxWidth <= 760

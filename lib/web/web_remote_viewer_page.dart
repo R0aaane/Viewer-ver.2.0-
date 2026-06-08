@@ -77,7 +77,7 @@ class WebRemoteViewerPage extends StatefulWidget {
 }
 
 class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
-  static const int _threeUpPageSize = 30;
+  static const int _browserPageSize = 10;
   static const Duration _remoteRefreshInterval = Duration(seconds: 15);
   static const String _ratingsPrefsKey = 'web.remoteViewer.ratingsJson.v1';
 
@@ -111,7 +111,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   int _homeRatingShelfRating = 5;
   Set<String> _favorites = const <String>{};
   Map<String, int> _ratingsById = const <String, int>{};
-  int _threeUpPage = 1;
+  int _browserPage = 1;
   Timer? _remoteRefreshTimer;
   Future<void>? _webViewerVersionFuture;
   DateTime? _latestObservedLibraryScanAt;
@@ -487,7 +487,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
   }
 
-  Future<void> _loadEntries({bool reuseHomeOnEmptyQuery = true}) async {
+  Future<void> _loadEntries({
+    bool reuseHomeOnEmptyQuery = true,
+    bool resetPage = true,
+  }) async {
     final client = _client;
     final folderRaw = _selectedFolderRaw;
     if (client == null || folderRaw == null || folderRaw.trim().isEmpty) {
@@ -529,7 +532,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       setState(() {
         _entries = filtered;
         _selectedEntry = nextSelected;
-        _threeUpPage = 1;
+        if (resetPage) {
+          _browserPage = 1;
+        }
         if (rawQuery.isEmpty) {
           _homeEntries = filtered;
           _homeErrorMessage = null;
@@ -837,36 +842,36 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return 3;
   }
 
-  int _threeUpTotalPages(int entryCount) {
+  int _browserTotalPages(int entryCount) {
     if (entryCount <= 0) {
       return 1;
     }
-    return (entryCount + _threeUpPageSize - 1) ~/ _threeUpPageSize;
+    return (entryCount + _browserPageSize - 1) ~/ _browserPageSize;
   }
 
-  int _clampThreeUpPage(int totalPages) {
+  int _clampBrowserPage(int totalPages) {
     if (totalPages <= 1) {
       return 1;
     }
-    return _threeUpPage.clamp(1, totalPages);
+    return _browserPage.clamp(1, totalPages);
   }
 
-  List<WebRemoteEntry> _threeUpEntriesForPage(
+  List<WebRemoteEntry> _browserEntriesForPage(
     List<WebRemoteEntry> entries,
     int page,
   ) {
     if (entries.isEmpty) {
       return const <WebRemoteEntry>[];
     }
-    final start = (page - 1) * _threeUpPageSize;
+    final start = (page - 1) * _browserPageSize;
     if (start >= entries.length) {
       return const <WebRemoteEntry>[];
     }
-    final end = (start + _threeUpPageSize).clamp(0, entries.length);
+    final end = (start + _browserPageSize).clamp(0, entries.length);
     return entries.sublist(start, end);
   }
 
-  List<int?> _threeUpPagerItems(int currentPage, int totalPages) {
+  List<int?> _browserPagerItems(int currentPage, int totalPages) {
     if (totalPages <= 7) {
       return List<int?>.generate(totalPages, (index) => index + 1);
     }
@@ -901,12 +906,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return out;
   }
 
-  Widget _buildThreeUpPager({
+  Widget _buildBrowserPager({
     required int currentPage,
     required int totalPages,
   }) {
     final compact = MediaQuery.of(context).size.width < 720;
-    final items = _threeUpPagerItems(currentPage, totalPages);
+    final items = _browserPagerItems(currentPage, totalPages);
 
     Widget pageButton(int page) {
       final selected = page == currentPage;
@@ -914,7 +919,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           ? null
           : () {
               setState(() {
-                _threeUpPage = page;
+                _browserPage = page;
               });
             };
       if (selected) {
@@ -954,7 +959,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               onPressed: currentPage > 1
                   ? () {
                       setState(() {
-                        _threeUpPage = currentPage - 1;
+                        _browserPage = currentPage - 1;
                       });
                     }
                   : null,
@@ -978,7 +983,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               onPressed: currentPage < totalPages
                   ? () {
                       setState(() {
-                        _threeUpPage = currentPage + 1;
+                        _browserPage = currentPage + 1;
                       });
                     }
                   : null,
@@ -1213,7 +1218,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     setState(() {
       _browserSortMode = mode;
       _entries = _sortBrowserEntries(_entries);
-      _threeUpPage = 1;
+      _browserPage = 1;
     });
   }
 
@@ -1302,7 +1307,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
     await _refreshHomeEntries(force: true);
     if (_searchController.text.trim().isEmpty) {
-      await _loadEntries();
+      await _loadEntries(resetPage: false);
     }
   }
 
@@ -2108,6 +2113,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       currentFolderRaw: currentFolderRaw,
       parentFolder: parentFolder,
     );
+    final totalPages = _browserTotalPages(_entries.length);
+    final currentPage = _clampBrowserPage(totalPages);
+    final pageEntries = _browserEntriesForPage(_entries, currentPage);
 
     return RefreshIndicator(
       onRefresh: _loadEntries,
@@ -2141,14 +2149,25 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             )
           : ListView.separated(
               padding: listPadding,
-              itemCount: _entries.length + 1,
+              itemCount:
+                  pageEntries.length +
+                  1 +
+                  (_entries.length > _browserPageSize ? 1 : 0),
               separatorBuilder: (context, index) =>
                   SizedBox(height: compact ? 10 : 12),
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return controls;
                 }
-                final entry = _entries[index - 1];
+                if (index == 1 && _entries.length > _browserPageSize) {
+                  return _buildBrowserPager(
+                    currentPage: currentPage,
+                    totalPages: totalPages,
+                  );
+                }
+                final entryIndex =
+                    index - 1 - (_entries.length > _browserPageSize ? 1 : 0);
+                final entry = pageEntries[entryIndex];
                 final selected = _selectedEntry?.stableId == entry.stableId;
                 return _EntryCard(
                   key: ValueKey<String>(entry.stableId),
@@ -2175,6 +2194,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       currentFolderRaw: currentFolderRaw,
       parentFolder: parentFolder,
     );
+    final totalPages = _browserTotalPages(_entries.length);
+    final currentPage = _clampBrowserPage(totalPages);
+    final pageEntries = _browserEntriesForPage(_entries, currentPage);
 
     return RefreshIndicator(
       onRefresh: _loadEntries,
@@ -2208,14 +2230,25 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             )
           : ListView.separated(
               padding: listPadding,
-              itemCount: _entries.length + 1,
+              itemCount:
+                  pageEntries.length +
+                  1 +
+                  (_entries.length > _browserPageSize ? 1 : 0),
               separatorBuilder: (context, index) =>
                   SizedBox(height: compact ? 10 : 14),
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return controls;
                 }
-                final entry = _entries[index - 1];
+                if (index == 1 && _entries.length > _browserPageSize) {
+                  return _buildBrowserPager(
+                    currentPage: currentPage,
+                    totalPages: totalPages,
+                  );
+                }
+                final entryIndex =
+                    index - 1 - (_entries.length > _browserPageSize ? 1 : 0);
+                final entry = pageEntries[entryIndex];
                 final selected = _selectedEntry?.stableId == entry.stableId;
                 return _EntrySingleTileCard(
                   key: ValueKey<String>('tile-${entry.stableId}'),
@@ -2241,9 +2274,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       currentFolderRaw: currentFolderRaw,
       parentFolder: parentFolder,
     );
-    final totalPages = _threeUpTotalPages(_entries.length);
-    final currentPage = _clampThreeUpPage(totalPages);
-    final pageEntries = _threeUpEntriesForPage(_entries, currentPage);
+    final totalPages = _browserTotalPages(_entries.length);
+    final currentPage = _clampBrowserPage(totalPages);
+    final pageEntries = _browserEntriesForPage(_entries, currentPage);
 
     return RefreshIndicator(
       onRefresh: _loadEntries,
@@ -2269,7 +2302,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                     0,
                   ),
                   sliver: SliverToBoxAdapter(
-                    child: _buildThreeUpPager(
+                    child: _buildBrowserPager(
                       currentPage: currentPage,
                       totalPages: totalPages,
                     ),
@@ -2352,7 +2385,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                     listPadding.bottom,
                   ),
                   sliver: SliverToBoxAdapter(
-                    child: _buildThreeUpPager(
+                    child: _buildBrowserPager(
                       currentPage: currentPage,
                       totalPages: totalPages,
                     ),
