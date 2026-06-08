@@ -4,6 +4,7 @@ import 'dart:io' show Directory, File, Platform;
 import 'dart:typed_data';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
@@ -121,8 +122,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   static const int _mediaThumbCacheMaxBytes = 32 * 1024 * 1024;
 
   static const int _pageSize = 20;
+  static const int _webDetailedBrowsePageSize = 10;
   int _galleryPageIndex = 0;
   int _galleryTotal = 0;
+  int get _detailedBrowsePageSize =>
+      kIsWeb ? _webDetailedBrowsePageSize : _pageSize;
 
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
   DetailedBrowseViewMode _detailedBrowseViewMode = DetailedBrowseViewMode.grid;

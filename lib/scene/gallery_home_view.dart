@@ -247,7 +247,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
     return true;
   }
 
-  Future<void> _runHomeSearch({bool includeAllWhenEmpty = false}) async {
+  Future<void> _runHomeSearch({
+    bool includeAllWhenEmpty = false,
+    bool resetPage = true,
+  }) async {
     final q = _homeQuery.trim();
     if (!_repoCapabilities.canRecursiveSearch) {
       if (!mounted) return;
@@ -255,7 +258,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
         _homeSearching = false;
         _homeSearchResults = const [];
         _homeSearchErrorMessage = null;
-        _homeSearchPageIndex = 0;
+        if (resetPage) _homeSearchPageIndex = 0;
       });
       return;
     }
@@ -266,7 +269,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
         _homeSearching = false;
         _homeSearchResults = const [];
         _homeSearchErrorMessage = null;
-        _homeSearchPageIndex = 0;
+        if (resetPage) _homeSearchPageIndex = 0;
       });
       return;
     }
@@ -284,9 +287,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
           .split(RegExp(r'\s+'))
           .any(
             (token) =>
-                token == 'しおり' ||
-                token == 'bookmark' ||
-                token == 'bookmarked',
+                token == 'しおり' || token == 'bookmark' || token == 'bookmarked',
           );
       if (needsProgressForQuery) {
         await _refreshCurrentPageReadingProgress(all);
@@ -312,7 +313,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
         _homeSearching = false;
         _homeSearchResults = sorted;
         _homeSearchErrorMessage = null;
-        _homeSearchPageIndex = 0;
+        if (resetPage) _homeSearchPageIndex = 0;
       });
     } catch (e, st) {
       _logUiError('home-search', e, st);
@@ -363,7 +364,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
   Future<void> _refreshDetailedBrowseIfNeeded() async {
     if (_homeQuery.trim().isNotEmpty || _page == _MainPage.search) {
-      await _runHomeSearch(includeAllWhenEmpty: _page == _MainPage.search);
+      await _runHomeSearch(
+        includeAllWhenEmpty: _page == _MainPage.search,
+        resetPage: false,
+      );
     }
   }
 
@@ -689,8 +693,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
   int _detailedBrowseTotalPages() {
     if (_homeSearchResults.isEmpty) return 0;
-    return (_homeSearchResults.length + _GalleryGridPageState._pageSize - 1) ~/
-        _GalleryGridPageState._pageSize;
+    final pageSize = _detailedBrowsePageSize;
+    return (_homeSearchResults.length + pageSize - 1) ~/ pageSize;
   }
 
   int _detailedBrowseClampedPageIndex() {
@@ -702,9 +706,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
   List<MediaItem> _currentDetailedBrowsePageItems() {
     if (_homeSearchResults.isEmpty) return const <MediaItem>[];
 
+    final pageSize = _detailedBrowsePageSize;
     final pageIndex = _detailedBrowseClampedPageIndex();
-    final start = pageIndex * _GalleryGridPageState._pageSize;
-    final end = start + _GalleryGridPageState._pageSize;
+    final start = pageIndex * pageSize;
+    final end = start + pageSize;
 
     return _homeSearchResults.sublist(
       start,
@@ -713,17 +718,15 @@ extension _GalleryHomeView on _GalleryGridPageState {
   }
 
   Widget _buildDetailedBrowsePager() {
-    if (_homeSearchResults.length <= _GalleryGridPageState._pageSize) {
+    final pageSize = _detailedBrowsePageSize;
+    if (_homeSearchResults.length <= pageSize) {
       return const SizedBox.shrink();
     }
 
     final totalPages = _detailedBrowseTotalPages();
     final clamped = _detailedBrowseClampedPageIndex();
-    final start = clamped * _GalleryGridPageState._pageSize + 1;
-    final end = ((clamped + 1) * _GalleryGridPageState._pageSize).clamp(
-      0,
-      _homeSearchResults.length,
-    );
+    final start = clamped * pageSize + 1;
+    final end = ((clamped + 1) * pageSize).clamp(0, _homeSearchResults.length);
     final useDropdown = totalPages > 10;
 
     return Padding(
@@ -927,8 +930,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
       builder: (context, constraints) {
         const crossAxisCount = 3;
         final pageItems = _currentDetailedBrowsePageItems();
-        final showPager =
-            _homeSearchResults.length > _GalleryGridPageState._pageSize;
+        final showPager = _homeSearchResults.length > _detailedBrowsePageSize;
         final crossSpacing = constraints.maxWidth < 420 ? 8.0 : 12.0;
         final mainSpacing = constraints.maxWidth < 420 ? 14.0 : 18.0;
         final contentWidth = constraints.maxWidth <= 760
