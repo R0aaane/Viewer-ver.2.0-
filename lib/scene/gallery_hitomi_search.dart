@@ -42,7 +42,6 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       setState(() {
         _hitomiSearching = false;
         _hitomiSearchResults = results;
-        _hitomiSearchPageIndex = 0;
       });
       unawaited(_refreshHitomiImportedMatches(results, loadVersion));
     } catch (error, stackTrace) {

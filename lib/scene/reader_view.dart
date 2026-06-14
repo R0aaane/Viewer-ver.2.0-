@@ -31,6 +31,10 @@ extension _ReaderView on _ImageDetailPageState {
     return _readerController.loadThumbBytes(item, page);
   }
 
+  Future<Uint8List> _loadImageBytes(MediaItem item) {
+    return _readerController.loadImageBytes(item);
+  }
+
   Future<EpubTextDocument> _ensureEpubDocument(MediaItem item) {
     if (_epubDocumentFuture != null && _epubDocumentItemId == item.id) {
       return _epubDocumentFuture!;
@@ -168,6 +172,9 @@ extension _ReaderView on _ImageDetailPageState {
 
     _readerController.clearCaches();
     _loadedTagItemId = null;
+    _kemonoVerticalBaseId = null;
+    _kemonoVerticalItems = null;
+    _kemonoVerticalLoading = false;
     if (mounted) {
       if (!_isEpub) {
         _disposeEpubController();
@@ -199,6 +206,7 @@ extension _ReaderView on _ImageDetailPageState {
 
     unawaited(_loadFavoriteForCurrent(loadVersion: loadVersion));
     unawaited(_loadRatingForCurrent(loadVersion: loadVersion));
+    unawaited(_loadTagsForCurrent(loadVersion: loadVersion));
     if (item.kind == MediaKind.pdf) {
       unawaited(_loadReadingProgressForCurrent(item, loadVersion));
       unawaited(_loadPageCountForCurrent(item, loadVersion));
@@ -297,6 +305,10 @@ extension _ReaderView on _ImageDetailPageState {
 
     if (_isEpub) {
       return _buildEpubReader(_item);
+    }
+
+    if (_isKemonoTaggedImage(_item, _tags)) {
+      return _buildKemonoVerticalReader(_item);
     }
 
     if (_readerController.leftFuture == null) {
@@ -472,6 +484,137 @@ extension _ReaderView on _ImageDetailPageState {
                     ),
                   ],
                 ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  bool _isKemonoTaggedImage(MediaItem item, Iterable<TagWithId> details) {
+    if (item.kind != MediaKind.image) {
+      return false;
+    }
+    for (final tag in item.tags) {
+      if (_isKemonoTag(tag)) {
+        return true;
+      }
+    }
+    for (final detail in details) {
+      if (_isKemonoTag(detail.tag)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _isKemonoTag(Tag tag) {
+    return tag.name.trim().toLowerCase() == 'kemono';
+  }
+
+  Future<void> _loadKemonoVerticalItems(MediaItem base, int loadVersion) async {
+    if (_kemonoVerticalBaseId == base.id && _kemonoVerticalItems != null) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _kemonoVerticalBaseId = base.id;
+        _kemonoVerticalLoading = true;
+      });
+    } else {
+      _kemonoVerticalBaseId = base.id;
+      _kemonoVerticalLoading = true;
+    }
+
+    final candidates = _items
+        .where(
+          (item) =>
+              item.kind == MediaKind.image && item.folderRaw == base.folderRaw,
+        )
+        .toList(growable: false);
+
+    var verticalItems = candidates
+        .where((item) => item.tags.any(_isKemonoTag))
+        .toList(growable: false);
+
+    if (verticalItems.length < 2) {
+      try {
+        final details = await widget.tagService.getDetailedTagsByItems(
+          candidates,
+        );
+        verticalItems = candidates
+            .where((item) {
+              if (item.id == base.id) {
+                return true;
+              }
+              return (details[item.id] ?? const <TagWithId>[]).any(
+                (entry) => _isKemonoTag(entry.tag),
+              );
+            })
+            .toList(growable: false);
+      } catch (_) {
+        verticalItems = <MediaItem>[base];
+      }
+    }
+
+    if (!verticalItems.any((item) => item.id == base.id)) {
+      verticalItems = <MediaItem>[base, ...verticalItems];
+    }
+
+    if (!_isCurrentLoad(loadVersion, base)) {
+      return;
+    }
+    setState(() {
+      _kemonoVerticalItems = verticalItems;
+      _kemonoVerticalLoading = false;
+    });
+  }
+
+  Widget _buildKemonoVerticalReader(MediaItem item) {
+    final verticalItems = _kemonoVerticalItems;
+    if (_kemonoVerticalBaseId != item.id || verticalItems == null) {
+      if (!_kemonoVerticalLoading) {
+        unawaited(_loadKemonoVerticalItems(item, _detailLoadVersion));
+      }
+      return _buildReaderBusy('Kemono 縦表示を読み込んでいます...');
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      itemCount: verticalItems.length,
+      itemBuilder: (context, index) {
+        final entry = verticalItems[index];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: FutureBuilder<Uint8List>(
+            future: _loadImageBytes(entry),
+            builder: (context, snap) {
+              if (snap.hasError) {
+                return _buildLoadError(
+                  '画像の読み込みに失敗しました。\n${snap.error}',
+                  onRetry: () => setState(_readerController.clearCaches),
+                );
+              }
+              if (!snap.hasData) {
+                return const SizedBox(
+                  height: 180,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              final bytes = snap.data!;
+              if (bytes.isEmpty) {
+                return _buildLoadError(
+                  '画像の読み込みに失敗しました。',
+                  onRetry: () => setState(_readerController.clearCaches),
+                );
+              }
+              return Image.memory(
+                bytes,
+                width: double.infinity,
+                fit: BoxFit.fitWidth,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.high,
               );
             },
           ),

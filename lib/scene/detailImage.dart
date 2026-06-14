@@ -79,6 +79,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   bool _tagsLoading = false;
   String? _loadedTagItemId;
+  String? _kemonoVerticalBaseId;
+  bool _kemonoVerticalLoading = false;
+  List<MediaItem>? _kemonoVerticalItems;
   bool _masterTagsInitialized = false;
   int _detailLoadVersion = 0;
   bool _recentTagsLoaded = false;
@@ -335,9 +338,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
                   tooltip: _isBookmarked ? 'しおりを外す' : 'しおりを挟む',
                   onPressed: _toggleBookmark,
                   icon: Icon(
-                    _isBookmarked
-                        ? Icons.bookmark
-                        : Icons.bookmark_border,
+                    _isBookmarked ? Icons.bookmark : Icons.bookmark_border,
                   ),
                 ),
               IconButton(

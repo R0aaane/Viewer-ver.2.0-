@@ -195,6 +195,9 @@ extension _DetailTagPanel on _ImageDetailPageState {
         _tags = list;
         _loadedTagItemId = item.id;
       });
+      if (_isKemonoTaggedImage(item, list)) {
+        unawaited(_loadKemonoVerticalItems(item, version));
+      }
     } finally {
       if (_isCurrentLoad(version, item)) {
         setState(() => _tagsLoading = false);

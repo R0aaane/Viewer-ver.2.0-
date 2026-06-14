@@ -17,6 +17,8 @@ class DetailReaderController {
       <int, Future<Uint8List>>{};
   final Map<int, Future<Uint8List>> _thumbFutureCache =
       <int, Future<Uint8List>>{};
+  final Map<String, Future<Uint8List>> _imageFutureCache =
+      <String, Future<Uint8List>>{};
 
   DetailReaderController({
     required this.repo,
@@ -30,6 +32,7 @@ class DetailReaderController {
     _readerFutureCache.clear();
     _staticReaderFutureCache.clear();
     _thumbFutureCache.clear();
+    _imageFutureCache.clear();
   }
 
   void removeReaderPage(int page) {
@@ -68,6 +71,14 @@ class DetailReaderController {
   Future<Uint8List> loadThumbBytes(MediaItem item, int page) {
     return _thumbFutureCache.putIfAbsent(page, () {
       return repo.renderPageBytes(item, page, maxWidth: 320);
+    });
+  }
+
+  Future<Uint8List> loadImageBytes(MediaItem item) {
+    return _imageFutureCache.putIfAbsent(item.id, () {
+      return _loadAfterFirstPaint(
+        () => repo.renderPageBytes(item, 1, maxWidth: 1600),
+      );
     });
   }
 
