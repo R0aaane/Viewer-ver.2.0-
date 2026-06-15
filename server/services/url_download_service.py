@@ -377,6 +377,18 @@ class UrlDownloadService:
                     "KEMONO_DL_REQUEST_TIMEOUT",
                     "60",
                 ),
+                "KEMONO_DL_CONNECT_TIMEOUT": os.environ.get(
+                    "KEMONO_DL_CONNECT_TIMEOUT",
+                    "8",
+                ),
+                "KEMONO_DL_FILE_RETRY": os.environ.get(
+                    "KEMONO_DL_FILE_RETRY",
+                    "1",
+                ),
+                "KEMONO_DL_DATA_FAILURE_LIMIT": os.environ.get(
+                    "KEMONO_DL_DATA_FAILURE_LIMIT",
+                    "6",
+                ),
                 "KEMONO_DL_STARTUP_TIMEOUT": os.environ.get(
                     "KEMONO_DL_STARTUP_TIMEOUT",
                     "15",

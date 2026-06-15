@@ -76,6 +76,7 @@ class downloader:
         self.headers['Accept'] = 'text/css'
         self.cookies = args['cookies']
         self.timeout = _env_int('KEMONO_DL_REQUEST_TIMEOUT', 60)
+        self.connect_timeout = _env_int('KEMONO_DL_CONNECT_TIMEOUT', 8)
 
         self.headcheck = args['head_check']
 
@@ -160,8 +161,12 @@ class downloader:
 
         # other
         self.retry = args['retry']
+        self.file_retry = min(self.retry, _env_int('KEMONO_DL_FILE_RETRY', 1))
         self.parallel_downloads = args['parallel_downloads']
         self.download_slot = threading.BoundedSemaphore(max(1, self.parallel_downloads))
+        self.data_failure_limit = _env_int('KEMONO_DL_DATA_FAILURE_LIMIT', max(6, self.parallel_downloads))
+        self.data_failure_count = 0
+        self.data_failure_open = False
         self.part_files = args['part_files']
         self.ratelimit_sleep = args['ratelimit_sleep']
         self.ratelimit_ms = args['ratelimit_ms']
@@ -1069,10 +1074,47 @@ class downloader:
     def download_file_safe(self, file:dict, post:dict):
         with self.download_slot:
             try:
-                self.download_file(file, retry=self.retry, post=post)
+                self.download_file(file, retry=self.file_retry, post=post)
             except:
                 self.mark_file_failed(file)
                 logger.exception(f"Failed to download: {file['file_path']}")
+
+    def is_kemono_data_url(self, url:str):
+        return bool(re.match(r'^https://(?:n[1-4]\.)?(?:kemono|coomer)\.(?:cr|st)/data/', url))
+
+    def build_data_url_candidates(self, url:str):
+        urls = [url]
+        found = re.match(r'^(https://)(?:n[1-4]\.)?((?:kemono|coomer)\.(?:cr|st))(/data/.*)$', url)
+        if found:
+            scheme, domain, path = found.groups()
+            urls.extend(f"{scheme}n{i}.{domain}{path}" for i in range(1, 5))
+        seen = set()
+        result = []
+        for candidate in urls:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            result.append(candidate)
+        return result
+
+    def should_skip_data_downloads(self):
+        with self.state_lock:
+            return self.data_failure_open
+
+    def mark_data_download_success(self, url:str):
+        if not self.is_kemono_data_url(url):
+            return
+        with self.state_lock:
+            self.data_failure_count = 0
+            self.data_failure_open = False
+
+    def mark_data_download_failure(self, url:str):
+        if not self.is_kemono_data_url(url):
+            return
+        with self.state_lock:
+            self.data_failure_count += 1
+            if self.data_failure_count >= self.data_failure_limit:
+                self.data_failure_open = True
 
     def write_content(self, post:dict):
         # write post content
@@ -1158,6 +1200,11 @@ class downloader:
             self.mark_file_outcome(file, 'skipped')
             return
 
+        if self.should_skip_data_downloads() and self.is_kemono_data_url(file['file_variables']['url']):
+            logger.error("Skipping download because Kemono data servers are unreachable from this network")
+            self.mark_file_failed(file)
+            return
+
         part_file = f"{file['file_path']}.part" if self.part_files else file['file_path']
 
         logger.info(f"Downloading: {os.path.split(file['file_path'])[1]}")
@@ -1166,21 +1213,21 @@ class downloader:
         self.mark_file_started(file)
 
         request_headers={'Referer':file['file_variables']['referer']}
-        candidate_exts = [
-            file['file_variables'].get('ext'),
-            *file['file_variables'].get('fallback_exts', []),
-        ]
-        candidate_urls = [
-            file['file_variables']['url'],
-            *file['file_variables'].get('fallback_urls', []),
-        ]
         candidate_pairs = []
         seen_candidate_urls = set()
-        for candidate_url, candidate_ext in zip(candidate_urls, candidate_exts):
+        primary_ext = file['file_variables'].get('ext')
+        for candidate_url in self.build_data_url_candidates(file['file_variables']['url']):
             if not candidate_url or candidate_url in seen_candidate_urls:
                 continue
             seen_candidate_urls.add(candidate_url)
-            candidate_pairs.append((candidate_url, candidate_ext))
+            candidate_pairs.append((candidate_url, primary_ext))
+        fallback_exts = file['file_variables'].get('fallback_exts', [])
+        for candidate_url, candidate_ext in zip(file['file_variables'].get('fallback_urls', []), fallback_exts):
+            for expanded_url in self.build_data_url_candidates(candidate_url):
+                if not expanded_url or expanded_url in seen_candidate_urls:
+                    continue
+                seen_candidate_urls.add(expanded_url)
+                candidate_pairs.append((expanded_url, candidate_ext))
 
         if self.force_dss:
             dss_letter=isinstance(self.force_dss,str) and self.force_dss[0]
@@ -1215,14 +1262,14 @@ class downloader:
                         stream=False,
                         headers=dict(**self.headers,**{'Range':f'bytes={resume_size}-{resume_size+1023}'}),
                         cookies=self.cookies,
-                        timeout=self.timeout,
+                        timeout=(self.connect_timeout, self.timeout),
                     ).content
                 response = self.session.get(
                     url=candidate_url,
                     stream=True,
                     headers=dict(**self.headers,**request_headers),
                     cookies=self.cookies,
-                    timeout=self.timeout,
+                    timeout=(self.connect_timeout, self.timeout),
                 )
             except:
                 if not is_last_candidate:
@@ -1233,6 +1280,7 @@ class downloader:
                     self.download_file(file, retry=retry-1, post=post)
                     return
                 logger.error(f"Failed to get responce: {candidate_url} | All retries failed")
+                self.mark_data_download_failure(candidate_url)
                 self.mark_file_failed(file)
                 return
 
@@ -1255,7 +1303,7 @@ class downloader:
             for _ in range(self.retry_403):
                 logger.info('A 403 encountered, retry without session.')
                 try:
-                    response = requests.get(url=file['file_variables']['url'], stream=True, headers=request_headers, timeout=self.timeout,proxies=self.proxies)
+                    response = requests.get(url=file['file_variables']['url'], stream=True, headers=request_headers, timeout=(self.connect_timeout, self.timeout),proxies=self.proxies)
                 except:
                     logger.exception(f"Failed to get responce: {file['file_variables']['url']} | Retrying")
                     if retry > 0:
@@ -1268,12 +1316,13 @@ class downloader:
                     break
             if response.status_code == 403:
                 logger.error(f"Failed to download: {file['file_variables']['url']} | 403 Forbidden")
+                self.mark_data_download_failure(file['file_variables']['url'])
                 self.mark_file_failed(file)
                 return
 
         if response.status_code == 416:
             logger.warning(f"Failed to download: {file['file_variables']['url']} | 416 Range Not Satisfiable | Assuming broken server hash value")
-            content_length = self.session.get(url=file['file_variables']['url'], stream=True, headers=self.headers, cookies=self.cookies, timeout=self.timeout).headers.get('content-length', '')
+            content_length = self.session.get(url=file['file_variables']['url'], stream=True, headers=self.headers, cookies=self.cookies, timeout=(self.connect_timeout, self.timeout)).headers.get('content-length', '')
             if int(content_length) == resume_size:
                 logger.debug("Correct amount of bytes downloaded | Assuming download completed successfully")
                 if self.overwrite:
@@ -1296,10 +1345,12 @@ class downloader:
         if response.status_code == 429:
             # already retried for 429
             logger.error(f"Failed to download: {file['file_variables']['url']} | 429 Too Many Requests | All retries failed")
+            self.mark_data_download_failure(file['file_variables']['url'])
             self.mark_file_failed(file)
             return
         if not response.ok:
             logger.error(f"Failed to download: {file['file_variables']['url']} | {response.status_code} {response.reason}")
+            self.mark_data_download_failure(file['file_variables']['url'])
             self.mark_file_failed(file)
             return
 
@@ -1349,6 +1400,7 @@ class downloader:
                     self.download_file(file, retry=retry-1, post=post)
                     return
                 logger.error(f"Failed to download: {os.path.split(file['file_path'])[1]} | Exception: {exc} | All retries failed")
+                self.mark_data_download_failure(file['file_variables']['url'])
                 self.mark_file_failed(file)
                 return
 
@@ -1376,6 +1428,7 @@ class downloader:
                 self.convert_downloaded_file_if_needed(part_file, file, selected_ext)
                 os.rename(part_file, file['file_path'])
             self.mark_file_outcome(file, 'success')
+            self.mark_data_download_success(selected_url)
 
     def convert_downloaded_file_if_needed(self, part_file: str, file: dict, selected_ext: str | None):
         return
@@ -1515,7 +1568,7 @@ class downloader:
 
         # check file size
         if self.min_size or self.max_size:
-            file_size = requests.get(file['file_variables']['url'], cookies=self.cookies, stream=True,proxies=self.proxies).headers.get('content-length', 0)
+            file_size = requests.get(file['file_variables']['url'], cookies=self.cookies, stream=True, timeout=(self.connect_timeout, self.timeout),proxies=self.proxies).headers.get('content-length', 0)
             if int(file_size) == 0:
                     logger.info(f"Skipping: {os.path.split(file['file_path'])[1]} | File size not included in file header")
                     return True
