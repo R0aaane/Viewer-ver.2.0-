@@ -73,22 +73,24 @@ class downloader:
 
         # requests variables
         self.headers = {'User-Agent': args['user_agent']} if args['user_agent'] else {}
-        self.headers['Accept'] = 'text/css'
+        self.headers['Accept'] = 'application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         self.cookies = args['cookies']
         self.timeout = _env_int('KEMONO_DL_REQUEST_TIMEOUT', 60)
         self.connect_timeout = _env_int('KEMONO_DL_CONNECT_TIMEOUT', 8)
 
         self.headcheck = args['head_check']
 
-        for i in ('/v1','/v0'):
-            self.api_ver = i
+        self.api_ver = '/v1'
+        for api_ver in ('/v1','/v0'):
             try:
                 if requests.get(
-                    f'https://kemono.cr/api{self.api_ver}/app_version',
+                    f'https://kemono.cr/api{api_ver}/app_version',
                     headers=self.headers,
+                    cookies=self.cookies,
                     timeout=_env_int('KEMONO_DL_STARTUP_TIMEOUT', 15),
                     proxies={'http': args['proxy'], 'https': args['proxy']},
                 ).status_code == 200:
+                    self.api_ver = api_ver
                     break
             except requests.RequestException:
                 continue
@@ -1175,8 +1177,8 @@ class downloader:
 
     def download_file(self, file:dict, retry:int, post:dict):
         # download a file
-        if str(file['file_variables'].get('ext', '')).lower() == 'zip':
-            logger.info(f"Skipping zip archive: {os.path.split(file['file_path'])[1]}")
+        if str(file['file_variables'].get('ext', '')).lower() in {'zip', '7z', 'rar'}:
+            logger.info(f"Skipping archive: {os.path.split(file['file_path'])[1]}")
             self.mark_file_outcome(file, 'skipped')
             return
 
