@@ -73,7 +73,7 @@ class downloader:
 
         # requests variables
         self.headers = {'User-Agent': args['user_agent']} if args['user_agent'] else {}
-        self.headers['Accept'] = 'application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        self.headers['Accept'] = 'text/css,application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         self.cookies = args['cookies']
         self.timeout = _env_int('KEMONO_DL_REQUEST_TIMEOUT', 60)
         self.connect_timeout = _env_int('KEMONO_DL_CONNECT_TIMEOUT', 8)
