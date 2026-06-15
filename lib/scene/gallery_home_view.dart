@@ -69,8 +69,9 @@ class _TileShell extends StatelessWidget {
 extension _GalleryHomeView on _GalleryGridPageState {
   Future<Map<String, MediaItem>> _buildHomeItemLookup(
     List<MediaItem> mediaItems,
-    Iterable<ReadingProgressEntry> recentProgress,
-  ) async {
+    Iterable<ReadingProgressEntry> recentProgress, {
+    Iterable<String> stableItemIds = const <String>[],
+  }) async {
     final itemByVariant = <String, MediaItem>{};
     for (final item in mediaItems) {
       for (final variant in _idVariants(item.id)) {
@@ -85,11 +86,14 @@ extension _GalleryHomeView on _GalleryGridPageState {
       }
     }
 
-    final unresolvedStableIds = recentProgress
-        .map((entry) => entry.mediaId.trim())
-        .where(_looksLikeStableMediaId)
-        .where((itemId) => !itemByVariant.containsKey(itemId))
-        .toSet();
+    final unresolvedStableIds = <String>{
+      ...recentProgress
+          .map((entry) => entry.mediaId.trim())
+          .where(_looksLikeStableMediaId),
+      ...stableItemIds
+          .map((entry) => entry.trim())
+          .where(_looksLikeStableMediaId),
+    }.where((itemId) => !itemByVariant.containsKey(itemId)).toSet();
     if (unresolvedStableIds.isEmpty) {
       return itemByVariant;
     }
@@ -1334,9 +1338,13 @@ extension _GalleryHomeView on _GalleryGridPageState {
       final recentAdded = mediaItems.toList(growable: true)
         ..sort(compareHomeAddedDesc);
 
+      final ratingIds = _ratingsById.entries
+          .where((entry) => entry.value == _homeRatingShelfRating)
+          .map((entry) => entry.key);
       final itemByVariant = await _buildHomeItemLookup(
         mediaItems,
         recentProgress,
+        stableItemIds: ratingIds,
       );
 
       final recentViewedItems = <MediaItem>[];
@@ -1389,11 +1397,20 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
       final favorites = mediaItems.where(_isFavoriteItem).toList(growable: true)
         ..sort(compareHomeAddedDesc);
-      final ratingItems =
-          mediaItems
-              .where((item) => _ratingForItem(item) == _homeRatingShelfRating)
-              .toList(growable: true)
-            ..sort(compareHomeAddedDesc);
+      final ratingItemById = <String, MediaItem>{};
+      for (final item in mediaItems) {
+        if (_ratingForItem(item) == _homeRatingShelfRating) {
+          ratingItemById.putIfAbsent(item.id, () => item);
+        }
+      }
+      for (final id in ratingIds) {
+        final item = itemByVariant[id];
+        if (item != null) {
+          ratingItemById.putIfAbsent(item.id, () => item);
+        }
+      }
+      final ratingItems = ratingItemById.values.toList(growable: true)
+        ..sort(compareHomeAddedDesc);
       final unreadItems = recentAdded
           .where(
             (item) =>
