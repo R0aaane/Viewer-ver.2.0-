@@ -270,6 +270,13 @@ class downloader:
             current_file=os.path.split(file['file_path'])[1],
         )
 
+    def mark_file_download_progress(self, file:dict):
+        self.emit_progress(
+            status='downloading',
+            current_kind=self.get_file_kind(file),
+            current_file=os.path.split(file['file_path'])[1],
+        )
+
     def mark_file_outcome(self, file:dict, outcome:str):
         with self.state_lock:
             self.progress['completed'] += 1
@@ -1274,6 +1281,7 @@ class downloader:
                         if len(puff) >= (32<<20)//iter_chunk_size*iter_chunk_size:
                             f.write(puff)
                             puff = bytes()
+                            self.mark_file_download_progress(file)
                         print_download_bar(total, downloaded, resume_size, start)
                     if puff:
                         f.write(puff)
