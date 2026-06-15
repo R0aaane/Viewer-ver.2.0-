@@ -1079,6 +1079,10 @@ class downloader:
 
     def download_file(self, file:dict, retry:int, post:dict):
         # download a file
+        if str(file['file_variables'].get('ext', '')).lower() == 'zip':
+            logger.info(f"Skipping zip archive: {os.path.split(file['file_path'])[1]}")
+            self.mark_file_outcome(file, 'skipped')
+            return
 
         # try archives password before skipping
         if self.archives_password and file['file_variables']['ext'] in ('zip','7z','rar'):
