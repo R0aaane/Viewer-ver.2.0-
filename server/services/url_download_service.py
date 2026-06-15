@@ -19,7 +19,7 @@ from typing import Awaitable, Callable
 
 
 _UI_EVENT_PREFIX = "__KEMONO_DL_UI__"
-_LAUNCHER_IDLE_TIMEOUT_SECONDS = 120
+_LAUNCHER_IDLE_TIMEOUT_SECONDS = 600
 _CONTENT_DISPOSITION_HEADER = "Content-Disposition"
 _STANDALONE_USER_AGENT = "pdf_viewer/standalone"
 _MEDIA_ACCEPT_HEADER = "application/pdf,image/*,*/*;q=0.8"

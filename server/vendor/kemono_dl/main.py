@@ -1266,6 +1266,7 @@ class downloader:
                 first_chunk=True
                 with open(part_file, 'wb' if resume_size == 0 else 'ab') as f:
                     start = time.time()
+                    last_progress_event_at = start
                     downloaded = resume_size
                     print_download_bar(total, downloaded, resume_size, start)
                     iter_chunk_size = 256<<10
@@ -1278,6 +1279,10 @@ class downloader:
                                     raise Exception("Head Check Mismatch")
                         puff += chunk
                         downloaded += len(chunk)
+                        now = time.time()
+                        if now - last_progress_event_at >= 10:
+                            self.mark_file_download_progress(file)
+                            last_progress_event_at = now
                         if len(puff) >= (32<<20)//iter_chunk_size*iter_chunk_size:
                             f.write(puff)
                             puff = bytes()
