@@ -161,6 +161,7 @@ class downloader:
         # other
         self.retry = args['retry']
         self.parallel_downloads = args['parallel_downloads']
+        self.download_slot = threading.BoundedSemaphore(max(1, self.parallel_downloads))
         self.part_files = args['part_files']
         self.ratelimit_sleep = args['ratelimit_sleep']
         self.ratelimit_ms = args['ratelimit_ms']
@@ -1066,11 +1067,12 @@ class downloader:
                 future.result()
 
     def download_file_safe(self, file:dict, post:dict):
-        try:
-            self.download_file(file, retry=self.retry, post=post)
-        except:
-            self.mark_file_failed(file)
-            logger.exception(f"Failed to download: {file['file_path']}")
+        with self.download_slot:
+            try:
+                self.download_file(file, retry=self.retry, post=post)
+            except:
+                self.mark_file_failed(file)
+                logger.exception(f"Failed to download: {file['file_path']}")
 
     def write_content(self, post:dict):
         # write post content
