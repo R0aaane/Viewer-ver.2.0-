@@ -331,6 +331,9 @@ class WebRemoteUrlImportResult {
   String? get failureSummary {
     for (final line in logLines.reversed) {
       final lower = line.toLowerCase();
+      if (lower.contains('kemono data servers are unreachable')) {
+        return 'Kemono の画像配信サーバーに接続できませんでした。VPN / プロキシ / ネットワーク設定を確認してください。';
+      }
       if (lower.contains('[error]') || lower.contains('[stderr]')) {
         return line;
       }

@@ -41,4 +41,18 @@ void main() {
       expect(suggested.convertHitomiToPdf, isTrue);
     });
   });
+
+  group('UrlImportResult.failureSummary', () {
+    test('explains unreachable Kemono data servers', () {
+      const result = UrlImportResult(
+        importedCount: 0,
+        failedCount: 1,
+        logLines: [
+          '[stderr] ERROR:Skipping download because Kemono data servers are unreachable from this network',
+        ],
+      );
+
+      expect(result.failureSummary, contains('Kemono の画像配信サーバー'));
+    });
+  });
 }
