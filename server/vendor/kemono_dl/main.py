@@ -50,6 +50,14 @@ class downloader:
         'mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'wmv', 'flv', 'mpeg', 'mpg', 'ts', 'm2ts'
     }
 
+    @property
+    def post_errors(self):
+        return getattr(self._post_state, 'errors', 0)
+
+    @post_errors.setter
+    def post_errors(self, value):
+        self._post_state.errors = value
+
     def __init__(self, args):
         self.input_urls = args['links'] + args['from_file']
         if args['replace_tld']:
@@ -108,6 +116,7 @@ class downloader:
 
         self.archive_file = args['archive']
         self.archive_list = []
+        self._post_state = threading.local()
         self.post_errors = 0
 
         # controls what to download/save
@@ -578,19 +587,60 @@ class downloader:
             return
 
         matched = 0
+        favorite_urls = []
         for favorite in favorites:
             if fav_type == 'post':
                 matched += 1
-                self.get_post(f"https://{domain}/{favorite['service']}/user/{favorite['user']}/post/{favorite['id']}", retry=self.retry)
+                favorite_urls.append(f"https://{domain}/{favorite['service']}/user/{favorite['user']}/post/{favorite['id']}")
             if fav_type == 'artist':
                 if not (favorite['service'] in services or 'all' in services):
                     logger.info(f"Skipping user {favorite['name']} | Service {favorite['service']} was not requested")
                     continue
                 matched += 1
-                self.get_post(f"https://{domain}/{favorite['service']}/user/{favorite['id']}", retry=self.retry)
+                favorite_urls.append(f"https://{domain}/{favorite['service']}/user/{favorite['id']}")
+
+        self.download_urls(favorite_urls)
 
         if fav_type == 'artist' and matched == 0:
             logger.info(f"No favorite users matched the requested services for {domain}")
+
+    def download_urls(self, urls:list):
+        if not urls:
+            return
+        max_workers = min(self.parallel_downloads, len(urls))
+        if max_workers <= 1:
+            for url in urls:
+                self.get_post(url, retry=self.retry)
+            return
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(self.get_post, url, self.retry) for url in urls]
+            for future in as_completed(futures):
+                future.result()
+
+    def download_posts(self, posts:list):
+        if not posts:
+            return
+        max_workers = min(self.parallel_downloads, len(posts))
+        if max_workers <= 1:
+            for post in posts:
+                self.download_post_and_archive(post)
+            return
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(self.download_post_and_archive, post) for post in posts]
+            for future in as_completed(futures):
+                future.result()
+
+    def download_post_and_archive(self, post:dict):
+        try:
+            self.download_post(post)
+            if self.post_timeout:
+                logger.info(f"Sleeping for {self.post_timeout} seconds.")
+                time.sleep(self.post_timeout)
+        except:
+            logger.exception("Unable to download post | service:{service} user_id:{user_id} post_id:{id}".format(**post['post_variables']))
+            return
+        with self.state_lock:
+            self.comp_posts.append(self.get_post_source_url(post))
 
     def get_post(self, url:str, retry:int, chunk=0, first=True):
         found = re.search(r'(https://((?:kemono|coomer)\.(?:party|su|cr|st))/)(([^/]+)/user/([^/]+)($|/post/[^/]+)($|/revision/[^/]+))', url)
@@ -638,6 +688,7 @@ class downloader:
                 json = json.get('post')
             if not isinstance(json,list):
                 json=[json]
+            posts_to_download = []
             for post in json:
                 # only download once
                 if not is_post and first:
@@ -693,14 +744,8 @@ class downloader:
                         continue
                 else:
                     post = self.clean_post(post, user, site)
-                try:
-                    self.download_post(post)
-                    if self.post_timeout:
-                        logger.info(f"Sleeping for {self.post_timeout} seconds.")
-                        time.sleep(self.post_timeout)
-                except:
-                    logger.exception("Unable to download post | service:{service} user_id:{user_id} post_id:{id}".format(**post['post_variables']))
-                self.comp_posts.append(self.get_post_source_url(post))
+                posts_to_download.append(post)
+            self.download_posts(posts_to_download)
             chunk_size = 50
             if len(json) < chunk_size:
                 return # completed
@@ -1543,11 +1588,7 @@ class downloader:
             except:
                 logger.exception(f"Unable to get favorite users from {self.cookie_domains[site]}")
 
-        for job in kemono_jobs:
-            try:
-                self.get_post(job['url'], retry=self.retry)
-            except:
-                logger.exception(f"Unable to get posts for {job['url']}")
+        self.download_urls([job['url'] for job in kemono_jobs])
         for gallery in hitomi_jobs:
             try:
                 self.get_hitomi_gallery(gallery, retry=self.retry)
