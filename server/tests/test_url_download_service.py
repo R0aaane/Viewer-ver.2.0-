@@ -1,7 +1,10 @@
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from server.services.url_download_service import (
+    UrlDownloadError,
     UrlDownloadOptions,
     UrlDownloadResult,
     UrlDownloadService,
@@ -211,6 +214,31 @@ class UrlDownloadServiceTest(unittest.TestCase):
             [item["galleryId"] for item in results],
             [400, 300],
         )
+
+    def test_launcher_idle_timeout_stops_silent_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_path = Path(temp_dir) / "silent_task.py"
+            task_path.write_text(
+                "import time\n"
+                "time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            service = UrlDownloadService(workdir=temp_dir, module_name="silent_task")
+
+            with patch(
+                "server.services.url_download_service._LAUNCHER_IDLE_TIMEOUT_SECONDS",
+                1,
+            ):
+                with self.assertRaises(UrlDownloadError) as raised:
+                    service_loop(
+                        service._run_with_launcher(
+                            source_url="https://kemono.cr/fanbox/user/30259663",
+                            destination_folder=temp_dir,
+                            options=UrlDownloadOptions(),
+                        )
+                    )
+
+        self.assertIn("producing no output", str(raised.exception))
 
 
 def service_loop(awaitable):

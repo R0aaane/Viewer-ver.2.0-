@@ -35,6 +35,13 @@ from .hitomi import (
 )
 # from .my_yt_dlp import my_yt_dlp
 
+
+def _env_int(name, default):
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
 class downloader:
     IMAGE_EXTENSIONS = {
         'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif'
@@ -60,14 +67,22 @@ class downloader:
         self.headers = {'User-Agent': args['user_agent']} if args['user_agent'] else {}
         self.headers['Accept'] = 'text/css'
         self.cookies = args['cookies']
-        self.timeout = 300
+        self.timeout = _env_int('KEMONO_DL_REQUEST_TIMEOUT', 60)
 
         self.headcheck = args['head_check']
 
         for i in ('/v1','/v0'):
             self.api_ver = i
-            if requests.get(f'https://kemono.cr/api{self.api_ver}/app_version', headers=self.headers).status_code == 200:
-                break
+            try:
+                if requests.get(
+                    f'https://kemono.cr/api{self.api_ver}/app_version',
+                    headers=self.headers,
+                    timeout=_env_int('KEMONO_DL_STARTUP_TIMEOUT', 15),
+                    proxies={'http': args['proxy'], 'https': args['proxy']},
+                ).status_code == 200:
+                    break
+            except requests.RequestException:
+                continue
 
         # file/folder naming
         self.name_templates_glop = ''

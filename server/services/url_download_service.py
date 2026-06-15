@@ -19,6 +19,7 @@ from typing import Awaitable, Callable
 
 
 _UI_EVENT_PREFIX = "__KEMONO_DL_UI__"
+_LAUNCHER_IDLE_TIMEOUT_SECONDS = 120
 _CONTENT_DISPOSITION_HEADER = "Content-Disposition"
 _STANDALONE_USER_AGENT = "pdf_viewer/standalone"
 _MEDIA_ACCEPT_HEADER = "application/pdf,image/*,*/*;q=0.8"
@@ -355,6 +356,7 @@ class UrlDownloadService:
         result = UrlDownloadResult(status="starting")
         log_lines: deque[str] = deque(maxlen=80)
         event_seen = False
+        last_output_at = asyncio.get_running_loop().time()
         process_args = [
             sys.executable,
             "-X",
@@ -368,18 +370,30 @@ class UrlDownloadService:
         process = await asyncio.create_subprocess_exec(
             *process_args,
             cwd=self._workdir,
-            env={**os.environ, "PYTHONUTF8": "1"},
+            env={
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "KEMONO_DL_REQUEST_TIMEOUT": os.environ.get(
+                    "KEMONO_DL_REQUEST_TIMEOUT",
+                    "60",
+                ),
+                "KEMONO_DL_STARTUP_TIMEOUT": os.environ.get(
+                    "KEMONO_DL_STARTUP_TIMEOUT",
+                    "15",
+                ),
+            },
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
         async def read_stdout() -> None:
-            nonlocal event_seen
+            nonlocal event_seen, last_output_at
             assert process.stdout is not None
             while True:
                 raw_line = await process.stdout.readline()
                 if not raw_line:
                     break
+                last_output_at = asyncio.get_running_loop().time()
                 line = raw_line.decode("utf-8", errors="replace").rstrip()
                 if not line:
                     continue
@@ -403,19 +417,43 @@ class UrlDownloadService:
                 log_lines.append(f"[stdout] {line}")
 
         async def read_stderr() -> None:
+            nonlocal last_output_at
             assert process.stderr is not None
             while True:
                 raw_line = await process.stderr.readline()
                 if not raw_line:
                     break
+                last_output_at = asyncio.get_running_loop().time()
                 line = raw_line.decode("utf-8", errors="replace").rstrip()
                 if line:
                     log_lines.append(f"[stderr] {line}")
 
-        await asyncio.gather(read_stdout(), read_stderr())
+        async def monitor_idle_timeout() -> None:
+            while True:
+                return_code = process.returncode
+                if return_code is not None:
+                    return
+                idle_seconds = asyncio.get_running_loop().time() - last_output_at
+                if idle_seconds >= _LAUNCHER_IDLE_TIMEOUT_SECONDS:
+                    log_lines.append(
+                        "[error] downloader produced no output for "
+                        f"{_LAUNCHER_IDLE_TIMEOUT_SECONDS} seconds"
+                    )
+                    process.kill()
+                    return
+                await asyncio.sleep(5)
+
+        await asyncio.gather(read_stdout(), read_stderr(), monitor_idle_timeout())
         return_code = await process.wait()
 
         result.log_lines = list(log_lines)
+        timed_out = any("downloader produced no output" in line for line in log_lines)
+        if timed_out:
+            raise UrlDownloadError(
+                "Downloader stopped after producing no output for "
+                f"{_LAUNCHER_IDLE_TIMEOUT_SECONDS} seconds. "
+                f"{_tail_message(result.log_lines, return_code)}"
+            )
         if return_code != 0:
             raise UrlDownloadError(_tail_message(result.log_lines, return_code))
         if not event_seen:
