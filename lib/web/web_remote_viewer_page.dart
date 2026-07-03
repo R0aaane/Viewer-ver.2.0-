@@ -618,8 +618,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         break;
       case _WebBrowserSortMode.unread:
         sorted.sort((left, right) {
-          final leftUnread = _viewCountForEntry(left) == 0;
-          final rightUnread = _viewCountForEntry(right) == 0;
+          final leftUnread = _isUnreadEntry(left);
+          final rightUnread = _isUnreadEntry(right);
           if (leftUnread != rightUnread) {
             return rightUnread ? 1 : -1;
           }
@@ -736,17 +736,26 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return const <String, ReadingProgressEntry>{};
     }
 
-    final knownIds = entries
-        .map((entry) => entry.stableId.trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
+    final entryStableIdByKnownId = <String, String>{};
+    for (final entry in entries) {
+      final stableId = entry.stableId.trim();
+      if (stableId.isNotEmpty) {
+        entryStableIdByKnownId[stableId] = stableId;
+      }
+      final mediaId = entry.mediaId?.trim();
+      if (mediaId != null && mediaId.isNotEmpty) {
+        entryStableIdByKnownId[mediaId] = stableId;
+      }
+    }
     final mapped = <String, ReadingProgressEntry>{};
     for (final activity in activityEntries) {
       final mediaId = activity.mediaId.trim();
-      if (mediaId.isEmpty || !knownIds.contains(mediaId)) {
+      final stableId = entryStableIdByKnownId[mediaId];
+      if (mediaId.isEmpty || stableId == null) {
         continue;
       }
       mapped.putIfAbsent(mediaId, () => activity);
+      mapped.putIfAbsent(stableId, () => activity);
     }
     return mapped;
   }
@@ -2310,6 +2319,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return entry.stats?.viewCount ?? 0;
   }
 
+  bool _hasReadingProgressForEntry(WebRemoteEntry entry) {
+    return _recentActivityForEntry(entry) != null;
+  }
+
+  bool _isUnreadEntry(WebRemoteEntry entry) {
+    return _viewCountForEntry(entry) == 0 &&
+        !_hasReadingProgressForEntry(entry);
+  }
+
   DateTime? _lastViewedAtForEntry(WebRemoteEntry entry) {
     return entry.stats?.lastViewedAt?.toLocal();
   }
@@ -2392,7 +2410,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       );
     final recentlyViewed = _recentlyViewedEntries(entries);
     final viewed = entries
-        .where((entry) => _viewCountForEntry(entry) > 0)
+        .where((entry) => !_isUnreadEntry(entry))
         .toList(growable: false);
     final frequentlyViewed = viewed.toList(growable: false)
       ..sort((left, right) {
@@ -2426,14 +2444,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             DateTime.fromMillisecondsSinceEpoch(0);
         return leftViewed.compareTo(rightViewed);
       });
-    final unread =
-        entries
-            .where((entry) => _viewCountForEntry(entry) == 0)
-            .toList(growable: false)
-          ..sort(
-            (left, right) =>
-                _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
-          );
+    final unread = entries.where(_isUnreadEntry).toList(growable: false)
+      ..sort(
+        (left, right) =>
+            _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
+      );
 
     return <_WebHomeSectionData>[
       _WebHomeSectionData(
@@ -2496,12 +2511,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
 
     final entries = _homeEntries;
-    final unreadCount = entries
-        .where((entry) => _viewCountForEntry(entry) == 0)
-        .length;
-    final viewedCount = entries
-        .where((entry) => _viewCountForEntry(entry) > 0)
-        .length;
+    final unreadCount = entries.where(_isUnreadEntry).length;
+    final viewedCount = entries.where((entry) => !_isUnreadEntry(entry)).length;
     final recentCount = entries
         .where(
           (entry) => _addedAtForEntry(
