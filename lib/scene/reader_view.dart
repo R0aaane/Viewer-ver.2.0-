@@ -19,6 +19,13 @@ extension _ReaderView on _ImageDetailPageState {
     await _saveTwoPage(value);
   }
 
+  Future<void> _setReadingDirection(_ReadingDirection value) async {
+    if (_readingDirection == value) return;
+    setState(() => _readingDirection = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_PrefsKeys.readingDirection, value.index);
+  }
+
   Future<Uint8List> _loadReaderBytes(MediaItem item, int page) {
     return _readerController.loadReaderBytes(
       item,
@@ -192,6 +199,9 @@ extension _ReaderView on _ImageDetailPageState {
         _isBookmarked = false;
         _rating = null;
         _tags = const [];
+        _relatedItems = const [];
+        _relatedItemsLoading = false;
+        _relatedItemsForItemId = null;
         _tagsLoading = false;
         if (_tagUsageScopeRaw != item.folderRaw) {
           _tagUsageCounts = <String, int>{};
@@ -324,12 +334,16 @@ extension _ReaderView on _ImageDetailPageState {
 
               final isSpread = _twoPage && _isPdf;
               final pageW = isSpread ? (c.maxWidth - gap) / 2.0 : c.maxWidth;
-              final leftPage = isSpread ? _page + 1 : _page;
-              final rightPage = _page;
-              final leftFuture = isSpread
+              final rightToLeft =
+                  _readingDirection == _ReadingDirection.rightToLeft;
+              final leftPage = isSpread && rightToLeft ? _page + 1 : _page;
+              final rightPage = isSpread && !rightToLeft ? _page + 1 : _page;
+              final leftFuture = isSpread && rightToLeft
                   ? _readerController.rightFuture
                   : _readerController.leftFuture;
-              final rightFuture = _readerController.leftFuture;
+              final rightFuture = isSpread && !rightToLeft
+                  ? _readerController.rightFuture
+                  : _readerController.leftFuture;
 
               return Row(
                 mainAxisSize: MainAxisSize.min,
@@ -383,13 +397,17 @@ extension _ReaderView on _ImageDetailPageState {
 
                   if (dx < leftEdge) {
                     if (_isPdf) {
-                      _next();
+                      _readingDirection == _ReadingDirection.rightToLeft
+                          ? _next()
+                          : _prev();
                     } else {
                       _prev();
                     }
                   } else if (dx > rightEdge) {
                     if (_isPdf) {
-                      _prev();
+                      _readingDirection == _ReadingDirection.rightToLeft
+                          ? _prev()
+                          : _next();
                     } else {
                       _next();
                     }
@@ -703,14 +721,17 @@ extension _ReaderView on _ImageDetailPageState {
     final pageText = _isPdf
         ? '$_page/$_totalPages'
         : '${_index + 1}/${_items.length}';
+    final rightToLeft = _readingDirection == _ReadingDirection.rightToLeft;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
-          tooltip: _isPdf ? '次' : '前',
+          tooltip: _isPdf ? (rightToLeft ? '次' : '前') : '前',
           onPressed: _isPdf
-              ? (canNext ? _next : null)
+              ? (rightToLeft
+                    ? (canNext ? _next : null)
+                    : (canPrev ? _prev : null))
               : (canPrev ? _prev : null),
           icon: const Icon(Icons.chevron_left),
           visualDensity: VisualDensity.compact,
@@ -718,9 +739,11 @@ extension _ReaderView on _ImageDetailPageState {
           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
         ),
         IconButton(
-          tooltip: _isPdf ? '前' : '次',
+          tooltip: _isPdf ? (rightToLeft ? '前' : '次') : '次',
           onPressed: _isPdf
-              ? (canPrev ? _prev : null)
+              ? (rightToLeft
+                    ? (canPrev ? _prev : null)
+                    : (canNext ? _next : null))
               : (canNext ? _next : null),
           icon: const Icon(Icons.chevron_right),
           visualDensity: VisualDensity.compact,
@@ -761,6 +784,31 @@ extension _ReaderView on _ImageDetailPageState {
               await _setTwoPageMode(!_twoPage);
             },
           ),
+
+        if (_isPdf) ...[
+          const SizedBox(width: 6),
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              backgroundColor: _ImageDetailPageState._uiChip,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              visualDensity: VisualDensity.compact,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            icon: const Icon(Icons.menu_book_outlined, size: 18),
+            label: Text(
+              rightToLeft ? '右開き' : '左開き',
+              style: const TextStyle(fontSize: 12),
+            ),
+            onPressed: () => _setReadingDirection(
+              rightToLeft
+                  ? _ReadingDirection.leftToRight
+                  : _ReadingDirection.rightToLeft,
+            ),
+          ),
+        ],
 
         const SizedBox(width: 6),
 

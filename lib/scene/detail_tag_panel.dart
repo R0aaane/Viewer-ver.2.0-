@@ -195,12 +195,97 @@ extension _DetailTagPanel on _ImageDetailPageState {
         _tags = list;
         _loadedTagItemId = item.id;
       });
+      if (!_inReader || force) {
+        unawaited(_loadRelatedItemsForCurrent(list, version, force: force));
+      }
       if (_isKemonoTaggedImage(item, list)) {
         unawaited(_loadKemonoVerticalItems(item, version));
       }
     } finally {
       if (_isCurrentLoad(version, item)) {
         setState(() => _tagsLoading = false);
+      }
+    }
+  }
+
+  Future<void> _loadRelatedItemsForCurrent(
+    List<TagWithId> tags,
+    int loadVersion, {
+    bool force = false,
+  }) async {
+    final item = _item;
+    if (!force && _relatedItemsForItemId == item.id) return;
+
+    final selectedTags = tags
+        .map((entry) => entry.tag)
+        .where((tag) => tag.name.trim().isNotEmpty)
+        .take(6)
+        .toList(growable: false);
+    if (selectedTags.isEmpty) {
+      if (_isCurrentLoad(loadVersion, item)) {
+        setState(() {
+          _relatedItems = const [];
+          _relatedItemsLoading = false;
+          _relatedItemsForItemId = item.id;
+        });
+      }
+      return;
+    }
+
+    setState(() {
+      _relatedItemsLoading = true;
+      _relatedItemsForItemId = item.id;
+    });
+    try {
+      final matches = await Future.wait(
+        selectedTags.map((tag) {
+          if (widget.tagService.isRemoteMode) {
+            return widget.tagService.findMediaItemsByTagAcrossFolders(
+              category: tag.category,
+              name: tag.name,
+              repo: widget.repo,
+              folderRaws: <String>[item.folderRaw],
+            );
+          }
+          return widget.tagService.findMediaItemsByTagGlobal(
+            category: tag.category,
+            name: tag.name,
+          );
+        }),
+      );
+      if (!_isCurrentLoad(loadVersion, item)) return;
+      final scoreById = <String, int>{};
+      final itemById = <String, MediaItem>{};
+      for (final group in matches) {
+        for (final candidate in group) {
+          if (candidate.id == item.id || candidate.kind == MediaKind.folder) {
+            continue;
+          }
+          itemById[candidate.id] = candidate;
+          scoreById.update(
+            candidate.id,
+            (score) => score + 1,
+            ifAbsent: () => 1,
+          );
+        }
+      }
+      final related = itemById.values.toList(growable: true)
+        ..sort((left, right) {
+          final scoreCompare = (scoreById[right.id] ?? 0).compareTo(
+            scoreById[left.id] ?? 0,
+          );
+          return scoreCompare != 0
+              ? scoreCompare
+              : left.displayName.compareTo(right.displayName);
+        });
+      setState(() => _relatedItems = related.take(12).toList(growable: false));
+    } catch (_) {
+      if (_isCurrentLoad(loadVersion, item)) {
+        setState(() => _relatedItems = const []);
+      }
+    } finally {
+      if (_isCurrentLoad(loadVersion, item)) {
+        setState(() => _relatedItemsLoading = false);
       }
     }
   }

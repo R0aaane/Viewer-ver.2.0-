@@ -26,12 +26,19 @@ extension _DetailActions on _ImageDetailPageState {
     final prefs = await SharedPreferences.getInstance();
     final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
     final two = prefs.getBool(_PrefsKeys.twoPage);
+    final readingDirectionIndex = prefs.getInt(_PrefsKeys.readingDirection);
     if (fitIndex != null &&
         fitIndex >= 0 &&
         fitIndex < ReaderFitMode.values.length) {
       _fitMode = ReaderFitMode.values[fitIndex];
     }
     if (two != null) _twoPage = two;
+    if (readingDirectionIndex != null &&
+        readingDirectionIndex >= 0 &&
+        readingDirectionIndex < _ReadingDirection.values.length) {
+      _readingDirection = _ReadingDirection.values[readingDirectionIndex];
+    }
+    _sidebarCollapsed = prefs.getBool(_PrefsKeys.sidebarCollapsed) ?? false;
     if (widget.repo.isRemoteMode) {
       _folder = FolderHandle(_item.folderRaw);
     } else {

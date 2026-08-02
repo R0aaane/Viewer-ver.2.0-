@@ -56,7 +56,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: AppContentModeConfig.isReader ? 'Book Reader' : 'pdf_viewer R18',
+      title: AppContentModeConfig.isReader ? '紙魚' : '紙魚 R18',
       theme: buildAppTheme(),
       builder: (context, child) =>
           ControllerNavigationShell(child: child ?? const SizedBox.shrink()),

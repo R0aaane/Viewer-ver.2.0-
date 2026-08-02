@@ -47,6 +47,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   int _totalPages = 1;
 
   bool _twoPage = false;
+  _ReadingDirection _readingDirection = _ReadingDirection.rightToLeft;
   bool _fullscreen = false;
   bool _inReader = true;
   bool _leaving = false;
@@ -57,9 +58,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   int? _rating;
   bool _ratingChanged = false;
   bool _itemChanged = false;
+  bool _sidebarCollapsed = false;
 
   // tag・医ち繧ｰ・・
   List<TagWithId> _tags = const [];
+  List<MediaItem> _relatedItems = const [];
+  bool _relatedItemsLoading = false;
+  String? _relatedItemsForItemId;
   bool _tagsChanged = false;
   bool _tagEditMode = false;
   _TagLayoutMode _tagLayoutMode = _TagLayoutMode.chips;
@@ -188,6 +193,11 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (_loadedTagItemId != _item.id && !_tagsLoading) {
       unawaited(_loadTagsForCurrent());
     }
+    if (_loadedTagItemId == _item.id &&
+        _relatedItemsForItemId != _item.id &&
+        !_relatedItemsLoading) {
+      unawaited(_loadRelatedItemsForCurrent(_tags, _detailLoadVersion));
+    }
     if (!_masterTagsInitialized && !_masterLoading) {
       _masterTagsInitialized = true;
       unawaited(_loadMasterTags());
@@ -228,7 +238,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.gameButtonLeft1) {
       if (_isPdf) {
-        _next();
+        _readingDirection == _ReadingDirection.rightToLeft ? _next() : _prev();
       } else {
         _prev();
       }
@@ -241,7 +251,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     if (key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.gameButtonRight1) {
       if (_isPdf) {
-        _prev();
+        _readingDirection == _ReadingDirection.rightToLeft ? _prev() : _next();
       } else {
         _next();
       }
@@ -328,6 +338,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             ),
 
             actions: [
+              if (wide && !_fullscreen) _buildSidebarToggleButton(),
               IconButton(
                 tooltip: _isFavorite ? 'お気に入りを解除' : 'お気に入りに追加',
                 onPressed: _toggleFavorite,

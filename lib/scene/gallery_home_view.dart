@@ -1033,7 +1033,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        const crossAxisCount = 3;
+        const crossAxisCount = 2;
         final pageItems = _currentDetailedBrowsePageItems();
         final showPager =
             _homeSearchResults.length >

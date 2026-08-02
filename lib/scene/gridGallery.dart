@@ -91,6 +91,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _loadProcessed = 0;
   int _loadTotal = 0;
   bool _thumbsEnabled = true;
+  bool _sidebarCollapsed = false;
 
   Timer? _thumbResumeDebounce;
   StreamSubscription<ExternalSharePayload>? _externalShareSubscription;
@@ -670,6 +671,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       _tagDetailsById = <String, List<TagWithId>>{};
       final fitIndex = prefs.getInt(_PrefsKeys.fitMode);
       final two = prefs.getBool(_PrefsKeys.twoPage);
+      _sidebarCollapsed = prefs.getBool(_PrefsKeys.sidebarCollapsed) ?? false;
       List<String> folders =
           prefs.getStringList(_PrefsKeys.folders) ?? const <String>[];
       String? current = prefs.getString(_PrefsKeys.currentFolder);
@@ -978,7 +980,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   List<Widget> _appendTopBarRescanAction(List<Widget> actions) {
-    return <Widget>[...actions, _buildRescanAppBarButton()];
+    return <Widget>[
+      ...actions,
+      if (_isWideLayout(context)) _buildSidebarToggleButton(),
+      _buildRescanAppBarButton(),
+    ];
   }
 
   Future<void> _saveFolderTileMode(FolderTileMode m) async {
@@ -1996,13 +2002,28 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Widget _withSidebar(BuildContext context, Widget body) {
-    if (!_isWideLayout(context)) return body;
+    if (!_isWideLayout(context) || _sidebarCollapsed) return body;
     return Row(
       children: [
         SizedBox(width: _kSidebarWidth, child: _buildSidebarPanel()),
         const VerticalDivider(width: 1),
         Expanded(child: body),
       ],
+    );
+  }
+
+  Future<void> _toggleSidebarCollapsed() async {
+    final next = !_sidebarCollapsed;
+    setState(() => _sidebarCollapsed = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_PrefsKeys.sidebarCollapsed, next);
+  }
+
+  Widget _buildSidebarToggleButton() {
+    return IconButton(
+      tooltip: _sidebarCollapsed ? 'サイドパネルを表示' : 'サイドパネルを格納',
+      onPressed: _toggleSidebarCollapsed,
+      icon: Icon(_sidebarCollapsed ? Icons.menu_open : Icons.menu),
     );
   }
 
@@ -2016,7 +2037,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('メディアビューア', style: Theme.of(context).textTheme.titleLarge),
+          Text('紙魚', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 4),
           Text(
             '現在のフォルダ: $currentLabel',
@@ -2356,7 +2377,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         autofocusFirstFocusable: true,
         child: Scaffold(
           drawer: _isWideLayout(context) ? null : _buildSidebar(),
-          appBar: AppBar(title: const Text('検索ページ')),
+          appBar: AppBar(
+            title: const Text('検索ページ'),
+            actions: [if (_isWideLayout(context)) _buildSidebarToggleButton()],
+          ),
           body: _wrapBodyWithUrlImportQueue(
             _withSidebar(
               context,

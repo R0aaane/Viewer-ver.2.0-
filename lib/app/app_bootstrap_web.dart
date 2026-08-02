@@ -42,8 +42,8 @@ class WebViewerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: AppContentModeConfig.isReader
-          ? 'Book Reader Web'
-          : 'pdf_viewer R18 Web',
+          ? '紙魚'
+          : '紙魚 R18 Web',
       theme: buildAppTheme(),
       debugShowCheckedModeBanner: false,
       builder: (context, child) =>

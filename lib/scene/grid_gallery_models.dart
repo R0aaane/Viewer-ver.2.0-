@@ -54,6 +54,7 @@ class _PrefsKeys {
   static const String folderAliasesJson = 'prefs.folderAliasesJson';
   static const String folderTileMode = 'prefs.folderTileMode';
   static const String detailedBrowseViewMode = 'prefs.detailedBrowseViewMode';
+  static const String sidebarCollapsed = 'prefs.sidebarCollapsed';
 }
 
 class _FolderNavState {

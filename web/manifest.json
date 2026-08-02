@@ -1,6 +1,6 @@
 {
-    "name": "pdf_viewer",
-    "short_name": "pdf_viewer",
+    "name": "紙魚",
+    "short_name": "紙魚",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#100B0E",

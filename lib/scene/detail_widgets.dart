@@ -50,7 +50,8 @@ extension _DetailWidgets on _ImageDetailPageState {
   }
 
   Widget _withSidebar(BuildContext context, Widget body) {
-    if (_fullscreen || !_isWideLayout(context)) return body;
+    if (_fullscreen || !_isWideLayout(context) || _sidebarCollapsed)
+      return body;
     return Row(
       children: [
         SizedBox(
@@ -60,6 +61,21 @@ extension _DetailWidgets on _ImageDetailPageState {
         const VerticalDivider(width: 1),
         Expanded(child: body),
       ],
+    );
+  }
+
+  Future<void> _toggleSidebarCollapsed() async {
+    final next = !_sidebarCollapsed;
+    setState(() => _sidebarCollapsed = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_PrefsKeys.sidebarCollapsed, next);
+  }
+
+  Widget _buildSidebarToggleButton() {
+    return IconButton(
+      tooltip: _sidebarCollapsed ? 'サイドパネルを表示' : 'サイドパネルを格納',
+      onPressed: _toggleSidebarCollapsed,
+      icon: Icon(_sidebarCollapsed ? Icons.menu_open : Icons.menu),
     );
   }
 
@@ -105,6 +121,25 @@ extension _DetailWidgets on _ImageDetailPageState {
           title: const Text('見開き表示 (ON/OFF)'),
           value: _twoPage,
           onChanged: (v) async => _setTwoPageMode(v),
+        ),
+        ListTile(
+          title: const Text('ページの読み方向'),
+          trailing: DropdownButton<_ReadingDirection>(
+            value: _readingDirection,
+            items: const [
+              DropdownMenuItem(
+                value: _ReadingDirection.rightToLeft,
+                child: Text('右から左'),
+              ),
+              DropdownMenuItem(
+                value: _ReadingDirection.leftToRight,
+                child: Text('左から右'),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) _setReadingDirection(value);
+            },
+          ),
         ),
         const Divider(),
         _sidebarSectionLabel('フォルダ'),
@@ -399,6 +434,10 @@ extension _DetailWidgets on _ImageDetailPageState {
         _buildCompactMetadataCard(item),
         const SizedBox(height: 12),
         _buildRatingSection(),
+        if (_tags.isNotEmpty || _relatedItemsLoading) ...[
+          const SizedBox(height: 12),
+          _buildRelatedItemsSection(),
+        ],
         const SizedBox(height: 12),
         _buildAssignedTagsSection(),
         const SizedBox(height: 12),
@@ -514,6 +553,127 @@ extension _DetailWidgets on _ImageDetailPageState {
         ],
       ),
     );
+  }
+
+  Widget _buildRelatedItemsSection() {
+    if (_relatedItemsLoading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_relatedItems.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.auto_awesome_outlined, color: Colors.amber),
+              SizedBox(width: 8),
+              Text('関連する蔵書', style: TextStyle(color: Colors.white)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 190,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _relatedItems.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (context, index) {
+                final related = _relatedItems[index];
+                return SizedBox(
+                  width: 120,
+                  child: Material(
+                    color: _ImageDetailPageState._uiChip,
+                    borderRadius: BorderRadius.circular(10),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => _openRelatedItem(related),
+                      child: Column(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: FutureBuilder<ThumbPair>(
+                                future: widget.repo.readThumbPair(
+                                  related,
+                                  maxWidth: 240,
+                                ),
+                                builder: (context, snapshot) {
+                                  if (!snapshot.hasData) {
+                                    return const Center(
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    );
+                                  }
+                                  return Image.memory(
+                                    snapshot.data!.front,
+                                    fit: BoxFit.cover,
+                                    gaplessPlayback: true,
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Text(
+                              ItemNameService.formatMediaTitle(
+                                related.displayName,
+                                kind: related.kind,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openRelatedItem(MediaItem item) async {
+    try {
+      final items = await widget.repo.listMedia(FolderHandle(item.folderRaw));
+      final index = items.indexWhere((entry) => entry.id == item.id);
+      if (!mounted || index < 0) return;
+      await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => ImageDetailPage(
+            repo: widget.repo,
+            tagService: widget.tagService,
+            items: items,
+            initialIndex: index,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('関連作品を開けませんでした: $error')));
+    }
   }
 
   Widget _infoRow(String k, String v) {
