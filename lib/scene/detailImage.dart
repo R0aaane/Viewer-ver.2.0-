@@ -45,6 +45,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
 
   int _page = 1;
   int _totalPages = 1;
+  bool _atPdfCompletionPage = false;
 
   bool _twoPage = false;
   _ReadingDirection _readingDirection = _ReadingDirection.rightToLeft;

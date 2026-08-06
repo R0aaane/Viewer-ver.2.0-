@@ -84,6 +84,7 @@ extension _ReaderView on _ImageDetailPageState {
   void _setCurrentPdfPage(int page) {
     setState(() {
       _hasMovedPdfPageSinceLoad = true;
+      _atPdfCompletionPage = false;
       _page = page.clamp(1, _totalPages);
       _syncReaderFutures(_item);
     });
@@ -210,6 +211,7 @@ extension _ReaderView on _ImageDetailPageState {
             widget.repo.capabilities.canDelete && item.kind == MediaKind.pdf;
         _totalPages = 1;
         _page = initialPage < 1 ? 1 : initialPage;
+        _atPdfCompletionPage = false;
         _syncReaderFutures(item);
       });
     }
@@ -258,10 +260,13 @@ extension _ReaderView on _ImageDetailPageState {
 
   void _next() {
     if (_isPdf) {
+      if (_atPdfCompletionPage) return;
       final step = _twoPage ? 2 : 1;
       final next = _page + step;
       if (next <= _totalPages) {
         _setCurrentPdfPage(next);
+      } else {
+        _showPdfCompletionPage();
       }
     } else {
       if (_index < _items.length - 1) {
@@ -277,6 +282,10 @@ extension _ReaderView on _ImageDetailPageState {
 
   void _prev() {
     if (_isPdf) {
+      if (_atPdfCompletionPage) {
+        setState(() => _atPdfCompletionPage = false);
+        return;
+      }
       final step = _twoPage ? 2 : 1;
       final prev = _page - step;
       if (prev >= 1) {
@@ -292,6 +301,12 @@ extension _ReaderView on _ImageDetailPageState {
         _reloadForCurrent();
       }
     }
+  }
+
+  void _showPdfCompletionPage() {
+    setState(() => _atPdfCompletionPage = true);
+    _schedulePersistCurrentActivity();
+    _ensureDeferredDetailData();
   }
 
   Future<void> _toggleFullscreen() async {
@@ -315,6 +330,10 @@ extension _ReaderView on _ImageDetailPageState {
 
     if (_isEpub) {
       return _buildEpubReader(_item);
+    }
+
+    if (_isPdf && _atPdfCompletionPage) {
+      return _buildPdfCompletionPage();
     }
 
     if (_isKemonoTaggedImage(_item, _tags)) {
@@ -432,6 +451,52 @@ extension _ReaderView on _ImageDetailPageState {
           const SizedBox(height: 12),
           Text(message, style: const TextStyle(color: Colors.white70)),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPdfCompletionPage() {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(
+                Icons.task_alt_outlined,
+                color: Colors.amber,
+                size: 48,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '読了',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '$_totalPages ページを読み終えました。',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 20),
+              _buildRatingSection(),
+              const SizedBox(height: 12),
+              _buildRelatedItemsSection(),
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: _prev,
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('最終ページに戻る'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -713,12 +778,14 @@ extension _ReaderView on _ImageDetailPageState {
   }
 
   Widget _topReaderControls() {
-    final canPrev = _isPdf ? (_page > 1) : (_index > 0);
+    final canPrev = _isPdf ? (_atPdfCompletionPage || _page > 1) : (_index > 0);
     final canNext = _isPdf
-        ? (_page + (_twoPage ? 2 : 1) <= _totalPages)
+        ? !_atPdfCompletionPage
         : (_index < _items.length - 1);
 
-    final pageText = _isPdf
+    final pageText = _isPdf && _atPdfCompletionPage
+        ? '読了'
+        : _isPdf
         ? '$_page/$_totalPages'
         : '${_index + 1}/${_items.length}';
     final rightToLeft = _readingDirection == _ReadingDirection.rightToLeft;

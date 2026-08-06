@@ -195,7 +195,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
         _tags = list;
         _loadedTagItemId = item.id;
       });
-      if (!_inReader || force) {
+      if (!_inReader || _atPdfCompletionPage || force) {
         unawaited(_loadRelatedItemsForCurrent(list, version, force: force));
       }
       if (_isKemonoTaggedImage(item, list)) {
@@ -631,6 +631,13 @@ extension _DetailTagPanel on _ImageDetailPageState {
             controller: _tagController.assignedFilterCtrl,
             hintText: '付与済みタグを探す',
             onChanged: (_) => setState(() {}),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text(
+              'タグをタップすると検索結果を開きます。',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
           ),
           if (_tagEditMode) ...[
             const SizedBox(height: 12),
