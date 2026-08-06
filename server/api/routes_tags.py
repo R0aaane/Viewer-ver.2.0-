@@ -120,6 +120,15 @@ def list_ratings(request: Request) -> RatingListResponse:
     return RatingListResponse(items=request.app.state.metadata_store.list_media_ratings())
 
 
+@router.get("/ratings/media", response_model=FavoriteMediaListResponse)
+def list_rated_media(request: Request, rating: int = 5) -> FavoriteMediaListResponse:
+    if rating not in (3, 4, 5):
+        return FavoriteMediaListResponse(items=[])
+    return FavoriteMediaListResponse(
+        items=request.app.state.metadata_store.list_rated_media_items(rating)
+    )
+
+
 @router.put("/ratings/{media_id}", response_model=AddItemTagsResponse)
 def set_rating(
     request: Request,

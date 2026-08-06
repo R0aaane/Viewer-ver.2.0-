@@ -763,6 +763,14 @@ class MetadataStore:
     def list_media_ratings(self) -> dict[str, int]:
         return self._db.list_media_ratings()
 
+    def list_rated_media_items(self, rating: int) -> list[dict[str, Any]]:
+        items = [
+            self._row_to_media_dict(row)
+            for row in self._db.list_rated_media_records(rating)
+            if row["kind"] in {"image", "pdf"}
+        ]
+        return self._attach_stats_to_media_items(items)
+
     def set_media_rating(
         self,
         media_id: str,

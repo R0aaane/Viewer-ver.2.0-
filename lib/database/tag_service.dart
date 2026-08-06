@@ -165,6 +165,16 @@ class TagService {
     return _requireApiClient().fetchRatings();
   }
 
+  Future<List<MediaItem>?> listRemoteRatedMediaItems(int rating) async {
+    await initialize();
+    if (!isRemoteMode && !isHostMode) {
+      return null;
+    }
+    final items = await _requireApiClient().fetchRatedMediaItems(rating);
+    rememberItems(items);
+    return items;
+  }
+
   Future<String?> setRemoteRating(MediaItem item, int? rating) async {
     await initialize();
     if (!isRemoteMode && !isHostMode) {

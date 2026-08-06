@@ -1311,6 +1311,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
       final fetchSw = Stopwatch()..start();
       debugPrint('[home-refresh] remote API fetch start');
+      final remoteRatingItemsFuture = widget.tagService
+          .listRemoteRatedMediaItems(_homeRatingShelfRating)
+          .catchError((_) => null);
       final recentProgress = await _readingProgressService.fetchRecent(
         limit: 5000,
       );
@@ -1326,6 +1329,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
       final mediaItems = allItems
           .where((item) => item.kind != MediaKind.folder)
           .toList(growable: false);
+      final remoteRatingItems = await remoteRatingItemsFuture;
 
       final buildSw = Stopwatch()..start();
       final addedTimestampByItem = <MediaItem, DateTime>{
@@ -1338,9 +1342,11 @@ extension _GalleryHomeView on _GalleryGridPageState {
       final recentAdded = mediaItems.toList(growable: true)
         ..sort(compareHomeAddedDesc);
 
-      final ratingIds = _ratingsById.entries
-          .where((entry) => entry.value == _homeRatingShelfRating)
-          .map((entry) => entry.key);
+      final Iterable<String> ratingIds = remoteRatingItems == null
+          ? _ratingsById.entries
+                .where((entry) => entry.value == _homeRatingShelfRating)
+                .map((entry) => entry.key)
+          : const <String>[];
       final itemByVariant = await _buildHomeItemLookup(
         mediaItems,
         recentProgress,
@@ -1397,20 +1403,25 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
       final favorites = mediaItems.where(_isFavoriteItem).toList(growable: true)
         ..sort(compareHomeAddedDesc);
-      final ratingItemById = <String, MediaItem>{};
-      for (final item in mediaItems) {
-        if (_ratingForItem(item) == _homeRatingShelfRating) {
-          ratingItemById.putIfAbsent(item.id, () => item);
+      final List<MediaItem> ratingItems;
+      if (remoteRatingItems != null) {
+        ratingItems = remoteRatingItems;
+      } else {
+        final ratingItemById = <String, MediaItem>{};
+        for (final item in mediaItems) {
+          if (_ratingForItem(item) == _homeRatingShelfRating) {
+            ratingItemById.putIfAbsent(item.id, () => item);
+          }
         }
-      }
-      for (final id in ratingIds) {
-        final item = itemByVariant[id];
-        if (item != null) {
-          ratingItemById.putIfAbsent(item.id, () => item);
+        for (final id in ratingIds) {
+          final item = itemByVariant[id];
+          if (item != null) {
+            ratingItemById.putIfAbsent(item.id, () => item);
+          }
         }
+        ratingItems = ratingItemById.values.toList(growable: true)
+          ..sort(compareHomeAddedDesc);
       }
-      final ratingItems = ratingItemById.values.toList(growable: true)
-        ..sort(compareHomeAddedDesc);
       final unreadItems = recentAdded
           .where(
             (item) =>

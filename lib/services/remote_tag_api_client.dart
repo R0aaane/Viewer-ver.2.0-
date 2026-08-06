@@ -235,6 +235,20 @@ class RemoteTagApiClient {
     return ratings;
   }
 
+  Future<List<MediaItem>> fetchRatedMediaItems(int rating) async {
+    if (rating < 3 || rating > 5) return const <MediaItem>[];
+    final json = await _getJson(
+      '/ratings/media',
+      queryParameters: <String, String>{'rating': '$rating'},
+    );
+    final rows = _unwrapList(json, preferredKeys: const ['items', 'results']);
+    return rows
+        .whereType<Map>()
+        .map(_parseFavoriteMediaItem)
+        .where((item) => item.kind == MediaKind.pdf)
+        .toList(growable: false);
+  }
+
   Future<String> setRating(
     String mediaId,
     int? rating, {
