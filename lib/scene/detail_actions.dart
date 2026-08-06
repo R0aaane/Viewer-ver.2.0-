@@ -66,13 +66,20 @@ extension _DetailActions on _ImageDetailPageState {
   Future<void> _loadFavoriteForCurrent({int? loadVersion}) async {
     final item = _item;
     final version = loadVersion ?? _detailLoadVersion;
+    final revision = _favoriteRevision;
     final prefs = await SharedPreferences.getInstance();
     var favList = prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
     final remoteFavorites = await widget.tagService
         .listRemoteFavoriteIds()
         .catchError((_) => null);
+    if (revision != _favoriteRevision || !_isCurrentLoad(version, item)) {
+      return;
+    }
     if (remoteFavorites != null) {
-      favList = remoteFavorites.toList(growable: false);
+      favList = <String>{
+        ...favList,
+        ...remoteFavorites,
+      }.toList(growable: false);
       await prefs.setStringList(_PrefsKeys.favorites, favList);
     }
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
@@ -105,13 +112,17 @@ extension _DetailActions on _ImageDetailPageState {
   Future<void> _loadRatingForCurrent({int? loadVersion}) async {
     final item = _item;
     final version = loadVersion ?? _detailLoadVersion;
+    final revision = _ratingRevision;
     final prefs = await SharedPreferences.getInstance();
     var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
     final remoteRatings = await widget.tagService
         .listRemoteRatings()
         .catchError((_) => null);
+    if (revision != _ratingRevision || !_isCurrentLoad(version, item)) {
+      return;
+    }
     if (remoteRatings != null) {
-      ratings = remoteRatings;
+      ratings = <String, int>{...ratings, ...remoteRatings};
       await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
     }
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
@@ -126,6 +137,7 @@ extension _DetailActions on _ImageDetailPageState {
 
   Future<void> _setRating(int? rating) async {
     if (rating != null && (rating < 3 || rating > 5)) return;
+    final revision = ++_ratingRevision;
     final prefs = await SharedPreferences.getInstance();
     final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
     if (rating == null) {
@@ -136,6 +148,7 @@ extension _DetailActions on _ImageDetailPageState {
     final remoteId = await widget.tagService
         .setRemoteRating(_item, rating)
         .catchError((_) => null);
+    if (revision != _ratingRevision) return;
     if (remoteId != null && remoteId != _item.id) {
       if (rating == null) {
         ratings.remove(remoteId);
@@ -150,11 +163,13 @@ extension _DetailActions on _ImageDetailPageState {
   }
 
   Future<void> _toggleFavorite() async {
+    final revision = ++_favoriteRevision;
     final prefs = await SharedPreferences.getInstance();
     final favList =
         prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
     final next = favList.toSet();
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(_item);
+    if (revision != _favoriteRevision) return;
     final wasFavorite = lookupIds.any(next.contains);
 
     if (wasFavorite) {
@@ -169,6 +184,7 @@ extension _DetailActions on _ImageDetailPageState {
     final remoteId = await widget.tagService
         .setRemoteFavorite(_item, !wasFavorite)
         .catchError((_) => null);
+    if (revision != _favoriteRevision) return;
     if (remoteId != null && remoteId != _item.id) {
       if (next.remove(_item.id)) {
         next.add(remoteId);

@@ -664,7 +664,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           .listRemoteRatings()
           .catchError((_) => null);
       if (remoteRatings != null) {
-        ratings = remoteRatings;
+        ratings = <String, int>{...ratings, ...remoteRatings};
         await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
       }
       _tagsById = <String, List<String>>{};
@@ -1027,7 +1027,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .listRemoteRatings()
         .catchError((_) => null);
     if (remoteRatings != null) {
-      ratings = remoteRatings;
+      ratings = <String, int>{...ratings, ...remoteRatings};
       await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
     }
     if (!mounted) return;
@@ -1213,7 +1213,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .listRemoteFavoriteIds()
         .catchError((_) => null);
     if (remoteFavorites != null) {
-      favList = remoteFavorites.toList(growable: false);
+      favList = <String>{
+        ...favList,
+        ...remoteFavorites,
+      }.toList(growable: false);
       await prefs.setStringList(_PrefsKeys.favorites, favList);
     }
     if (!mounted) return;

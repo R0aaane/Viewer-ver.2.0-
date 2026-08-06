@@ -56,8 +56,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _isFavorite = false;
   bool _isBookmarked = false;
   bool _favChanged = false;
+  int _favoriteRevision = 0;
   int? _rating;
   bool _ratingChanged = false;
+  int _ratingRevision = 0;
   bool _itemChanged = false;
   bool _sidebarCollapsed = false;
 
