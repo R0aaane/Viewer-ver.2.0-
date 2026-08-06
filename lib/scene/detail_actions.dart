@@ -76,10 +76,7 @@ extension _DetailActions on _ImageDetailPageState {
       return;
     }
     if (remoteFavorites != null) {
-      favList = <String>{
-        ...favList,
-        ...remoteFavorites,
-      }.toList(growable: false);
+      favList = remoteFavorites.toList(growable: false);
       await prefs.setStringList(_PrefsKeys.favorites, favList);
     }
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
@@ -122,7 +119,7 @@ extension _DetailActions on _ImageDetailPageState {
       return;
     }
     if (remoteRatings != null) {
-      ratings = <String, int>{...ratings, ...remoteRatings};
+      ratings = remoteRatings;
       await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
     }
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
@@ -140,20 +137,25 @@ extension _DetailActions on _ImageDetailPageState {
     final revision = ++_ratingRevision;
     final prefs = await SharedPreferences.getInstance();
     final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
-    if (rating == null) {
-      ratings.remove(_item.id);
-    } else {
-      ratings[_item.id] = rating;
-    }
+    final lookupIds = await widget.tagService.favoriteLookupIdsForItem(_item);
+    if (revision != _ratingRevision) return;
+    final usesHostMetadata =
+        widget.tagService.isRemoteMode || widget.tagService.isHostMode;
     final remoteId = await widget.tagService
         .setRemoteRating(_item, rating)
         .catchError((_) => null);
     if (revision != _ratingRevision) return;
-    if (remoteId != null && remoteId != _item.id) {
-      if (rating == null) {
-        ratings.remove(remoteId);
-      } else if (ratings.remove(_item.id) != null) {
-        ratings[remoteId] = rating;
+    if (usesHostMetadata && remoteId == null) return;
+    final registeredId = remoteId ?? _item.id;
+    if (rating == null) {
+      for (final id in lookupIds) {
+        ratings.remove(id);
+      }
+      ratings.remove(registeredId);
+    } else {
+      ratings[registeredId] = rating;
+      for (final id in lookupIds) {
+        ratings[id] = rating;
       }
     }
     await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
@@ -171,29 +173,26 @@ extension _DetailActions on _ImageDetailPageState {
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(_item);
     if (revision != _favoriteRevision) return;
     final wasFavorite = lookupIds.any(next.contains);
-
-    if (wasFavorite) {
-      next.removeAll(lookupIds);
-      setState(() => _isFavorite = false);
-    } else {
-      next.add(_item.id);
-      setState(() => _isFavorite = true);
-    }
-
-    _favChanged = true;
+    final usesHostMetadata =
+        widget.tagService.isRemoteMode || widget.tagService.isHostMode;
     final remoteId = await widget.tagService
         .setRemoteFavorite(_item, !wasFavorite)
         .catchError((_) => null);
     if (revision != _favoriteRevision) return;
-    if (remoteId != null && remoteId != _item.id) {
-      if (next.remove(_item.id)) {
-        next.add(remoteId);
-      }
+    if (usesHostMetadata && remoteId == null) return;
+    if (wasFavorite) {
+      next.removeAll(lookupIds);
+      next.remove(remoteId);
+    } else {
+      next.add(remoteId ?? _item.id);
     }
     await prefs.setStringList(
       _PrefsKeys.favorites,
       next.toList(growable: false),
     );
+    if (!mounted) return;
+    setState(() => _isFavorite = !wasFavorite);
+    _favChanged = true;
   }
 
   Future<void> _toggleBookmark() async {

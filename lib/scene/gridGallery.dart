@@ -657,14 +657,23 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
         } catch (_) {}
       }
-      final favList =
+      final remoteFavoritesFuture = widget.tagService
+          .listRemoteFavoriteIds()
+          .catchError((_) => null);
+      var favList =
           prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
       var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
-      final remoteRatings = await widget.tagService
+      final remoteRatingsFuture = widget.tagService
           .listRemoteRatings()
           .catchError((_) => null);
+      final remoteFavorites = await remoteFavoritesFuture;
+      final remoteRatings = await remoteRatingsFuture;
+      if (remoteFavorites != null) {
+        favList = remoteFavorites.toList(growable: false);
+        await prefs.setStringList(_PrefsKeys.favorites, favList);
+      }
       if (remoteRatings != null) {
-        ratings = <String, int>{...ratings, ...remoteRatings};
+        ratings = remoteRatings;
         await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
       }
       _tagsById = <String, List<String>>{};
@@ -1027,7 +1036,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .listRemoteRatings()
         .catchError((_) => null);
     if (remoteRatings != null) {
-      ratings = <String, int>{...ratings, ...remoteRatings};
+      ratings = remoteRatings;
       await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
     }
     if (!mounted) return;
@@ -1213,10 +1222,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         .listRemoteFavoriteIds()
         .catchError((_) => null);
     if (remoteFavorites != null) {
-      favList = <String>{
-        ...favList,
-        ...remoteFavorites,
-      }.toList(growable: false);
+      favList = remoteFavorites.toList(growable: false);
       await prefs.setStringList(_PrefsKeys.favorites, favList);
     }
     if (!mounted) return;
@@ -1236,6 +1242,25 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       next.add(id);
     }
 
+    final usesHostMetadata =
+        widget.tagService.isRemoteMode || widget.tagService.isHostMode;
+    final remoteId = await widget.tagService
+        .setRemoteFavorite(item, !wasFavorite)
+        .catchError((_) => null);
+    if (usesHostMetadata && remoteId == null) return;
+    if (wasFavorite) {
+      next.removeAll(lookupIds);
+      next.remove(remoteId);
+    } else {
+      next.add(remoteId ?? id);
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _PrefsKeys.favorites,
+      next.toList(growable: false),
+    );
+    if (!mounted) return;
     setState(() {
       _favorites = next;
       if (wasFavorite) {
@@ -1244,22 +1269,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         _favoriteResolvedIds.addAll(lookupIds);
       }
     });
-
-    final remoteId = await widget.tagService
-        .setRemoteFavorite(item, !wasFavorite)
-        .catchError((_) => null);
-    if (remoteId != null && remoteId != id) {
-      if (next.remove(id)) {
-        next.add(remoteId);
-      }
-      setState(() => _favorites = next);
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      _PrefsKeys.favorites,
-      next.toList(growable: false),
-    );
     await _refreshAllFavoritesItems();
     await _refreshHomeShowcases();
   }
