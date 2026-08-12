@@ -63,6 +63,12 @@ class DeleteItemTagsRequest(BaseModel):
     tagIds: list[str] = Field(default_factory=list)
 
 
+class MergeTagMasterRequest(BaseModel):
+    tagIds: list[str] = Field(min_length=1)
+    category: str
+    targetName: str = Field(min_length=1)
+
+
 class FavoriteListResponse(BaseModel):
     items: list[str] = Field(default_factory=list)
 

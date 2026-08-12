@@ -38,8 +38,6 @@ enum _GalleryMenuAction {
 
 enum FolderTileMode { labelOnly, preview }
 
-enum DetailedBrowseViewMode { grid, bookshelf }
-
 class _PrefsKeys {
   static const String lastFolderRaw = 'prefs.lastFolderRaw';
 
@@ -53,7 +51,8 @@ class _PrefsKeys {
 
   static const String folderAliasesJson = 'prefs.folderAliasesJson';
   static const String folderTileMode = 'prefs.folderTileMode';
-  static const String detailedBrowseViewMode = 'prefs.detailedBrowseViewMode';
+  static const String detailedBrowseCardColumns =
+      'prefs.detailedBrowseCardColumns';
   static const String sidebarCollapsed = 'prefs.sidebarCollapsed';
 }
 

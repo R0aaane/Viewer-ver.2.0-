@@ -257,6 +257,13 @@ class WebRemoteEntry {
   }
 }
 
+class WebRemoteTagRecord {
+  final String tagId;
+  final Tag tag;
+
+  const WebRemoteTagRecord({required this.tagId, required this.tag});
+}
+
 class WebRemoteMediaMeta {
   final String mediaId;
   final String displayName;
@@ -590,6 +597,8 @@ class WebRemoteApiClient {
       <String, Future<List<WebRemoteEntry>>>{};
   final Map<String, Future<List<Tag>>> _itemTagsCache =
       <String, Future<List<Tag>>>{};
+  final Map<String, Future<List<WebRemoteTagRecord>>> _itemTagRecordsCache =
+      <String, Future<List<WebRemoteTagRecord>>>{};
   final Map<String, Future<WebRemoteMediaMeta>> _mediaMetaCache =
       <String, Future<WebRemoteMediaMeta>>{};
   final Map<String, Future<WebRemotePdfPageCountInfo>> _pdfPageCountCache =
@@ -610,6 +619,7 @@ class WebRemoteApiClient {
     _folderChildrenCache.clear();
     _searchCache.clear();
     _itemTagsCache.clear();
+    _itemTagRecordsCache.clear();
     _mediaMetaCache.clear();
     _pdfPageCountCache.clear();
     _pdfBytesCache.clear();
@@ -784,13 +794,137 @@ class WebRemoteApiClient {
 
   Future<List<Tag>> fetchItemTags(String mediaId) async {
     return _memoize(_itemTagsCache, mediaId, () async {
+      final records = await fetchItemTagRecords(mediaId);
+      return records.map((record) => record.tag).toList(growable: false);
+    });
+  }
+
+  Future<List<WebRemoteTagRecord>> fetchItemTagRecords(String mediaId) async {
+    return _memoize(_itemTagRecordsCache, mediaId, () async {
       final json = await _getJson(
         '/items/${Uri.encodeComponent(mediaId)}/tags',
       );
-      return _unwrapItems(
-        json,
-      ).whereType<Map>().map(_parseTag).toList(growable: false);
+      return _unwrapItems(json)
+          .whereType<Map>()
+          .map(_parseTagRecord)
+          .where((record) => record.tagId.isNotEmpty)
+          .toList(growable: false);
     });
+  }
+
+  Future<void> addTagToItem(String mediaId, Tag tag) async {
+    await _postJson(
+      '/items/${Uri.encodeComponent(mediaId)}/tags',
+      <String, dynamic>{'tag': _tagToJson(tag)},
+    );
+    _clearItemTagCaches(mediaId);
+  }
+
+  Future<void> deleteItemTag(String mediaId, String tagId) async {
+    await _deleteJson(
+      '/items/${Uri.encodeComponent(mediaId)}/tags/${Uri.encodeComponent(tagId)}',
+    );
+    _clearItemTagCaches(mediaId);
+  }
+
+  Future<List<WebRemoteTagRecord>> listMasterTags(
+    TagCategory category, {
+    String? contains,
+  }) async {
+    final json = await _getJson(
+      '/tags/master',
+      queryParameters: <String, String>{
+        'category': _tagCategoryApiValue(category),
+        'limit': '500',
+        if (contains != null && contains.trim().isNotEmpty)
+          'contains': contains.trim(),
+      },
+    );
+    return _unwrapItems(json)
+        .whereType<Map>()
+        .map(_parseTagRecord)
+        .where((record) => record.tagId.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<void> deleteMasterTag(String tagId) async {
+    await _deleteJson('/tags/master/${Uri.encodeComponent(tagId)}');
+  }
+
+  Future<WebRemoteTagRecord> renameMasterTag(
+    WebRemoteTagRecord source,
+    String targetName,
+  ) async {
+    final json = await _postJson('/tags/master/merge', <String, dynamic>{
+      'tagIds': <String>[source.tagId],
+      'category': _tagCategoryApiValue(source.tag.category),
+      'targetName': targetName.trim(),
+    });
+    final items = _unwrapItems(json).whereType<Map>();
+    if (items.isEmpty) {
+      throw const WebRemoteException('タグ名の変更結果が不正です');
+    }
+    return _parseTagRecord(items.first);
+  }
+
+  Future<void> renameMedia({
+    required WebRemoteEntry entry,
+    required String newPath,
+    required String newDisplayName,
+  }) async {
+    final mediaId = entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty || entry.fullPath == null) {
+      throw const WebRemoteException('名前を変更できるメディア情報がありません');
+    }
+    await _postJson('/rename', <String, dynamic>{
+      'oldMediaId': mediaId,
+      'oldPath': entry.fullPath,
+      'newPath': newPath,
+      'before': <String, dynamic>{
+        'mediaId': mediaId,
+        'path': entry.fullPath,
+        'folderRaw': entry.folderRaw,
+        'displayName': entry.displayName,
+      },
+      'after': <String, dynamic>{
+        'path': newPath,
+        'folderRaw': entry.folderRaw,
+        'displayName': newDisplayName,
+      },
+    }, requestTimeout: actionTimeout);
+    clearCaches();
+  }
+
+  Future<void> deleteMedia(WebRemoteEntry entry) async {
+    await deleteMediaEntries(<WebRemoteEntry>[entry]);
+  }
+
+  Future<void> deleteMediaEntries(List<WebRemoteEntry> entries) async {
+    final items = entries
+        .where((entry) => (entry.mediaId?.trim().isNotEmpty ?? false))
+        .map(
+          (entry) => <String, dynamic>{
+            'mediaId': entry.mediaId,
+            'path': entry.fullPath,
+            'folderRaw': entry.folderRaw,
+            'displayName': entry.displayName,
+            'hardDelete': true,
+          },
+        )
+        .toList(growable: false);
+    if (items.isEmpty) {
+      throw const WebRemoteException('削除できるメディア情報がありません');
+    }
+    await _postJson('/delete', <String, dynamic>{
+      'hardDelete': true,
+      'items': items,
+    }, requestTimeout: actionTimeout);
+    clearCaches();
+  }
+
+  void _clearItemTagCaches(String mediaId) {
+    _itemTagsCache.remove(mediaId);
+    _itemTagRecordsCache.remove(mediaId);
   }
 
   Future<Map<String, int>> fetchRatings() async {
@@ -1670,6 +1804,33 @@ class WebRemoteApiClient {
       name: raw['name']?.toString() ?? '',
       category: _parseTagCategory(raw['category']?.toString()),
     );
+  }
+
+  WebRemoteTagRecord _parseTagRecord(Map raw) {
+    return WebRemoteTagRecord(
+      tagId: raw['tagId']?.toString().trim() ?? '',
+      tag: _parseTag(raw),
+    );
+  }
+
+  Map<String, String> _tagToJson(Tag tag) => <String, String>{
+    'name': tag.name.trim(),
+    'category': _tagCategoryApiValue(tag.category),
+  };
+
+  String _tagCategoryApiValue(TagCategory category) {
+    switch (category) {
+      case TagCategory.artist:
+        return 'artist';
+      case TagCategory.series:
+        return 'series';
+      case TagCategory.mediaType:
+        return 'mediaType';
+      case TagCategory.character:
+        return 'character';
+      case TagCategory.free:
+        return 'free';
+    }
   }
 
   WebRemoteMediaStats? _parseMediaStats(dynamic raw) {

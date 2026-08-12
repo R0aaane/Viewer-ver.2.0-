@@ -941,21 +941,17 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       unawaited(_applyDetailedBrowseSortMode(value));
                     },
                   );
-                  final viewDropdown = DropdownButton<DetailedBrowseViewMode>(
-                    value: _detailedBrowseViewMode,
+                  final columnsDropdown = DropdownButton<int>(
+                    value: _detailedBrowseCardColumns,
                     items: const [
-                      DropdownMenuItem(
-                        value: DetailedBrowseViewMode.grid,
-                        child: Text('カード'),
-                      ),
-                      DropdownMenuItem(
-                        value: DetailedBrowseViewMode.bookshelf,
-                        child: Text('本棚'),
-                      ),
+                      DropdownMenuItem(value: 1, child: Text('1列')),
+                      DropdownMenuItem(value: 2, child: Text('2列')),
+                      DropdownMenuItem(value: 3, child: Text('3列')),
+                      DropdownMenuItem(value: 4, child: Text('4列')),
                     ],
                     onChanged: (value) {
                       if (value == null) return;
-                      _saveDetailedBrowseViewMode(value);
+                      _saveDetailedBrowseCardColumns(value);
                     },
                   );
                   final ratingDropdown = DropdownButton<int?>(
@@ -986,9 +982,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
                             const SizedBox(width: 8),
                             dropdown,
                             const SizedBox(width: 16),
-                            const Text('表示'),
+                            const Text('列数'),
                             const SizedBox(width: 8),
-                            viewDropdown,
+                            columnsDropdown,
                           ],
                         ),
                         Row(
@@ -1010,9 +1006,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       const SizedBox(width: 8),
                       dropdown,
                       const SizedBox(width: 16),
-                      const Text('表示'),
+                      const Text('列数'),
                       const SizedBox(width: 8),
-                      viewDropdown,
+                      columnsDropdown,
                       const SizedBox(width: 16),
                       const Text('評価'),
                       const SizedBox(width: 8),
@@ -1033,7 +1029,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        const crossAxisCount = 2;
+        final crossAxisCount = _detailedBrowseCardColumns;
         final pageItems = _currentDetailedBrowsePageItems();
         final showPager =
             _homeSearchResults.length >
@@ -1048,8 +1044,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
             (contentWidth - (crossSpacing * (crossAxisCount - 1))) /
             crossAxisCount;
         final tileHeight = (tileWidth * (4 / 3)) + 84;
-        final bookshelfMode =
-            _detailedBrowseViewMode == DetailedBrowseViewMode.bookshelf;
 
         return RefreshIndicator(
           onRefresh: _handlePullToRefresh,
@@ -1085,24 +1079,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   ),
                 )
               else ...[
-                if (bookshelfMode) ...[
-                  ..._buildDetailedBrowseBookshelfSlivers(
-                    pageItems,
-                    showPager: showPager,
-                  ),
-                ] else ...[
-                  if (showPager)
-                    SliverPadding(
-                      padding: EdgeInsets.fromLTRB(
-                        sidePadding,
-                        0,
-                        sidePadding,
-                        12,
-                      ),
-                      sliver: SliverToBoxAdapter(
-                        child: _buildDetailedBrowsePager(),
-                      ),
-                    ),
+                if (showPager)
                   SliverPadding(
                     padding: EdgeInsets.fromLTRB(
                       sidePadding,
@@ -1110,32 +1087,37 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       sidePadding,
                       12,
                     ),
-                    sliver: SliverGrid(
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        mainAxisSpacing: mainSpacing,
-                        crossAxisSpacing: crossSpacing,
-                        mainAxisExtent: tileHeight,
-                      ),
-                      delegate: SliverChildBuilderDelegate((context, index) {
-                        final item = pageItems[index];
-                        return _buildDetailedBrowseGridTile(item);
-                      }, childCount: pageItems.length),
+                    sliver: SliverToBoxAdapter(
+                      child: _buildDetailedBrowsePager(),
                     ),
                   ),
-                  if (showPager)
-                    SliverPadding(
-                      padding: EdgeInsets.fromLTRB(
-                        sidePadding,
-                        0,
-                        sidePadding,
-                        12,
-                      ),
-                      sliver: SliverToBoxAdapter(
-                        child: _buildDetailedBrowsePager(),
-                      ),
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(sidePadding, 0, sidePadding, 12),
+                  sliver: SliverGrid(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      mainAxisSpacing: mainSpacing,
+                      crossAxisSpacing: crossSpacing,
+                      mainAxisExtent: tileHeight,
                     ),
-                ],
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final item = pageItems[index];
+                      return _buildDetailedBrowseGridTile(item);
+                    }, childCount: pageItems.length),
+                  ),
+                ),
+                if (showPager)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      sidePadding,
+                      0,
+                      sidePadding,
+                      12,
+                    ),
+                    sliver: SliverToBoxAdapter(
+                      child: _buildDetailedBrowsePager(),
+                    ),
+                  ),
               ],
             ],
           ),

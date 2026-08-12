@@ -178,6 +178,32 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertEqual(self._media_tags(self.media_id_1), set())
         self.assertEqual(self._media_tags(self.media_id_2), set())
 
+    def test_merge_tag_master_relinks_media_and_removes_source(self) -> None:
+        self.store.add_tags_to_media(
+            self.media_id_1,
+            [{'category': 'artist', 'name': 'Old Artist'}],
+        )
+        self.store.add_tags_to_media(
+            self.media_id_2,
+            [{'category': 'artist', 'name': 'New Artist'}],
+        )
+        source = next(
+            row
+            for row in self.sqlite.list_tag_master()
+            if row['name'] == 'Old Artist'
+        )
+
+        result = self.store.merge_tag_master(
+            tag_ids=[str(source['tag_id'])],
+            category='artist',
+            target_name='New Artist',
+        )
+
+        self.assertEqual(result['name'], 'New Artist')
+        self.assertEqual(self._master_tags(), {('artist', 'New Artist')})
+        self.assertEqual(self._media_tags(self.media_id_1), {('artist', 'New Artist')})
+        self.assertEqual(self._media_tags(self.media_id_2), {('artist', 'New Artist')})
+
     def test_apply_delete_removes_folder_and_marks_descendants_deleted(self) -> None:
         folder = self.library_dir / 'artist-folder'
         folder.mkdir()

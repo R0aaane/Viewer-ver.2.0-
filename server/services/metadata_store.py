@@ -561,6 +561,56 @@ class MetadataStore:
             raise not_found("Tag was not found")
         return self._db.delete_tag_master(tag_id)
 
+    def merge_tag_master(
+        self,
+        *,
+        tag_ids: list[str],
+        category: str,
+        target_name: str,
+    ) -> dict[str, str]:
+        normalized_category = str(category or "").strip()
+        normalized_target_name = str(target_name or "").strip()
+        source_ids = list(
+            dict.fromkeys(
+                str(tag_id).strip()
+                for tag_id in tag_ids
+                if str(tag_id).strip()
+            )
+        )
+        if not source_ids or not normalized_category or not normalized_target_name:
+            raise bad_request("tagIds, category and targetName are required")
+
+        for tag_id in source_ids:
+            source = self._db.get_tag_master(tag_id)
+            if source is None:
+                raise not_found("Tag was not found")
+            if str(source["category"]) != normalized_category:
+                raise bad_request("All tags must have the same category")
+
+        target_tag_id = self.ensure_exact_tag_id(
+            category=normalized_category,
+            raw_name=normalized_target_name,
+            request_id="tag-master-merge",
+        )
+        if target_tag_id is None:
+            raise bad_request("targetName is required")
+
+        for source_id in source_ids:
+            if source_id == target_tag_id:
+                continue
+            for media_id in self._db.list_media_ids_for_tag(source_id):
+                self._db.add_media_tag_link(media_id, target_tag_id)
+            self._db.delete_tag_master(source_id)
+
+        target = self._db.get_tag_master(target_tag_id)
+        if target is None:
+            raise not_found("Target tag was not found")
+        return {
+            "tagId": str(target["tag_id"]),
+            "name": str(target["name"]),
+            "category": str(target["category"]),
+        }
+
     def backfill_configured_tag_aliases(self) -> dict[str, int]:
         if not self._tag_aliases.is_configured:
             return {"removedAliasCount": 0, "migratedLinkCount": 0}

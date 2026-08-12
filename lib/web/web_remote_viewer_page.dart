@@ -123,6 +123,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   int _webSeriesSuggestionLoadVersion = 0;
   int _hitomiSearchLoadVersion = 0;
   bool _hitomiSearching = false;
+  bool _bulkSelectionMode = false;
+  final Set<String> _selectedMediaIds = <String>{};
   String? _hitomiSearchErrorMessage;
   List<WebHitomiSearchResult> _hitomiSearchResults =
       const <WebHitomiSearchResult>[];
@@ -547,6 +549,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (!mounted) return;
       setState(() {
         _entries = filtered;
+        _selectedMediaIds.removeWhere(
+          (mediaId) => !filtered.any((entry) => entry.mediaId == mediaId),
+        );
         _selectedEntry = nextSelected;
         if (resetPage) {
           _browserPage = 1;
@@ -1330,6 +1335,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                     Navigator.of(pageContext).pop();
                   }
                 },
+                onRenameRequested: (name) => _renameEntry(entry, name),
+                onDeleteRequested: () => _deleteEntry(entry),
                 onOpenPdfViewerPage: allowOpenPdfViewer && entry.isPdf
                     ? () => _openPdfViewerPage(entry)
                     : null,
@@ -1553,6 +1560,141 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         });
       }
     }
+  }
+
+  p.Context _pathContextFor(String rawPath) => p.Context(
+    style: rawPath.contains('\\') ? p.Style.windows : p.Style.posix,
+  );
+
+  Future<void> _renameEntry(WebRemoteEntry entry, String editableName) async {
+    final value = editableName.trim();
+    final error = ItemNameService.validateEditableName(value);
+    if (error != null) {
+      throw WebRemoteException(error);
+    }
+    final extension = p.extension(entry.displayName);
+    final newDisplayName = '$value$extension';
+    final newPath = _pathContextFor(
+      entry.fullPath ?? entry.folderRaw,
+    ).join(entry.folderRaw, newDisplayName);
+    final completed = await _runRemoteAction<bool>(
+      workingStatus: '名前を変更中...',
+      action: (client) async {
+        await client.renameMedia(
+          entry: entry,
+          newPath: newPath,
+          newDisplayName: newDisplayName,
+        );
+        return true;
+      },
+    );
+    if (completed != true || !mounted) return;
+    setState(() => _selectedEntry = null);
+    await _refreshHomeEntries(force: true);
+    await _loadEntries(resetPage: false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('「${entry.displayName}」の名前を変更しました')),
+      );
+    }
+  }
+
+  Future<void> _deleteEntry(WebRemoteEntry entry) async {
+    final completed = await _runRemoteAction<bool>(
+      workingStatus: '削除中...',
+      action: (client) async {
+        await client.deleteMedia(entry);
+        return true;
+      },
+    );
+    if (completed != true || !mounted) return;
+    setState(() => _selectedEntry = null);
+    await _refreshHomeEntries(force: true);
+    await _loadEntries(resetPage: false);
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('「${entry.displayName}」を削除しました')));
+    }
+  }
+
+  void _toggleBulkSelectionMode() {
+    setState(() {
+      _bulkSelectionMode = !_bulkSelectionMode;
+      if (!_bulkSelectionMode) {
+        _selectedMediaIds.clear();
+      }
+    });
+  }
+
+  void _toggleBulkSelection(WebRemoteEntry entry) {
+    final mediaId = entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty) return;
+    setState(() {
+      if (!_selectedMediaIds.add(mediaId)) {
+        _selectedMediaIds.remove(mediaId);
+      }
+    });
+  }
+
+  Future<void> _deleteSelectedEntries() async {
+    final selectedEntries = _entries
+        .where((entry) => _selectedMediaIds.contains(entry.mediaId))
+        .toList(growable: false);
+    if (selectedEntries.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('選択したメディアを削除しますか？'),
+        content: Text(
+          '${selectedEntries.length}件をホストのLibraryから完全に削除します。\nこの操作は元に戻せません。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('完全に削除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final completed = await _runRemoteAction<bool>(
+      workingStatus: '${selectedEntries.length}件を削除中...',
+      action: (client) async {
+        await client.deleteMediaEntries(selectedEntries);
+        return true;
+      },
+    );
+    if (completed != true || !mounted) return;
+    setState(() {
+      _selectedEntry = null;
+      _selectedMediaIds.clear();
+      _bulkSelectionMode = false;
+    });
+    await _refreshHomeEntries(force: true);
+    await _loadEntries(resetPage: false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${selectedEntries.length}件を削除しました')),
+      );
+    }
+  }
+
+  Future<void> _openTagManagement() async {
+    final client = _client;
+    if (client == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => WebTagManagementPage(client: client),
+      ),
+    );
+    if (!mounted) return;
+    await _refreshHomeEntries(force: true);
+    await _loadEntries(resetPage: false);
   }
 
   Future<void> _importUrlToCurrentFolder() async {
@@ -2140,6 +2282,31 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                     ),
                   ),
             actions: <Widget>[
+              if (_surface == _WebRemoteSurface.browse && _bulkSelectionMode)
+                IconButton(
+                  tooltip: '${_selectedMediaIds.length}件を削除',
+                  onPressed: _selectedMediaIds.isEmpty || _actionBusy
+                      ? null
+                      : _deleteSelectedEntries,
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              if (_surface == _WebRemoteSurface.browse)
+                IconButton(
+                  tooltip: _bulkSelectionMode ? '選択を終了' : '複数選択',
+                  onPressed: _actionBusy ? null : _toggleBulkSelectionMode,
+                  icon: Icon(
+                    _bulkSelectionMode
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank,
+                  ),
+                ),
+              IconButton(
+                tooltip: 'タグ管理',
+                onPressed: _client == null || _actionBusy
+                    ? null
+                    : _openTagManagement,
+                icon: const Icon(Icons.sell_outlined),
+              ),
               IconButton(
                 tooltip: 'URL取り込み',
                 onPressed: canImportUrl ? _importUrlToCurrentFolder : null,
@@ -2776,7 +2943,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   client: _client,
                   entry: entry,
                   selected: selected,
-                  onTap: () => _handleEntryTap(entry, splitView: splitView),
+                  selectionMode: _bulkSelectionMode,
+                  batchSelected: _selectedMediaIds.contains(entry.mediaId),
+                  onTap: () => _bulkSelectionMode && !entry.isFolder
+                      ? _toggleBulkSelection(entry)
+                      : _handleEntryTap(entry, splitView: splitView),
                   folderName: _folderName,
                   onApplyTagQuery: _applyTagQuery,
                 );
@@ -2857,7 +3028,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   client: _client,
                   entry: entry,
                   selected: selected,
-                  onTap: () => _handleEntryTap(entry, splitView: splitView),
+                  selectionMode: _bulkSelectionMode,
+                  batchSelected: _selectedMediaIds.contains(entry.mediaId),
+                  onTap: () => _bulkSelectionMode && !entry.isFolder
+                      ? _toggleBulkSelection(entry)
+                      : _handleEntryTap(entry, splitView: splitView),
                   folderName: _folderName,
                 );
               },
@@ -2972,8 +3147,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                         client: _client,
                         entry: entry,
                         selected: selected,
-                        onTap: () =>
-                            _handleEntryTap(entry, splitView: splitView),
+                        selectionMode: _bulkSelectionMode,
+                        batchSelected: _selectedMediaIds.contains(
+                          entry.mediaId,
+                        ),
+                        onTap: () => _bulkSelectionMode && !entry.isFolder
+                            ? _toggleBulkSelection(entry)
+                            : _handleEntryTap(entry, splitView: splitView),
                       );
                     }, childCount: pageEntries.length),
                   ),
@@ -3032,6 +3212,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       rating: _ratingForEntry(_selectedEntry!),
       onRatingChanged: (rating) => _setRatingForEntry(_selectedEntry!, rating),
       onApplyTagQuery: _applyTagQuery,
+      onRenameRequested: (name) => _renameEntry(_selectedEntry!, name),
+      onDeleteRequested: () => _deleteEntry(_selectedEntry!),
       onOpenPdfViewerPage: _selectedEntry!.isPdf
           ? () => _openPdfViewerPage(_selectedEntry!)
           : null,
@@ -4443,6 +4625,236 @@ String _entryDisplayTitle(WebRemoteEntry entry) {
   );
 }
 
+String _tagCategoryLabel(TagCategory category) {
+  switch (category) {
+    case TagCategory.artist:
+      return '作家';
+    case TagCategory.series:
+      return '作品';
+    case TagCategory.mediaType:
+      return '種別';
+    case TagCategory.character:
+      return 'キャラクター';
+    case TagCategory.free:
+      return '自由タグ';
+  }
+}
+
+class WebTagManagementPage extends StatefulWidget {
+  final WebRemoteApiClient client;
+
+  const WebTagManagementPage({super.key, required this.client});
+
+  @override
+  State<WebTagManagementPage> createState() => _WebTagManagementPageState();
+}
+
+class _WebTagManagementPageState extends State<WebTagManagementPage> {
+  final TextEditingController _searchController = TextEditingController();
+  TagCategory _category = TagCategory.artist;
+  late Future<List<WebRemoteTagRecord>> _tagsFuture;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _reload() {
+    setState(() {
+      _tagsFuture = widget.client.listMasterTags(
+        _category,
+        contains: _searchController.text,
+      );
+    });
+  }
+
+  Future<void> _runAction(Future<void> Function() action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+      if (mounted) _reload();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _rename(WebRemoteTagRecord record) async {
+    final controller = TextEditingController(text: record.tag.name);
+    final targetName = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('タグ名を変更'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '新しいタグ名',
+            helperText: '同名タグがある場合は関連付けを統合します。',
+          ),
+          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('変更'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (targetName == null || targetName.trim().isEmpty) return;
+    await _runAction(() => widget.client.renameMasterTag(record, targetName));
+  }
+
+  Future<void> _delete(WebRemoteTagRecord record) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('タグを削除しますか？'),
+        content: Text('「${record.tag.name}」と関連付けを削除します。'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('削除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _runAction(() => widget.client.deleteMasterTag(record.tagId));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('タグ管理'),
+        actions: <Widget>[
+          IconButton(
+            tooltip: '更新',
+            onPressed: _busy ? null : _reload,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: <Widget>[
+              DropdownButtonFormField<TagCategory>(
+                key: ValueKey<TagCategory>(_category),
+                initialValue: _category,
+                decoration: const InputDecoration(labelText: 'カテゴリ'),
+                items: TagCategory.values
+                    .map(
+                      (value) => DropdownMenuItem<TagCategory>(
+                        value: value,
+                        child: Text(_tagCategoryLabel(value)),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: _busy
+                    ? null
+                    : (value) {
+                        if (value == null) return;
+                        setState(() => _category = value);
+                        _reload();
+                      },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText: 'タグを検索',
+                  suffixIcon: IconButton(
+                    tooltip: '検索',
+                    onPressed: _busy ? null : _reload,
+                    icon: const Icon(Icons.search),
+                  ),
+                ),
+                onSubmitted: (_) => _reload(),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: FutureBuilder<List<WebRemoteTagRecord>>(
+                  future: _tagsFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text('タグを読み込めませんでした: ${snapshot.error}'),
+                      );
+                    }
+                    final records =
+                        snapshot.data ?? const <WebRemoteTagRecord>[];
+                    if (records.isEmpty) {
+                      return const Center(child: Text('該当するタグはありません。'));
+                    }
+                    return ListView.separated(
+                      itemCount: records.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final record = records[index];
+                        return ListTile(
+                          title: Text(record.tag.name),
+                          subtitle: Text(
+                            _tagCategoryLabel(record.tag.category),
+                          ),
+                          trailing: Wrap(
+                            spacing: 2,
+                            children: <Widget>[
+                              IconButton(
+                                tooltip: '名前を変更',
+                                onPressed: _busy ? null : () => _rename(record),
+                                icon: const Icon(Icons.edit_outlined),
+                              ),
+                              IconButton(
+                                tooltip: '削除',
+                                onPressed: _busy ? null : () => _delete(record),
+                                icon: const Icon(Icons.delete_outline),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 Color _entryAccentColor(WebRemoteEntry entry) {
   if (entry.isFolder) {
     return const Color(0xFF94A7BD);
@@ -4521,6 +4933,8 @@ class _EntryCard extends StatelessWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
   final bool selected;
+  final bool selectionMode;
+  final bool batchSelected;
   final VoidCallback onTap;
   final String Function(String raw) folderName;
   final Future<void> Function(String query)? onApplyTagQuery;
@@ -4530,6 +4944,8 @@ class _EntryCard extends StatelessWidget {
     required this.client,
     required this.entry,
     required this.selected,
+    required this.selectionMode,
+    required this.batchSelected,
     required this.onTap,
     required this.folderName,
     this.onApplyTagQuery,
@@ -4606,9 +5022,13 @@ class _EntryCard extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
                       child: Icon(
-                        entry.isFolder
-                            ? Icons.arrow_forward
-                            : Icons.chevron_right,
+                        selectionMode && !entry.isFolder
+                            ? (batchSelected
+                                  ? Icons.check_circle
+                                  : Icons.circle_outlined)
+                            : (entry.isFolder
+                                  ? Icons.arrow_forward
+                                  : Icons.chevron_right),
                         color: const Color(0xFF6E5354),
                       ),
                     ),
@@ -4624,6 +5044,8 @@ class _EntrySingleTileCard extends StatelessWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
   final bool selected;
+  final bool selectionMode;
+  final bool batchSelected;
   final VoidCallback onTap;
   final String Function(String raw) folderName;
 
@@ -4632,6 +5054,8 @@ class _EntrySingleTileCard extends StatelessWidget {
     required this.client,
     required this.entry,
     required this.selected,
+    required this.selectionMode,
+    required this.batchSelected,
     required this.onTap,
     required this.folderName,
   });
@@ -4772,6 +5196,16 @@ class _EntrySingleTileCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (selectionMode && !entry.isFolder)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Icon(
+                    batchSelected ? Icons.check_circle : Icons.circle_outlined,
+                    color: batchSelected
+                        ? Colors.lightBlueAccent
+                        : Colors.white70,
+                  ),
+                ),
             ],
           ),
         ),
@@ -4784,6 +5218,8 @@ class _EntryGridTileCard extends StatelessWidget {
   final WebRemoteApiClient? client;
   final WebRemoteEntry entry;
   final bool selected;
+  final bool selectionMode;
+  final bool batchSelected;
   final VoidCallback onTap;
 
   const _EntryGridTileCard({
@@ -4791,6 +5227,8 @@ class _EntryGridTileCard extends StatelessWidget {
     required this.client,
     required this.entry,
     required this.selected,
+    required this.selectionMode,
+    required this.batchSelected,
     required this.onTap,
   });
 
@@ -4822,20 +5260,38 @@ class _EntryGridTileCard extends StatelessWidget {
               ),
             ],
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(17),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return _RemoteThumbnail(
-                  client: client,
-                  entry: entry,
-                  width: constraints.maxWidth,
-                  height: constraints.maxHeight,
-                  borderRadius: 17,
-                  backgroundColor: const Color(0xFF0E141C),
-                );
-              },
-            ),
+          child: Stack(
+            children: <Widget>[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(17),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return _RemoteThumbnail(
+                      client: client,
+                      entry: entry,
+                      width: constraints.maxWidth,
+                      height: constraints.maxHeight,
+                      borderRadius: 17,
+                      backgroundColor: const Color(0xFF0E141C),
+                    );
+                  },
+                ),
+              ),
+              if (selectionMode && !entry.isFolder)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Icon(
+                    batchSelected ? Icons.check_circle : Icons.circle_outlined,
+                    color: batchSelected
+                        ? Colors.lightBlueAccent
+                        : Colors.white,
+                    shadows: const <Shadow>[
+                      Shadow(color: Colors.black54, blurRadius: 4),
+                    ],
+                  ),
+                ),
+            ],
           ),
         ),
       ),
@@ -5963,6 +6419,8 @@ class WebMediaDetailView extends StatefulWidget {
   final int? rating;
   final Future<void> Function(int? rating)? onRatingChanged;
   final Future<void> Function(String query) onApplyTagQuery;
+  final Future<void> Function(String editableName) onRenameRequested;
+  final Future<void> Function() onDeleteRequested;
   final VoidCallback? onOpenPdfViewerPage;
 
   const WebMediaDetailView({
@@ -5974,6 +6432,8 @@ class WebMediaDetailView extends StatefulWidget {
     this.rating,
     this.onRatingChanged,
     required this.onApplyTagQuery,
+    required this.onRenameRequested,
+    required this.onDeleteRequested,
     this.onOpenPdfViewerPage,
   });
 
@@ -5984,7 +6444,7 @@ class WebMediaDetailView extends StatefulWidget {
 class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   static const int _pdfPreviewRenderWidth = 1200;
 
-  late Future<List<Tag>> _tagsFuture;
+  late Future<List<WebRemoteTagRecord>> _tagsFuture;
   late Future<WebRemoteMediaMeta> _metaFuture;
   late Future<Uint8List> _imageFuture;
   Uint8List? _pdfPageBytes;
@@ -6043,7 +6503,9 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     _pdfPageRequestSerial += 1;
     _clearPdfPreviewImage();
     if (mediaId == null || mediaId.isEmpty) {
-      _tagsFuture = Future<List<Tag>>.value(const <Tag>[]);
+      _tagsFuture = Future<List<WebRemoteTagRecord>>.value(
+        const <WebRemoteTagRecord>[],
+      );
       _metaFuture = Future<WebRemoteMediaMeta>.error(missingMediaIdError);
       _imageFuture = Future<Uint8List>.error(missingMediaIdError);
       _pdfPageBytes = null;
@@ -6053,7 +6515,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
       _loadingPdfPage = false;
       return;
     }
-    _tagsFuture = widget.client.fetchItemTags(mediaId);
+    _tagsFuture = widget.client.fetchItemTagRecords(mediaId);
     _metaFuture = widget.client.fetchMediaMeta(mediaId);
     _imageFuture = widget.entry.isPdf
         ? Future<Uint8List>.value(Uint8List(0))
@@ -6198,6 +6660,159 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     }
   }
 
+  Future<void> _runDetailAction(Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  void _refreshTags() {
+    final mediaId = widget.entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty || !mounted) return;
+    setState(() {
+      _tagsFuture = widget.client.fetchItemTagRecords(mediaId);
+    });
+  }
+
+  Future<void> _showRenameDialog() async {
+    final controller = TextEditingController(
+      text: p.basenameWithoutExtension(widget.entry.displayName),
+    );
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('名前を変更'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '新しい名前',
+            helperText: '拡張子は維持されます。',
+          ),
+          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('変更'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value == null) return;
+    await _runDetailAction(() => widget.onRenameRequested(value));
+  }
+
+  Future<void> _confirmDelete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('メディアを削除しますか？'),
+        content: Text(
+          '「${widget.entry.displayName}」をホストのLibraryから完全に削除します。\nこの操作は元に戻せません。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('完全に削除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _runDetailAction(widget.onDeleteRequested);
+  }
+
+  Future<Tag?> _showAddTagDialog() async {
+    final controller = TextEditingController();
+    var category = TagCategory.free;
+    final tag = await showDialog<Tag>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('タグを追加'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              DropdownButtonFormField<TagCategory>(
+                initialValue: category,
+                decoration: const InputDecoration(labelText: 'カテゴリ'),
+                items: TagCategory.values
+                    .map(
+                      (value) => DropdownMenuItem<TagCategory>(
+                        value: value,
+                        child: Text(_tagCategoryLabel(value)),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => category = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'タグ名'),
+                onSubmitted: (value) => Navigator.of(
+                  dialogContext,
+                ).pop(Tag(name: value.trim(), category: category)),
+              ),
+            ],
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop(Tag(name: controller.text.trim(), category: category)),
+              child: const Text('追加'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    if (tag == null || tag.name.isEmpty) return null;
+    return tag;
+  }
+
+  Future<void> _addTag() async {
+    final tag = await _showAddTagDialog();
+    final mediaId = widget.entry.mediaId?.trim();
+    if (tag == null || mediaId == null || mediaId.isEmpty) return;
+    await _runDetailAction(() async {
+      await widget.client.addTagToItem(mediaId, tag);
+      _refreshTags();
+    });
+  }
+
+  Future<void> _deleteTag(WebRemoteTagRecord record) async {
+    final mediaId = widget.entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty) return;
+    await _runDetailAction(() async {
+      await widget.client.deleteItemTag(mediaId, record.tagId);
+      _refreshTags();
+    });
+  }
+
   Widget _detailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -6334,6 +6949,26 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                 Chip(
                   avatar: const Icon(Icons.folder_open, size: 18),
                   label: Text(widget.entry.folderRaw),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                OutlinedButton.icon(
+                  onPressed: _showRenameDialog,
+                  icon: const Icon(Icons.drive_file_rename_outline),
+                  label: const Text('名前を変更'),
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade200,
+                  ),
+                  onPressed: _confirmDelete,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('削除'),
                 ),
               ],
             ),
@@ -6509,7 +7144,13 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 10),
-            FutureBuilder<List<Tag>>(
+            OutlinedButton.icon(
+              onPressed: _addTag,
+              icon: const Icon(Icons.add),
+              label: const Text('タグを追加'),
+            ),
+            const SizedBox(height: 10),
+            FutureBuilder<List<WebRemoteTagRecord>>(
               future: _tagsFuture,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
@@ -6521,8 +7162,8 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                     style: TextStyle(color: Colors.red.shade200),
                   );
                 }
-                final tags = snapshot.data ?? const <Tag>[];
-                if (tags.isEmpty) {
+                final records = snapshot.data ?? const <WebRemoteTagRecord>[];
+                if (records.isEmpty) {
                   return const Text(
                     'タグはまだ付いていません。',
                     style: TextStyle(color: Colors.white60),
@@ -6531,13 +7172,14 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                 return Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: tags
+                  children: records
                       .map(
-                        (tag) => ActionChip(
-                          label: Text(_tagLabel(tag)),
+                        (record) => InputChip(
+                          label: Text(_tagLabel(record.tag)),
                           onPressed: () => widget.onApplyTagQuery(
-                            WebSearchParser.formatTagQuery(tag),
+                            WebSearchParser.formatTagQuery(record.tag),
                           ),
+                          onDeleted: () => _deleteTag(record),
                         ),
                       )
                       .toList(growable: false),

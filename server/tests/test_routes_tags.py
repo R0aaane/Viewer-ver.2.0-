@@ -3,7 +3,8 @@ import unittest
 
 from starlette.datastructures import QueryParams
 
-from server.api.routes_tags import delete_master_tag, get_tags_for_item
+from server.api.routes_tags import delete_master_tag, get_tags_for_item, merge_tag_master
+from server.models.dto import MergeTagMasterRequest
 
 
 class _RecordingMetadataStore:
@@ -11,6 +12,7 @@ class _RecordingMetadataStore:
         self.resolve_calls: list[dict[str, object | None]] = []
         self.get_tag_calls: list[dict[str, object | None]] = []
         self.deleted_tag_ids: list[str] = []
+        self.merge_calls: list[dict[str, object]] = []
 
     def resolve_media_id(
         self,
@@ -34,6 +36,10 @@ class _RecordingMetadataStore:
         self.deleted_tag_ids.append(tag_id)
         return 1
 
+    def merge_tag_master(self, **kwargs: object) -> dict[str, str]:
+        self.merge_calls.append(kwargs)
+        return {'tagId': 'artist:new', 'name': 'New artist', 'category': 'artist'}
+
 
 def _request(query: str, metadata_store: _RecordingMetadataStore):
     return SimpleNamespace(
@@ -50,7 +56,7 @@ class TagsRoutesTest(unittest.TestCase):
     def test_get_tags_for_item_resolves_media_from_query_identity(self) -> None:
         store = _RecordingMetadataStore()
         request = _request(
-            'normalizedPath=c%3A%5C%5Clibrary%5C%5Csample.jpg&relativePathHint=sample.jpg&sizeBytes=12&modifiedEpochMs=1234&alias0=C%3A%5C%5Clibrary%5C%5Csample.jpg',
+            'normalizedPath=c%3A%5Clibrary%5Csample.jpg&relativePathHint=sample.jpg&sizeBytes=12&modifiedEpochMs=1234&alias0=C%3A%5Clibrary%5Csample.jpg',
             store,
         )
 
@@ -75,6 +81,23 @@ class TagsRoutesTest(unittest.TestCase):
 
         self.assertTrue(response['ok'])
         self.assertEqual(store.deleted_tag_ids, ['artist:123'])
+
+    def test_merge_master_tag_forwards_to_metadata_store(self) -> None:
+        store = _RecordingMetadataStore()
+        response = merge_tag_master(
+            _request('', store),
+            MergeTagMasterRequest(
+                tagIds=['artist:old'],
+                category='artist',
+                targetName='New artist',
+            ),
+        )
+
+        self.assertEqual(response.items[0].tagId, 'artist:new')
+        self.assertEqual(
+            store.merge_calls,
+            [{'tag_ids': ['artist:old'], 'category': 'artist', 'target_name': 'New artist'}],
+        )
 
 
 if __name__ == '__main__':

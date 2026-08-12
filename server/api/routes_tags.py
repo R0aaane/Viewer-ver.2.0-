@@ -9,6 +9,7 @@ from server.models.dto import (
     FavoriteListResponse,
     FavoriteMediaListResponse,
     ItemTagsResponse,
+    MergeTagMasterRequest,
     RatingListResponse,
     SetFavoriteRequest,
     SetRatingRequest,
@@ -148,6 +149,19 @@ def set_rating(
 def delete_master_tag(request: Request, tag_id: str):
     deleted = request.app.state.metadata_store.delete_tag_master(tag_id)
     return {"ok": True, "message": f"deleted {deleted} tag(s)"}
+
+
+@router.post("/tags/master/merge", response_model=TagListResponse)
+def merge_tag_master(
+    request: Request,
+    payload: MergeTagMasterRequest,
+) -> TagListResponse:
+    item = request.app.state.metadata_store.merge_tag_master(
+        tag_ids=payload.tagIds,
+        category=payload.category,
+        target_name=payload.targetName,
+    )
+    return TagListResponse(items=[item])
 
 
 @router.post("/tags/item/{media_id}", response_model=AddItemTagsResponse)

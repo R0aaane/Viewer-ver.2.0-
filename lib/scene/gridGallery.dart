@@ -45,7 +45,6 @@ import 'xviewer_page.dart';
 
 part 'grid_gallery_models.dart';
 part 'gallery_grid_view.dart';
-part 'bookshelf_view.dart';
 part 'gallery_home_view.dart';
 part 'gallery_import_actions.dart';
 part 'gallery_thumbnail_cache.dart';
@@ -130,9 +129,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _gallerySearchPageIndex = 0;
 
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
-  DetailedBrowseViewMode _detailedBrowseViewMode = DetailedBrowseViewMode.grid;
-  final Map<String, Future<int>> _bookshelfPageCountCache =
-      <String, Future<int>>{};
+  int _detailedBrowseCardColumns = 2;
 
   Set<String> _favorites = <String>{};
   Map<String, int> _ratingsById = <String, int>{};
@@ -703,13 +700,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           modeIndex < FolderTileMode.values.length) {
         _folderTileMode = FolderTileMode.values[modeIndex];
       }
-      final detailedModeIndex = prefs.getInt(_PrefsKeys.detailedBrowseViewMode);
-      if (detailedModeIndex != null &&
-          detailedModeIndex >= 0 &&
-          detailedModeIndex < DetailedBrowseViewMode.values.length) {
-        _detailedBrowseViewMode =
-            DetailedBrowseViewMode.values[detailedModeIndex];
+      final detailedColumns = prefs.getInt(
+        _PrefsKeys.detailedBrowseCardColumns,
+      );
+      if (detailedColumns != null &&
+          detailedColumns >= 1 &&
+          detailedColumns <= 4) {
+        _detailedBrowseCardColumns = detailedColumns;
       }
+      await prefs.remove('prefs.detailedBrowseViewMode');
       if (widget.repo.isRemoteMode) {
         List<FolderHandle> remoteFolders = const <FolderHandle>[];
         try {
@@ -1002,10 +1001,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     await prefs.setInt(_PrefsKeys.folderTileMode, m.index);
   }
 
-  Future<void> _saveDetailedBrowseViewMode(DetailedBrowseViewMode m) async {
-    setState(() => _detailedBrowseViewMode = m);
+  Future<void> _saveDetailedBrowseCardColumns(int columns) async {
+    if (columns < 1 || columns > 4) return;
+    setState(() => _detailedBrowseCardColumns = columns);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_PrefsKeys.detailedBrowseViewMode, m.index);
+    await prefs.setInt(_PrefsKeys.detailedBrowseCardColumns, columns);
   }
 
   Map<String, int> _decodeRatings(String? raw) {
