@@ -177,6 +177,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _hitomiInitialSearchStarted = false;
   Set<int> _hitomiImportedGalleryIds = <int>{};
   Set<String> _hitomiImportedTitleKeys = <String>{};
+  Map<int, MediaItem> _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
+  Set<int> _hitomiSelectedGalleryIds = <int>{};
 
   bool _shouldShowItem(MediaItem item) {
     if (item.kind == MediaKind.folder) {

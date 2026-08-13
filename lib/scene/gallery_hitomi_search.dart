@@ -31,6 +31,8 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       _hitomiSearchPageIndex = 0;
       _hitomiImportedGalleryIds = <int>{};
       _hitomiImportedTitleKeys = <String>{};
+      _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
+      _hitomiSelectedGalleryIds = <int>{};
     });
 
     try {
@@ -77,6 +79,20 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
           ),
         ),
         if (_hitomiSearching) const LinearProgressIndicator(),
+        if (_hitomiSelectedGalleryIds.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                onPressed: _currentFolderRaw == null
+                    ? null
+                    : _importSelectedHitomiResults,
+                icon: const Icon(Icons.download_outlined),
+                label: Text('${_hitomiSelectedGalleryIds.length}件を一括取り込み'),
+              ),
+            ),
+          ),
         Expanded(child: _buildHitomiSearchResults()),
       ],
     );
@@ -325,6 +341,8 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
   Widget _buildHitomiResultCard(HitomiSearchResult result) {
     final theme = Theme.of(context);
     final imported = _isHitomiResultImported(result);
+    final selected = _hitomiSelectedGalleryIds.contains(result.galleryId);
+    final importedItem = _hitomiImportedItemsByGalleryId[result.galleryId];
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -365,12 +383,24 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                           label: const Text('取り込み済み'),
                         ),
                       ),
+                      if (importedItem != null) ...[
+                        const SizedBox(height: 6),
+                        _buildHitomiImportedItemPreview(importedItem),
+                      ],
                     ],
                     const SizedBox(height: 8),
                     _buildHitomiTagWrap(result),
                     const SizedBox(height: 8),
                     Row(
                       children: [
+                        Checkbox(
+                          value: selected,
+                          onChanged: imported
+                              ? null
+                              : (_) => _toggleHitomiResultSelection(result),
+                        ),
+                        Text(selected ? '選択中' : '選択'),
+                        const SizedBox(width: 6),
                         TextButton.icon(
                           onPressed: () => _openHitomiResult(result),
                           icon: const Icon(Icons.open_in_new),
@@ -406,6 +436,42 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
             ? <String>[url]
             : result.thumbnailUrls,
       ),
+    );
+  }
+
+  Widget _buildHitomiImportedItemPreview(MediaItem item) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 42,
+          height: 58,
+          child: FutureBuilder<ThumbPair>(
+            future: _getMediaThumbPair(item),
+            builder: (context, snapshot) {
+              final bytes = snapshot.data?.front;
+              if (bytes == null || bytes.isEmpty) {
+                return const DecoratedBox(
+                  decoration: BoxDecoration(color: Color(0x11000000)),
+                  child: Icon(Icons.picture_as_pdf_outlined, size: 20),
+                );
+              }
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: Image.memory(bytes, fit: BoxFit.cover),
+              );
+            },
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            'ライブラリ: ${item.displayName}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      ],
     );
   }
 
@@ -467,35 +533,74 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       successLabel: '取り込み',
       initialSourceText: result.galleryUrl,
     );
-    _markHitomiResultImported(result);
+    unawaited(
+      _refreshHitomiImportedMatches(
+        _hitomiSearchResults,
+        _hitomiSearchLoadVersion,
+      ),
+    );
+  }
+
+  void _toggleHitomiResultSelection(HitomiSearchResult result) {
+    setState(() {
+      if (!_hitomiSelectedGalleryIds.add(result.galleryId)) {
+        _hitomiSelectedGalleryIds.remove(result.galleryId);
+      }
+    });
+  }
+
+  Future<void> _importSelectedHitomiResults() async {
+    final folderRaw = _currentFolderRaw;
+    if (folderRaw == null) return;
+    final selected = _hitomiSearchResults
+        .where((result) => _hitomiSelectedGalleryIds.contains(result.galleryId))
+        .toList(growable: false);
+    if (selected.isEmpty) return;
+
+    await _runUrlImport(
+      folder: FolderHandle(folderRaw),
+      dialogTitle: 'Hitomi を一括取り込み',
+      dialogDescription: '選択した ${selected.length} 件の Hitomi ギャラリーを現在のフォルダへ取り込みます。',
+      progressTitle: 'Hitomi を一括取り込み中',
+      successLabel: '一括取り込み',
+      initialSourceText: selected.map((result) => result.galleryUrl).join('\n'),
+    );
+    if (!mounted) return;
+    setState(() => _hitomiSelectedGalleryIds = <int>{});
+    unawaited(
+      _refreshHitomiImportedMatches(
+        _hitomiSearchResults,
+        _hitomiSearchLoadVersion,
+      ),
+    );
   }
 
   Future<void> _refreshHitomiImportedMatches(
     List<HitomiSearchResult> results,
     int loadVersion,
   ) async {
-    final folderRaw = _currentFolderRaw;
-    if (folderRaw == null || results.isEmpty) {
+    if (results.isEmpty) {
       if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
       setState(() {
         _hitomiImportedGalleryIds = <int>{};
         _hitomiImportedTitleKeys = <String>{};
+        _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
       });
       return;
     }
 
     List<MediaItem> items;
     try {
-      items = await widget.repo.listMediaRecursiveFiles(
-        FolderHandle(folderRaw),
-      );
+      final libraryFolder = await widget.repo.getAppLibraryFolder();
+      items = await widget.repo.listMediaRecursiveFiles(libraryFolder);
     } catch (_) {
-      items = _items.where((item) => item.kind != MediaKind.folder).toList();
+      items = const <MediaItem>[];
     }
     if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
 
     final ids = <int>{};
     final titleKeys = <String>{};
+    final matchedItems = <int, MediaItem>{};
     for (final result in results) {
       final titleKey = _hitomiImportedTitleKey(result.title);
       for (final item in items) {
@@ -505,6 +610,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
           if (titleKey.isNotEmpty) {
             titleKeys.add(titleKey);
           }
+          matchedItems[result.galleryId] = item;
           break;
         }
       }
@@ -513,6 +619,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     setState(() {
       _hitomiImportedGalleryIds = ids;
       _hitomiImportedTitleKeys = titleKeys;
+      _hitomiImportedItemsByGalleryId = matchedItems;
     });
   }
 
@@ -542,20 +649,6 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
         _hitomiImportedTitleKeys.contains(
           _hitomiImportedTitleKey(result.title),
         );
-  }
-
-  void _markHitomiResultImported(HitomiSearchResult result) {
-    if (!mounted) return;
-    setState(() {
-      _hitomiImportedGalleryIds = <int>{
-        ..._hitomiImportedGalleryIds,
-        result.galleryId,
-      };
-      _hitomiImportedTitleKeys = <String>{
-        ..._hitomiImportedTitleKeys,
-        _hitomiImportedTitleKey(result.title),
-      }..remove('');
-    });
   }
 
   String _hitomiImportedTitleKey(String value) {
