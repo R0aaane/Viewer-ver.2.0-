@@ -172,6 +172,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _hitomiSearching = false;
   List<HitomiSearchResult> _hitomiSearchResults = const <HitomiSearchResult>[];
   int _hitomiSearchPageIndex = 0;
+  int _hitomiSearchTotal = 0;
   String? _hitomiSearchErrorMessage;
   int _hitomiSearchLoadVersion = 0;
   bool _hitomiInitialSearchStarted = false;
@@ -179,6 +180,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Set<String> _hitomiImportedTitleKeys = <String>{};
   Map<int, MediaItem> _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
   Set<int> _hitomiSelectedGalleryIds = <int>{};
+  Map<int, HitomiSearchResult> _hitomiSelectedResultsByGalleryId =
+      <int, HitomiSearchResult>{};
 
   bool _shouldShowItem(MediaItem item) {
     if (item.kind == MediaKind.folder) {

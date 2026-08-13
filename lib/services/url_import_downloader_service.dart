@@ -65,6 +65,13 @@ class HitomiSearchResult {
   });
 }
 
+class HitomiSearchPage {
+  final List<HitomiSearchResult> results;
+  final int total;
+
+  const HitomiSearchPage({required this.results, required this.total});
+}
+
 class HitomiSearchSuggestion {
   final String value;
   final int? count;
@@ -192,22 +199,31 @@ class UrlImportDownloaderService {
     'galleries',
     'reader',
   };
+  final Map<String, Future<List<int>>> _hitomiSearchIdsByQuery =
+      <String, Future<List<int>>>{};
 
-  Future<List<HitomiSearchResult>> searchHitomiGalleries({
+  Future<HitomiSearchPage> searchHitomiGalleryPage({
     required String query,
-    int limit = 50,
+    required int offset,
+    required int limit,
   }) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) {
-      return const <HitomiSearchResult>[];
+      return const HitomiSearchPage(results: <HitomiSearchResult>[], total: 0);
     }
-    final ids = await _resolveHitomiSearchGalleryIds(trimmed);
-    final limitedIds = ids.take(limit.clamp(1, 100)).toList(growable: false);
-    return _mapConcurrent<int, HitomiSearchResult>(
-      limitedIds,
+    final ids = await _hitomiSearchIdsByQuery.putIfAbsent(
+      trimmed,
+      () => _resolveHitomiSearchGalleryIds(trimmed),
+    );
+    final start = offset.clamp(0, ids.length).toInt();
+    final end = (start + limit.clamp(1, 50)).clamp(0, ids.length).toInt();
+    final pageIds = ids.sublist(start, end);
+    final results = await _mapConcurrent<int, HitomiSearchResult>(
+      pageIds,
       concurrency: 6,
       mapper: _fetchHitomiSearchResult,
     );
+    return HitomiSearchPage(results: results, total: ids.length);
   }
 
   Future<List<HitomiSearchSuggestion>> searchHitomiSuggestions(

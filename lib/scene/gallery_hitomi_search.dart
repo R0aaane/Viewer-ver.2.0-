@@ -20,6 +20,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       setState(() {
         _hitomiSearchResults = const <HitomiSearchResult>[];
         _hitomiSearchPageIndex = 0;
+        _hitomiSearchTotal = 0;
         _hitomiSearchErrorMessage = null;
       });
       return;
@@ -29,30 +30,50 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       _hitomiSearching = true;
       _hitomiSearchErrorMessage = null;
       _hitomiSearchPageIndex = 0;
+      _hitomiSearchTotal = 0;
       _hitomiImportedGalleryIds = <int>{};
       _hitomiImportedTitleKeys = <String>{};
       _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
       _hitomiSelectedGalleryIds = <int>{};
+      _hitomiSelectedResultsByGalleryId = <int, HitomiSearchResult>{};
     });
 
+    await _loadHitomiSearchPage(0, loadVersion: loadVersion);
+  }
+
+  Future<void> _loadHitomiSearchPage(
+    int pageIndex, {
+    int? loadVersion,
+  }) async {
+    final query = _hitomiSearchCtrl.text.trim();
+    if (query.isEmpty) return;
+    final version = loadVersion ?? ++_hitomiSearchLoadVersion;
+    if (loadVersion == null) {
+      setState(() {
+        _hitomiSearching = true;
+        _hitomiSearchErrorMessage = null;
+      });
+    }
     try {
-      final results = await _urlImportDownloaderService.searchHitomiGalleries(
+      final page = await _urlImportDownloaderService.searchHitomiGalleryPage(
         query: query,
-        limit: 50,
+        offset: pageIndex * _GalleryGridPageState._hitomiSearchPageSize,
+        limit: _GalleryGridPageState._hitomiSearchPageSize,
       );
-      if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
+      if (!mounted || version != _hitomiSearchLoadVersion) return;
       setState(() {
         _hitomiSearching = false;
-        _hitomiSearchResults = results;
+        _hitomiSearchPageIndex = pageIndex;
+        _hitomiSearchResults = page.results;
+        _hitomiSearchTotal = page.total;
       });
-      unawaited(_refreshHitomiImportedMatches(results, loadVersion));
+      unawaited(_refreshHitomiImportedMatches(page.results, version));
     } catch (error, stackTrace) {
       _logUiError('hitomi-search', error, stackTrace);
-      if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
+      if (!mounted || version != _hitomiSearchLoadVersion) return;
       setState(() {
         _hitomiSearching = false;
         _hitomiSearchResults = const <HitomiSearchResult>[];
-        _hitomiSearchPageIndex = 0;
         _hitomiSearchErrorMessage = '$error';
       });
     }
@@ -213,17 +234,13 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     if (_hitomiSearchResults.isEmpty) {
       return const _HitomiSearchEmptyState();
     }
-    final totalPages = _hitomiSearchTotalPages(_hitomiSearchResults.length);
+    final totalPages = _hitomiSearchTotalPages(_hitomiSearchTotal);
     final clamped = _hitomiSearchPageIndex.clamp(0, totalPages - 1).toInt();
     final start = clamped * _GalleryGridPageState._hitomiSearchPageSize;
-    final end = (start + _GalleryGridPageState._hitomiSearchPageSize).clamp(
-      0,
-      _hitomiSearchResults.length,
-    );
-    final pageItems = _hitomiSearchResults.sublist(start, end);
+    final end = start + _hitomiSearchResults.length;
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      itemCount: pageItems.length + (totalPages > 1 ? 1 : 0),
+      itemCount: _hitomiSearchResults.length + (totalPages > 1 ? 1 : 0),
       separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
         if (index == 0 && totalPages > 1) {
@@ -232,11 +249,11 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
             totalPages: totalPages,
             start: start + 1,
             end: end,
-            total: _hitomiSearchResults.length,
+            total: _hitomiSearchTotal,
           );
         }
         final itemIndex = index - (totalPages > 1 ? 1 : 0);
-        return _buildHitomiResultCard(pageItems[itemIndex]);
+        return _buildHitomiResultCard(_hitomiSearchResults[itemIndex]);
       },
     );
   }
@@ -265,8 +282,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
             tooltip: '前へ',
             onPressed: currentPage <= 0
                 ? null
-                : () =>
-                      setState(() => _hitomiSearchPageIndex = currentPage - 1),
+                : () => _loadHitomiSearchPage(currentPage - 1),
             icon: const Icon(Icons.chevron_left),
           ),
           if (useDropdown)
@@ -281,7 +297,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
               ),
               onChanged: (value) {
                 if (value == null || value == currentPage) return;
-                setState(() => _hitomiSearchPageIndex = value);
+                _loadHitomiSearchPage(value);
               },
             )
           else
@@ -298,7 +314,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                         selected: selected,
                         onSelected: (_) {
                           if (selected) return;
-                          setState(() => _hitomiSearchPageIndex = index);
+                          _loadHitomiSearchPage(index);
                         },
                       ),
                     );
@@ -310,8 +326,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
             tooltip: '次へ',
             onPressed: currentPage >= totalPages - 1
                 ? null
-                : () =>
-                      setState(() => _hitomiSearchPageIndex = currentPage + 1),
+                : () => _loadHitomiSearchPage(currentPage + 1),
             icon: const Icon(Icons.chevron_right),
           ),
         ],
@@ -545,6 +560,9 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     setState(() {
       if (!_hitomiSelectedGalleryIds.add(result.galleryId)) {
         _hitomiSelectedGalleryIds.remove(result.galleryId);
+        _hitomiSelectedResultsByGalleryId.remove(result.galleryId);
+      } else {
+        _hitomiSelectedResultsByGalleryId[result.galleryId] = result;
       }
     });
   }
@@ -552,9 +570,9 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
   Future<void> _importSelectedHitomiResults() async {
     final folderRaw = _currentFolderRaw;
     if (folderRaw == null) return;
-    final selected = _hitomiSearchResults
-        .where((result) => _hitomiSelectedGalleryIds.contains(result.galleryId))
-        .toList(growable: false);
+    final selected = _hitomiSelectedResultsByGalleryId.values.toList(
+      growable: false,
+    );
     if (selected.isEmpty) return;
 
     await _runUrlImport(
@@ -566,7 +584,10 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       initialSourceText: selected.map((result) => result.galleryUrl).join('\n'),
     );
     if (!mounted) return;
-    setState(() => _hitomiSelectedGalleryIds = <int>{});
+    setState(() {
+      _hitomiSelectedGalleryIds = <int>{};
+      _hitomiSelectedResultsByGalleryId = <int, HitomiSearchResult>{};
+    });
     unawaited(
       _refreshHitomiImportedMatches(
         _hitomiSearchResults,
