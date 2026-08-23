@@ -305,6 +305,41 @@ class MetadataStoreTagSyncTest(unittest.TestCase):
         self.assertIsNotNone(updated)
         self.assertEqual(updated['folder_raw'], str(renamed_folder))
 
+    def test_apply_rename_renames_unindexed_file(self) -> None:
+        source = self.library_dir / 'unindexed.pdf'
+        source.write_bytes(b'%PDF-1.4')
+        renamed = self.library_dir / 'renamed.pdf'
+
+        result = self.store.apply_rename(
+            old_media_id=None,
+            new_media_id=None,
+            old_path=str(source),
+            new_path=str(renamed),
+        )
+
+        self.assertEqual(result['fullPath'], str(renamed))
+        self.assertFalse(source.exists())
+        self.assertTrue(renamed.exists())
+
+    def test_apply_rename_preserves_favorite_and_rating(self) -> None:
+        self.store.set_media_favorite(self.media_id_1, True)
+        self.store.set_media_rating(self.media_id_1, 5)
+        source = self.library_dir / 'sample-1.jpg'
+        renamed = self.library_dir / 'renamed.jpg'
+
+        self.store.apply_rename(
+            old_media_id=self.media_id_1,
+            new_media_id=None,
+            old_path=str(source),
+            new_path=str(renamed),
+        )
+
+        updated = self.sqlite.get_media_record_by_path(str(renamed))
+        self.assertIsNotNone(updated)
+        updated_media_id = str(updated['media_id'])
+        self.assertEqual(self.store.list_favorite_media_ids(), [updated_media_id])
+        self.assertEqual(self.store.list_media_ratings(), {updated_media_id: 5})
+
     def test_organize_media_by_tags_uses_author_dir_for_single_artist(self) -> None:
         source = self.library_dir / "sample.pdf"
         source.write_bytes(b"author")

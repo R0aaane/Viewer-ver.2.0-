@@ -104,6 +104,24 @@ void main() {
       expect(idResolver.forgotten, containsAll(<String>[item.id, renamed.id]));
     });
 
+    test(
+      'uses the requested item when the refreshed entry is not listed yet',
+      () async {
+        final apiClient = _FakeRemoteMediaApiClient();
+        final repository = RemoteMediaRepository(
+          apiClient: apiClient,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: const _StubMediaRepository(),
+        );
+
+        final renamed = await repository.rename(_imageItem(), 'new');
+
+        expect(renamed.id, r'C:\library\new.jpg');
+        expect(renamed.displayName, 'new.jpg');
+        expect(renamed.kind, MediaKind.image);
+      },
+    );
+
     test('throws when the remote rename API fails', () async {
       final apiClient = _FakeRemoteMediaApiClient()
         ..renameError = const RemoteMediaException('rename failed');

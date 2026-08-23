@@ -870,6 +870,9 @@ class SqliteStore:
             )
 
     def replace_media_id_references(self, old_media_id: str, new_media_id: str) -> None:
+        if old_media_id == new_media_id:
+            return
+
         with self._cursor() as cur:
             rows = cur.execute(
                 "SELECT tag_id FROM media_tag_links WHERE media_id = ?",
@@ -1008,6 +1011,61 @@ class SqliteStore:
                 )
                 cur.execute(
                     "DELETE FROM reading_progress WHERE media_id = ?",
+                    (old_media_id,),
+                )
+
+            favorite_row = cur.execute(
+                "SELECT updated_at FROM media_favorites WHERE media_id = ?",
+                (old_media_id,),
+            ).fetchone()
+            if favorite_row is not None:
+                cur.execute(
+                    """
+                    INSERT INTO media_favorites (media_id, updated_at)
+                    VALUES (?, ?)
+                    ON CONFLICT(media_id) DO UPDATE SET
+                        updated_at = CASE
+                            WHEN media_favorites.updated_at >= excluded.updated_at
+                                THEN media_favorites.updated_at
+                            ELSE excluded.updated_at
+                        END
+                    """,
+                    (new_media_id, favorite_row["updated_at"]),
+                )
+                cur.execute(
+                    "DELETE FROM media_favorites WHERE media_id = ?",
+                    (old_media_id,),
+                )
+
+            rating_row = cur.execute(
+                "SELECT rating, updated_at FROM media_ratings WHERE media_id = ?",
+                (old_media_id,),
+            ).fetchone()
+            if rating_row is not None:
+                cur.execute(
+                    """
+                    INSERT INTO media_ratings (media_id, rating, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(media_id) DO UPDATE SET
+                        rating = CASE
+                            WHEN media_ratings.updated_at >= excluded.updated_at
+                                THEN media_ratings.rating
+                            ELSE excluded.rating
+                        END,
+                        updated_at = CASE
+                            WHEN media_ratings.updated_at >= excluded.updated_at
+                                THEN media_ratings.updated_at
+                            ELSE excluded.updated_at
+                        END
+                    """,
+                    (
+                        new_media_id,
+                        rating_row["rating"],
+                        rating_row["updated_at"],
+                    ),
+                )
+                cur.execute(
+                    "DELETE FROM media_ratings WHERE media_id = ?",
                     (old_media_id,),
                 )
 

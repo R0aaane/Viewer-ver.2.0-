@@ -1141,8 +1141,10 @@ class MetadataStore:
         logger.info("[RENAME] request old=%s new=%s", old_full_path, target_full_path)
 
         if current is None:
-            if not old_full_path or not os.path.isdir(old_full_path):
+            if not old_full_path or not os.path.exists(old_full_path):
                 raise not_found("Rename target was not found")
+
+            is_folder = os.path.isdir(old_full_path)
 
             if _normalize_path(old_full_path) == _normalize_path(target_full_path):
                 logger.info("[MOVE] skipped same-file old=%s new=%s", old_full_path, target_full_path)
@@ -1150,7 +1152,7 @@ class MetadataStore:
                     "entryId": target_full_path,
                     "displayName": os.path.basename(target_full_path),
                     "folderRaw": os.path.dirname(target_full_path),
-                    "kind": "folder",
+                    "kind": "folder" if is_folder else "file",
                     "mediaId": None,
                     "fullPath": target_full_path,
                     "sizeBytes": None,
@@ -1168,7 +1170,23 @@ class MetadataStore:
             target_parent = os.path.dirname(target_full_path)
             if target_parent:
                 os.makedirs(target_parent, exist_ok=True)
-            shutil.move(old_full_path, target_full_path)
+            if is_folder:
+                shutil.move(old_full_path, target_full_path)
+            else:
+                os.replace(old_full_path, target_full_path)
+
+            if not is_folder:
+                logger.info("[RENAME] success old=%s new=%s", old_full_path, target_full_path)
+                return {
+                    "entryId": target_full_path,
+                    "displayName": os.path.basename(target_full_path),
+                    "folderRaw": os.path.dirname(target_full_path),
+                    "kind": "file",
+                    "mediaId": None,
+                    "fullPath": target_full_path,
+                    "sizeBytes": os.path.getsize(target_full_path),
+                    "modifiedAt": None,
+                }
 
             descendants = self._db.list_media_records(
                 folder_prefix=_normalize_path(old_full_path),

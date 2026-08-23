@@ -219,6 +219,16 @@ extension _GalleryHomeView on _GalleryGridPageState {
       if (t == 'untagged' || t == '未分類') {
         return detailedTags.isEmpty;
       }
+      if (t == 'お気に入り' || t == 'favorite' || t == 'favorites' || t == 'fav') {
+        return _isFavoriteItem(item);
+      }
+      final ratingMatch = RegExp(
+        r'^(?:☆|★|star:|rating:)([345]+)$',
+      ).firstMatch(t);
+      if (ratingMatch != null) {
+        final ratings = ratingMatch.group(1)!.split('').map(int.parse).toSet();
+        return ratings.contains(_ratingForItem(item));
+      }
       if (t == 'しおり' || t == 'bookmark' || t == 'bookmarked') {
         return _isBookmarkedReadingItem(item);
       }
@@ -407,7 +417,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
           focusNode: focusNode,
           decoration: InputDecoration(
             prefixIcon: const Icon(Icons.search),
-            hintText: hintText ?? 'タイトル / #タグ / artist:xxx / series:yyy',
+            hintText: hintText ?? 'タイトル / #タグ / お気に入り / ☆3 / artist:xxx',
             border: const OutlineInputBorder(),
             isDense: true,
             contentPadding: const EdgeInsets.symmetric(vertical: 10),
@@ -471,6 +481,14 @@ extension _GalleryHomeView on _GalleryGridPageState {
     final token = _homeSearchCurrentToken(raw);
     final lower = token.toLowerCase();
     if (lower.isEmpty) return const <String>[];
+
+    const specialQueries = <String>['お気に入り', '☆5', '☆4', '☆3'];
+    final specialMatches = specialQueries
+        .where((query) => query.toLowerCase().contains(lower))
+        .toList(growable: false);
+    if (specialMatches.isNotEmpty) {
+      return specialMatches;
+    }
 
     final seriesByKey = <String, String>{};
     for (final details in _dbTagDetailsByItemId.values) {
@@ -897,8 +915,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
               const SizedBox(height: 6),
               Text(
                 _homeQuery.trim().isEmpty
-                    ? 'キーワードなしでも最近の項目を一覧できます。検索すると作家・シリーズ・タグで絞り込めます。'
-                    : '作家・シリーズ・タグを含む詳細カードで、PDF や画像を選びやすく表示します。',
+                    ? 'キーワードなしでも最近の項目を一覧できます。作家・シリーズ・タグ・お気に入り・評価で絞り込めます。'
+                    : '作家・シリーズ・タグ・お気に入り・評価を含む詳細カードで、PDF や画像を選びやすく表示します。',
               ),
               const SizedBox(height: 10),
               SizedBox(
@@ -1074,7 +1092,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       title: '表示できる項目がありません',
                       message: _homeQuery.trim().isEmpty
                           ? '登録フォルダ内に表示対象の PDF / 画像がありません。'
-                          : '別のキーワード、タグ、artist / series 指定を試してください。',
+                          : '別のキーワード、タグ、お気に入り、☆3〜☆5、artist / series 指定を試してください。',
                     ),
                   ),
                 )

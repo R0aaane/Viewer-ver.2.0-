@@ -345,6 +345,24 @@ class ActionsRoutesTest(unittest.TestCase):
         with self.assertRaises(ApiError):
             apply_rename(request, payload)
 
+    def test_apply_rename_recovers_when_file_was_renamed_before_metadata_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            old_path = os.path.join(temp_dir, 'old.pdf')
+            new_path = os.path.join(temp_dir, 'new.pdf')
+            with open(new_path, 'wb') as handle:
+                handle.write(b'%PDF-1.4')
+            store = _RecordingMetadataStore(rename_error=RuntimeError('db update failed'))
+            index_service = _RecordingIndexService()
+            request = _request(store, index_service=index_service)
+
+            response = apply_rename(
+                request,
+                RenameRequest(oldPath=old_path, newPath=new_path),
+            )
+
+        self.assertEqual(response.message, 'Rename completed')
+        self.assertEqual(index_service.scan_calls, [temp_dir])
+
     def test_apply_delete_passes_all_items_to_metadata_store(self) -> None:
         store = _RecordingMetadataStore(deleted_count=2)
         thumbnail_service = _RecordingThumbnailService()

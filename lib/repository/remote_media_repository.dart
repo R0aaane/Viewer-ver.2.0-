@@ -1708,7 +1708,9 @@ class RemoteMediaRepository implements MediaRepository {
       nextPath,
     );
     if (refreshed == null) {
-      throw const RemoteMediaException('リネーム後のメディア取得に失敗しました');
+      debugPrint(
+        '[RENAME] completed but the renamed item is not listed yet: $nextPath',
+      );
     }
 
     if (item.kind == MediaKind.folder) {
@@ -1716,22 +1718,27 @@ class RemoteMediaRepository implements MediaRepository {
       _forgetRemoteMediaIdsUnderPath(nextItem.id);
     }
     _evictMetaCache(beforeRemoteMediaId);
-    if (refreshed.mediaId != null && refreshed.mediaId!.isNotEmpty) {
-      _evictMetaCache(refreshed.mediaId!);
+    final refreshedMediaId = refreshed?.mediaId;
+    if (refreshedMediaId != null && refreshedMediaId.isNotEmpty) {
+      _evictMetaCache(refreshedMediaId);
     }
     _forgetRemoteMediaId(item.id);
     _forgetRemoteMediaId(nextItem.id);
-    _rememberRemoteEntry(refreshed);
+    if (refreshed != null) {
+      _rememberRemoteEntry(refreshed);
+    }
     _idResolver.forget(item);
     _idResolver.forget(nextItem);
 
     return MediaItem(
-      id: refreshed.fullPath ?? nextItem.id,
-      displayName: refreshed.displayName,
-      kind: _mediaKindFromRemote(refreshed.kind),
-      folderRaw: refreshed.folderRaw,
-      modified: refreshed.modifiedAt ?? nextItem.modified,
-      sizeBytes: refreshed.sizeBytes ?? nextItem.sizeBytes,
+      id: refreshed?.fullPath ?? nextItem.id,
+      displayName: refreshed?.displayName ?? nextItem.displayName,
+      kind: refreshed == null
+          ? nextItem.kind
+          : _mediaKindFromRemote(refreshed.kind),
+      folderRaw: refreshed?.folderRaw ?? nextItem.folderRaw,
+      modified: refreshed?.modifiedAt ?? nextItem.modified,
+      sizeBytes: refreshed?.sizeBytes ?? nextItem.sizeBytes,
       tags: item.tags,
     );
   }

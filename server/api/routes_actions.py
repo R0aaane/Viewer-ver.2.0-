@@ -907,12 +907,35 @@ async def download_url(
 def apply_rename(request: Request, payload: RenameRequest) -> MessageResponse:
     before = payload.before
     after = payload.after
-    request.app.state.metadata_store.apply_rename(
-        old_media_id=payload.oldMediaId or (before.mediaId if before else None),
-        new_media_id=payload.newMediaId or (after.mediaId if after else None),
-        old_path=payload.oldPath or (before.path if before else None),
-        new_path=payload.newPath or (after.path if after else None),
-    )
+    old_path = payload.oldPath or (before.path if before else None)
+    new_path = payload.newPath or (after.path if after else None)
+    try:
+        request.app.state.metadata_store.apply_rename(
+            old_media_id=payload.oldMediaId or (before.mediaId if before else None),
+            new_media_id=payload.newMediaId or (after.mediaId if after else None),
+            old_path=old_path,
+            new_path=new_path,
+        )
+    except ApiError:
+        raise
+    except Exception as error:
+        logger.exception("[rename] metadata update failed old=%s new=%s", old_path, new_path)
+        renamed_on_disk = (
+            bool(old_path)
+            and bool(new_path)
+            and not os.path.exists(old_path)
+            and os.path.exists(new_path)
+        )
+        if not renamed_on_disk:
+            raise server_error(f"名前の変更に失敗しました: {error}") from error
+
+        index_service = getattr(request.app.state, "index_service", None)
+        try:
+            if index_service is not None:
+                index_service.scan_folder(os.path.dirname(new_path))
+        except Exception:
+            logger.exception("[rename] rescan after metadata failure also failed: %s", new_path)
+        logger.warning("[rename] completed on disk and recovered with a rescan: %s", new_path)
     return MessageResponse(message="Rename completed")
 
 
