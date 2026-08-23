@@ -435,6 +435,7 @@ function Build-And-Restart {
         }
     }
 
+    Start-HostServer
     Start-HostApp
 }
 

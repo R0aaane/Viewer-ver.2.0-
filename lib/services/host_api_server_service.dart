@@ -715,15 +715,8 @@ class HostApiServerService extends ChangeNotifier {
 
     try {
       await Process.start(
-        'cmd.exe',
-        <String>[
-          '/c',
-          'start',
-          'PDFViewer Host Auto Update',
-          'powershell.exe',
-          '-NoExit',
-          ...arguments,
-        ],
+        'powershell.exe',
+        <String>['-WindowStyle', 'Hidden', ...arguments],
         workingDirectory: projectRoot.path,
         mode: ProcessStartMode.detached,
       );
