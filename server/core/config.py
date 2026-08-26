@@ -18,6 +18,19 @@ def _parse_csv(raw: str | None) -> list[str]:
     return [entry for entry in values if entry]
 
 
+def _project_version(project_root: Path) -> str:
+    pubspec = project_root / "pubspec.yaml"
+    try:
+        for line in pubspec.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version:"):
+                version = line.removeprefix("version:").strip()
+                if version:
+                    return version
+    except OSError:
+        pass
+    return (os.getenv("MEDIA_SERVER_VERSION") or "0.1.0").strip()
+
+
 @dataclass(frozen=True)
 class Settings:
     service_name: str
@@ -64,7 +77,7 @@ def load_settings() -> Settings:
 
     return Settings(
         service_name=os.getenv("MEDIA_SERVER_NAME", "metadata-media-server"),
-        version=os.getenv("MEDIA_SERVER_VERSION", "0.1.0"),
+        version=_project_version(project_root),
         host=os.getenv("MEDIA_SERVER_HOST", "127.0.0.1"),
         port=int(os.getenv("MEDIA_SERVER_PORT", "8000")),
         data_dir=data_dir,
