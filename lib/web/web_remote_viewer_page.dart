@@ -1364,6 +1364,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           rating: _ratingForEntry(entry),
           onRatingChanged: (rating) => _setRatingForEntry(entry, rating),
           onOpenDetail: () => _openDetailPage(entry, allowOpenPdfViewer: false),
+          onOpenRelatedEntry: (relatedEntry) => _openPdfViewerPage(
+            relatedEntry,
+          ),
         ),
       ),
     );
@@ -7213,6 +7216,7 @@ class WebPdfViewerPage extends StatefulWidget {
   final int? rating;
   final Future<void> Function(int? rating)? onRatingChanged;
   final Future<void> Function()? onOpenDetail;
+  final Future<void> Function(WebRemoteEntry entry)? onOpenRelatedEntry;
 
   const WebPdfViewerPage({
     super.key,
@@ -7222,6 +7226,7 @@ class WebPdfViewerPage extends StatefulWidget {
     this.rating,
     this.onRatingChanged,
     this.onOpenDetail,
+    this.onOpenRelatedEntry,
   });
 
   @override
@@ -7254,6 +7259,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   bool _canPersistReadingProgress = false;
   bool _hasMovedPageSinceLoad = false;
   int? _rating;
+  Future<List<WebRemoteEntry>>? _relatedEntriesFuture;
   StreamSubscription<html.Event>? _visibilitySubscription;
 
   @override
@@ -7282,6 +7288,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _pageCountReliable = false;
       _leftFuture = null;
       _rightFuture = null;
+      _relatedEntriesFuture = null;
       _loadViewer();
     }
     if (oldWidget.rating != widget.rating) {
@@ -7757,6 +7764,61 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     await onOpenDetail();
   }
 
+  Future<void> _openDetailPage() async {
+    final onOpenDetail = widget.onOpenDetail;
+    if (onOpenDetail == null) return;
+    await onOpenDetail();
+  }
+
+  Future<List<WebRemoteEntry>> _loadRelatedEntries() async {
+    final mediaId = widget.entry.mediaId?.trim();
+    if (mediaId == null || mediaId.isEmpty) {
+      return const <WebRemoteEntry>[];
+    }
+    final tags = await widget.client.fetchItemTags(mediaId);
+    final authorNames = tags
+        .where((tag) => tag.category == TagCategory.artist)
+        .map((tag) => tag.name.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final seriesNames = tags
+        .where((tag) => tag.category == TagCategory.series)
+        .map((tag) => tag.name.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final related = <WebRemoteEntry>[];
+    final seen = <String>{widget.entry.stableId};
+
+    Future<void> addMatches(
+      Iterable<String> values, {
+      required bool series,
+    }) async {
+      for (final value in values) {
+        if (related.length >= 4) return;
+        final results = await widget.client.search(
+          WebSearchQuery(
+            raw: '',
+            artist: series ? null : value,
+            series: series ? value : null,
+            mediaType: 'pdf',
+          ),
+          limit: 12,
+        );
+        for (final entry in results) {
+          if (!entry.isPdf || !seen.add(entry.stableId)) continue;
+          related.add(entry);
+          if (related.length >= 4) return;
+        }
+      }
+    }
+
+    await addMatches(authorNames, series: false);
+    if (related.length < 4) {
+      await addMatches(seriesNames, series: true);
+    }
+    return related;
+  }
+
   Widget _buildLoadError(String message, {required VoidCallback onRetry}) {
     return Center(
       child: Padding(
@@ -7912,6 +7974,55 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                   icon: const Icon(Icons.clear),
                   label: const Text('評価をクリア'),
                 ),
+                FutureBuilder<List<WebRemoteEntry>>(
+                  future: _relatedEntriesFuture ??= _loadRelatedEntries(),
+                  builder: (context, snapshot) {
+                    final entries = snapshot.data ?? const <WebRemoteEntry>[];
+                    if (entries.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            '関連作品',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final entry in entries)
+                                SizedBox(
+                                  width: 178,
+                                  child: OutlinedButton.icon(
+                                    onPressed: widget.onOpenRelatedEntry == null
+                                        ? null
+                                        : () => unawaited(
+                                            widget.onOpenRelatedEntry!(entry),
+                                          ),
+                                    icon: const Icon(Icons.menu_book_outlined),
+                                    label: Text(
+                                      _entryDisplayTitle(entry),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.left,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               ],
             ),
           ),
@@ -7930,7 +8041,6 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         onRetry: _loadViewer,
       );
     }
-    final showsRatingPage = _isRatingPage(_page) || _isRatingPage(_page + 1);
     return Stack(
       children: <Widget>[
         Center(
@@ -7979,27 +8089,27 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             },
           ),
         ),
-        if (!showsRatingPage)
-          Positioned.fill(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return GestureDetector(
+        Positioned.fill(
+          child: Row(
+            children: [
+              Expanded(
+                flex: 22,
+                child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
-                  onTapUp: (details) {
-                    final dx = details.localPosition.dx;
-                    final width = constraints.maxWidth;
-                    final leftEdge = width * 0.35;
-                    final rightEdge = width * 0.65;
-                    if (dx < leftEdge) {
-                      _prev();
-                    } else if (dx > rightEdge) {
-                      _next();
-                    }
-                  },
-                );
-              },
-            ),
+                  onTap: _prev,
+                ),
+              ),
+              const Spacer(flex: 56),
+              Expanded(
+                flex: 22,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _next,
+                ),
+              ),
+            ],
           ),
+        ),
       ],
     );
   }
@@ -8134,40 +8244,56 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       color: Colors.black,
       child: SafeArea(
         bottom: false,
-        child: SizedBox(
-          height: 56,
-          child: Row(
-            children: <Widget>[
-              IconButton(
-                onPressed: canReturn ? () => _handleOpenDetail(context) : null,
-                tooltip: '詳細へ戻る',
-                icon: const Icon(Icons.arrow_back_ios_new_rounded),
-              ),
-              IconButton(
-                onPressed: canPrev ? _prev : null,
-                tooltip: '前のページ',
-                icon: const Icon(Icons.chevron_left_rounded),
-              ),
-              IconButton(
-                onPressed: canNext ? _next : null,
-                tooltip: '次のページ',
-                icon: const Icon(Icons.chevron_right_rounded),
-              ),
-              IconButton(
-                onPressed: _toggleTwoPage,
-                tooltip: _twoPage ? '見開きをオフ' : '見開きをオン',
-                icon: Icon(
-                  _twoPage
-                      ? Icons.chrome_reader_mode_rounded
-                      : Icons.menu_book_rounded,
+        child: LayoutBuilder(
+          builder: (context, constraints) => SizedBox(
+            height: 56,
+            child: Row(
+              children: <Widget>[
+                IconButton(
+                  onPressed: canReturn
+                      ? () => _handleOpenDetail(context)
+                      : null,
+                  tooltip: '戻る',
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
                 ),
-              ),
-              const Spacer(),
-              Container(
-                margin: const EdgeInsets.only(right: 12),
-                child: _buildPageSelector(compact: true),
-              ),
-            ],
+                if (widget.onOpenDetail != null)
+                  constraints.maxWidth >= 520
+                      ? TextButton.icon(
+                          onPressed: _openDetailPage,
+                          icon: const Icon(Icons.description_outlined),
+                          label: const Text('作品詳細'),
+                        )
+                      : IconButton(
+                          onPressed: _openDetailPage,
+                          tooltip: '作品詳細',
+                          icon: const Icon(Icons.description_outlined),
+                        ),
+                IconButton(
+                  onPressed: canPrev ? _prev : null,
+                  tooltip: '前のページ',
+                  icon: const Icon(Icons.chevron_left_rounded),
+                ),
+                IconButton(
+                  onPressed: canNext ? _next : null,
+                  tooltip: '次のページ',
+                  icon: const Icon(Icons.chevron_right_rounded),
+                ),
+                IconButton(
+                  onPressed: _toggleTwoPage,
+                  tooltip: _twoPage ? '見開きをオフ' : '見開きをオン',
+                  icon: Icon(
+                    _twoPage
+                        ? Icons.chrome_reader_mode_rounded
+                        : Icons.menu_book_rounded,
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  margin: const EdgeInsets.only(right: 12),
+                  child: _buildPageSelector(compact: true),
+                ),
+              ],
+            ),
           ),
         ),
       ),
