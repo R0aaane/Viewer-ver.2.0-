@@ -6,6 +6,7 @@ import os
 import posixpath
 import re
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,27 @@ from server.services.tag_alias_service import TagAliasService
 
 
 logger = logging.getLogger(__name__)
+
+
+def _rename_path_with_retry(source: str, target: str, *, is_folder: bool) -> None:
+    for attempt in range(4):
+        try:
+            if is_folder:
+                shutil.move(source, target)
+            else:
+                os.replace(source, target)
+            return
+        except PermissionError as error:
+            sharing_violation = getattr(error, "winerror", None) in {32, 33} or (
+                os.name == "nt" and error.errno in {13, 32}
+            )
+            if not sharing_violation or attempt == 3:
+                if sharing_violation:
+                    raise bad_request(
+                        "対象ファイルは別のアプリで使用中です。PDFを閉じてから、もう一度名前を変更してください"
+                    ) from error
+                raise
+            time.sleep(0.3 * (attempt + 1))
 
 
 def _normalize_name(name: str) -> str:
@@ -1170,10 +1192,11 @@ class MetadataStore:
             target_parent = os.path.dirname(target_full_path)
             if target_parent:
                 os.makedirs(target_parent, exist_ok=True)
-            if is_folder:
-                shutil.move(old_full_path, target_full_path)
-            else:
-                os.replace(old_full_path, target_full_path)
+            _rename_path_with_retry(
+                old_full_path,
+                target_full_path,
+                is_folder=is_folder,
+            )
 
             if not is_folder:
                 logger.info("[RENAME] success old=%s new=%s", old_full_path, target_full_path)
@@ -1267,10 +1290,11 @@ class MetadataStore:
                 target_parent = os.path.dirname(target_full_path)
                 if target_parent:
                     os.makedirs(target_parent, exist_ok=True)
-                if os.path.isdir(old_full_path):
-                    shutil.move(old_full_path, target_full_path)
-                else:
-                    os.replace(old_full_path, target_full_path)
+                _rename_path_with_retry(
+                    old_full_path,
+                    target_full_path,
+                    is_folder=os.path.isdir(old_full_path),
+                )
 
         actual_path = target_full_path
         kind = current["kind"]
