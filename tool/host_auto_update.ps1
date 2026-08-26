@@ -285,6 +285,8 @@ function Stop-HostApp {
 }
 
 function Start-HostApp {
+    param([switch]$RestartHostServer)
+
     if ($SkipHostAppRestart) {
         return
     }
@@ -296,10 +298,15 @@ function Start-HostApp {
     }
 
     Stop-HostApp
-    $process = Start-Process `
-        -FilePath $resolvedAppExe `
-        -WorkingDirectory (Split-Path -Parent $resolvedAppExe) `
-        -PassThru
+    $startArguments = @{
+        FilePath = $resolvedAppExe
+        WorkingDirectory = (Split-Path -Parent $resolvedAppExe)
+        PassThru = $true
+    }
+    if ($RestartHostServer) {
+        $startArguments.ArgumentList = '--restart-host-server'
+    }
+    $process = Start-Process @startArguments
 
     Set-Content -LiteralPath (Join-Path 'data' 'host_app.pid') -Value $process.Id
     Write-Host "app: started pid=$($process.Id)"
@@ -435,8 +442,7 @@ function Build-And-Restart {
         }
     }
 
-    Start-HostServer
-    Start-HostApp
+    Start-HostApp -RestartHostServer
 }
 
 function Get-PubspecVersion {
@@ -515,11 +521,11 @@ try {
         } else {
             Write-Host "update: none"
             if (-not $SkipInitialServerStartWhenNoUpdate) {
-                Start-HostServer
+                Start-HostApp -RestartHostServer
             }
         }
     } elseif (-not $SkipInitialServerStartWhenNoUpdate) {
-        Start-HostServer
+        Start-HostApp -RestartHostServer
     }
 
     if ($Once -and $initialFetchSucceeded) {

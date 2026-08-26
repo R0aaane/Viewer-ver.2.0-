@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../database/app_db.dart';
@@ -22,6 +24,11 @@ Future<void> bootstrapApp() async {
   await tagService.initialize();
   final hostServerService = HostApiServerService();
   await hostServerService.refresh();
+  if (Platform.executableArguments.contains('--restart-host-server') &&
+      tagService.settings.isHostMode) {
+    await hostServerService.stopServer();
+    await hostServerService.startServer(tagService: tagService);
+  }
 
   final repo = createRepository(
     appDb,
