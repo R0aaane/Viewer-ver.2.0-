@@ -337,6 +337,22 @@ class ActionsRoutesTest(unittest.TestCase):
             ],
         )
 
+    def test_apply_rename_closes_only_the_target_pdf_cache(self) -> None:
+        store = _RecordingMetadataStore()
+        thumbnail_service = _RecordingThumbnailService()
+        request = _request(store, thumbnail_service=thumbnail_service)
+        payload = RenameRequest(
+            oldPath=r'C:\library\target.pdf',
+            newPath=r'C:\library\renamed.pdf',
+        )
+
+        apply_rename(request, payload)
+
+        self.assertEqual(
+            thumbnail_service.close_cached_pdf_documents_calls,
+            [[r'C:\library\target.pdf']],
+        )
+
     def test_apply_rename_propagates_metadata_errors(self) -> None:
         store = _RecordingMetadataStore(rename_error=bad_request('rename failed'))
         request = _request(store)

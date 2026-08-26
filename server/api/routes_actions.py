@@ -909,6 +909,15 @@ def apply_rename(request: Request, payload: RenameRequest) -> MessageResponse:
     after = payload.after
     old_path = payload.oldPath or (before.path if before else None)
     new_path = payload.newPath or (after.path if after else None)
+    thumbnail_service = getattr(request.app.state, "thumbnail_service", None)
+    if thumbnail_service is not None and old_path:
+        close_cached_pdf_documents = getattr(
+            thumbnail_service,
+            "close_cached_pdf_documents",
+            None,
+        )
+        if close_cached_pdf_documents is not None:
+            close_cached_pdf_documents([old_path])
     try:
         request.app.state.metadata_store.apply_rename(
             old_media_id=payload.oldMediaId or (before.mediaId if before else None),
