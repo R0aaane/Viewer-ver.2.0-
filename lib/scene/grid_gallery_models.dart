@@ -6,6 +6,7 @@ enum _SortMode {
   name,
   updatedAt,
   addedAt,
+  ratingHighFirst,
   unreadFirst,
   readFirst,
   bookmarkedFirst,

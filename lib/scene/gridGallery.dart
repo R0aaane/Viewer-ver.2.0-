@@ -121,7 +121,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   static const int _mediaThumbCacheMaxBytes = 32 * 1024 * 1024;
 
   static const int _pageSize = 20;
-  static const int _detailedBrowsePageSize = 10;
+  static const int _detailedBrowseRowsPerPage = 4;
   static const int _gallerySearchPageSize = 10;
   static const int _hitomiSearchPageSize = 10;
   int _galleryPageIndex = 0;
@@ -178,7 +178,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _hitomiInitialSearchStarted = false;
   Set<int> _hitomiImportedGalleryIds = <int>{};
   Set<String> _hitomiImportedTitleKeys = <String>{};
-  Map<int, MediaItem> _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
   Set<int> _hitomiSelectedGalleryIds = <int>{};
   Map<int, HitomiSearchResult> _hitomiSelectedResultsByGalleryId =
       <int, HitomiSearchResult>{};
@@ -1008,7 +1007,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _saveDetailedBrowseCardColumns(int columns) async {
     if (columns < 1 || columns > 4) return;
-    setState(() => _detailedBrowseCardColumns = columns);
+    setState(() {
+      _detailedBrowseCardColumns = columns;
+      _homeSearchPageIndex = 0;
+    });
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_PrefsKeys.detailedBrowseCardColumns, columns);
   }

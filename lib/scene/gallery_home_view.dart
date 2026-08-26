@@ -346,6 +346,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
   }
 
   Future<void> _applyDetailedBrowseSortMode(_SortMode value) async {
+    if (value == _SortMode.ratingHighFirst) {
+      await _reloadRatings();
+    }
     if (_sortModeUsesReadingProgress(value)) {
       await _refreshCurrentPageReadingProgress(_homeSearchResults);
     }
@@ -816,7 +819,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
   int _detailedBrowseTotalPages() {
     if (_homeSearchResults.isEmpty) return 0;
-    final pageSize = _GalleryGridPageState._detailedBrowsePageSize;
+    final pageSize = _detailedBrowsePageSize();
     return (_homeSearchResults.length + pageSize - 1) ~/ pageSize;
   }
 
@@ -829,7 +832,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
   List<MediaItem> _currentDetailedBrowsePageItems() {
     if (_homeSearchResults.isEmpty) return const <MediaItem>[];
 
-    final pageSize = _GalleryGridPageState._detailedBrowsePageSize;
+    final pageSize = _detailedBrowsePageSize();
     final pageIndex = _detailedBrowseClampedPageIndex();
     final start = pageIndex * pageSize;
     final end = start + pageSize;
@@ -841,7 +844,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
   }
 
   Widget _buildDetailedBrowsePager() {
-    final pageSize = _GalleryGridPageState._detailedBrowsePageSize;
+    final pageSize = _detailedBrowsePageSize();
     if (_homeSearchResults.length <= pageSize) {
       return const SizedBox.shrink();
     }
@@ -850,52 +853,148 @@ extension _GalleryHomeView on _GalleryGridPageState {
     final clamped = _detailedBrowseClampedPageIndex();
     final start = clamped * pageSize + 1;
     final end = ((clamped + 1) * pageSize).clamp(0, _homeSearchResults.length);
-    final useDropdown = totalPages > 10;
-
+    final pageItems = _detailedBrowsePagerItems(clamped, totalPages);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-      child: Row(
-        children: [
-          Text('$start-$end / ${_homeSearchResults.length}'),
-          const Spacer(),
-          if (useDropdown)
-            DropdownButton<int>(
-              value: clamped,
-              items: List.generate(
-                totalPages,
-                (index) => DropdownMenuItem<int>(
-                  value: index,
-                  child: Text('ページ ${index + 1}'),
-                ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final pager = Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildDetailedBrowsePagerButton(
+                icon: Icons.chevron_left,
+                tooltip: '前のページ',
+                onTap: clamped > 0
+                    ? () => setState(() => _homeSearchPageIndex = clamped - 1)
+                    : null,
               ),
-              onChanged: (value) {
-                if (value == null || value == clamped) return;
-                setState(() => _homeSearchPageIndex = value);
-              },
-            )
-          else
-            Flexible(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: List.generate(totalPages, (index) {
-                    final selected = index == clamped;
-                    return Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: ChoiceChip(
-                        label: Text('${index + 1}'),
-                        selected: selected,
-                        onSelected: (_) {
-                          if (selected) return;
-                          setState(() => _homeSearchPageIndex = index);
-                        },
+              for (final page in pageItems)
+                page == null
+                    ? const SizedBox(width: 32, child: Center(child: Text('…')))
+                    : _buildDetailedBrowsePagerButton(
+                        label: '${page + 1}',
+                        selected: page == clamped,
+                        tooltip: '${page + 1} ページ',
+                        onTap: page == clamped
+                            ? null
+                            : () => setState(
+                                () => _homeSearchPageIndex = page,
+                              ),
                       ),
-                    );
-                  }),
-                ),
+              _buildDetailedBrowsePagerButton(
+                icon: Icons.chevron_right,
+                tooltip: '次のページ',
+                onTap: clamped < totalPages - 1
+                    ? () => setState(() => _homeSearchPageIndex = clamped + 1)
+                    : null,
               ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Text('$pageSize / ページ'),
+              ),
+            ],
+          );
+          if (constraints.maxWidth < 640) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$start-$end / ${_homeSearchResults.length}'),
+                const SizedBox(height: 8),
+                pager,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Text('$start-$end / ${_homeSearchResults.length}'),
+              const Spacer(),
+              pager,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  int _detailedBrowsePageSize() =>
+      _detailedBrowseCardColumns *
+      _GalleryGridPageState._detailedBrowseRowsPerPage;
+
+  List<int?> _detailedBrowsePagerItems(int currentPage, int totalPages) {
+    if (totalPages <= 7) {
+      return List<int?>.generate(totalPages, (index) => index);
+    }
+    final pages = <int>{
+      0,
+      1,
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+      totalPages - 2,
+      totalPages - 1,
+    }.where((page) => page >= 0 && page < totalPages).toList()
+      ..sort();
+    final items = <int?>[];
+    for (final page in pages) {
+      if (items.isNotEmpty && page - items.last! > 1) items.add(null);
+      items.add(page);
+    }
+    return items;
+  }
+
+  Widget _buildDetailedBrowsePagerButton({
+    String? label,
+    IconData? icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+    bool selected = false,
+  }) {
+    final theme = Theme.of(context);
+    final foreground = selected
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurface;
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: selected
+            ? theme.colorScheme.primary
+            : theme.colorScheme.surfaceContainerHighest,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: 38,
+            height: 38,
+            child: Center(
+              child: icon == null
+                  ? Text(
+                      label!,
+                      style: TextStyle(
+                        color: onTap == null && !selected
+                            ? foreground.withValues(alpha: 0.38)
+                            : foreground,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  : Icon(
+                      icon,
+                      color: onTap == null
+                          ? foreground.withValues(alpha: 0.38)
+                          : foreground,
+                    ),
             ),
-        ],
+          ),
+        ),
       ),
     );
   }
@@ -936,6 +1035,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       DropdownMenuItem(
                         value: _SortMode.addedAt,
                         child: Text('追加日'),
+                      ),
+                      DropdownMenuItem(
+                        value: _SortMode.ratingHighFirst,
+                        child: Text('評価（高い順）'),
                       ),
                       DropdownMenuItem(
                         value: _SortMode.name,
@@ -1049,9 +1152,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
       builder: (context, constraints) {
         final crossAxisCount = _detailedBrowseCardColumns;
         final pageItems = _currentDetailedBrowsePageItems();
-        final showPager =
-            _homeSearchResults.length >
-            _GalleryGridPageState._detailedBrowsePageSize;
+        final showPager = _homeSearchResults.length > _detailedBrowsePageSize();
         final crossSpacing = constraints.maxWidth < 420 ? 8.0 : 12.0;
         final mainSpacing = constraints.maxWidth < 420 ? 14.0 : 18.0;
         final contentWidth = constraints.maxWidth <= 760

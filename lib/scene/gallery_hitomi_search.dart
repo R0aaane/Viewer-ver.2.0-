@@ -33,7 +33,6 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       _hitomiSearchTotal = 0;
       _hitomiImportedGalleryIds = <int>{};
       _hitomiImportedTitleKeys = <String>{};
-      _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
       _hitomiSelectedGalleryIds = <int>{};
       _hitomiSelectedResultsByGalleryId = <int, HitomiSearchResult>{};
     });
@@ -238,22 +237,48 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     final clamped = _hitomiSearchPageIndex.clamp(0, totalPages - 1).toInt();
     final start = clamped * _GalleryGridPageState._hitomiSearchPageSize;
     final end = start + _hitomiSearchResults.length;
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      itemCount: _hitomiSearchResults.length + (totalPages > 1 ? 1 : 0),
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        if (index == 0 && totalPages > 1) {
-          return _buildHitomiSearchPager(
-            currentPage: clamped,
-            totalPages: totalPages,
-            start: start + 1,
-            end: end,
-            total: _hitomiSearchTotal,
-          );
-        }
-        final itemIndex = index - (totalPages > 1 ? 1 : 0);
-        return _buildHitomiResultCard(_hitomiSearchResults[itemIndex]);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 900
+            ? 3
+            : constraints.maxWidth >= 560
+            ? 2
+            : 1;
+        return CustomScrollView(
+          // Avoid preparing off-screen network thumbnails while the user scrolls.
+          cacheExtent: 0,
+          slivers: [
+            if (totalPages > 1)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                sliver: SliverToBoxAdapter(
+                  child: _buildHitomiSearchPager(
+                    currentPage: clamped,
+                    totalPages: totalPages,
+                    start: start + 1,
+                    end: end,
+                    total: _hitomiSearchTotal,
+                  ),
+                ),
+              ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: 14,
+                  crossAxisSpacing: 14,
+                  childAspectRatio: columns == 1 ? 1.35 : 0.56,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) =>
+                      _buildHitomiResultCard(_hitomiSearchResults[index]),
+                  childCount: _hitomiSearchResults.length,
+                ),
+              ),
+            ),
+          ],
+        );
       },
     );
   }
@@ -271,65 +296,132 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     required int end,
     required int total,
   }) {
-    final useDropdown = totalPages > 10;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Row(
-        children: [
-          Text('$start-$end / $total'),
-          const Spacer(),
-          IconButton(
-            tooltip: '前へ',
-            onPressed: currentPage <= 0
-                ? null
-                : () => _loadHitomiSearchPage(currentPage - 1),
-            icon: const Icon(Icons.chevron_left),
-          ),
-          if (useDropdown)
-            DropdownButton<int>(
-              value: currentPage,
-              items: List.generate(
-                totalPages,
-                (index) => DropdownMenuItem<int>(
-                  value: index,
-                  child: Text('ページ ${index + 1}'),
-                ),
-              ),
-              onChanged: (value) {
-                if (value == null || value == currentPage) return;
-                _loadHitomiSearchPage(value);
-              },
-            )
-          else
-            Flexible(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: List.generate(totalPages, (index) {
-                    final selected = index == currentPage;
-                    return Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: ChoiceChip(
-                        label: Text('${index + 1}'),
-                        selected: selected,
-                        onSelected: (_) {
-                          if (selected) return;
-                          _loadHitomiSearchPage(index);
-                        },
-                      ),
-                    );
-                  }),
-                ),
-              ),
+    final pageItems = _hitomiSearchPagerItems(currentPage, totalPages);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final pager = Wrap(
+          alignment: WrapAlignment.end,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            _buildHitomiPagerCircle(
+              icon: Icons.chevron_left,
+              tooltip: '前のページ',
+              onTap: currentPage <= 0
+                  ? null
+                  : () => _loadHitomiSearchPage(currentPage - 1),
             ),
-          IconButton(
-            tooltip: '次へ',
-            onPressed: currentPage >= totalPages - 1
-                ? null
-                : () => _loadHitomiSearchPage(currentPage + 1),
-            icon: const Icon(Icons.chevron_right),
+            for (final page in pageItems)
+              page == null
+                  ? const SizedBox(
+                      width: 36,
+                      child: Center(child: Text('…')),
+                    )
+                  : _buildHitomiPagerCircle(
+                      label: '${page + 1}',
+                      selected: page == currentPage,
+                      tooltip: '${page + 1} ページ',
+                      onTap: page == currentPage
+                          ? null
+                          : () => _loadHitomiSearchPage(page),
+                    ),
+            _buildHitomiPagerCircle(
+              icon: Icons.chevron_right,
+              tooltip: '次のページ',
+              onTap: currentPage >= totalPages - 1
+                  ? null
+                  : () => _loadHitomiSearchPage(currentPage + 1),
+            ),
+          ],
+        );
+        if (constraints.maxWidth < 560) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$start-$end / $total'),
+              const SizedBox(height: 8),
+              pager,
+            ],
+          );
+        }
+        return Row(
+          children: [Text('$start-$end / $total'), const Spacer(), pager],
+        );
+      },
+    );
+  }
+
+  List<int?> _hitomiSearchPagerItems(int currentPage, int totalPages) {
+    if (totalPages <= 7) {
+      return List<int?>.generate(totalPages, (index) => index);
+    }
+    final pages = <int>{
+      0,
+      1,
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+      totalPages - 2,
+      totalPages - 1,
+    }.where((page) => page >= 0 && page < totalPages).toList()
+      ..sort();
+    final items = <int?>[];
+    for (final page in pages) {
+      if (items.isNotEmpty) {
+        final previous = items.last!;
+        if (page - previous > 1) items.add(null);
+      }
+      items.add(page);
+    }
+    return items;
+  }
+
+  Widget _buildHitomiPagerCircle({
+    String? label,
+    IconData? icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+    bool selected = false,
+  }) {
+    final theme = Theme.of(context);
+    final background = selected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.surfaceContainerHighest;
+    final foreground = selected
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurface;
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: background,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: 38,
+            height: 38,
+            child: Center(
+              child: icon == null
+                  ? Text(
+                      label!,
+                      style: TextStyle(
+                        color: onTap == null && !selected
+                            ? foreground.withValues(alpha: 0.38)
+                            : foreground,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  : Icon(
+                      icon,
+                      color: onTap == null
+                          ? foreground.withValues(alpha: 0.38)
+                          : foreground,
+                    ),
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -357,82 +449,73 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     final theme = Theme.of(context);
     final imported = _isHitomiResultImported(result);
     final selected = _hitomiSelectedGalleryIds.contains(result.galleryId);
-    final importedItem = _hitomiImportedItemsByGalleryId[result.galleryId];
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => _openHitomiResult(result),
         child: Padding(
           padding: const EdgeInsets.all(10),
-          child: Row(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHitomiThumbnail(result),
-              const SizedBox(width: 12),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Stack(
+                  fit: StackFit.expand,
                   children: [
-                    Text(
-                      result.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _hitomiResultSubtitle(result),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall,
-                    ),
-                    if (imported) ...[
-                      const SizedBox(height: 6),
-                      Align(
-                        alignment: Alignment.centerLeft,
+                    _buildHitomiThumbnail(result),
+                    if (imported)
+                      const Positioned(
+                        top: 8,
+                        right: 8,
                         child: Chip(
                           visualDensity: VisualDensity.compact,
-                          avatar: const Icon(Icons.check_circle, size: 18),
-                          label: const Text('取り込み済み'),
+                          avatar: Icon(Icons.check_circle, size: 18),
+                          label: Text('取り込み済み'),
                         ),
                       ),
-                      if (importedItem != null) ...[
-                        const SizedBox(height: 6),
-                        _buildHitomiImportedItemPreview(importedItem),
-                      ],
-                    ],
-                    const SizedBox(height: 8),
-                    _buildHitomiTagWrap(result),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Checkbox(
-                          value: selected,
-                          onChanged: imported
-                              ? null
-                              : (_) => _toggleHitomiResultSelection(result),
-                        ),
-                        Text(selected ? '選択中' : '選択'),
-                        const SizedBox(width: 6),
-                        TextButton.icon(
-                          onPressed: () => _openHitomiResult(result),
-                          icon: const Icon(Icons.open_in_new),
-                          label: const Text('開く'),
-                        ),
-                        const SizedBox(width: 6),
-                        TextButton.icon(
-                          onPressed: _currentFolderRaw == null || imported
-                              ? null
-                              : () => _importHitomiResult(result),
-                          icon: const Icon(Icons.download_outlined),
-                          label: Text(imported ? '取り込み済み' : '取り込み'),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                result.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _hitomiResultSubtitle(result),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Checkbox(
+                    value: selected,
+                    onChanged: imported
+                        ? null
+                        : (_) => _toggleHitomiResultSelection(result),
+                  ),
+                  Text(selected ? '選択中' : '選択'),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: '開く',
+                    onPressed: () => _openHitomiResult(result),
+                    icon: const Icon(Icons.open_in_new),
+                  ),
+                  IconButton(
+                    tooltip: imported ? '取り込み済み' : '取り込み',
+                    onPressed: _currentFolderRaw == null || imported
+                        ? null
+                        : () => _importHitomiResult(result),
+                    icon: const Icon(Icons.download_outlined),
+                  ),
+                ],
               ),
             ],
           ),
@@ -444,80 +527,13 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
   Widget _buildHitomiThumbnail(HitomiSearchResult result) {
     final url = result.thumbnailUrl;
     return SizedBox(
-      width: 112,
-      height: 156,
+      width: double.infinity,
+      height: double.infinity,
       child: _HitomiThumbnailImage(
         urls: result.thumbnailUrls.isEmpty && url != null
             ? <String>[url]
             : result.thumbnailUrls,
       ),
-    );
-  }
-
-  Widget _buildHitomiImportedItemPreview(MediaItem item) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 42,
-          height: 58,
-          child: FutureBuilder<ThumbPair>(
-            future: _getMediaThumbPair(item),
-            builder: (context, snapshot) {
-              final bytes = snapshot.data?.front;
-              if (bytes == null || bytes.isEmpty) {
-                return const DecoratedBox(
-                  decoration: BoxDecoration(color: Color(0x11000000)),
-                  child: Icon(Icons.picture_as_pdf_outlined, size: 20),
-                );
-              }
-              return ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: Image.memory(bytes, fit: BoxFit.cover),
-              );
-            },
-          ),
-        ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            'ライブラリ: ${item.displayName}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHitomiTagWrap(HitomiSearchResult result) {
-    final tags = <({String prefix, String value})>[
-      for (final value in result.artists.take(2))
-        (prefix: 'artist', value: value),
-      for (final value in result.groups.take(2))
-        (prefix: 'group', value: value),
-      for (final value in result.series.take(2))
-        (prefix: 'series', value: value),
-      for (final value in result.characters.take(2))
-        (prefix: 'character', value: value),
-      for (final value in result.tags.take(8)) (prefix: 'tag', value: value),
-    ];
-    if (tags.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Wrap(
-      spacing: 6,
-      runSpacing: 4,
-      children: [
-        for (final tag in tags)
-          ActionChip(
-            visualDensity: VisualDensity.compact,
-            label: Text(tag.value, overflow: TextOverflow.ellipsis),
-            onPressed: () => _appendHitomiSearchTerm(
-              '${tag.prefix}:${_hitomiTerm(tag.value)}',
-            ),
-          ),
-      ],
     );
   }
 
@@ -605,7 +621,6 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       setState(() {
         _hitomiImportedGalleryIds = <int>{};
         _hitomiImportedTitleKeys = <String>{};
-        _hitomiImportedItemsByGalleryId = <int, MediaItem>{};
       });
       return;
     }
@@ -621,7 +636,6 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
 
     final ids = <int>{};
     final titleKeys = <String>{};
-    final matchedItems = <int, MediaItem>{};
     for (final result in results) {
       final titleKey = _hitomiImportedTitleKey(result.title);
       for (final item in items) {
@@ -631,7 +645,6 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
           if (titleKey.isNotEmpty) {
             titleKeys.add(titleKey);
           }
-          matchedItems[result.galleryId] = item;
           break;
         }
       }
@@ -640,7 +653,6 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     setState(() {
       _hitomiImportedGalleryIds = ids;
       _hitomiImportedTitleKeys = titleKeys;
-      _hitomiImportedItemsByGalleryId = matchedItems;
     });
   }
 
@@ -992,6 +1004,8 @@ class _HitomiThumbnailImageState extends State<_HitomiThumbnailImage> {
                 'User-Agent': 'Mozilla/5.0',
               },
               fit: BoxFit.cover,
+              cacheWidth: 480,
+              filterQuality: FilterQuality.low,
               errorBuilder: (_, _, _) {
                 if (_index + 1 < widget.urls.length) {
                   WidgetsBinding.instance.addPostFrameCallback((_) {
