@@ -66,6 +66,15 @@ class _TileShell extends StatelessWidget {
   }
 }
 
+enum _HomeShelfKind {
+  recentAdded,
+  favorites,
+  rating,
+  unread,
+  bookmarks,
+  recentlyViewed,
+}
+
 extension _GalleryHomeView on _GalleryGridPageState {
   Future<Map<String, MediaItem>> _buildHomeItemLookup(
     List<MediaItem> mediaItems,
@@ -1428,6 +1437,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
           _homeRatingShelfItems = const <MediaItem>[];
           _homeRecentViewedItems = const <MediaItem>[];
           _homeBookmarkedReadingItems = const <MediaItem>[];
+          _homeAllItemsByShelfKind =
+              <_HomeShelfKind, List<MediaItem>>{};
           _homeRecentViewEntriesByItemId = <String, ReadingProgressEntry>{};
           _homeResumeCard = null;
           _homeShowcaseErrorMessage = null;
@@ -1574,6 +1585,14 @@ extension _GalleryHomeView on _GalleryGridPageState {
         _homeBookmarkedReadingItems = bookmarkedReadingItems
             .take(10)
             .toList(growable: false);
+        _homeAllItemsByShelfKind = <_HomeShelfKind, List<MediaItem>>{
+          _HomeShelfKind.recentAdded: recentAdded,
+          _HomeShelfKind.favorites: favorites,
+          _HomeShelfKind.rating: ratingItems,
+          _HomeShelfKind.unread: unreadItems,
+          _HomeShelfKind.bookmarks: bookmarkedReadingItems,
+          _HomeShelfKind.recentlyViewed: recentViewedItems,
+        };
         _homeRecentViewEntriesByItemId = recentViewEntriesByItemId;
         _homeResumeCard = resumeCard;
         _homeShowcaseErrorMessage = null;
@@ -1647,13 +1666,15 @@ extension _GalleryHomeView on _GalleryGridPageState {
           title,
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
-        const SizedBox(height: 4),
-        Text(
-          subtitle,
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: Colors.white70),
-        ),
+        if (subtitle.trim().isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+          ),
+        ],
       ],
     );
   }
@@ -1906,6 +1927,87 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
+  Future<void> _showAllHomeShelf({
+    required String title,
+    required _HomeShelfKind kind,
+  }) async {
+    final items = _homeAllItemsByShelfKind[kind] ?? const <MediaItem>[];
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 820, maxHeight: 680),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: Theme.of(dialogContext).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 2),
+                          Text('${items.length} 件'),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '閉じる',
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: items.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final item = items[index];
+                    return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 8,
+                      ),
+                      leading: SizedBox(
+                        width: 44,
+                        height: 64,
+                        child: _homeFavThumb(item),
+                      ),
+                      title: Text(
+                        _displayTitleForItem(item),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${item.kind == MediaKind.pdf ? 'PDF' : '画像'} / ${_folderLabelForItem(item)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.of(dialogContext).pop();
+                        _openDetailFromHome(item);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHomeMediaShelf({
     required String title,
     required String subtitle,
@@ -1913,6 +2015,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
     required String emptyTitle,
     required String emptyMessage,
     required Widget Function(MediaItem item) itemBuilder,
+    VoidCallback? onShowAll,
   }) {
     return Card(
       child: Padding(
@@ -1920,7 +2023,18 @@ extension _GalleryHomeView on _GalleryGridPageState {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildHomeSectionHeading(title, subtitle),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: _buildHomeSectionHeading(title, subtitle)),
+                if (onShowAll != null && items.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: onShowAll,
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                    label: const Text('すべて表示'),
+                  ),
+              ],
+            ),
             const SizedBox(height: 10),
             if (_homeShowcaseLoading && items.isEmpty)
               const Padding(
@@ -1972,6 +2086,15 @@ extension _GalleryHomeView on _GalleryGridPageState {
                     unawaited(_refreshHomeShowcases());
                   },
                 ),
+                if (_homeRatingShelfItems.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _showAllHomeShelf(
+                      title: '評価$ratingの作品',
+                      kind: _HomeShelfKind.rating,
+                    ),
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                    label: const Text('すべて表示'),
+                  ),
               ],
             ),
             const SizedBox(height: 10),
@@ -2135,6 +2258,281 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
+  String _homeMyListLabel(_HomeShelfKind kind) {
+    switch (kind) {
+      case _HomeShelfKind.favorites:
+        return 'お気に入り';
+      case _HomeShelfKind.unread:
+        return '未読';
+      case _HomeShelfKind.bookmarks:
+        return 'しおり';
+      case _HomeShelfKind.recentlyViewed:
+        return '最近閲覧';
+      case _HomeShelfKind.rating:
+        return '評価別';
+      case _HomeShelfKind.recentAdded:
+        return '最近追加';
+    }
+  }
+
+  List<MediaItem> _homeMyListItems(_HomeShelfKind kind) {
+    switch (kind) {
+      case _HomeShelfKind.favorites:
+        return _homeFavoriteShowcaseItems;
+      case _HomeShelfKind.unread:
+        return _homeUnreadItems;
+      case _HomeShelfKind.bookmarks:
+        return _homeBookmarkedReadingItems;
+      case _HomeShelfKind.recentlyViewed:
+        return _homeRecentViewedItems;
+      case _HomeShelfKind.rating:
+        return _homeRatingShelfItems;
+      case _HomeShelfKind.recentAdded:
+        return _homeRecentAddedItems;
+    }
+  }
+
+  Widget _buildHomeMyListItem(
+    MediaItem item,
+    _HomeShelfKind kind,
+  ) {
+    final activity = _homeRecentViewEntryForItem(item);
+    final page = activity?.currentPage;
+    final pageText = page == null
+        ? null
+        : activity?.totalPages == null
+        ? 'p.$page'
+        : 'p.$page / ${activity!.totalPages}';
+    final scheme = Theme.of(context).colorScheme;
+    var footerText = '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}';
+    var footerIcon = Icons.schedule_outlined;
+    String? badgeText;
+    IconData? badgeIcon;
+    Color? badgeBackgroundColor;
+    Color? badgeForegroundColor;
+
+    switch (kind) {
+      case _HomeShelfKind.favorites:
+        footerText = activity == null
+            ? footerText
+            : '最終閲覧 ${_formatHomeDateTime(activity.lastReadAt)}';
+        footerIcon = activity == null ? Icons.schedule_outlined : Icons.history;
+        badgeText = 'お気に入り';
+        badgeIcon = Icons.star_rounded;
+        badgeBackgroundColor = scheme.primaryContainer;
+        badgeForegroundColor = scheme.onPrimaryContainer;
+        break;
+      case _HomeShelfKind.unread:
+        footerIcon = Icons.mark_email_unread_outlined;
+        badgeText = '未読';
+        badgeIcon = Icons.mark_email_unread_outlined;
+        badgeBackgroundColor = scheme.tertiaryContainer;
+        badgeForegroundColor = scheme.onTertiaryContainer;
+        break;
+      case _HomeShelfKind.bookmarks:
+        footerText = pageText == null
+            ? 'しおり ${_formatHomeDateTime(activity?.updatedAt)}'
+            : 'しおり ${_formatHomeDateTime(activity?.updatedAt)} / $pageText';
+        footerIcon = Icons.bookmark;
+        badgeText = pageText ?? 'しおり';
+        badgeIcon = Icons.bookmark;
+        badgeBackgroundColor = scheme.primaryContainer;
+        badgeForegroundColor = scheme.onPrimaryContainer;
+        break;
+      case _HomeShelfKind.recentlyViewed:
+        footerText = pageText == null
+            ? '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)}'
+            : '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)} / $pageText';
+        footerIcon = Icons.history;
+        badgeText = pageText;
+        badgeIcon = pageText == null ? null : Icons.auto_stories_outlined;
+        badgeBackgroundColor = scheme.secondaryContainer;
+        badgeForegroundColor = scheme.onSecondaryContainer;
+        break;
+      case _HomeShelfKind.rating:
+        badgeText = '評価$_homeRatingShelfRating';
+        badgeIcon = Icons.star_rounded;
+        badgeBackgroundColor = scheme.secondaryContainer;
+        badgeForegroundColor = scheme.onSecondaryContainer;
+        break;
+      case _HomeShelfKind.recentAdded:
+        break;
+    }
+
+    return _buildHomeMediaShelfCard(
+      item: item,
+      footerText: footerText,
+      footerIcon: footerIcon,
+      badgeText: badgeText,
+      badgeIcon: badgeIcon,
+      badgeBackgroundColor: badgeBackgroundColor,
+      badgeForegroundColor: badgeForegroundColor,
+      onTap: () => _openDetailFromHome(
+        item,
+        initialPdfPage:
+            (kind == _HomeShelfKind.bookmarks ||
+                kind == _HomeShelfKind.recentlyViewed) &&
+            item.kind == MediaKind.pdf &&
+            page != null
+            ? page
+            : 1,
+      ),
+    );
+  }
+
+  Widget _buildHomeCompactResumeCard() {
+    final resume = _homeResumeCard;
+    if (resume == null) return const SizedBox.shrink();
+    final progress = resume.progress;
+    final pageText = progress.totalPages == null
+        ? 'p.${progress.currentPage}'
+        : 'p.${progress.currentPage} / ${progress.totalPages}';
+    return ControllerFocusable(
+      debugLabel: 'home-my-list-resume-${resume.item.id}',
+      borderRadius: BorderRadius.circular(12),
+      onPressed: () => _openDetailFromHome(
+        resume.item,
+        initialPdfPage: progress.currentPage,
+      ),
+      child: Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 52,
+                  height: 72,
+                  child: _homeFavThumb(resume.item, fill: true),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '続きから読む',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${_displayTitleForItem(resume.item)} ($pageText)',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 72,
+                child: LinearProgressIndicator(value: progress.progress),
+              ),
+              const SizedBox(width: 8),
+              Text('${(progress.progress * 100).round()}%'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHomeMyListPanel() {
+    final kind = _homeMyListKind;
+    final items = _homeMyListItems(kind);
+    final label = _homeMyListLabel(kind);
+    final hasResume = _homeResumeCard != null;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'マイリスト',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                if (kind == _HomeShelfKind.rating)
+                  DropdownButton<int>(
+                    value: _homeRatingShelfRating,
+                    items: const [
+                      DropdownMenuItem(value: 5, child: Text('評価5')),
+                      DropdownMenuItem(value: 4, child: Text('評価4')),
+                      DropdownMenuItem(value: 3, child: Text('評価3')),
+                    ],
+                    onChanged: (value) {
+                      if (value == null || value == _homeRatingShelfRating) {
+                        return;
+                      }
+                      setState(() => _homeRatingShelfRating = value);
+                      unawaited(_refreshHomeShowcases());
+                    },
+                  ),
+                if (items.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _showAllHomeShelf(title: label, kind: kind),
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                    label: const Text('すべて表示'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final option in const <_HomeShelfKind>[
+                  _HomeShelfKind.favorites,
+                  _HomeShelfKind.unread,
+                  _HomeShelfKind.bookmarks,
+                  _HomeShelfKind.recentlyViewed,
+                  _HomeShelfKind.rating,
+                ])
+                  ChoiceChip(
+                    label: Text(_homeMyListLabel(option)),
+                    selected: option == kind,
+                    onSelected: (_) => setState(() => _homeMyListKind = option),
+                  ),
+              ],
+            ),
+            if (hasResume) ...[
+              const SizedBox(height: 14),
+              _buildHomeCompactResumeCard(),
+            ],
+            const SizedBox(height: 16),
+            if (_homeShowcaseLoading && items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (items.isEmpty)
+              _buildHomeShelfEmptyState(
+                icon: Icons.collections_bookmark_outlined,
+                title: '$labelはまだありません',
+                message: '該当する作品があると、ここに表示されます。',
+              )
+            else
+              _HomeShelfScroller(
+                itemCount: items.length,
+                itemBuilder: (context, index) =>
+                    _buildHomeMyListItem(items[index], kind),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildHomeBody() {
     if (_initializing) {
       return _buildRefreshableStatusBody(
@@ -2164,8 +2562,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
     final homeSearchPreview = _homeSearchResults
         .take(4)
         .toList(growable: false);
-    final recentViewedEntries = _homeRecentViewEntriesByItemId;
-    final scheme = Theme.of(context).colorScheme;
+    final documentCount =
+        _homeAllItemsByShelfKind[_HomeShelfKind.recentAdded]?.length ?? 0;
 
     return RefreshIndicator(
       onRefresh: _handlePullToRefresh,
@@ -2182,18 +2580,17 @@ extension _GalleryHomeView on _GalleryGridPageState {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.search_rounded, color: scheme.primary),
-                      const SizedBox(width: 10),
-                      const Expanded(
-                        child: Text(
-                          'ライブラリを検索',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
+                      Expanded(
+                        child: SizedBox(
+                          height: 48,
+                          child: _buildSharedHomeSearchField(
+                            includeAllWhenEmpty: false,
+                            hintText: 'タイトル・タグ・作者を検索',
                           ),
                         ),
                       ),
-                      if (_repoCapabilities.canRecursiveSearch)
+                      if (_repoCapabilities.canRecursiveSearch) ...[
+                        const SizedBox(width: 8),
                         Tooltip(
                           message: '詳細ブラウズを開く',
                           child: IconButton(
@@ -2201,15 +2598,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
                             icon: const Icon(Icons.tune_rounded),
                           ),
                         ),
+                      ],
                     ],
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    height: 48,
-                    child: _buildSharedHomeSearchField(
-                      includeAllWhenEmpty: false,
-                      hintText: 'タイトル・タグ・作者を検索',
-                    ),
                   ),
                   const SizedBox(height: 10),
 
@@ -2230,7 +2620,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       ),
                     )
                   else if (_homeQuery.trim().isEmpty)
-                    const Text('タイトル、タグ、作者、シリーズからすぐに探せます。')
+                    const SizedBox.shrink()
                   else if (_homeSearchResults.isEmpty)
                     const Text('一致する作品はありません。')
                   else ...[
@@ -2354,6 +2744,11 @@ extension _GalleryHomeView on _GalleryGridPageState {
                     runSpacing: 10,
                     children: [
                       _buildHomeOverviewMetric(
+                        icon: Icons.description_outlined,
+                        label: 'ドキュメント',
+                        value: '$documentCount',
+                      ),
+                      _buildHomeOverviewMetric(
                         icon: Icons.folder_outlined,
                         label: '登録フォルダ',
                         value: '$folderCount',
@@ -2433,10 +2828,14 @@ extension _GalleryHomeView on _GalleryGridPageState {
           if (_homeShowcaseErrorMessage != null) const SizedBox(height: 12),
           _buildHomeMediaShelf(
             title: '最近追加',
-            subtitle: '追加された作品を表紙つきで一覧できます。',
+            subtitle: '',
             items: _homeRecentAddedItems,
             emptyTitle: '最近追加はまだありません',
             emptyMessage: '作品が追加されると、ここに新着が並びます。',
+            onShowAll: () => _showAllHomeShelf(
+              title: '最近追加した作品',
+              kind: _HomeShelfKind.recentAdded,
+            ),
             itemBuilder: (item) => _buildHomeMediaShelfCard(
               item: item,
               footerText:
@@ -2446,202 +2845,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
             ),
           ),
           const SizedBox(height: 12),
-          _buildHomeMediaShelf(
-            title: 'お気に入り',
-            subtitle: 'お気に入り登録した作品をすぐ開けます。',
-            items: _homeFavoriteShowcaseItems,
-            emptyTitle: 'お気に入りはまだありません',
-            emptyMessage: '作品をお気に入りにすると、ここへ表紙つきで並びます。',
-            itemBuilder: (item) {
-              final activity = _homeRecentViewEntryForItem(item);
-              return _buildHomeMediaShelfCard(
-                item: item,
-                footerText: activity == null
-                    ? '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}'
-                    : '最終閲覧 ${_formatHomeDateTime(activity.lastReadAt)}',
-                footerIcon: activity == null
-                    ? Icons.schedule_outlined
-                    : Icons.history,
-                badgeText: 'お気に入り',
-                badgeIcon: Icons.star_rounded,
-                badgeBackgroundColor: Theme.of(
-                  context,
-                ).colorScheme.primaryContainer,
-                badgeForegroundColor: Theme.of(
-                  context,
-                ).colorScheme.onPrimaryContainer,
-                onTap: () => _openDetailFromHome(item),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          _buildHomeRatingShelf(),
-          const SizedBox(height: 12),
-          _buildHomeMediaShelf(
-            title: '未読',
-            subtitle: 'まだ開いていない PDF を最近追加の順に表示します。',
-            items: _homeUnreadItems,
-            emptyTitle: '未読の PDF はありません',
-            emptyMessage: '未読の PDF があると、ここに表示されます。',
-            itemBuilder: (item) => _buildHomeMediaShelfCard(
-              item: item,
-              footerText:
-                  '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
-              footerIcon: Icons.mark_email_unread_outlined,
-              badgeText: '未読',
-              badgeIcon: Icons.mark_email_unread_outlined,
-              badgeBackgroundColor: Theme.of(
-                context,
-              ).colorScheme.tertiaryContainer,
-              badgeForegroundColor: Theme.of(
-                context,
-              ).colorScheme.onTertiaryContainer,
-              onTap: () => _openDetailFromHome(item),
-            ),
-          ),
-          const SizedBox(height: 12),
-          _buildContinueReadingCard(),
-          const SizedBox(height: 12),
-          _buildHomeMediaShelf(
-            title: 'しおり',
-            subtitle: 'しおりを挟んだ読みかけの PDF を表示します。',
-            items: _homeBookmarkedReadingItems,
-            emptyTitle: 'しおり付きの読みかけ PDF はありません',
-            emptyMessage: '詳細ページでしおりを挟むと、ここに表示されます。',
-            itemBuilder: (item) {
-              final activity = recentViewedEntries[item.id];
-              final page = activity?.currentPage;
-              final totalPages = activity?.totalPages;
-              final pageText = page == null
-                  ? null
-                  : totalPages != null
-                  ? 'p.$page / $totalPages'
-                  : 'p.$page';
-              return _buildHomeMediaShelfCard(
-                item: item,
-                footerText: pageText != null
-                    ? 'しおり ${_formatHomeDateTime(activity?.updatedAt)} / $pageText'
-                    : 'しおり ${_formatHomeDateTime(activity?.updatedAt)}',
-                footerIcon: Icons.bookmark,
-                badgeText: pageText ?? 'しおり',
-                badgeIcon: Icons.bookmark,
-                badgeBackgroundColor: Theme.of(
-                  context,
-                ).colorScheme.primaryContainer,
-                badgeForegroundColor: Theme.of(
-                  context,
-                ).colorScheme.onPrimaryContainer,
-                onTap: () => _openDetailFromHome(
-                  item,
-                  initialPdfPage: item.kind == MediaKind.pdf && page != null
-                      ? page
-                      : 1,
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          _buildHomeMediaShelf(
-            title: '最近閲覧',
-            subtitle: 'さっき見ていた作品へすぐ戻れます。',
-            items: _homeRecentViewedItems,
-            emptyTitle: '最近閲覧はまだありません',
-            emptyMessage: '作品を開くと、ここに最近見たものが並びます。',
-            itemBuilder: (item) {
-              final activity = recentViewedEntries[item.id];
-              final page = activity?.currentPage;
-              final totalPages = activity?.totalPages;
-              final pageText = page == null
-                  ? null
-                  : totalPages != null
-                  ? 'p.$page / $totalPages'
-                  : 'p.$page';
-              final progressText = activity == null
-                  ? null
-                  : '${(activity.progress * 100).round()}%';
-              return _buildHomeMediaShelfCard(
-                item: item,
-                footerText: pageText != null
-                    ? '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)} / $pageText / $progressText'
-                    : '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)}',
-                footerIcon: Icons.history,
-                badgeText: pageText,
-                badgeIcon: pageText != null
-                    ? Icons.auto_stories_outlined
-                    : null,
-                badgeBackgroundColor: Theme.of(
-                  context,
-                ).colorScheme.secondaryContainer,
-                badgeForegroundColor: Theme.of(
-                  context,
-                ).colorScheme.onSecondaryContainer,
-                onTap: () => _openDetailFromHome(
-                  item,
-                  initialPdfPage: item.kind == MediaKind.pdf && page != null
-                      ? page
-                      : 1,
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '登録フォルダ',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_foldersRaw.isEmpty)
-                    Text('登録フォルダがありません。「$_primaryAddActionLabel」から追加してください。')
-                  else
-                    ..._foldersRaw.map((raw) {
-                      final isCurrent = raw == _currentFolderRaw;
-                      return ListTile(
-                        dense: true,
-                        leading: Icon(
-                          isCurrent ? Icons.folder : Icons.folder_outlined,
-                        ),
-                        title: Text(
-                          _folderLabel(raw),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          raw,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: '名前変更',
-                              icon: const Icon(Icons.edit_outlined),
-                              onPressed: () => _renameFolder(raw),
-                            ),
-                            IconButton(
-                              tooltip: '削除',
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: () => _removeFolder(raw),
-                            ),
-                          ],
-                        ),
-                        onTap: () async {
-                          await _switchFolder(raw);
-                          _exitSelectMode();
-                          setState(() => _page = _MainPage.gallery);
-                        },
-                      );
-                    }),
-                ],
-              ),
-            ),
-          ),
+          _buildHomeMyListPanel(),
         ],
       ),
     );

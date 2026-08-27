@@ -234,6 +234,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _homeRatingShelfItems = const [];
   List<MediaItem> _homeRecentViewedItems = const [];
   List<MediaItem> _homeBookmarkedReadingItems = const [];
+  Map<_HomeShelfKind, List<MediaItem>> _homeAllItemsByShelfKind =
+      <_HomeShelfKind, List<MediaItem>>{};
+  _HomeShelfKind _homeMyListKind = _HomeShelfKind.favorites;
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
       <String, ReadingProgressEntry>{};
   Map<String, ReadingProgressEntry> _readingProgressByItemId =
