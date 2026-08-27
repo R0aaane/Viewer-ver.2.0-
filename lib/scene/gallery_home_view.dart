@@ -296,6 +296,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     try {
       final all = await _ensureHomeSearchCorpusLoaded();
+      await _expandStableRatingsForItems(all);
       final needsProgressForQuery = q
           .toLowerCase()
           .split(RegExp(r'\s+'))
@@ -348,6 +349,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
   Future<void> _applyDetailedBrowseSortMode(_SortMode value) async {
     if (value == _SortMode.ratingHighFirst) {
       await _reloadRatings();
+      await _expandStableRatingsForItems(_homeSearchResults);
     }
     if (_sortModeUsesReadingProgress(value)) {
       await _refreshCurrentPageReadingProgress(_homeSearchResults);

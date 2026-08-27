@@ -1058,6 +1058,36 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     return null;
   }
 
+  Future<void> _expandStableRatingsForItems(Iterable<MediaItem> items) async {
+    final stableRatings = <String, int>{
+      for (final entry in _ratingsById.entries)
+        if (_looksLikeStableMediaId(entry.key)) entry.key: entry.value,
+    };
+    if (stableRatings.isEmpty) return;
+
+    final expandedRatings = Map<String, int>.from(_ratingsById);
+    for (final item in items) {
+      if (item.kind == MediaKind.folder || _ratingForItem(item) != null) {
+        continue;
+      }
+      try {
+        final identity = await _homeMediaIdResolver.resolve(item);
+        final rating = stableRatings[identity.stableId];
+        if (rating == null) continue;
+        for (final id in <String>{item.id, ...identity.aliases}) {
+          for (final variant in _idVariants(id)) {
+            expandedRatings[variant] = rating;
+          }
+        }
+      } catch (_) {
+        // Keep the existing path-based lookup when the ID cannot be resolved.
+      }
+    }
+
+    if (!mounted || expandedRatings.length == _ratingsById.length) return;
+    setState(() => _ratingsById = expandedRatings);
+  }
+
   Future<void> _replaceRatingId(String oldId, String newId) async {
     final prefs = await SharedPreferences.getInstance();
     final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
