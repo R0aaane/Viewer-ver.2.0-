@@ -365,6 +365,33 @@ extension _GalleryHomeView on _GalleryGridPageState {
     });
   }
 
+  Future<void> _applyDetailedBrowseRatingFilter(int? rating) async {
+    if (!mounted) return;
+    setState(() {
+      _homeRatingFilter = rating;
+      _homeSearchPageIndex = 0;
+    });
+
+    if (rating != null) {
+      await _reloadRatings();
+      final ratedItems = await widget.tagService
+          .listRemoteRatedMediaItems(rating)
+          .catchError((_) => null);
+      if (!mounted) return;
+      if (ratedItems != null) {
+        final ratings = Map<String, int>.from(_ratingsById);
+        for (final item in ratedItems) {
+          for (final variant in _idVariants(item.id)) {
+            ratings[variant] = rating;
+          }
+        }
+        setState(() => _ratingsById = ratings);
+      }
+    }
+
+    await _runHomeSearch(includeAllWhenEmpty: true);
+  }
+
   Future<void> _openDetailedBrowsePage() async {
     if (!_repoCapabilities.canRecursiveSearch) {
       if (!mounted) return;
@@ -1086,11 +1113,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       DropdownMenuItem<int?>(value: 3, child: Text('評価3')),
                     ],
                     onChanged: (value) {
-                      setState(() {
-                        _homeRatingFilter = value;
-                        _homeSearchPageIndex = 0;
-                      });
-                      _runHomeSearch(includeAllWhenEmpty: true);
+                      unawaited(_applyDetailedBrowseRatingFilter(value));
                     },
                   );
 
