@@ -739,6 +739,15 @@ extension _GalleryGridView on _GalleryGridPageState {
       case _SortMode.addedAt:
         list.sort((a, b) => _getAddedAt(b).compareTo(_getAddedAt(a)));
         break;
+      case _SortMode.ratingHighFirst:
+        list.sort((a, b) {
+          final ratingCompare = (_ratingForItem(b) ?? 0).compareTo(
+            _ratingForItem(a) ?? 0,
+          );
+          if (ratingCompare != 0) return ratingCompare;
+          return _compareNaturalName(a.displayName, b.displayName);
+        });
+        break;
       case _SortMode.unreadFirst:
         list.sort((a, b) => _compareByReadStatus(a, b, readFirst: false));
         break;
