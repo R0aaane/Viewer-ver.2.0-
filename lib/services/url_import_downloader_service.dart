@@ -47,6 +47,7 @@ class HitomiSearchResult {
   final String galleryUrl;
   final String? thumbnailUrl;
   final List<String> thumbnailUrls;
+  final List<List<String>> previewUrlSets;
 
   const HitomiSearchResult({
     required this.galleryId,
@@ -62,6 +63,7 @@ class HitomiSearchResult {
     required this.galleryUrl,
     this.thumbnailUrl,
     this.thumbnailUrls = const <String>[],
+    this.previewUrlSets = const <List<String>>[],
   });
 }
 
@@ -305,10 +307,22 @@ class UrlImportDownloaderService {
     final files = info['files'];
     String? thumbnailUrl;
     var thumbnailUrls = const <String>[];
-    if (files is List && files.isNotEmpty && files.first is Map) {
-      final firstFile = (files.first as Map).cast<Object?, Object?>();
-      thumbnailUrls = _buildHitomiThumbnailUrls(firstFile);
-      thumbnailUrl = thumbnailUrls.isEmpty ? null : thumbnailUrls.first;
+    var previewUrlSets = const <List<String>>[];
+    if (files is List && files.isNotEmpty) {
+      previewUrlSets = files
+          .whereType<Map>()
+          .take(2)
+          .map(
+            (file) => _buildHitomiThumbnailUrls(
+              file.cast<Object?, Object?>(),
+            ),
+          )
+          .where((urls) => urls.isNotEmpty)
+          .toList(growable: false);
+      if (previewUrlSets.isNotEmpty) {
+        thumbnailUrls = previewUrlSets.first;
+        thumbnailUrl = thumbnailUrls.first;
+      }
     }
     return HitomiSearchResult(
       galleryId: galleryId,
@@ -333,6 +347,7 @@ class UrlImportDownloaderService {
       galleryUrl: galleryUrl,
       thumbnailUrl: thumbnailUrl,
       thumbnailUrls: thumbnailUrls,
+      previewUrlSets: previewUrlSets,
     );
   }
 

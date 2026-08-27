@@ -1658,6 +1658,51 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
+  Widget _buildHomeOverviewMetric({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 154,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: scheme.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: Colors.white70),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$value 件',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHomeShelfMetaLine(String label, String value) {
     return Text(
       '$label: $value',
@@ -2120,29 +2165,50 @@ extension _GalleryHomeView on _GalleryGridPageState {
         .take(4)
         .toList(growable: false);
     final recentViewedEntries = _homeRecentViewEntriesByItemId;
+    final scheme = Theme.of(context).colorScheme;
 
     return RefreshIndicator(
       onRefresh: _handlePullToRefresh,
       child: ListView(
         physics: _refreshScrollPhysics,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         children: [
           _buildHomeRefreshBanner(),
           Card(
             child: Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'ホーム検索',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  Row(
+                    children: [
+                      Icon(Icons.search_rounded, color: scheme.primary),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'ライブラリを検索',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      if (_repoCapabilities.canRecursiveSearch)
+                        Tooltip(
+                          message: '詳細ブラウズを開く',
+                          child: IconButton(
+                            onPressed: _openDetailedBrowsePage,
+                            icon: const Icon(Icons.tune_rounded),
+                          ),
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 14),
                   SizedBox(
-                    height: 44,
+                    height: 48,
                     child: _buildSharedHomeSearchField(
                       includeAllWhenEmpty: false,
+                      hintText: 'タイトル・タグ・作者を検索',
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -2164,7 +2230,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       ),
                     )
                   else if (_homeQuery.trim().isEmpty)
-                    const Text('タイトル、タグ、作者、シリーズで検索できます。')
+                    const Text('タイトル、タグ、作者、シリーズからすぐに探せます。')
                   else if (_homeSearchResults.isEmpty)
                     const Text('一致する作品はありません。')
                   else ...[
@@ -2247,27 +2313,73 @@ extension _GalleryHomeView on _GalleryGridPageState {
           const SizedBox(height: 12),
           Card(
             child: Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'ライブラリ',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('登録フォルダ数: $folderCount'),
-                  Text('現在のフォルダ: $currentLabel'),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                  Row(
                     children: [
-                      ElevatedButton.icon(
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'ライブラリ',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '現在のフォルダ: $currentLabel',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: Colors.white70),
+                            ),
+                          ],
+                        ),
+                      ),
+                      FilledButton.icon(
                         onPressed: _addFolder,
                         icon: Icon(_primaryAddActionIcon),
                         label: Text(_primaryAddActionLabel),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      _buildHomeOverviewMetric(
+                        icon: Icons.folder_outlined,
+                        label: '登録フォルダ',
+                        value: '$folderCount',
+                      ),
+                      _buildHomeOverviewMetric(
+                        icon: Icons.star_outline_rounded,
+                        label: 'お気に入り',
+                        value: '${_homeFavoriteShowcaseItems.length}',
+                      ),
+                      _buildHomeOverviewMetric(
+                        icon: Icons.schedule_outlined,
+                        label: '最近追加',
+                        value: '${_homeRecentAddedItems.length}',
+                      ),
+                      _buildHomeOverviewMetric(
+                        icon: Icons.mark_email_unread_outlined,
+                        label: '未読',
+                        value: '${_homeUnreadItems.length}',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
                       OutlinedButton.icon(
                         onPressed: (_currentFolderRaw == null)
                             ? null
@@ -2320,6 +2432,21 @@ extension _GalleryHomeView on _GalleryGridPageState {
             ),
           if (_homeShowcaseErrorMessage != null) const SizedBox(height: 12),
           _buildHomeMediaShelf(
+            title: '最近追加',
+            subtitle: '追加された作品を表紙つきで一覧できます。',
+            items: _homeRecentAddedItems,
+            emptyTitle: '最近追加はまだありません',
+            emptyMessage: '作品が追加されると、ここに新着が並びます。',
+            itemBuilder: (item) => _buildHomeMediaShelfCard(
+              item: item,
+              footerText:
+                  '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
+              footerIcon: Icons.schedule_outlined,
+              onTap: () => _openDetailFromHome(item),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildHomeMediaShelf(
             title: 'お気に入り',
             subtitle: 'お気に入り登録した作品をすぐ開けます。',
             items: _homeFavoriteShowcaseItems,
@@ -2349,21 +2476,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
           ),
           const SizedBox(height: 12),
           _buildHomeRatingShelf(),
-          const SizedBox(height: 12),
-          _buildHomeMediaShelf(
-            title: '最近追加',
-            subtitle: '追加された作品を表紙つきで一覧できます。',
-            items: _homeRecentAddedItems,
-            emptyTitle: '最近追加はまだありません',
-            emptyMessage: '作品が追加されると、ここに新着が並びます。',
-            itemBuilder: (item) => _buildHomeMediaShelfCard(
-              item: item,
-              footerText:
-                  '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
-              footerIcon: Icons.schedule_outlined,
-              onTap: () => _openDetailFromHome(item),
-            ),
-          ),
           const SizedBox(height: 12),
           _buildHomeMediaShelf(
             title: '未読',

@@ -237,49 +237,49 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     final clamped = _hitomiSearchPageIndex.clamp(0, totalPages - 1).toInt();
     final start = clamped * _GalleryGridPageState._hitomiSearchPageSize;
     final end = start + _hitomiSearchResults.length;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 900
-            ? 3
-            : constraints.maxWidth >= 560
-            ? 2
-            : 1;
-        return CustomScrollView(
-          // Avoid preparing off-screen network thumbnails while the user scrolls.
-          cacheExtent: 0,
-          slivers: [
-            if (totalPages > 1)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-                sliver: SliverToBoxAdapter(
-                  child: _buildHitomiSearchPager(
-                    currentPage: clamped,
-                    totalPages: totalPages,
-                    start: start + 1,
-                    end: end,
-                    total: _hitomiSearchTotal,
-                  ),
-                ),
-              ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              sliver: SliverGrid(
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: columns,
-                  mainAxisSpacing: 14,
-                  crossAxisSpacing: 14,
-                  childAspectRatio: columns == 1 ? 1.35 : 0.56,
-                ),
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) =>
-                      _buildHitomiResultCard(_hitomiSearchResults[index]),
-                  childCount: _hitomiSearchResults.length,
-                ),
+    return CustomScrollView(
+      // Avoid preparing off-screen network thumbnails while the user scrolls.
+      cacheExtent: 0,
+      slivers: [
+        if (totalPages > 1)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+            sliver: SliverToBoxAdapter(
+              child: _buildHitomiSearchPager(
+                currentPage: clamped,
+                totalPages: totalPages,
+                start: start + 1,
+                end: end,
+                total: _hitomiSearchTotal,
               ),
             ),
-          ],
-        );
-      },
+          ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _buildHitomiResultCard(_hitomiSearchResults[index]),
+              ),
+              childCount: _hitomiSearchResults.length,
+            ),
+          ),
+        ),
+        if (totalPages > 1)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            sliver: SliverToBoxAdapter(
+              child: _buildHitomiSearchPager(
+                currentPage: clamped,
+                totalPages: totalPages,
+                start: start + 1,
+                end: end,
+                total: _hitomiSearchTotal,
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -297,10 +297,13 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     required int total,
   }) {
     final pageItems = _hitomiSearchPagerItems(currentPage, totalPages);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final pager = Wrap(
-          alignment: WrapAlignment.end,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text('$start-$end / $total'),
+        const SizedBox(height: 8),
+        Wrap(
+          alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,
           spacing: 6,
           runSpacing: 6,
@@ -334,21 +337,8 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                   : () => _loadHitomiSearchPage(currentPage + 1),
             ),
           ],
-        );
-        if (constraints.maxWidth < 560) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('$start-$end / $total'),
-              const SizedBox(height: 8),
-              pager,
-            ],
-          );
-        }
-        return Row(
-          children: [Text('$start-$end / $total'), const Spacer(), pager],
-        );
-      },
+        ),
+      ],
     );
   }
 
@@ -453,72 +443,101 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => _openHitomiResult(result),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _buildHitomiThumbnail(result),
-                    if (imported)
-                      const Positioned(
-                        top: 8,
-                        right: 8,
-                        child: Chip(
-                          visualDensity: VisualDensity.compact,
-                          avatar: Icon(Icons.check_circle, size: 18),
-                          label: Text('取り込み済み'),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                result.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                _hitomiResultSubtitle(result),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall,
-              ),
-              const SizedBox(height: 4),
-              Row(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 680;
+            final thumbnail = SizedBox(
+              width: compact ? 128 : 196,
+              height: compact ? 180 : 236,
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  Checkbox(
-                    value: selected,
-                    onChanged: imported
-                        ? null
-                        : (_) => _toggleHitomiResultSelection(result),
-                  ),
-                  Text(selected ? '選択中' : '選択'),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: '開く',
-                    onPressed: () => _openHitomiResult(result),
-                    icon: const Icon(Icons.open_in_new),
-                  ),
-                  IconButton(
-                    tooltip: imported ? '取り込み済み' : '取り込み',
-                    onPressed: _currentFolderRaw == null || imported
-                        ? null
-                        : () => _importHitomiResult(result),
-                    icon: const Icon(Icons.download_outlined),
-                  ),
+                  _buildHitomiThumbnail(result),
+                  if (imported)
+                    const Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Chip(
+                        visualDensity: VisualDensity.compact,
+                        avatar: Icon(Icons.check_circle, size: 18),
+                        label: Text('取り込み済み'),
+                      ),
+                    ),
                 ],
               ),
-            ],
-          ),
+            );
+            final details = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  result.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _hitomiResultSubtitle(result),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildHitomiResultTags(result),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    FilterChip(
+                      label: Text(selected ? '選択中' : '選択'),
+                      selected: selected,
+                      onSelected: imported
+                          ? null
+                          : (_) => _toggleHitomiResultSelection(result),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => _openHitomiResult(result),
+                      icon: const Icon(Icons.open_in_new),
+                      label: const Text('開く'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: _currentFolderRaw == null || imported
+                          ? null
+                          : () => _importHitomiResult(result),
+                      icon: const Icon(Icons.download_outlined),
+                      label: Text(imported ? '取り込み済み' : '取り込み'),
+                    ),
+                  ],
+                ),
+              ],
+            );
+            return Padding(
+              padding: const EdgeInsets.all(14),
+              child: compact
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        thumbnail,
+                        const SizedBox(height: 14),
+                        details,
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        thumbnail,
+                        const SizedBox(width: 18),
+                        Expanded(child: details),
+                      ],
+                    ),
+            );
+          },
         ),
       ),
     );
@@ -526,14 +545,41 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
 
   Widget _buildHitomiThumbnail(HitomiSearchResult result) {
     final url = result.thumbnailUrl;
-    return SizedBox(
-      width: double.infinity,
-      height: double.infinity,
-      child: _HitomiThumbnailImage(
-        urls: result.thumbnailUrls.isEmpty && url != null
-            ? <String>[url]
-            : result.thumbnailUrls,
-      ),
+    final previewUrlSets = result.previewUrlSets.isEmpty
+        ? <List<String>>[
+            result.thumbnailUrls.isEmpty && url != null
+                ? <String>[url]
+                : result.thumbnailUrls,
+          ]
+        : result.previewUrlSets;
+    return _HitomiHoverPreview(urlSets: previewUrlSets);
+  }
+
+  Widget _buildHitomiResultTags(HitomiSearchResult result) {
+    final tags = <({String label, String query})>[
+      for (final value in result.artists.take(2))
+        (label: value, query: 'artist:${_hitomiTerm(value)}'),
+      for (final value in result.groups.take(2))
+        (label: value, query: 'group:${_hitomiTerm(value)}'),
+      for (final value in result.series.take(2))
+        (label: value, query: 'series:${_hitomiTerm(value)}'),
+      for (final value in result.tags.take(6))
+        (label: value, query: 'tag:${_hitomiTerm(value)}'),
+    ];
+    if (tags.isEmpty) {
+      return const Text('タグ情報はありません');
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        for (final tag in tags)
+          ActionChip(
+            visualDensity: VisualDensity.compact,
+            label: Text(tag.label, overflow: TextOverflow.ellipsis),
+            onPressed: () => _appendHitomiSearchTerm(tag.query),
+          ),
+      ],
     );
   }
 
@@ -964,6 +1010,122 @@ class _HitomiSearchOption {
 
   factory _HitomiSearchOption.staticValue(String value) {
     return _HitomiSearchOption(query: value, label: value);
+  }
+}
+
+class _HitomiHoverPreview extends StatefulWidget {
+  final List<List<String>> urlSets;
+
+  const _HitomiHoverPreview({required this.urlSets});
+
+  @override
+  State<_HitomiHoverPreview> createState() => _HitomiHoverPreviewState();
+}
+
+class _HitomiHoverPreviewState extends State<_HitomiHoverPreview> {
+  bool _showSecondPage = false;
+
+  @override
+  void didUpdateWidget(covariant _HitomiHoverPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.urlSets != widget.urlSets) {
+      _showSecondPage = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pages = widget.urlSets
+        .where((urls) => urls.isNotEmpty)
+        .take(2)
+        .toList(growable: false);
+    if (pages.isEmpty) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(color: Colors.black26),
+        child: Icon(Icons.image_not_supported_outlined),
+      );
+    }
+    final canPreviewSecondPage = pages.length > 1;
+    return MouseRegion(
+      cursor: canPreviewSecondPage
+          ? SystemMouseCursors.click
+          : MouseCursor.defer,
+      onEnter: (_) {
+        if (canPreviewSecondPage) {
+          setState(() => _showSecondPage = true);
+        }
+      },
+      onExit: (_) {
+        if (_showSecondPage) {
+          setState(() => _showSecondPage = false);
+        }
+      },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                AnimatedSlide(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  offset: Offset(_showSecondPage ? -1 : 0, 0),
+                  child: OverflowBox(
+                    alignment: Alignment.centerLeft,
+                    minWidth: constraints.maxWidth *
+                        (canPreviewSecondPage ? 2 : 1),
+                    maxWidth: constraints.maxWidth *
+                        (canPreviewSecondPage ? 2 : 1),
+                    child: SizedBox(
+                      width: constraints.maxWidth *
+                          (canPreviewSecondPage ? 2 : 1),
+                      height: constraints.maxHeight,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _HitomiThumbnailImage(urls: pages.first),
+                          ),
+                          if (canPreviewSecondPage)
+                            Expanded(
+                              child: _HitomiThumbnailImage(urls: pages[1]),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                if (canPreviewSecondPage)
+                  Positioned(
+                    right: 8,
+                    bottom: 8,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.66),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.swipe_left_rounded, size: 14),
+                            const SizedBox(width: 4),
+                            Text(_showSecondPage ? '2枚目' : '表紙'),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 }
 
