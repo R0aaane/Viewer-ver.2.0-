@@ -442,7 +442,11 @@ function Build-And-Restart {
         }
     }
 
-    Start-HostApp -RestartHostServer
+    # Restart the API here so its environment always reflects the newly
+    # checked-out source and pubspec version. Do not depend on the Flutter
+    # application's startup mode to perform this restart.
+    Start-HostServer
+    Start-HostApp
 }
 
 function Get-PubspecVersion {
