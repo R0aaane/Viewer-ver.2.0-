@@ -2826,6 +2826,8 @@ extension _GalleryHomeView on _GalleryGridPageState {
               ),
             ),
           if (_homeShowcaseErrorMessage != null) const SizedBox(height: 12),
+          _buildHomeMyListPanel(),
+          const SizedBox(height: 12),
           _buildHomeMediaShelf(
             title: '最近追加',
             subtitle: '',
@@ -2844,8 +2846,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
               onTap: () => _openDetailFromHome(item),
             ),
           ),
-          const SizedBox(height: 12),
-          _buildHomeMyListPanel(),
         ],
       ),
     );
