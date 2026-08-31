@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import Response
 
 from server.models.dto import (
     FolderChildrenResponse,
@@ -12,6 +13,8 @@ from server.models.dto import (
 )
 from server.services.auth_service import require_bearer_token
 from server.services.metadata_store import SearchQuery
+from server.services.url_download_service import UrlDownloadError
+from server.core.errors import not_found
 
 
 router = APIRouter(tags=["search"], dependencies=[Depends(require_bearer_token)])
@@ -95,6 +98,23 @@ async def search_hitomi(
         limit=safe_limit,
     )
     return HitomiSearchResponse(items=items, total=len(items), limit=safe_limit)
+
+
+@router.get("/hitomi/galleries/{gallery_id}/thumbnail")
+async def get_hitomi_thumbnail(request: Request, gallery_id: int) -> Response:
+    if gallery_id <= 0:
+        raise not_found("Hitomi thumbnail was not found")
+    try:
+        payload, mime_type = await request.app.state.url_download_service.fetch_hitomi_thumbnail(
+            gallery_id
+        )
+    except UrlDownloadError:
+        raise not_found("Hitomi thumbnail was not found") from None
+    return Response(
+        content=payload,
+        media_type=mime_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.get("/untagged", response_model=SearchResponse)

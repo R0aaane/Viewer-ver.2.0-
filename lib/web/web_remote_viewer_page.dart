@@ -2137,16 +2137,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Widget _buildHitomiThumbnail(WebHitomiSearchResult result) {
-    final urls = result.thumbnailUrls.isEmpty && result.thumbnailUrl != null
-        ? <String>[result.thumbnailUrl!]
-        : result.thumbnailUrls;
-    return Container(
-      width: 112,
-      height: 156,
-      color: Colors.black26,
-      child: urls.isEmpty
-          ? const Icon(Icons.image_not_supported_outlined)
-          : Image.network(urls.first, fit: BoxFit.cover),
+    return _HitomiThumbnail(
+      key: ValueKey<int>(result.galleryId),
+      client: _client,
+      galleryId: result.galleryId,
     );
   }
 
@@ -8393,6 +8387,89 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _HitomiThumbnail extends StatefulWidget {
+  final WebRemoteApiClient? client;
+  final int galleryId;
+
+  const _HitomiThumbnail({
+    super.key,
+    required this.client,
+    required this.galleryId,
+  });
+
+  @override
+  State<_HitomiThumbnail> createState() => _HitomiThumbnailState();
+}
+
+class _HitomiThumbnailState extends State<_HitomiThumbnail> {
+  Future<Uint8List>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HitomiThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.client != widget.client ||
+        oldWidget.galleryId != widget.galleryId) {
+      _load();
+    }
+  }
+
+  void _load() {
+    final client = widget.client;
+    _future = client?.fetchHitomiThumbnail(widget.galleryId);
+  }
+
+  Widget _frame(Widget child) {
+    return Container(
+      width: 112,
+      height: 156,
+      color: Colors.black26,
+      alignment: Alignment.center,
+      child: child,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final future = _future;
+    if (future == null) {
+      return _frame(const Icon(Icons.image_not_supported_outlined));
+    }
+    return FutureBuilder<Uint8List>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _frame(
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+        final bytes = snapshot.data;
+        if (snapshot.hasError || bytes == null || bytes.isEmpty) {
+          return _frame(const Icon(Icons.image_not_supported_outlined));
+        }
+        return ClipRect(
+          child: Image.memory(
+            bytes,
+            width: 112,
+            height: 156,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          ),
+        );
+      },
     );
   }
 }

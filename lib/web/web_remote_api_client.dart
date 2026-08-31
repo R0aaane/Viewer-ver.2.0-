@@ -1105,6 +1105,10 @@ class WebRemoteApiClient {
         .toList(growable: false);
   }
 
+  Future<Uint8List> fetchHitomiThumbnail(int galleryId) {
+    return _getBytes('/hitomi/galleries/$galleryId/thumbnail');
+  }
+
   Future<WebRemoteMediaMeta> fetchMediaMeta(String mediaId) async {
     return _memoize(_mediaMetaCache, mediaId, () async {
       final json = await _getJson(

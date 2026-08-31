@@ -12,9 +12,11 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import deque
+from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import Lock
 from typing import Awaitable, Callable
 
 
@@ -30,6 +32,9 @@ _HITOMI_NOZOMI_HOSTS = (
     "ltn.hitomi.la",
 )
 _HITOMI_INDEX_HOST = "ltn.gold-usergeneratedcontent.net"
+_HITOMI_SEARCH_CONCURRENCY = 8
+_HITOMI_SEARCH_RESULT_CACHE_SIZE = 500
+_HITOMI_THUMBNAIL_CACHE_SIZE = 100
 _HITOMI_GALLERIES_INDEX_DIR = "galleriesindex"
 _HITOMI_INDEX_NODE_SIZE = 464
 _HITOMI_BTREE_ORDER = 16
@@ -241,6 +246,13 @@ class UrlDownloadService:
     ) -> None:
         self._workdir = str(Path(workdir or Path(__file__).resolve().parents[2]))
         self._module_name = module_name
+        self._hitomi_cache_lock = Lock()
+        self._hitomi_search_result_cache: OrderedDict[int, dict[str, object]] = (
+            OrderedDict()
+        )
+        self._hitomi_thumbnail_cache: OrderedDict[int, tuple[bytes, str]] = (
+            OrderedDict()
+        )
 
     async def download_url(
         self,
@@ -494,30 +506,107 @@ class UrlDownloadService:
         limit: int,
     ) -> list[dict[str, object]]:
         gallery_ids = self._resolve_hitomi_search_gallery_ids(query)[:limit]
-        return [
-            self._fetch_hitomi_search_result(gallery_id)
-            for gallery_id in gallery_ids
-        ]
+        if not gallery_ids:
+            return []
+        with ThreadPoolExecutor(
+            max_workers=min(_HITOMI_SEARCH_CONCURRENCY, len(gallery_ids))
+        ) as executor:
+            return list(executor.map(self._fetch_hitomi_search_result, gallery_ids))
+
+    async def fetch_hitomi_thumbnail(self, gallery_id: int) -> tuple[bytes, str]:
+        return await asyncio.to_thread(self._fetch_hitomi_thumbnail_sync, gallery_id)
+
+    def _fetch_hitomi_thumbnail_sync(self, gallery_id: int) -> tuple[bytes, str]:
+        with self._hitomi_cache_lock:
+            cached = self._hitomi_thumbnail_cache.get(gallery_id)
+            if cached is not None:
+                self._hitomi_thumbnail_cache.move_to_end(gallery_id)
+                return cached
+
+        result = self._fetch_hitomi_search_result(gallery_id)
+        urls = result.get("thumbnailUrls")
+        if not isinstance(urls, list):
+            raise UrlDownloadError("Hitomi thumbnail was not found")
+        for url in urls:
+            if not isinstance(url, str) or not self._is_hitomi_thumbnail_url(url):
+                continue
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": _STANDALONE_USER_AGENT},
+                )
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    payload = response.read(5 * 1024 * 1024 + 1)
+                    if len(payload) > 5 * 1024 * 1024:
+                        continue
+                    mime = response.headers.get_content_type() or "image/jpeg"
+                    if not mime.startswith("image/"):
+                        continue
+                value = (payload, mime)
+                self._cache_hitomi_thumbnail(gallery_id, value)
+                return value
+            except (OSError, urllib.error.URLError):
+                continue
+        raise UrlDownloadError("Hitomi thumbnail could not be downloaded")
 
     def _fetch_hitomi_search_result(self, gallery_id: int) -> dict[str, object]:
+        with self._hitomi_cache_lock:
+            cached = self._hitomi_search_result_cache.get(gallery_id)
+            if cached is not None:
+                self._hitomi_search_result_cache.move_to_end(gallery_id)
+                return cached
         gallery_url = f"https://hitomi.la/galleries/{gallery_id}.html"
         url = f"https://{_HITOMI_INDEX_HOST}/galleries/{gallery_id}.js"
         try:
             payload = self._download_html(url)
             info = self._decode_hitomi_gallery_info(payload)
             if info is not None:
-                return self._hitomi_search_result_from_info(
+                result = self._hitomi_search_result_from_info(
                     gallery_id=gallery_id,
                     gallery_url=gallery_url,
                     info=info,
                 )
+                self._cache_hitomi_search_result(gallery_id, result)
+                return result
         except Exception:
             pass
-        return {
+        result = {
             "galleryId": gallery_id,
             "title": f"Gallery {gallery_id}",
             "galleryUrl": gallery_url,
         }
+        self._cache_hitomi_search_result(gallery_id, result)
+        return result
+
+    def _cache_hitomi_search_result(
+        self,
+        gallery_id: int,
+        result: dict[str, object],
+    ) -> None:
+        with self._hitomi_cache_lock:
+            self._hitomi_search_result_cache[gallery_id] = result
+            self._hitomi_search_result_cache.move_to_end(gallery_id)
+            while len(self._hitomi_search_result_cache) > _HITOMI_SEARCH_RESULT_CACHE_SIZE:
+                self._hitomi_search_result_cache.popitem(last=False)
+
+    def _cache_hitomi_thumbnail(
+        self,
+        gallery_id: int,
+        thumbnail: tuple[bytes, str],
+    ) -> None:
+        with self._hitomi_cache_lock:
+            self._hitomi_thumbnail_cache[gallery_id] = thumbnail
+            self._hitomi_thumbnail_cache.move_to_end(gallery_id)
+            while len(self._hitomi_thumbnail_cache) > _HITOMI_THUMBNAIL_CACHE_SIZE:
+                self._hitomi_thumbnail_cache.popitem(last=False)
+
+    def _is_hitomi_thumbnail_url(self, value: str) -> bool:
+        parsed = urllib.parse.urlparse(value)
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname is not None
+            and parsed.hostname.endswith(".gold-usergeneratedcontent.net")
+        )
 
     def _decode_hitomi_gallery_info(self, payload: str) -> dict[str, object] | None:
         marker = re.search(r"galleryinfo\s*=", payload)
