@@ -121,7 +121,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   static const int _mediaThumbCacheMaxBytes = 32 * 1024 * 1024;
 
   static const int _pageSize = 20;
-  static const int _detailedBrowseRowsPerPage = 4;
+  static const int _detailedBrowseRowsPerPage = 5;
   static const int _gallerySearchPageSize = 10;
   static const int _hitomiSearchPageSize = 10;
   int _galleryPageIndex = 0;
@@ -129,7 +129,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _gallerySearchPageIndex = 0;
 
   FolderTileMode _folderTileMode = FolderTileMode.labelOnly;
-  int _detailedBrowseCardColumns = 2;
+  int _detailedBrowseCardColumns = 3;
+  MediaItem? _detailedBrowseSelectedItem;
 
   Set<String> _favorites = <String>{};
   Map<String, int> _ratingsById = <String, int>{};
@@ -237,6 +238,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Map<_HomeShelfKind, List<MediaItem>> _homeAllItemsByShelfKind =
       <_HomeShelfKind, List<MediaItem>>{};
   _HomeShelfKind _homeMyListKind = _HomeShelfKind.favorites;
+  _HomeShelfKind? _homeDetailedBrowseMyListKind;
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
       <String, ReadingProgressEntry>{};
   Map<String, ReadingProgressEntry> _readingProgressByItemId =
@@ -1942,7 +1944,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           child: ListTile(
             leading: Icon(Icons.view_agenda_outlined),
             title: Text(
-              _repoCapabilities.canRecursiveSearch ? '詳細ブラウズ' : '詳細ブラウズ（未対応）',
+              _repoCapabilities.canRecursiveSearch ? 'PDF一覧' : 'PDF一覧（未対応）',
             ),
           ),
         ),
@@ -2158,7 +2160,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           ),
           ListTile(
             leading: const Icon(Icons.view_agenda_outlined),
-            title: const Text('詳細ブラウズ'),
+            title: const Text('PDF一覧'),
             selected: _page == _MainPage.search,
             onTap: () async {
               _closeSidebar();
@@ -2409,7 +2411,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         child: Scaffold(
           drawer: _isWideLayout(context) ? null : _buildSidebar(),
           appBar: AppBar(
-            title: const Text('詳細ブラウズ'),
+            title: const Text('PDF一覧'),
             actions: _buildSearchAppBarActions(),
           ),
           body: _wrapBodyWithUrlImportQueue(

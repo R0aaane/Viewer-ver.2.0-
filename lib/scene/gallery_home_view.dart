@@ -321,6 +321,16 @@ extension _GalleryHomeView on _GalleryGridPageState {
           : all
                 .where((item) => _matchHomeQuery(item, q))
                 .toList(growable: false);
+      final myListKind = _homeDetailedBrowseMyListKind;
+      if (myListKind != null) {
+        final itemIds = (_homeAllItemsByShelfKind[myListKind] ??
+                const <MediaItem>[])
+            .map((item) => item.id)
+            .toSet();
+        filtered = filtered
+            .where((item) => itemIds.contains(item.id))
+            .toList(growable: false);
+      }
       final ratingFilter = _homeRatingFilter;
       if (ratingFilter != null) {
         filtered = filtered
@@ -337,6 +347,12 @@ extension _GalleryHomeView on _GalleryGridPageState {
         _homeSearching = false;
         _homeSearchResults = sorted;
         _homeSearchErrorMessage = null;
+        if (sorted.isEmpty) {
+          _detailedBrowseSelectedItem = null;
+        } else if (_detailedBrowseSelectedItem == null ||
+            !sorted.any((item) => item.id == _detailedBrowseSelectedItem!.id)) {
+          _detailedBrowseSelectedItem = sorted.first;
+        }
         if (resetPage) _homeSearchPageIndex = 0;
       });
     } catch (e, st) {
@@ -401,18 +417,24 @@ extension _GalleryHomeView on _GalleryGridPageState {
     await _runHomeSearch(includeAllWhenEmpty: true);
   }
 
-  Future<void> _openDetailedBrowsePage() async {
+  Future<void> _openDetailedBrowsePage({
+    _HomeShelfKind? myListKind,
+  }) async {
     if (!_repoCapabilities.canRecursiveSearch) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('このモードでは詳細ブラウズは未対応です')));
+      ).showSnackBar(const SnackBar(content: Text('このモードではPDF一覧は未対応です')));
       return;
     }
     if (mounted) {
-      setState(() => _page = _MainPage.search);
+      setState(() {
+        _page = _MainPage.search;
+        _homeDetailedBrowseMyListKind = myListKind;
+      });
     } else {
       _page = _MainPage.search;
+      _homeDetailedBrowseMyListKind = myListKind;
     }
     await _runHomeSearch(includeAllWhenEmpty: true);
   }
@@ -720,6 +742,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
       item.modified ?? _getUpdatedAt(item),
     );
     final isSelected = _selectedIds.contains(item.id);
+    final isBrowseSelected = _detailedBrowseSelectedItem?.id == item.id;
     final isFavorite = _favorites.contains(item.id);
     final accent = _detailedBrowseAccentColor(context, item);
     final accentText = _detailedBrowseAccentTextColor(context, item);
@@ -739,6 +762,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
           _toggleSelect(item);
           return;
         }
+        if (_isWideLayout(context)) {
+          setState(() => _detailedBrowseSelectedItem = item);
+          return;
+        }
         await _openDetailFromHome(item);
       },
       child: AnimatedContainer(
@@ -746,10 +773,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
-          border: isSelected
+          border: isSelected || isBrowseSelected
               ? Border.all(color: theme.colorScheme.primary, width: 2)
               : null,
-          color: isSelected
+          color: isSelected || isBrowseSelected
               ? theme.colorScheme.primary.withValues(alpha: 0.04)
               : Colors.transparent,
         ),
@@ -1037,6 +1064,75 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
+  Widget _buildDetailedBrowseDetailPanel() {
+    final item = _detailedBrowseSelectedItem;
+    if (item == null) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('作品を選択すると詳細を表示します。'),
+        ),
+      );
+    }
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.surface,
+      child: SafeArea(
+        left: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _displayTitleForItem(item),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  Chip(label: Text(ItemNameService.kindLabel(item))),
+                  Chip(label: Text(_folderLabelForItem(item))),
+                ],
+              ),
+              const SizedBox(height: 14),
+              AspectRatio(
+                aspectRatio: 0.78,
+                child: _buildDetailedBrowseThumb(item),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                '更新 ${_formatDetailedBrowseDate(item.modified ?? _getUpdatedAt(item))}',
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => _openDetailFromHome(item),
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('詳細を開く'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => _toggleFavorite(item),
+                icon: Icon(
+                  _isFavoriteItem(item)
+                      ? Icons.star_rounded
+                      : Icons.star_border_rounded,
+                ),
+                label: Text(_isFavoriteItem(item) ? 'お気に入り解除' : 'お気に入り'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDetailedBrowseResultsBody() {
     Widget headerCard() {
       return Card(
@@ -1046,7 +1142,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                '詳細ブラウズ',
+                'PDF一覧',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 6),
@@ -1189,16 +1285,20 @@ extension _GalleryHomeView on _GalleryGridPageState {
         final showPager = _homeSearchResults.length > _detailedBrowsePageSize();
         final crossSpacing = constraints.maxWidth < 420 ? 8.0 : 12.0;
         final mainSpacing = constraints.maxWidth < 420 ? 14.0 : 18.0;
-        final contentWidth = constraints.maxWidth <= 760
-            ? (constraints.maxWidth - 24).clamp(0.0, double.infinity).toDouble()
-            : 760.0;
-        final sidePadding = (constraints.maxWidth - contentWidth) / 2;
+        final showDetailPane = constraints.maxWidth >= 1180;
+        final listWidth = showDetailPane
+            ? constraints.maxWidth - 340
+            : constraints.maxWidth;
+        final contentWidth = (listWidth - 24)
+            .clamp(0.0, double.infinity)
+            .toDouble();
+        final sidePadding = (listWidth - contentWidth) / 2;
         final tileWidth =
             (contentWidth - (crossSpacing * (crossAxisCount - 1))) /
             crossAxisCount;
-        final tileHeight = (tileWidth * (4 / 3)) + 84;
+        final tileHeight = (tileWidth * 0.92) + 74;
 
-        return RefreshIndicator(
+        final browseContent = RefreshIndicator(
           onRefresh: _handlePullToRefresh,
           child: CustomScrollView(
             physics: _refreshScrollPhysics,
@@ -1213,7 +1313,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   padding: EdgeInsets.fromLTRB(sidePadding, 0, sidePadding, 12),
                   sliver: SliverToBoxAdapter(
                     child: _buildErrorBody(
-                      title: '詳細ブラウズの読み込みに失敗しました',
+                      title: 'PDF一覧の読み込みに失敗しました',
                       message: _homeSearchErrorMessage!,
                       onAction: () => _runHomeSearch(includeAllWhenEmpty: true),
                     ),
@@ -1274,6 +1374,16 @@ extension _GalleryHomeView on _GalleryGridPageState {
               ],
             ],
           ),
+        );
+        if (!showDetailPane) {
+          return browseContent;
+        }
+        return Row(
+          children: [
+            Expanded(child: browseContent),
+            const VerticalDivider(width: 1),
+            SizedBox(width: 339, child: _buildDetailedBrowseDetailPanel()),
+          ],
         );
       },
     );
@@ -2480,7 +2590,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   ),
                 if (items.isNotEmpty)
                   TextButton.icon(
-                    onPressed: () => _showAllHomeShelf(title: label, kind: kind),
+                    onPressed: () => _openDetailedBrowsePage(
+                      myListKind: kind,
+                    ),
                     icon: const Icon(Icons.arrow_forward_rounded, size: 18),
                     label: const Text('すべて表示'),
                   ),
@@ -2492,6 +2604,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
               runSpacing: 8,
               children: [
                 for (final option in const <_HomeShelfKind>[
+                  _HomeShelfKind.recentAdded,
                   _HomeShelfKind.favorites,
                   _HomeShelfKind.unread,
                   _HomeShelfKind.bookmarks,
@@ -2592,7 +2705,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                       if (_repoCapabilities.canRecursiveSearch) ...[
                         const SizedBox(width: 8),
                         Tooltip(
-                          message: '詳細ブラウズを開く',
+                          message: 'PDF一覧を開く',
                           child: IconButton(
                             onPressed: _openDetailedBrowsePage,
                             icon: const Icon(Icons.tune_rounded),
@@ -2691,7 +2804,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                           child: OutlinedButton.icon(
                             onPressed: () => _openDetailedBrowsePage(),
                             icon: const Icon(Icons.view_agenda_outlined),
-                            label: const Text('詳細ブラウズで続きを見る'),
+                            label: const Text('PDF一覧で続きを見る'),
                           ),
                         ),
                       ),
@@ -2787,7 +2900,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                             ? () => _openDetailedBrowsePage()
                             : null,
                         icon: const Icon(Icons.view_agenda_outlined),
-                        label: const Text('詳細ブラウズ'),
+                        label: const Text('PDF一覧'),
                       ),
                       OutlinedButton.icon(
                         onPressed: _refreshAllFavoritesItems,
@@ -2827,25 +2940,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
             ),
           if (_homeShowcaseErrorMessage != null) const SizedBox(height: 12),
           _buildHomeMyListPanel(),
-          const SizedBox(height: 12),
-          _buildHomeMediaShelf(
-            title: '最近追加',
-            subtitle: '',
-            items: _homeRecentAddedItems,
-            emptyTitle: '最近追加はまだありません',
-            emptyMessage: '作品が追加されると、ここに新着が並びます。',
-            onShowAll: () => _showAllHomeShelf(
-              title: '最近追加した作品',
-              kind: _HomeShelfKind.recentAdded,
-            ),
-            itemBuilder: (item) => _buildHomeMediaShelfCard(
-              item: item,
-              footerText:
-                  '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
-              footerIcon: Icons.schedule_outlined,
-              onTap: () => _openDetailFromHome(item),
-            ),
-          ),
         ],
       ),
     );
@@ -2899,7 +2993,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
         return _buildRefreshableStatusBody(
           onRefresh: _handlePullToRefresh,
           child: _buildLoadingBody(
-            title: '詳細ブラウズを準備しています',
+            title: 'PDF一覧を準備しています',
             message: '登録フォルダとタグ情報を読み込んでいます。',
           ),
         );

@@ -58,6 +58,15 @@ enum _WebBrowserSortMode {
   const _WebBrowserSortMode({required this.label, required this.icon});
 }
 
+enum _WebHomeMyListKind {
+  recentlyAdded,
+  favorites,
+  unread,
+  bookmarks,
+  recentlyViewed,
+  rating,
+}
+
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
   defaultValue: 'unknown',
@@ -113,6 +122,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   _WebBrowserSortMode _browserSortMode = _WebBrowserSortMode.newest;
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
   int _homeRatingShelfRating = 5;
+  _WebHomeMyListKind _homeMyListKind = _WebHomeMyListKind.favorites;
+  _WebHomeMyListKind? _browseMyListKind;
   Set<String> _favorites = const <String>{};
   Map<String, int> _ratingsById = const <String, int>{};
   int _browserPage = 1;
@@ -526,16 +537,35 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
     try {
       final rawQuery = _searchController.text.trim();
-      final fetched =
-          rawQuery.isEmpty && reuseHomeOnEmptyQuery && _homeEntries.isNotEmpty
-          ? _homeEntries
-          : _sortedPdfEntries(
-              await _loadPdfEntries(
-                client,
-                folderRaw: folderRaw,
-                rawQuery: rawQuery,
-              ),
-            );
+      final myListKind = _browseMyListKind;
+      List<WebRemoteEntry> fetched;
+      if (myListKind != null) {
+        fetched = _webHomeMyListEntries(_homeEntries, myListKind);
+        if (rawQuery.isNotEmpty) {
+          final searched = await _loadPdfEntries(
+            client,
+            folderRaw: folderRaw,
+            rawQuery: rawQuery,
+          );
+          final searchedIds = searched
+              .map((entry) => entry.stableId)
+              .toSet();
+          fetched = fetched
+              .where((entry) => searchedIds.contains(entry.stableId))
+              .toList(growable: false);
+        }
+      } else {
+        fetched =
+            rawQuery.isEmpty && reuseHomeOnEmptyQuery && _homeEntries.isNotEmpty
+            ? _homeEntries
+            : _sortedPdfEntries(
+                await _loadPdfEntries(
+                  client,
+                  folderRaw: folderRaw,
+                  rawQuery: rawQuery,
+                ),
+              );
+      }
       final filtered = _sortBrowserEntries(_applyFilter(fetched));
       WebRemoteEntry? nextSelected = _selectedEntry;
       if (nextSelected != null) {
@@ -560,9 +590,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           _homeEntries = filtered;
           _homeErrorMessage = null;
         }
-        _statusMessage = rawQuery.isEmpty
-            ? 'PDF 一覧: ${filtered.length}件'
-            : 'PDF 検索: ${filtered.length}件';
+        _statusMessage = myListKind == null
+            ? rawQuery.isEmpty
+                  ? 'PDF 一覧: ${filtered.length}件'
+                  : 'PDF 検索: ${filtered.length}件'
+            : 'マイリスト（${_webHomeMyListLabel(myListKind)}）: ${filtered.length}件';
       });
       unawaited(_refreshWebSeriesSuggestions(filtered));
     } catch (error) {
@@ -1303,6 +1335,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       _surface = _WebRemoteSurface.browse;
       _selectedFolderRaw = folderRaw;
       _selectedEntry = null;
+      _browseMyListKind = null;
     });
     await _loadEntries();
   }
@@ -1400,6 +1433,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     _searchController.text = query;
     setState(() {
       _surface = _WebRemoteSurface.browse;
+      _browseMyListKind = null;
     });
     await _loadEntries();
   }
@@ -2650,6 +2684,148 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     ];
   }
 
+  String _webHomeMyListLabel(_WebHomeMyListKind kind) {
+    switch (kind) {
+      case _WebHomeMyListKind.recentlyAdded:
+        return '最近追加';
+      case _WebHomeMyListKind.favorites:
+        return 'お気に入り';
+      case _WebHomeMyListKind.unread:
+        return '未読';
+      case _WebHomeMyListKind.bookmarks:
+        return 'しおり';
+      case _WebHomeMyListKind.recentlyViewed:
+        return '最近閲覧';
+      case _WebHomeMyListKind.rating:
+        return '評価別';
+    }
+  }
+
+  List<WebRemoteEntry> _webHomeMyListEntries(
+    List<WebRemoteEntry> entries,
+    _WebHomeMyListKind kind,
+  ) {
+    final selected = switch (kind) {
+      _WebHomeMyListKind.recentlyAdded => entries.toList(growable: false),
+      _WebHomeMyListKind.favorites =>
+        entries.where(_isFavoriteEntry).toList(growable: false),
+      _WebHomeMyListKind.unread =>
+        entries.where(_isUnreadEntry).toList(growable: false),
+      _WebHomeMyListKind.bookmarks => entries
+          .where((entry) => _recentActivityForEntry(entry)?.isBookmarked == true)
+          .toList(growable: false),
+      _WebHomeMyListKind.recentlyViewed => _recentlyViewedEntries(entries),
+      _WebHomeMyListKind.rating => entries
+          .where((entry) => _ratingForEntry(entry) == _homeRatingShelfRating)
+          .toList(growable: false),
+    }.toList(growable: true);
+    selected.sort((left, right) {
+      if (kind == _WebHomeMyListKind.recentlyViewed ||
+          kind == _WebHomeMyListKind.bookmarks) {
+        final rightViewed = _recentSortDateForEntry(right);
+        final leftViewed = _recentSortDateForEntry(left);
+        if (rightViewed != null && leftViewed != null) {
+          return rightViewed.compareTo(leftViewed);
+        }
+      }
+      return _addedAtForEntry(right).compareTo(_addedAtForEntry(left));
+    });
+    return selected;
+  }
+
+  Future<void> _openWebHomeMyListBrowse() async {
+    final root = _libraryRoot?.raw;
+    if (root == null || root.isEmpty) {
+      return;
+    }
+    setState(() {
+      _browseMyListKind = _homeMyListKind;
+      _selectedFolderRaw = root;
+      _selectedEntry = null;
+      _searchController.clear();
+      _surface = _WebRemoteSurface.browse;
+    });
+    await _loadEntries();
+  }
+
+  Widget _buildWebHomeMyListSection(List<WebRemoteEntry> entries) {
+    final kind = _homeMyListKind;
+    final listEntries = _webHomeMyListEntries(entries, kind);
+    final label = _webHomeMyListLabel(kind);
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Expanded(
+                  child: Text(
+                    'マイリスト',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                if (kind == _WebHomeMyListKind.rating)
+                  DropdownButton<int>(
+                    value: _homeRatingShelfRating,
+                    items: const <DropdownMenuItem<int>>[
+                      DropdownMenuItem(value: 5, child: Text('評価5')),
+                      DropdownMenuItem(value: 4, child: Text('評価4')),
+                      DropdownMenuItem(value: 3, child: Text('評価3')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _homeRatingShelfRating = value);
+                      }
+                    },
+                  ),
+                if (listEntries.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: _openWebHomeMyListBrowse,
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                    label: const Text('すべて表示'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                for (final option in _WebHomeMyListKind.values)
+                  ChoiceChip(
+                    label: Text(_webHomeMyListLabel(option)),
+                    selected: option == kind,
+                    onSelected: (_) =>
+                        setState(() => _homeMyListKind = option),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _WebHomeSection(
+              section: _WebHomeSectionData(
+                title: label,
+                subtitle: '$labelの PDF を表示します。',
+                icon: Icons.collections_bookmark_outlined,
+                entries: listEntries.take(12).toList(growable: false),
+                activityByStableId: _homeRecentActivityById,
+                resumeFromActivity:
+                    kind == _WebHomeMyListKind.recentlyViewed ||
+                    kind == _WebHomeMyListKind.bookmarks,
+                emptyMessage: '$labelの PDF はまだありません。',
+              ),
+              client: _client,
+              onOpen: _openPdfFromHome,
+              showHeader: false,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _openPdfFromHome(
     WebRemoteEntry entry, {
     ReadingProgressEntry? activity,
@@ -2711,6 +2887,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             onBrowseAll: () {
               setState(() {
                 _surface = _WebRemoteSurface.browse;
+                _browseMyListKind = null;
               });
               unawaited(_loadEntries());
             },
@@ -2733,6 +2910,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               Colors.white70,
             )
           else ...<Widget>[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 18),
+              child: _buildWebHomeMyListSection(entries),
+            ),
             if (sections.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 18),
@@ -3663,6 +3844,7 @@ class _WebHomeSection extends StatelessWidget {
   final _WebHomeSectionData section;
   final WebRemoteApiClient? client;
   final Widget? trailing;
+  final bool showHeader;
   final Future<void> Function(
     WebRemoteEntry entry, {
     ReadingProgressEntry? activity,
@@ -3674,6 +3856,7 @@ class _WebHomeSection extends StatelessWidget {
     required this.section,
     required this.client,
     this.trailing,
+    this.showHeader = true,
     required this.onOpen,
   });
 
@@ -3683,33 +3866,38 @@ class _WebHomeSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Icon(section.icon, color: Colors.white70),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    section.title,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
+        if (showHeader) ...<Widget>[
+          Row(
+            children: <Widget>[
+              Icon(section.icon, color: Colors.white70),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      section.title,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    section.subtitle,
-                    style: const TextStyle(color: Colors.white60),
-                  ),
-                ],
+                    const SizedBox(height: 2),
+                    Text(
+                      section.subtitle,
+                      style: const TextStyle(color: Colors.white60),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            if (trailing != null) ...[const SizedBox(width: 12), trailing!],
-          ],
-        ),
-        const SizedBox(height: 12),
+              if (trailing != null) ...[
+                const SizedBox(width: 12),
+                trailing!,
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         if (section.entries.isEmpty)
           Card(
             margin: EdgeInsets.zero,
