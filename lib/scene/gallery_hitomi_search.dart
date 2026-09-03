@@ -259,8 +259,13 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, index) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _buildHitomiResultCard(_hitomiSearchResults[index]),
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Column(
+                  children: [
+                    _buildHitomiResultCard(_hitomiSearchResults[index]),
+                    const Divider(),
+                  ],
+                ),
               ),
               childCount: _hitomiSearchResults.length,
             ),
@@ -439,16 +444,16 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     final theme = Theme.of(context);
     final imported = _isHitomiResultImported(result);
     final selected = _hitomiSelectedGalleryIds.contains(result.galleryId);
-    return Card(
-      clipBehavior: Clip.antiAlias,
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
         onTap: () => _openHitomiResult(result),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final compact = constraints.maxWidth < 680;
+            final compact = constraints.maxWidth < 560;
             final thumbnail = SizedBox(
-              width: compact ? 128 : 196,
-              height: compact ? 180 : 236,
+              width: compact ? 104 : 92,
+              height: compact ? 148 : 132,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -477,7 +482,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 Text(
                   _hitomiResultSubtitle(result),
                   maxLines: 2,
@@ -486,31 +491,29 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                     color: Colors.white70,
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 _buildHitomiResultTags(result),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
                 Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                  spacing: 4,
+                  runSpacing: 4,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    FilterChip(
-                      label: Text(selected ? '選択中' : '選択'),
-                      selected: selected,
-                      onSelected: imported
-                          ? null
-                          : (_) => _toggleHitomiResultSelection(result),
+                    IconButton(
+                      tooltip: selected ? '選択解除' : '選択',
+                      onPressed: imported ? null : () => _toggleHitomiResultSelection(result),
+                      icon: Icon(selected ? Icons.check_circle : Icons.check_circle_outline),
                     ),
-                    OutlinedButton.icon(
+                    IconButton(
+                      tooltip: '開く',
                       onPressed: () => _openHitomiResult(result),
                       icon: const Icon(Icons.open_in_new),
-                      label: const Text('開く'),
                     ),
-                    FilledButton.tonalIcon(
+                    FilledButton.icon(
                       onPressed: _currentFolderRaw == null || imported
                           ? null
                           : () => _importHitomiResult(result),
-                      icon: const Icon(Icons.download_outlined),
+                      icon: const Icon(Icons.download_outlined, size: 18),
                       label: Text(imported ? '取り込み済み' : '取り込み'),
                     ),
                   ],
@@ -518,13 +521,13 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
               ],
             );
             return Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.symmetric(vertical: 10),
               child: compact
                   ? Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         thumbnail,
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 10),
                         details,
                       ],
                     )
@@ -532,7 +535,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         thumbnail,
-                        const SizedBox(width: 18),
+                        const SizedBox(width: 12),
                         Expanded(child: details),
                       ],
                     ),
@@ -563,7 +566,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
         (label: value, query: 'group:${_hitomiTerm(value)}'),
       for (final value in result.series.take(2))
         (label: value, query: 'series:${_hitomiTerm(value)}'),
-      for (final value in result.tags.take(6))
+      for (final value in result.tags)
         (label: value, query: 'tag:${_hitomiTerm(value)}'),
     ];
     if (tags.isEmpty) {
@@ -573,11 +576,16 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       spacing: 6,
       runSpacing: 6,
       children: [
-        for (final tag in tags)
+        for (final tag in tags.take(4))
           ActionChip(
             visualDensity: VisualDensity.compact,
             label: Text(tag.label, overflow: TextOverflow.ellipsis),
             onPressed: () => _appendHitomiSearchTerm(tag.query),
+          ),
+        if (tags.length > 4)
+          Chip(
+            visualDensity: VisualDensity.compact,
+            label: Text('+${tags.length - 4}'),
           ),
       ],
     );

@@ -42,6 +42,7 @@ import 'TagResults.dart';
 import 'tag_management_page.dart';
 import 'url_import_dialog.dart';
 import 'xviewer_page.dart';
+import 'widgets/scene_ui.dart';
 
 part 'grid_gallery_models.dart';
 part 'gallery_grid_view.dart';
@@ -2044,7 +2045,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   // --- UI: responsive sidebar (Windows/desktop friendly) ---
-  static const double _kSidebarWidth = 340;
+  static const double _kSidebarWidth = SceneSpace.sidebarWidth;
 
   bool _isWideLayout(BuildContext context) =>
       MediaQuery.of(context).size.width >= 980;
@@ -2081,38 +2082,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
-  Widget _sidebarHeader() {
-    final currentLabel = _currentFolderRaw == null
-        ? '未選択'
-        : _folderLabel(_currentFolderRaw!);
+  Widget _sidebarHeader() =>
+      const SceneSidebarHeader(title: '紙魚', subtitle: 'Library');
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('紙魚', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 4),
-          Text(
-            '現在のフォルダ: $currentLabel',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _sidebarSectionLabel(String text) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-      child: Text(
-        text,
-        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
-  }
+  Widget _sidebarSectionLabel(String text) => SceneSidebarSectionLabel(text);
 
   Drawer _buildSidebar() =>
       Drawer(child: SafeArea(child: _buildSidebarListView()));
@@ -2170,7 +2143,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           ),
           ListTile(
             leading: const Icon(Icons.manage_search_outlined),
-            title: const Text('検索ページ'),
+            title: const Text('検索'),
             selected: _page == _MainPage.hitomiSearch,
             onTap: () {
               _closeSidebar();
@@ -2181,7 +2154,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           ListTile(
             leading: const Icon(Icons.travel_explore_outlined),
             title: const Text('XViewer'),
-            subtitle: const Text('Twitter画像ダウンロード / 作者検索'),
             onTap: () async {
               _closeSidebar();
               await Navigator.of(context).push(
@@ -2192,6 +2164,31 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
             },
           ),
           const Divider(),
+          _sidebarSectionLabel('ライブラリ'),
+          ListTile(
+            leading: const Icon(Icons.folder_outlined),
+            title: Text(
+              _currentFolderRaw == null
+                  ? 'フォルダ未選択'
+                  : _folderLabel(_currentFolderRaw!),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text('${_foldersRaw.length} フォルダ'),
+            onTap: () {
+              _closeSidebar();
+              _openLibrarySettings();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings_outlined),
+            title: const Text('設定'),
+            onTap: () {
+              _closeSidebar();
+              _openLibrarySettings();
+            },
+          ),
+          if (false) ...[
           _sidebarSectionLabel('作家タグ'),
           if (_loadingArtistTags)
             const Padding(
@@ -2375,7 +2372,143 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               ),
             ),
           ],
+          ],
         ],
+      ),
+    );
+  }
+
+  Future<void> _openLibrarySettings() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520, maxHeight: 640),
+          child: StatefulBuilder(
+            builder: (context, setDialogState) => Padding(
+              padding: const EdgeInsets.all(SceneSpace.x6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '設定',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '閉じる',
+                        onPressed: () => Navigator.pop(dialogContext),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: SceneSpace.x4),
+                  Text('閲覧', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: SceneSpace.x2),
+                  DropdownButtonFormField<ReaderFitMode>(
+                    value: _fitMode,
+                    decoration: const InputDecoration(labelText: '表示フィット'),
+                    items: const [
+                      DropdownMenuItem(value: ReaderFitMode.vertical, child: Text('縦フィット')),
+                      DropdownMenuItem(value: ReaderFitMode.horizontal, child: Text('横フィット')),
+                      DropdownMenuItem(value: ReaderFitMode.contain, child: Text('全体表示 (Contain)')),
+                    ],
+                    onChanged: (value) async {
+                      if (value == null) return;
+                      setState(() => _fitMode = value);
+                      setDialogState(() {});
+                      await _saveFitMode(value);
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('見開き表示'),
+                    value: _twoPage,
+                    onChanged: (value) async {
+                      setState(() => _twoPage = value);
+                      setDialogState(() {});
+                      await _saveTwoPage(value);
+                    },
+                  ),
+                  const Divider(height: SceneSpace.x8),
+                  Row(
+                    children: [
+                      Expanded(child: Text('ライブラリ', style: Theme.of(context).textTheme.titleMedium)),
+                      IconButton(
+                        tooltip: _primaryAddActionLabel,
+                        onPressed: () async {
+                          await _addFolder();
+                          setDialogState(() {});
+                        },
+                        icon: Icon(_primaryAddActionIcon),
+                      ),
+                    ],
+                  ),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        for (final raw in _foldersRaw)
+                          ListTile(
+                            selected: raw == _currentFolderRaw,
+                            leading: Icon(raw == _currentFolderRaw ? Icons.folder : Icons.folder_outlined),
+                            title: Text(_folderLabel(raw), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: '名前を変更',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () async { await _renameFolder(raw); setDialogState(() {}); },
+                                ),
+                                IconButton(
+                                  tooltip: '削除',
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: () async { await _removeFolder(raw); setDialogState(() {}); },
+                                ),
+                              ],
+                            ),
+                            onTap: () async { await _switchFolder(raw); setDialogState(() {}); },
+                          ),
+                        if (_foldersRaw.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: SceneSpace.x4),
+                            child: Text('登録フォルダがありません。右上の追加ボタンから登録してください。'),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: SceneSpace.x6),
+                  Wrap(
+                    spacing: SceneSpace.x2,
+                    runSpacing: SceneSpace.x2,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          await _openMetadataSettings();
+                          setDialogState(() {});
+                        },
+                        icon: const Icon(Icons.tune_outlined, size: 18),
+                        label: const Text('メタデータ設定'),
+                      ),
+                      if (widget.repo.canImportFromUrl)
+                        FilledButton.icon(
+                          onPressed: () async {
+                            await _importUrlToLibrary();
+                            setDialogState(() {});
+                          },
+                          icon: const Icon(Icons.download_outlined, size: 18),
+                          label: const Text('URLから取り込み'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

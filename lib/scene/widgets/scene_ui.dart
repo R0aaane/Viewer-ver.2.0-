@@ -1,5 +1,17 @@
 import 'package:flutter/material.dart';
 
+/// Shared desktop spacing and sizing tokens for the library screens.
+abstract final class SceneSpace {
+  static const double x1 = 4;
+  static const double x2 = 8;
+  static const double x3 = 12;
+  static const double x4 = 16;
+  static const double x6 = 24;
+  static const double x8 = 32;
+  static const double sidebarWidth = 232;
+  static const double inspectorWidth = 304;
+}
+
 class SceneSectionHeader extends StatelessWidget {
   final String title;
   final Widget? trailing;
@@ -9,7 +21,7 @@ class SceneSectionHeader extends StatelessWidget {
     super.key,
     required this.title,
     this.trailing,
-    this.padding = const EdgeInsets.fromLTRB(4, 0, 4, 8),
+    this.padding = const EdgeInsets.fromLTRB(0, 0, 0, SceneSpace.x2),
   });
 
   @override
@@ -34,7 +46,7 @@ class SceneSurfaceCard extends StatelessWidget {
   const SceneSurfaceCard({
     super.key,
     required this.child,
-    this.padding = const EdgeInsets.all(12),
+    this.padding = const EdgeInsets.all(SceneSpace.x3),
   });
 
   @override
@@ -73,11 +85,11 @@ class SceneSearchField extends StatelessWidget {
       onSubmitted: onSubmitted,
       textInputAction: TextInputAction.search,
       decoration: InputDecoration(
-        prefixIcon: const Icon(Icons.search),
+        prefixIcon: const Icon(Icons.search, size: 20),
         hintText: hintText,
         border: const OutlineInputBorder(),
         isDense: true,
-        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(vertical: SceneSpace.x2),
         suffixIconConstraints: const BoxConstraints(minWidth: 0),
         suffixIcon: hasText
             ? IconButton(
@@ -148,7 +160,12 @@ class SceneSidebarHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+      padding: const EdgeInsets.fromLTRB(
+        SceneSpace.x4,
+        SceneSpace.x4,
+        SceneSpace.x4,
+        SceneSpace.x3,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -176,11 +193,16 @@ class SceneSidebarSectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      padding: const EdgeInsets.fromLTRB(
+        SceneSpace.x4,
+        SceneSpace.x6,
+        SceneSpace.x4,
+        SceneSpace.x2,
+      ),
       child: Text(
         text,
         style: Theme.of(context).textTheme.labelLarge?.copyWith(
-          color: Theme.of(context).colorScheme.primary,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );

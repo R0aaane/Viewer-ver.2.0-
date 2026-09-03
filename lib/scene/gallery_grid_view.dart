@@ -400,7 +400,7 @@ class _ThumbImage extends StatelessWidget {
           : const ColorFilter.mode(Colors.transparent, BlendMode.dst),
       child: Image.memory(
         bytes,
-        fit: BoxFit.cover,
+        fit: BoxFit.contain,
         gaplessPlayback: true,
         filterQuality: FilterQuality.low,
         errorBuilder: (context, error, stack) {
@@ -1115,7 +1115,7 @@ extension _GalleryGridView on _GalleryGridPageState {
                 maxCrossAxisExtent: 220,
                 mainAxisSpacing: 12,
                 crossAxisSpacing: 12,
-                childAspectRatio: 0.75,
+                childAspectRatio: 0.65,
               ),
               delegate: SliverChildBuilderDelegate((context, index) {
                 final item = visibleItems[index];

@@ -681,7 +681,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
   Widget _buildDetailedBrowseThumb(MediaItem item) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(10),
       child: FutureBuilder<ThumbPair>(
         future: _getMediaThumbPair(item),
         builder: (context, snap) {
@@ -702,7 +702,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
           return Image.memory(
             snap.data!.front,
-            fit: BoxFit.cover,
+            fit: BoxFit.contain,
             gaplessPlayback: true,
           );
         },
@@ -710,46 +710,14 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
-  String _detailedBrowseTileSubtitle(MediaItem item) {
-    final artist = _homeSearchPrimaryValueForCategory(
-      item,
-      TagCategory.artist,
-      maxValues: 1,
-      emptyLabel: '',
-    );
-    if (artist.isNotEmpty) {
-      return artist;
-    }
-
-    final series = _homeSearchPrimaryValueForCategory(
-      item,
-      TagCategory.series,
-      maxValues: 1,
-      emptyLabel: '',
-    );
-    if (series.isNotEmpty) {
-      return series;
-    }
-
-    return _folderLabelForItem(item);
-  }
-
   Widget _buildDetailedBrowseGridTile(MediaItem item) {
     final theme = Theme.of(context);
-    final subtitle = _detailedBrowseTileSubtitle(item);
-    final folderLabel = _folderLabelForItem(item);
-    final updatedAt = _formatDetailedBrowseDate(
-      item.modified ?? _getUpdatedAt(item),
-    );
     final isSelected = _selectedIds.contains(item.id);
     final isBrowseSelected = _detailedBrowseSelectedItem?.id == item.id;
-    final isFavorite = _favorites.contains(item.id);
-    final accent = _detailedBrowseAccentColor(context, item);
-    final accentText = _detailedBrowseAccentTextColor(context, item);
 
     return ControllerFocusable(
       debugLabel: 'browse-grid-${item.id}',
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(10),
       onLongPress: () {
         if (!_selectMode) {
           _enterSelectMode(item);
@@ -770,9 +738,11 @@ extension _GalleryHomeView on _GalleryGridPageState {
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 120),
-        padding: const EdgeInsets.all(4),
+        padding: isSelected || isBrowseSelected
+            ? const EdgeInsets.all(2)
+            : EdgeInsets.zero,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(10),
           border: isSelected || isBrowseSelected
               ? Border.all(color: theme.colorScheme.primary, width: 2)
               : null,
@@ -780,102 +750,25 @@ extension _GalleryHomeView on _GalleryGridPageState {
               ? theme.colorScheme.primary.withValues(alpha: 0.04)
               : Colors.transparent,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(child: _buildDetailedBrowseThumb(item)),
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: item.kind == MediaKind.pdf
-                        ? _PdfBadge(label: ItemNameService.kindLabel(item))
-                        : const SizedBox.shrink(),
+            Positioned.fill(child: _buildDetailedBrowseThumb(item)),
+            if (isSelected)
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: _FavButton(
-                      isFavorite: isFavorite,
-                      onPressed: () => _toggleFavorite(item),
-                    ),
+                  padding: const EdgeInsets.all(8),
+                  alignment: Alignment.topRight,
+                  child: const Icon(
+                    Icons.check_circle,
+                    color: Colors.white,
+                    size: 24,
                   ),
-                  Positioned(
-                    left: 8,
-                    right: 8,
-                    bottom: 8,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.88),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 5,
-                        ),
-                        child: Text(
-                          folderLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: accentText,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (isSelected)
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        padding: const EdgeInsets.all(8),
-                        alignment: Alignment.topRight,
-                        child: const Icon(
-                          Icons.check_circle,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                      ),
-                    ),
-                ],
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _displayTitleForItem(item),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                height: 1.2,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              updatedAt,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: accent.withValues(alpha: 0.95),
-                fontWeight: FontWeight.w700,
-              ),
-            ),
           ],
         ),
       ),
@@ -1075,6 +968,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
       );
     }
     final theme = Theme.of(context);
+    final tags = _homeSearchTagsFor(item);
     return Material(
       color: theme.colorScheme.surface,
       child: SafeArea(
@@ -1085,6 +979,19 @@ extension _GalleryHomeView on _GalleryGridPageState {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
+                'INSPECTOR',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 12),
+              AspectRatio(
+                aspectRatio: 0.78,
+                child: _buildDetailedBrowseThumb(item),
+              ),
+              const SizedBox(height: 16),
+              Text(
                 _displayTitleForItem(item),
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
@@ -1092,7 +999,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -1101,20 +1008,57 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   Chip(label: Text(_folderLabelForItem(item))),
                 ],
               ),
-              const SizedBox(height: 14),
-              AspectRatio(
-                aspectRatio: 0.78,
-                child: _buildDetailedBrowseThumb(item),
-              ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               Text(
                 '更新 ${_formatDetailedBrowseDate(item.modified ?? _getUpdatedAt(item))}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildDetailedBrowseCategorySearchButtons(
+                label: '作者',
+                searchKey: 'artist',
+                values: _homeSearchValuesForCategory(
+                  item,
+                  TagCategory.artist,
+                ),
+              ),
+              const SizedBox(height: 6),
+              _buildDetailedBrowseCategorySearchButtons(
+                label: 'シリーズ',
+                searchKey: 'series',
+                values: _homeSearchValuesForCategory(
+                  item,
+                  TagCategory.series,
+                ),
+              ),
+              const SizedBox(height: 4),
+              if (tags.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('タグ', style: theme.textTheme.labelLarge),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final tag in tags.take(4)) Chip(label: Text(tag)),
+                    if (tags.length > 4) Chip(label: Text('+${tags.length - 4}')),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 8),
+              Text(
+                'フォルダ: ${_folderLabelForItem(item)}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: () => _openDetailFromHome(item),
                 icon: const Icon(Icons.open_in_new),
-                label: const Text('詳細を開く'),
+                label: const Text('開く'),
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -1133,12 +1077,51 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
+  Widget _buildDetailedBrowseCategorySearchButtons({
+    required String label,
+    required String searchKey,
+    required List<String> values,
+  }) {
+    if (values.isEmpty) {
+      return Text('$label: 未設定');
+    }
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: values
+          .take(3)
+          .map(
+            (value) => OutlinedButton.icon(
+              onPressed: () => _searchDetailedBrowseCategory(searchKey, value),
+              icon: const Icon(Icons.search, size: 16),
+              label: Text('$label: $value'),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  void _searchDetailedBrowseCategory(String searchKey, String value) {
+    final query = '$searchKey:${_quoteHomeSearchValue(value)}';
+    _homeSearchDebounce?.cancel();
+    _homeSearchCtrl.value = TextEditingValue(
+      text: query,
+      selection: TextSelection.collapsed(offset: query.length),
+    );
+    setState(() {
+      _homeQuery = query;
+      _homeSearchPageIndex = 0;
+      _detailedBrowseSelectedItem = null;
+    });
+    unawaited(_runHomeSearch(includeAllWhenEmpty: true));
+  }
+
   Widget _buildDetailedBrowseResultsBody() {
     Widget headerCard() {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 8),
+        child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
@@ -1274,7 +1257,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
               ],
             ],
           ),
-        ),
       );
     }
 
@@ -1283,11 +1265,11 @@ extension _GalleryHomeView on _GalleryGridPageState {
         final crossAxisCount = _detailedBrowseCardColumns;
         final pageItems = _currentDetailedBrowsePageItems();
         final showPager = _homeSearchResults.length > _detailedBrowsePageSize();
-        final crossSpacing = constraints.maxWidth < 420 ? 8.0 : 12.0;
-        final mainSpacing = constraints.maxWidth < 420 ? 14.0 : 18.0;
+        final crossSpacing = constraints.maxWidth < 420 ? 4.0 : 8.0;
+        final mainSpacing = constraints.maxWidth < 420 ? 4.0 : 8.0;
         final showDetailPane = constraints.maxWidth >= 1180;
         final listWidth = showDetailPane
-            ? constraints.maxWidth - 340
+            ? constraints.maxWidth - SceneSpace.inspectorWidth
             : constraints.maxWidth;
         final contentWidth = (listWidth - 24)
             .clamp(0.0, double.infinity)
@@ -1296,7 +1278,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
         final tileWidth =
             (contentWidth - (crossSpacing * (crossAxisCount - 1))) /
             crossAxisCount;
-        final tileHeight = (tileWidth * 0.92) + 74;
+        final tileHeight = tileWidth / 0.70;
 
         final browseContent = RefreshIndicator(
           onRefresh: _handlePullToRefresh,
@@ -1382,7 +1364,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
           children: [
             Expanded(child: browseContent),
             const VerticalDivider(width: 1),
-            SizedBox(width: 339, child: _buildDetailedBrowseDetailPanel()),
+            SizedBox(
+              width: SceneSpace.inspectorWidth,
+              child: _buildDetailedBrowseDetailPanel(),
+            ),
           ],
         );
       },
@@ -1795,18 +1780,12 @@ extension _GalleryHomeView on _GalleryGridPageState {
     required String value,
   }) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 154,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
-      ),
+    return SizedBox(
+      width: 148,
       child: Row(
         children: [
-          Icon(icon, size: 20, color: scheme.primary),
-          const SizedBox(width: 10),
+          Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1815,16 +1794,12 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelSmall?.copyWith(color: Colors.white70),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$value 件',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  value,
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
               ],
             ),
@@ -2646,7 +2621,169 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
-  Widget _buildHomeBody() {
+  Widget _buildHomeShelfSection({
+    required String title,
+    required _HomeShelfKind kind,
+  }) {
+    final items = _homeMyListItems(kind);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SceneSectionHeader(
+          title: title,
+          trailing: items.isEmpty
+              ? null
+              : TextButton.icon(
+                  onPressed: () => _openDetailedBrowsePage(myListKind: kind),
+                  icon: const Icon(Icons.arrow_forward, size: 18),
+                  label: const Text('すべて表示'),
+                ),
+        ),
+        if (_homeShowcaseLoading && items.isEmpty)
+          const SizedBox(
+            height: 180,
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (items.isEmpty)
+          _buildHomeShelfEmptyState(
+            icon: Icons.collections_bookmark_outlined,
+            title: '$titleはまだありません',
+            message: '作品を追加すると、ここに表示されます。',
+          )
+        else
+          SizedBox(
+            height: 290,
+            child: _HomeShelfScroller(
+              itemCount: items.length,
+              itemBuilder: (context, index) => _buildHomeMyListItem(items[index], kind),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildHomeSearchResultRow(MediaItem item) {
+    final tags = _homeSearchTagsFor(item);
+    return ControllerFocusable(
+      debugLabel: 'home-search-${item.id}',
+      borderRadius: BorderRadius.circular(8),
+      onPressed: () => _openDetailFromHome(item),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            SizedBox(width: 42, height: 56, child: _homeFavThumb(item, fill: true)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_displayTitleForItem(item), maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${ItemNameService.kindLabel(item)} · ${_folderLabelForItem(item)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  if (tags.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 4,
+                      children: [
+                        for (final tag in tags.take(3)) Chip(label: Text(tag), visualDensity: VisualDensity.compact),
+                        if (tags.length > 3) Chip(label: Text('+${tags.length - 3}'), visualDensity: VisualDensity.compact),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: '開く',
+              onPressed: () => _openDetailFromHome(item),
+              icon: const Icon(Icons.open_in_new, size: 18),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRedesignedHomeBody() {
+    if (_initializing) {
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildLoadingBody(title: 'ホームを読み込み中', message: 'ライブラリを準備しています。'),
+      );
+    }
+    if (_initializationErrorMessage != null) {
+      return _buildRefreshableStatusBody(
+        onRefresh: _handlePullToRefresh,
+        child: _buildErrorBody(title: 'ホームの初期化に失敗しました', message: _initializationErrorMessage!, onAction: _retryInitialization),
+      );
+    }
+
+    final documentCount = _homeAllItemsByShelfKind[_HomeShelfKind.recentAdded]?.length ?? 0;
+    final previews = _homeSearchResults.take(5).toList(growable: false);
+    return RefreshIndicator(
+      onRefresh: _handlePullToRefresh,
+      child: ListView(
+        physics: _refreshScrollPhysics,
+        padding: const EdgeInsets.all(SceneSpace.x6),
+        children: [
+          Text('ホーム', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: SceneSpace.x3),
+          SizedBox(
+            height: 44,
+            child: _buildSharedHomeSearchField(includeAllWhenEmpty: false, hintText: 'ライブラリを検索'),
+          ),
+          if (_homeSearching)
+            const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator())
+          else if (_homeQuery.trim().isNotEmpty) ...[
+            const SizedBox(height: SceneSpace.x4),
+            Row(
+              children: [
+                Text('検索結果 ${_homeSearchResults.length}件', style: Theme.of(context).textTheme.titleMedium),
+                const Spacer(),
+                TextButton(onPressed: _openDetailedBrowsePage, child: const Text('一覧で開く')),
+              ],
+            ),
+            const Divider(),
+            if (previews.isEmpty)
+              const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Text('一致する作品はありません。'))
+            else
+              for (final item in previews) ...[
+                _buildHomeSearchResultRow(item),
+                const Divider(),
+              ],
+          ],
+          const SizedBox(height: SceneSpace.x6),
+          _buildContinueReadingCard(),
+          const SizedBox(height: SceneSpace.x8),
+          _buildHomeShelfSection(title: '最近追加', kind: _HomeShelfKind.recentAdded),
+          const SizedBox(height: SceneSpace.x8),
+          _buildHomeShelfSection(title: 'お気に入り', kind: _HomeShelfKind.favorites),
+          const SizedBox(height: SceneSpace.x8),
+          SceneSectionHeader(title: 'ライブラリ'),
+          Wrap(
+            spacing: SceneSpace.x6,
+            runSpacing: SceneSpace.x3,
+            children: [
+              _buildHomeOverviewMetric(icon: Icons.description_outlined, label: 'ドキュメント', value: '$documentCount'),
+              _buildHomeOverviewMetric(icon: Icons.folder_outlined, label: '登録フォルダ', value: '${_foldersRaw.length}'),
+              _buildHomeOverviewMetric(icon: Icons.star_outline, label: 'お気に入り', value: '${_homeFavoriteShowcaseItems.length}'),
+              _buildHomeOverviewMetric(icon: Icons.schedule_outlined, label: '最近追加', value: '${_homeRecentAddedItems.length}'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeBody() => _buildRedesignedHomeBody();
+
+  Widget _buildLegacyHomeBody() {
     if (_initializing) {
       return _buildRefreshableStatusBody(
         onRefresh: _handlePullToRefresh,
