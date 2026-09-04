@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 
 ThemeData buildAppTheme() {
-  final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xFFF09AAF),
-    brightness: Brightness.dark,
-    surface: const Color(0xFF17181C),
-  );
+  final scheme =
+      ColorScheme.fromSeed(
+        seedColor: const Color(0xFFF09AAF),
+        brightness: Brightness.dark,
+      ).copyWith(
+        surface: const Color(0xFF17181C),
+        onSurface: const Color(0xFFE8E8EA),
+        onSurfaceVariant: const Color(0xFFB7B9C0),
+        outline: const Color(0xFF4A4D55),
+        outlineVariant: const Color(0xFF2B2D33),
+      );
 
   final base = ThemeData(
     useMaterial3: true,
@@ -118,13 +124,31 @@ ThemeData buildAppTheme() {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
     textTheme: base.textTheme.copyWith(
-      titleLarge: const TextStyle(fontSize: 24, fontWeight: FontWeight.w600),
-      titleMedium: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-      titleSmall: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
-      bodyMedium: const TextStyle(fontSize: 14, height: 1.4),
-      bodySmall: const TextStyle(fontSize: 12, height: 1.35),
-      labelLarge: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-      labelMedium: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+      titleLarge: base.textTheme.titleLarge?.copyWith(
+        fontSize: 24,
+        fontWeight: FontWeight.w600,
+      ),
+      titleMedium: base.textTheme.titleMedium?.copyWith(
+        fontSize: 17,
+        fontWeight: FontWeight.w600,
+      ),
+      titleSmall: base.textTheme.titleSmall?.copyWith(
+        fontSize: 15,
+        fontWeight: FontWeight.w500,
+      ),
+      bodyMedium: base.textTheme.bodyMedium?.copyWith(
+        fontSize: 14,
+        height: 1.4,
+      ),
+      bodySmall: base.textTheme.bodySmall?.copyWith(fontSize: 12, height: 1.35),
+      labelLarge: base.textTheme.labelLarge?.copyWith(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+      ),
+      labelMedium: base.textTheme.labelMedium?.copyWith(
+        fontSize: 11,
+        fontWeight: FontWeight.w500,
+      ),
     ),
   );
 }
