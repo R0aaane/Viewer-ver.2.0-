@@ -40,10 +40,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     await _loadHitomiSearchPage(0, loadVersion: loadVersion);
   }
 
-  Future<void> _loadHitomiSearchPage(
-    int pageIndex, {
-    int? loadVersion,
-  }) async {
+  Future<void> _loadHitomiSearchPage(int pageIndex, {int? loadVersion}) async {
     final query = _hitomiSearchCtrl.text.trim();
     if (query.isEmpty) return;
     final version = loadVersion ?? ++_hitomiSearchLoadVersion;
@@ -322,10 +319,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
             ),
             for (final page in pageItems)
               page == null
-                  ? const SizedBox(
-                      width: 36,
-                      child: Center(child: Text('…')),
-                    )
+                  ? const SizedBox(width: 36, child: Center(child: Text('…')))
                   : _buildHitomiPagerCircle(
                       label: '${page + 1}',
                       selected: page == currentPage,
@@ -359,8 +353,7 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       currentPage + 1,
       totalPages - 2,
       totalPages - 1,
-    }.where((page) => page >= 0 && page < totalPages).toList()
-      ..sort();
+    }.where((page) => page >= 0 && page < totalPages).toList()..sort();
     final items = <int?>[];
     for (final page in pages) {
       if (items.isNotEmpty) {
@@ -452,8 +445,8 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 560;
             final thumbnail = SizedBox(
-              width: compact ? 104 : 92,
-              height: compact ? 148 : 132,
+              width: compact ? 128 : 144,
+              height: compact ? 184 : 204,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -501,8 +494,14 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
                   children: [
                     IconButton(
                       tooltip: selected ? '選択解除' : '選択',
-                      onPressed: imported ? null : () => _toggleHitomiResultSelection(result),
-                      icon: Icon(selected ? Icons.check_circle : Icons.check_circle_outline),
+                      onPressed: imported
+                          ? null
+                          : () => _toggleHitomiResultSelection(result),
+                      icon: Icon(
+                        selected
+                            ? Icons.check_circle
+                            : Icons.check_circle_outline,
+                      ),
                     ),
                     IconButton(
                       tooltip: '開く',
@@ -648,7 +647,8 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     await _runUrlImport(
       folder: FolderHandle(folderRaw),
       dialogTitle: 'Hitomi を一括取り込み',
-      dialogDescription: '選択した ${selected.length} 件の Hitomi ギャラリーを現在のフォルダへ取り込みます。',
+      dialogDescription:
+          '選択した ${selected.length} 件の Hitomi ギャラリーを現在のフォルダへ取り込みます。',
       progressTitle: 'Hitomi を一括取り込み中',
       successLabel: '一括取り込み',
       initialSourceText: selected.map((result) => result.galleryUrl).join('\n'),
@@ -684,7 +684,9 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
       final libraryFolder = await widget.repo.getAppLibraryFolder();
       items = await widget.repo.listMediaRecursiveFiles(libraryFolder);
     } catch (_) {
-      items = const <MediaItem>[];
+      // Imports can temporarily make the repository unavailable. Keep the
+      // current badges rather than clearing already-confirmed imports.
+      return;
     }
     if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
 
@@ -705,8 +707,11 @@ extension _GalleryGridHitomiSearch on _GalleryGridPageState {
     }
 
     setState(() {
-      _hitomiImportedGalleryIds = ids;
-      _hitomiImportedTitleKeys = titleKeys;
+      _hitomiImportedGalleryIds = <int>{..._hitomiImportedGalleryIds, ...ids};
+      _hitomiImportedTitleKeys = <String>{
+        ..._hitomiImportedTitleKeys,
+        ...titleKeys,
+      };
     });
   }
 
@@ -1081,13 +1086,13 @@ class _HitomiHoverPreviewState extends State<_HitomiHoverPreview> {
                   offset: Offset(_showSecondPage ? -1 : 0, 0),
                   child: OverflowBox(
                     alignment: Alignment.centerLeft,
-                    minWidth: constraints.maxWidth *
-                        (canPreviewSecondPage ? 2 : 1),
-                    maxWidth: constraints.maxWidth *
-                        (canPreviewSecondPage ? 2 : 1),
+                    minWidth:
+                        constraints.maxWidth * (canPreviewSecondPage ? 2 : 1),
+                    maxWidth:
+                        constraints.maxWidth * (canPreviewSecondPage ? 2 : 1),
                     child: SizedBox(
-                      width: constraints.maxWidth *
-                          (canPreviewSecondPage ? 2 : 1),
+                      width:
+                          constraints.maxWidth * (canPreviewSecondPage ? 2 : 1),
                       height: constraints.maxHeight,
                       child: Row(
                         children: [
