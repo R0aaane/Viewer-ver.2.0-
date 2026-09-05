@@ -6,6 +6,8 @@ ThemeData buildAppTheme() {
         seedColor: const Color(0xFFF09AAF),
         brightness: Brightness.dark,
       ).copyWith(
+        primary: const Color(0xFFC95072),
+        onPrimary: Colors.white,
         surface: const Color(0xFF17181C),
         onSurface: const Color(0xFFE8E8EA),
         onSurfaceVariant: const Color(0xFFB7B9C0),
@@ -43,6 +45,7 @@ ThemeData buildAppTheme() {
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
+        foregroundColor: Colors.white,
         minimumSize: const Size(0, 36),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

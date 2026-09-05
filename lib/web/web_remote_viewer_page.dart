@@ -5655,7 +5655,7 @@ class _EntryTitleBand extends StatelessWidget {
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          color: Color(0xFF362324),
+          color: Colors.white,
           fontSize: compact ? 22 : 28,
           fontWeight: FontWeight.w800,
           height: 1.04,
