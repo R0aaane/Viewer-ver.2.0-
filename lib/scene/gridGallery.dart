@@ -929,7 +929,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     if (_homeQuery.trim().isNotEmpty || _page == _MainPage.search) {
       _folderItemsCacheRecursive.clear();
-      await _runHomeSearch(includeAllWhenEmpty: _page == _MainPage.search);
+      await _runHomeSearch(
+        includeAllWhenEmpty: _page == _MainPage.search,
+        resetPage: _page != _MainPage.search,
+      );
     } else if (mounted) {
       setState(() {
         _homeSearching = false;
