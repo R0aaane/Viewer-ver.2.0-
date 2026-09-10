@@ -21,6 +21,10 @@ ThemeData buildAppTheme() {
     brightness: Brightness.dark,
     scaffoldBackgroundColor: const Color(0xFF111214),
   );
+  final textTheme = base.textTheme.apply(
+    bodyColor: scheme.onSurface,
+    displayColor: scheme.onSurface,
+  );
 
   return base.copyWith(
     appBarTheme: const AppBarTheme(
@@ -29,7 +33,11 @@ ThemeData buildAppTheme() {
       centerTitle: false,
       surfaceTintColor: Colors.transparent,
       backgroundColor: Color(0xFF111214),
-      titleTextStyle: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+      titleTextStyle: TextStyle(
+        color: Color(0xFFE8E8EA),
+        fontSize: 20,
+        fontWeight: FontWeight.w600,
+      ),
     ),
     dividerTheme: const DividerThemeData(
       thickness: 1,
@@ -75,7 +83,11 @@ ThemeData buildAppTheme() {
       ),
     ),
     chipTheme: base.chipTheme.copyWith(
-      labelStyle: const TextStyle(fontSize: 12),
+      labelStyle: const TextStyle(fontSize: 12, color: Color(0xFFE8E8EA)),
+      secondaryLabelStyle: const TextStyle(
+        fontSize: 12,
+        color: Color(0xFFE8E8EA),
+      ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
       side: const BorderSide(color: Color(0xFF35373E)),
     ),
@@ -97,6 +109,8 @@ ThemeData buildAppTheme() {
       filled: true,
       fillColor: const Color(0xFF1A1B20),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      labelStyle: const TextStyle(color: Color(0xFFC9CBD2)),
+      hintStyle: const TextStyle(color: Color(0xFF9FA1AA)),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
         borderSide: const BorderSide(color: Color(0xFF35373E)),
@@ -111,6 +125,7 @@ ThemeData buildAppTheme() {
       ),
     ),
     dropdownMenuTheme: DropdownMenuThemeData(
+      textStyle: const TextStyle(color: Color(0xFFE8E8EA)),
       inputDecorationTheme: InputDecorationTheme(
         isDense: true,
         filled: true,
@@ -126,29 +141,26 @@ ThemeData buildAppTheme() {
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
-    textTheme: base.textTheme.copyWith(
-      titleLarge: base.textTheme.titleLarge?.copyWith(
+    textTheme: textTheme.copyWith(
+      titleLarge: textTheme.titleLarge?.copyWith(
         fontSize: 24,
         fontWeight: FontWeight.w600,
       ),
-      titleMedium: base.textTheme.titleMedium?.copyWith(
+      titleMedium: textTheme.titleMedium?.copyWith(
         fontSize: 17,
         fontWeight: FontWeight.w600,
       ),
-      titleSmall: base.textTheme.titleSmall?.copyWith(
+      titleSmall: textTheme.titleSmall?.copyWith(
         fontSize: 15,
         fontWeight: FontWeight.w500,
       ),
-      bodyMedium: base.textTheme.bodyMedium?.copyWith(
-        fontSize: 14,
-        height: 1.4,
-      ),
-      bodySmall: base.textTheme.bodySmall?.copyWith(fontSize: 12, height: 1.35),
-      labelLarge: base.textTheme.labelLarge?.copyWith(
+      bodyMedium: textTheme.bodyMedium?.copyWith(fontSize: 14, height: 1.4),
+      bodySmall: textTheme.bodySmall?.copyWith(fontSize: 12, height: 1.35),
+      labelLarge: textTheme.labelLarge?.copyWith(
         fontSize: 12,
         fontWeight: FontWeight.w600,
       ),
-      labelMedium: base.textTheme.labelMedium?.copyWith(
+      labelMedium: textTheme.labelMedium?.copyWith(
         fontSize: 11,
         fontWeight: FontWeight.w500,
       ),

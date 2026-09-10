@@ -19,6 +19,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Awaitable, Callable
 
+from server.vendor.kemono_dl.hitomi import parse_hitomi_gg
+
 
 _UI_EVENT_PREFIX = "__KEMONO_DL_UI__"
 _LAUNCHER_IDLE_TIMEOUT_SECONDS = 600
@@ -32,6 +34,7 @@ _HITOMI_NOZOMI_HOSTS = (
     "ltn.hitomi.la",
 )
 _HITOMI_INDEX_HOST = "ltn.gold-usergeneratedcontent.net"
+_HITOMI_GG_URL = f"https://{_HITOMI_INDEX_HOST}/gg.js"
 _HITOMI_SEARCH_CONCURRENCY = 8
 _HITOMI_SEARCH_RESULT_CACHE_SIZE = 500
 _HITOMI_THUMBNAIL_CACHE_SIZE = 100
@@ -253,6 +256,7 @@ class UrlDownloadService:
         self._hitomi_thumbnail_cache: OrderedDict[int, tuple[bytes, str]] = (
             OrderedDict()
         )
+        self._hitomi_thumbnail_host_map: tuple[dict[int, int], int] | None = None
 
     async def download_url(
         self,
@@ -533,7 +537,10 @@ class UrlDownloadService:
             try:
                 request = urllib.request.Request(
                     url,
-                    headers={"User-Agent": _STANDALONE_USER_AGENT},
+                    headers={
+                        "User-Agent": _STANDALONE_USER_AGENT,
+                        "Referer": f"https://hitomi.la/galleries/{gallery_id}.html",
+                    },
                 )
                 with urllib.request.urlopen(request, timeout=15) as response:
                     payload = response.read(5 * 1024 * 1024 + 1)
@@ -684,24 +691,36 @@ class UrlDownloadService:
             return []
         name = self._trimmed(file_info.get("name")) or "image.jpg"
         original_ext = name.rsplit(".", 1)[-1].lower() if "." in name else "jpg"
-        left = file_hash[-1:]
-        right = file_hash[-3:-1]
-        thumb_path = f"{left}/{right}/{file_hash}"
+        image_number = int(file_hash[-1] + file_hash[-3:-1], 16)
+        thumbnail_host = self._hitomi_thumbnail_host(image_number)
+        thumb_path = f"{file_hash[-1:]}/{file_hash[-3:-1]}/{file_hash}"
         urls: list[str] = []
-        for subdomain in ("atn", "btn", "ctn"):
-            urls.append(
-                f"https://{subdomain}.gold-usergeneratedcontent.net/webpsmalltn/{thumb_path}.webp"
-            )
+        urls.append(
+            f"https://{thumbnail_host}.gold-usergeneratedcontent.net/webpsmalltn/{thumb_path}.webp"
+        )
         if self._trimmed(file_info.get("hasavif")) == "1":
-            for subdomain in ("atn", "btn", "ctn"):
-                urls.append(
-                    f"https://{subdomain}.gold-usergeneratedcontent.net/avifsmalltn/{thumb_path}.avif"
-                )
-        for subdomain in ("atn", "btn", "ctn"):
             urls.append(
-                f"https://{subdomain}.gold-usergeneratedcontent.net/smalltn/{thumb_path}.{original_ext}"
+                f"https://{thumbnail_host}.gold-usergeneratedcontent.net/avifsmalltn/{thumb_path}.avif"
             )
+        urls.append(
+            f"https://{thumbnail_host}.gold-usergeneratedcontent.net/smalltn/{thumb_path}.{original_ext}"
+        )
         return urls
+
+    def _hitomi_thumbnail_host(self, image_number: int) -> str:
+        with self._hitomi_cache_lock:
+            cached = self._hitomi_thumbnail_host_map
+            if cached is None:
+                try:
+                    mapping, _, default = parse_hitomi_gg(
+                        self._download_html(_HITOMI_GG_URL)
+                    )
+                    cached = (mapping, default)
+                except Exception:
+                    cached = ({}, 0)
+                self._hitomi_thumbnail_host_map = cached
+        mapping, default = cached
+        return f"{chr(ord('a') + mapping.get(image_number, default))}tn"
 
     def _first_hitomi_field_name(self, value: object) -> str | None:
         values = self._hitomi_field_names(value)

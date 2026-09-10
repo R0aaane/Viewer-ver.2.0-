@@ -1872,29 +1872,49 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Widget _buildHitomiSearchPane() {
-    return Column(
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(child: _buildHitomiSearchField()),
-            const SizedBox(width: 8),
-            _buildHitomiOrderingDropdown(),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              onPressed: _hitomiSearching ? null : _runHitomiSearch,
-              icon: const Icon(Icons.search),
-              label: const Text('検索'),
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: <Widget>[
+          if (constraints.maxWidth < 720) ...<Widget>[
+            _buildHitomiSearchField(),
+            const SizedBox(height: 8),
+            Row(
+              children: <Widget>[
+                Expanded(child: _buildHitomiOrderingDropdown()),
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 48,
+                  child: FilledButton.icon(
+                    onPressed: _hitomiSearching ? null : _runHitomiSearch,
+                    icon: const Icon(Icons.search),
+                    label: const Text('検索'),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        if (_hitomiSearching)
-          const Padding(
-            padding: EdgeInsets.only(top: 8),
-            child: LinearProgressIndicator(),
-          ),
-        const SizedBox(height: 12),
-        Expanded(child: _buildHitomiSearchResults()),
-      ],
+          ] else
+            Row(
+              children: <Widget>[
+                Expanded(child: _buildHitomiSearchField()),
+                const SizedBox(width: 8),
+                SizedBox(width: 190, child: _buildHitomiOrderingDropdown()),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: _hitomiSearching ? null : _runHitomiSearch,
+                  icon: const Icon(Icons.search),
+                  label: const Text('検索'),
+                ),
+              ],
+            ),
+          if (_hitomiSearching)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: LinearProgressIndicator(),
+            ),
+          const SizedBox(height: 12),
+          Expanded(child: _buildHitomiSearchResults()),
+        ],
+      ),
     );
   }
 
@@ -1944,11 +1964,13 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         return TextField(
           controller: controller,
           focusNode: focusNode,
+          style: const TextStyle(fontSize: 16, color: Color(0xFFE8E8EA)),
           decoration: const InputDecoration(
             prefixIcon: Icon(Icons.search),
             labelText: 'Hitomi 検索',
             hintText: 'group:yoppu language:japanese',
             border: OutlineInputBorder(),
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
           ),
           textInputAction: TextInputAction.search,
           onSubmitted: (_) => _runHitomiSearch(),
@@ -1988,8 +2010,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: _hitomiSearchController,
       builder: (context, value, child) {
-        return DropdownButton<String>(
-          value: _selectedHitomiOrderingQuery(),
+        final selectedOrdering = _selectedHitomiOrderingQuery();
+        return DropdownButtonFormField<String>(
+          key: ValueKey<String>(selectedOrdering),
+          initialValue: selectedOrdering,
+          isExpanded: true,
+          style: const TextStyle(color: Color(0xFFE8E8EA)),
+          decoration: const InputDecoration(
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          ),
           items: const <DropdownMenuItem<String>>[
             DropdownMenuItem<String>(
               value: 'orderby:date orderbykey:added',
