@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_interop';
@@ -603,8 +604,14 @@ class WebRemoteApiClient {
       <String, Future<WebRemoteMediaMeta>>{};
   final Map<String, Future<WebRemotePdfPageCountInfo>> _pdfPageCountCache =
       <String, Future<WebRemotePdfPageCountInfo>>{};
-  final Map<String, Future<Uint8List>> _pdfBytesCache =
+  // Local PDF.js fallback needs the source file, but retaining every opened
+  // document grows without bound in a long browser session.
+  final LinkedHashMap<String, Uint8List> _pdfBytesCache =
+      LinkedHashMap<String, Uint8List>();
+  final Map<String, Future<Uint8List>> _pdfBytesInFlight =
       <String, Future<Uint8List>>{};
+  int _pdfBytesCacheSize = 0;
+  static const int _pdfBytesCacheMaxSize = 48 * 1024 * 1024;
 
   WebRemoteApiClient({
     required this.baseUrl,
@@ -623,6 +630,8 @@ class WebRemoteApiClient {
     _mediaMetaCache.clear();
     _pdfPageCountCache.clear();
     _pdfBytesCache.clear();
+    _pdfBytesInFlight.clear();
+    _pdfBytesCacheSize = 0;
   }
 
   Future<T> _memoize<T>(
@@ -1350,7 +1359,51 @@ class WebRemoteApiClient {
   }
 
   Future<Uint8List> _fetchPdfBytesForLocalRender(String mediaId) {
-    return _memoize(_pdfBytesCache, mediaId, () => fetchImageDownload(mediaId));
+    final cached = _pdfBytesCache.remove(mediaId);
+    if (cached != null) {
+      _pdfBytesCache[mediaId] = cached;
+      return Future<Uint8List>.value(cached);
+    }
+
+    final inFlight = _pdfBytesInFlight[mediaId];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = fetchImageDownload(mediaId);
+    _pdfBytesInFlight[mediaId] = future;
+    unawaited(
+      future.then<void>(
+        (bytes) {
+          if (bytes.lengthInBytes <= _pdfBytesCacheMaxSize) {
+            _putPdfBytesCache(mediaId, bytes);
+          }
+          if (identical(_pdfBytesInFlight[mediaId], future)) {
+            _pdfBytesInFlight.remove(mediaId);
+          }
+        },
+        onError: (_, _) {
+          if (identical(_pdfBytesInFlight[mediaId], future)) {
+            _pdfBytesInFlight.remove(mediaId);
+          }
+        },
+      ),
+    );
+    return future;
+  }
+
+  void _putPdfBytesCache(String mediaId, Uint8List bytes) {
+    final old = _pdfBytesCache.remove(mediaId);
+    if (old != null) {
+      _pdfBytesCacheSize -= old.lengthInBytes;
+    }
+    _pdfBytesCache[mediaId] = bytes;
+    _pdfBytesCacheSize += bytes.lengthInBytes;
+    while (_pdfBytesCache.isNotEmpty &&
+        _pdfBytesCacheSize > _pdfBytesCacheMaxSize) {
+      final oldest = _pdfBytesCache.remove(_pdfBytesCache.keys.first)!;
+      _pdfBytesCacheSize -= oldest.lengthInBytes;
+    }
   }
 
   Future<Uint8List> _renderPdfPageLocally(

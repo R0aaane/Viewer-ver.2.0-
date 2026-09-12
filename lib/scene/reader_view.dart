@@ -881,51 +881,17 @@ extension _ReaderView on _ImageDetailPageState {
 
         // Page selector.
         if (_isPdf)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-            decoration: BoxDecoration(
-              color: _ImageDetailPageState._uiChip,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<int>(
-                value: _page.clamp(1, _totalPages).toInt(),
-                isDense: true,
-                menuMaxHeight: 360,
-                dropdownColor: _ImageDetailPageState._uiBar,
-                borderRadius: BorderRadius.circular(14),
-                iconEnabledColor: Colors.white,
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-                selectedItemBuilder: (context) => [
-                  for (var page = 1; page <= _totalPages; page++)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'ページ $page',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                ],
-                items: [
-                  for (var page = 1; page <= _totalPages; page++)
-                    DropdownMenuItem<int>(
-                      value: page,
-                      child: Text('ページ $page'),
-                    ),
-                ],
-                onChanged: _totalPages <= 1
-                    ? null
-                    : (value) {
-                        if (value == null || value == _page) {
-                          return;
-                        }
-                        _setCurrentPdfPage(value);
-                      },
-              ),
-            ),
+          _PdfPageSelector(
+            page: _page,
+            totalPages: _totalPages,
+            onChanged: _totalPages <= 1
+                ? null
+                : (value) {
+                    if (value == null || value == _page) {
+                      return;
+                    }
+                    _setCurrentPdfPage(value);
+                  },
           ),
       ],
     );
@@ -1048,4 +1014,74 @@ class _NextIntent extends Intent {
 
 class _ExitFullscreenIntent extends Intent {
   const _ExitFullscreenIntent();
+}
+
+/// Keeps the identical page-selection controls while avoiding rebuilding a
+/// widget for every PDF page on unrelated reader state updates.
+class _PdfPageSelector extends StatefulWidget {
+  final int page;
+  final int totalPages;
+  final ValueChanged<int?>? onChanged;
+
+  const _PdfPageSelector({
+    required this.page,
+    required this.totalPages,
+    required this.onChanged,
+  });
+
+  @override
+  State<_PdfPageSelector> createState() => _PdfPageSelectorState();
+}
+
+class _PdfPageSelectorState extends State<_PdfPageSelector> {
+  int _cachedTotalPages = 0;
+  List<Widget> _selectedItems = const <Widget>[];
+  List<DropdownMenuItem<int>> _items = const <DropdownMenuItem<int>>[];
+
+  void _rebuildItemsIfNeeded() {
+    if (_cachedTotalPages == widget.totalPages) {
+      return;
+    }
+    _cachedTotalPages = widget.totalPages;
+    _selectedItems = List<Widget>.generate(widget.totalPages, (index) {
+      final page = index + 1;
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'ページ $page',
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+        ),
+      );
+    }, growable: false);
+    _items = List<DropdownMenuItem<int>>.generate(widget.totalPages, (index) {
+      final page = index + 1;
+      return DropdownMenuItem<int>(value: page, child: Text('ページ $page'));
+    }, growable: false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _rebuildItemsIfNeeded();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      decoration: BoxDecoration(
+        color: _ImageDetailPageState._uiChip,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<int>(
+          value: widget.page.clamp(1, widget.totalPages).toInt(),
+          isDense: true,
+          menuMaxHeight: 360,
+          dropdownColor: _ImageDetailPageState._uiBar,
+          borderRadius: BorderRadius.circular(14),
+          iconEnabledColor: Colors.white,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+          selectedItemBuilder: (context) => _selectedItems,
+          items: _items,
+          onChanged: widget.onChanged,
+        ),
+      ),
+    );
+  }
 }

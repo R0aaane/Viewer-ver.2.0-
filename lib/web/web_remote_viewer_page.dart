@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:typed_data';
@@ -547,9 +548,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             folderRaw: folderRaw,
             rawQuery: rawQuery,
           );
-          final searchedIds = searched
-              .map((entry) => entry.stableId)
-              .toSet();
+          final searchedIds = searched.map((entry) => entry.stableId).toSet();
           fetched = fetched
               .where((entry) => searchedIds.contains(entry.stableId))
               .toList(growable: false);
@@ -1397,9 +1396,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           rating: _ratingForEntry(entry),
           onRatingChanged: (rating) => _setRatingForEntry(entry, rating),
           onOpenDetail: () => _openDetailPage(entry, allowOpenPdfViewer: false),
-          onOpenRelatedEntry: (relatedEntry) => _openPdfViewerPage(
-            relatedEntry,
-          ),
+          onOpenRelatedEntry: (relatedEntry) =>
+              _openPdfViewerPage(relatedEntry),
         ),
       ),
     );
@@ -2740,13 +2738,17 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         entries.where(_isFavoriteEntry).toList(growable: false),
       _WebHomeMyListKind.unread =>
         entries.where(_isUnreadEntry).toList(growable: false),
-      _WebHomeMyListKind.bookmarks => entries
-          .where((entry) => _recentActivityForEntry(entry)?.isBookmarked == true)
-          .toList(growable: false),
+      _WebHomeMyListKind.bookmarks =>
+        entries
+            .where(
+              (entry) => _recentActivityForEntry(entry)?.isBookmarked == true,
+            )
+            .toList(growable: false),
       _WebHomeMyListKind.recentlyViewed => _recentlyViewedEntries(entries),
-      _WebHomeMyListKind.rating => entries
-          .where((entry) => _ratingForEntry(entry) == _homeRatingShelfRating)
-          .toList(growable: false),
+      _WebHomeMyListKind.rating =>
+        entries
+            .where((entry) => _ratingForEntry(entry) == _homeRatingShelfRating)
+            .toList(growable: false),
     }.toList(growable: true);
     selected.sort((left, right) {
       if (kind == _WebHomeMyListKind.recentlyViewed ||
@@ -2827,8 +2829,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   ChoiceChip(
                     label: Text(_webHomeMyListLabel(option)),
                     selected: option == kind,
-                    onSelected: (_) =>
-                        setState(() => _homeMyListKind = option),
+                    onSelected: (_) => setState(() => _homeMyListKind = option),
                   ),
               ],
             ),
@@ -3919,10 +3920,7 @@ class _WebHomeSection extends StatelessWidget {
                   ],
                 ),
               ),
-              if (trailing != null) ...[
-                const SizedBox(width: 12),
-                trailing!,
-              ],
+              if (trailing != null) ...[const SizedBox(width: 12), trailing!],
             ],
           ),
           const SizedBox(height: 12),
@@ -7456,6 +7454,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   int _totalPages = 1;
   bool _pageCountReliable = false;
   bool _twoPage = false;
+  final _WebPdfRenderQueue _renderQueue = _WebPdfRenderQueue(maxConcurrent: 2);
   final Map<int, Future<Uint8List>> _pageFutureCache =
       <int, Future<Uint8List>>{};
   final Map<int, Uint8List> _pageBytesCache = <int, Uint8List>{};
@@ -7533,6 +7532,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       ..._pageImageProviders.keys,
     }.toList(growable: false);
     for (final pageNumber in pages) {
+      _renderQueue.cancel(pageNumber);
       _pageFutureCache.remove(pageNumber);
       _pageBytesCache.remove(pageNumber);
       _evictPageImageProvider(pageNumber);
@@ -7540,6 +7540,25 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _pruneViewerPageCaches() {
+    final keepPages = _keptPageNumbers();
+
+    final cachedPages = <int>{
+      ..._pageFutureCache.keys,
+      ..._pageBytesCache.keys,
+      ..._pageImageProviders.keys,
+    }.toList(growable: false);
+    for (final pageNumber in cachedPages) {
+      if (keepPages.contains(pageNumber)) {
+        continue;
+      }
+      _renderQueue.cancel(pageNumber);
+      _pageFutureCache.remove(pageNumber);
+      _pageBytesCache.remove(pageNumber);
+      _evictPageImageProvider(pageNumber);
+    }
+  }
+
+  Set<int> _keptPageNumbers() {
     final keepPages = <int>{};
     final forwardWindow = _twoPage ? 4 : 3;
     for (
@@ -7555,21 +7574,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       }
       keepPages.add(pageNumber);
     }
-
-    final cachedPages = <int>{
-      ..._pageFutureCache.keys,
-      ..._pageBytesCache.keys,
-      ..._pageImageProviders.keys,
-    }.toList(growable: false);
-    for (final pageNumber in cachedPages) {
-      if (keepPages.contains(pageNumber)) {
-        continue;
-      }
-      _pageFutureCache.remove(pageNumber);
-      _pageBytesCache.remove(pageNumber);
-      _evictPageImageProvider(pageNumber);
-    }
+    return keepPages;
   }
+
+  bool _shouldKeepPage(int pageNumber) =>
+      _keptPageNumbers().contains(pageNumber);
 
   void _schedulePersistCurrentActivity() {
     if (!_canPersistReadingProgress && !_hasMovedPageSinceLoad) {
@@ -7739,7 +7748,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     }
   }
 
-  Future<Uint8List> _loadPageBytes(int pageNo) {
+  Future<Uint8List> _loadPageBytes(int pageNo, {bool prefetch = false}) {
     final mediaId = _activeViewerMediaId ?? widget.entry.mediaId?.trim();
     final stableId = _activeViewerStableId ?? widget.entry.stableId;
     final generation = _viewerGeneration;
@@ -7757,17 +7766,31 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     }
     final existing = _pageFutureCache[pageNo];
     if (existing != null) {
+      if (!prefetch) {
+        _renderQueue.promote(pageNo);
+      }
       return existing;
     }
 
-    final future = widget.client
-        .fetchRenderedPdfPage(mediaId, pageNo, width: _pdfViewerRenderWidth)
+    final future = _renderQueue
+        .schedule(
+          pageNo,
+          () => widget.client.fetchRenderedPdfPage(
+            mediaId,
+            pageNo,
+            width: _pdfViewerRenderWidth,
+          ),
+          priority: prefetch
+              ? _WebPdfRenderPriority.background
+              : _WebPdfRenderPriority.foreground,
+        )
         .then((bytes) {
           if (_isCurrentViewerRequest(
-            generation: generation,
-            mediaId: mediaId,
-            stableId: stableId,
-          )) {
+                generation: generation,
+                mediaId: mediaId,
+                stableId: stableId,
+              ) &&
+              _shouldKeepPage(pageNo)) {
             _pageFutureCache.remove(pageNo);
             _pageBytesCache[pageNo] = bytes;
             _pageImageProviderFor(pageNo, bytes);
@@ -7819,7 +7842,10 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         continue;
       }
       unawaited(
-        _loadPageBytes(pageNumber).then<void>((_) {}, onError: (_, _) {}),
+        _loadPageBytes(
+          pageNumber,
+          prefetch: true,
+        ).then<void>((_) {}, onError: (_, _) {}),
       );
     }
   }
@@ -7867,11 +7893,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       _loading = true;
     });
     try {
-      final bytes = await widget.client.fetchRenderedPdfPage(
-        mediaId,
-        page,
-        width: _pdfViewerRenderWidth,
-      );
+      final bytes = await _loadPageBytes(page);
       if (!_isCurrentViewerRequest(
         generation: generation,
         mediaId: mediaId,
@@ -8606,6 +8628,104 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       ),
     );
   }
+}
+
+enum _WebPdfRenderPriority { foreground, background }
+
+class _WebPdfRenderQueue {
+  final int maxConcurrent;
+  final Queue<_QueuedWebPdfRender> _foreground = Queue<_QueuedWebPdfRender>();
+  final Queue<_QueuedWebPdfRender> _background = Queue<_QueuedWebPdfRender>();
+  final Map<int, _QueuedWebPdfRender> _pendingByPage =
+      <int, _QueuedWebPdfRender>{};
+  int _activeForeground = 0;
+  int _activeBackground = 0;
+
+  _WebPdfRenderQueue({required this.maxConcurrent});
+
+  Future<Uint8List> schedule(
+    int pageNumber,
+    Future<Uint8List> Function() operation, {
+    required _WebPdfRenderPriority priority,
+  }) {
+    final task = _QueuedWebPdfRender(pageNumber, operation, priority);
+    _pendingByPage[pageNumber] = task;
+    _queueFor(priority).add(task);
+    _pump();
+    return task.completer.future;
+  }
+
+  void promote(int pageNumber) {
+    final task = _pendingByPage[pageNumber];
+    if (task == null || task.priority == _WebPdfRenderPriority.foreground) {
+      return;
+    }
+    _background.remove(task);
+    task.priority = _WebPdfRenderPriority.foreground;
+    _foreground.add(task);
+    _pump();
+  }
+
+  void cancel(int pageNumber) {
+    final task = _pendingByPage.remove(pageNumber);
+    if (task == null) {
+      return;
+    }
+    if (_queueFor(task.priority).remove(task)) {
+      task.completer.completeError(const _WebPdfRenderCancelled());
+    }
+  }
+
+  Queue<_QueuedWebPdfRender> _queueFor(_WebPdfRenderPriority priority) =>
+      priority == _WebPdfRenderPriority.foreground ? _foreground : _background;
+
+  void _pump() {
+    while (_activeForeground + _activeBackground < maxConcurrent) {
+      if (_foreground.isNotEmpty) {
+        _start(_foreground.removeFirst(), _WebPdfRenderPriority.foreground);
+      } else if (_activeBackground == 0 && _background.isNotEmpty) {
+        _start(_background.removeFirst(), _WebPdfRenderPriority.background);
+      } else {
+        return;
+      }
+    }
+  }
+
+  void _start(_QueuedWebPdfRender task, _WebPdfRenderPriority priority) {
+    _pendingByPage.remove(task.pageNumber);
+    if (priority == _WebPdfRenderPriority.foreground) {
+      _activeForeground++;
+    } else {
+      _activeBackground++;
+    }
+    unawaited(() async {
+      try {
+        task.completer.complete(await task.operation());
+      } catch (error, stackTrace) {
+        task.completer.completeError(error, stackTrace);
+      } finally {
+        if (priority == _WebPdfRenderPriority.foreground) {
+          _activeForeground--;
+        } else {
+          _activeBackground--;
+        }
+        _pump();
+      }
+    }());
+  }
+}
+
+class _QueuedWebPdfRender {
+  final int pageNumber;
+  final Future<Uint8List> Function() operation;
+  final Completer<Uint8List> completer = Completer<Uint8List>();
+  _WebPdfRenderPriority priority;
+
+  _QueuedWebPdfRender(this.pageNumber, this.operation, this.priority);
+}
+
+class _WebPdfRenderCancelled implements Exception {
+  const _WebPdfRenderCancelled();
 }
 
 class _HitomiThumbnail extends StatefulWidget {

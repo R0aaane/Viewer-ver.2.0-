@@ -163,8 +163,15 @@ class WindowsFolderRepository implements MediaRepository {
   // Share in-flight thumbnail builds for the same cache key.
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
 
-  // PDF document cache for faster page rendering.
-  final Map<String, PdfDocument> _pdfCache = {};
+  // Keep a small LRU of open documents.  An unbounded cache made long gallery
+  // sessions retain native PDF handles and their backing memory indefinitely.
+  final LinkedHashMap<String, PdfDocument> _pdfCache =
+      LinkedHashMap<String, PdfDocument>();
+  final Map<String, Future<PdfDocument>> _pdfOpenInFlight =
+      <String, Future<PdfDocument>>{};
+  final Map<String, Future<void>> _pdfRenderTails = <String, Future<void>>{};
+  final Map<String, int> _activePdfRenders = <String, int>{};
+  static const int _pdfCacheMaxEntries = 6;
   Directory? _thumbDiskDir;
 
   bool _isUncPath(String path) => path.startsWith(r'\\');
@@ -920,7 +927,7 @@ class WindowsFolderRepository implements MediaRepository {
       throw RangeError.range(page, 1, total, 'page');
     }
 
-    return _renderPage(doc, page, maxWidth);
+    return _renderPage(item.id, doc, page, maxWidth);
   }
 
   @override
@@ -1009,7 +1016,7 @@ class WindowsFolderRepository implements MediaRepository {
       () => PdfDocument.openFile(item.id),
     );
     try {
-      final front = await _renderPage(doc, 1, maxWidth);
+      final front = await _renderPage(item.id, doc, 1, maxWidth);
       return ThumbPair(front: front, back: null);
     } finally {
       await doc.close();
@@ -1018,38 +1025,102 @@ class WindowsFolderRepository implements MediaRepository {
 
   // ---- PDF open with cache ----
   Future<PdfDocument> _openPdf(String path) async {
-    final cached = _pdfCache[path];
-    if (cached != null) return cached;
+    final cached = _pdfCache.remove(path);
+    if (cached != null) {
+      _pdfCache[path] = cached;
+      return cached;
+    }
 
-    final doc = await _withFsRetry(path, () => PdfDocument.openFile(path));
-    _pdfCache[path] = doc;
-    return doc;
+    final opening = _pdfOpenInFlight[path];
+    if (opening != null) {
+      return opening;
+    }
+
+    final future = _withFsRetry(path, () => PdfDocument.openFile(path));
+    _pdfOpenInFlight[path] = future;
+    try {
+      final doc = await future;
+      _pdfCache[path] = doc;
+      await _trimPdfCache();
+      return doc;
+    } finally {
+      if (identical(_pdfOpenInFlight[path], future)) {
+        _pdfOpenInFlight.remove(path);
+      }
+    }
+  }
+
+  Future<void> _trimPdfCache() async {
+    while (_pdfCache.length > _pdfCacheMaxEntries) {
+      String? keyToEvict;
+      for (final key in _pdfCache.keys) {
+        if ((_activePdfRenders[key] ?? 0) == 0) {
+          keyToEvict = key;
+          break;
+        }
+      }
+      if (keyToEvict == null) {
+        return;
+      }
+      final doc = _pdfCache.remove(keyToEvict);
+      if (doc != null) {
+        await doc.close();
+      }
+    }
+  }
+
+  Future<T> _withPdfRenderLock<T>(
+    String path,
+    Future<T> Function() action,
+  ) async {
+    final previous = _pdfRenderTails[path];
+    final gate = Completer<void>();
+    _pdfRenderTails[path] = gate.future;
+    try {
+      if (previous != null) {
+        await previous;
+      }
+      _activePdfRenders[path] = (_activePdfRenders[path] ?? 0) + 1;
+      return await action();
+    } finally {
+      final active = (_activePdfRenders[path] ?? 1) - 1;
+      if (active <= 0) {
+        _activePdfRenders.remove(path);
+      } else {
+        _activePdfRenders[path] = active;
+      }
+      gate.complete();
+      if (identical(_pdfRenderTails[path], gate.future)) {
+        _pdfRenderTails.remove(path);
+      }
+      unawaited(_trimPdfCache());
+    }
   }
 
   // ---- PDF page render ----
   Future<Uint8List> _renderPage(
+    String documentPath,
     PdfDocument doc,
     int pageNumber,
     int maxWidth,
   ) async {
-    final page = await doc.getPage(pageNumber);
-
-    final scale = maxWidth / page.width;
-    final double w = maxWidth.toDouble();
-    final double h = (page.height * scale);
-
-    final img = await page.render(
-      width: w,
-      height: h,
-      format: PdfPageImageFormat.png,
-    );
-
-    await page.close();
-
-    if (img == null) {
-      throw Exception('PDF render failed (page=$pageNumber)');
-    }
-    return img.bytes;
+    return _withPdfRenderLock(documentPath, () async {
+      final page = await doc.getPage(pageNumber);
+      try {
+        final scale = maxWidth / page.width;
+        final img = await page.render(
+          width: maxWidth.toDouble(),
+          height: page.height * scale,
+          format: PdfPageImageFormat.png,
+        );
+        if (img == null) {
+          throw Exception('PDF render failed (page=$pageNumber)');
+        }
+        return img.bytes;
+      } finally {
+        await page.close();
+      }
+    });
   }
 
   /// Releases cached PDF documents and thumbnail state.
