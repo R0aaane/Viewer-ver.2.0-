@@ -27,7 +27,7 @@ class _HomeShelfScrollerState extends State<_HomeShelfScroller> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 522,
+      height: 440,
       child: Scrollbar(
         controller: _controller,
         thumbVisibility: true,
@@ -1882,7 +1882,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
         MediaQuery.of(context).size.width < 560 ? 168.0 : 198.0;
     final thumbnailHeight = thumbnailWidth * 4 / 3;
     final width = thumbnailWidth + 20;
-    final tileHeight = thumbnailHeight + 230;
+    final tileHeight = thumbnailHeight + 156;
 
     return SizedBox(
       width: width,
@@ -2631,7 +2631,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
           )
         else
           SizedBox(
-            height: 290,
+            height: 440,
             child: _HomeShelfScroller(
               itemCount: items.length,
               itemBuilder: (context, index) => _buildHomeMyListItem(items[index], kind),
