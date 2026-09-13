@@ -27,7 +27,7 @@ class _HomeShelfScrollerState extends State<_HomeShelfScroller> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 492,
+      height: 522,
       child: Scrollbar(
         controller: _controller,
         thumbVisibility: true,
@@ -1858,8 +1858,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
   Widget _buildHomeMediaShelfCard({
     required MediaItem item,
-    required String footerText,
-    required IconData footerIcon,
     required VoidCallback onTap,
     String? badgeText,
     IconData? badgeIcon,
@@ -1884,7 +1882,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
         MediaQuery.of(context).size.width < 560 ? 168.0 : 198.0;
     final thumbnailHeight = thumbnailWidth * 4 / 3;
     final width = thumbnailWidth + 20;
-    final tileHeight = thumbnailHeight + 200;
+    final tileHeight = thumbnailHeight + 230;
 
     return SizedBox(
       width: width,
@@ -1993,24 +1991,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
                 _buildHomeShelfMetaLine('作者', artist),
                 const SizedBox(height: 4),
                 _buildHomeShelfMetaLine('シリーズ', series),
-                const SizedBox(height: 8),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(footerIcon, size: 14, color: Colors.white70),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        footerText,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.white70,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
@@ -2208,9 +2188,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   final item = _homeRatingShelfItems[index];
                   return _buildHomeMediaShelfCard(
                     item: item,
-                    footerText:
-                        '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}',
-                    footerIcon: Icons.schedule_outlined,
                     badgeText: '評価$rating',
                     badgeIcon: Icons.star_rounded,
                     badgeBackgroundColor: Theme.of(
@@ -2408,8 +2385,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
         ? 'p.$page'
         : 'p.$page / ${activity!.totalPages}';
     final scheme = Theme.of(context).colorScheme;
-    var footerText = '追加 ${_formatHomeDateTime(_homeAddedTimestamp(item))}';
-    var footerIcon = Icons.schedule_outlined;
     String? badgeText;
     IconData? badgeIcon;
     Color? badgeBackgroundColor;
@@ -2417,37 +2392,24 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     switch (kind) {
       case _HomeShelfKind.favorites:
-        footerText = activity == null
-            ? footerText
-            : '最終閲覧 ${_formatHomeDateTime(activity.lastReadAt)}';
-        footerIcon = activity == null ? Icons.schedule_outlined : Icons.history;
         badgeText = 'お気に入り';
         badgeIcon = Icons.star_rounded;
         badgeBackgroundColor = scheme.primaryContainer;
         badgeForegroundColor = scheme.onPrimaryContainer;
         break;
       case _HomeShelfKind.unread:
-        footerIcon = Icons.mark_email_unread_outlined;
         badgeText = '未読';
         badgeIcon = Icons.mark_email_unread_outlined;
         badgeBackgroundColor = scheme.tertiaryContainer;
         badgeForegroundColor = scheme.onTertiaryContainer;
         break;
       case _HomeShelfKind.bookmarks:
-        footerText = pageText == null
-            ? 'しおり ${_formatHomeDateTime(activity?.updatedAt)}'
-            : 'しおり ${_formatHomeDateTime(activity?.updatedAt)} / $pageText';
-        footerIcon = Icons.bookmark;
         badgeText = pageText ?? 'しおり';
         badgeIcon = Icons.bookmark;
         badgeBackgroundColor = scheme.primaryContainer;
         badgeForegroundColor = scheme.onPrimaryContainer;
         break;
       case _HomeShelfKind.recentlyViewed:
-        footerText = pageText == null
-            ? '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)}'
-            : '最終閲覧 ${_formatHomeDateTime(activity?.lastReadAt)} / $pageText';
-        footerIcon = Icons.history;
         badgeText = pageText;
         badgeIcon = pageText == null ? null : Icons.auto_stories_outlined;
         badgeBackgroundColor = scheme.secondaryContainer;
@@ -2465,8 +2427,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
     return _buildHomeMediaShelfCard(
       item: item,
-      footerText: footerText,
-      footerIcon: footerIcon,
       badgeText: badgeText,
       badgeIcon: badgeIcon,
       badgeBackgroundColor: badgeBackgroundColor,
