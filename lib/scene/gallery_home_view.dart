@@ -1397,7 +1397,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
           return Image.memory(
             snap.data!.front,
-            fit: BoxFit.cover,
+            fit: BoxFit.contain,
             gaplessPlayback: true,
           );
         },
