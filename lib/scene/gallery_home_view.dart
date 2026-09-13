@@ -27,7 +27,7 @@ class _HomeShelfScrollerState extends State<_HomeShelfScroller> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 382,
+      height: 442,
       child: Scrollbar(
         controller: _controller,
         thumbVisibility: true,
@@ -1880,7 +1880,10 @@ extension _GalleryHomeView on _GalleryGridPageState {
       maxValues: 1,
       emptyLabel: '未設定',
     );
-    final width = MediaQuery.of(context).size.width < 560 ? 168.0 : 188.0;
+    final thumbnailWidth =
+        MediaQuery.of(context).size.width < 560 ? 168.0 : 198.0;
+    final thumbnailHeight = thumbnailWidth * 4 / 3;
+    final width = thumbnailWidth + 20;
 
     return SizedBox(
       width: width,
@@ -1896,7 +1899,9 @@ extension _GalleryHomeView on _GalleryGridPageState {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
+                SizedBox(
+                  width: thumbnailWidth,
+                  height: thumbnailHeight,
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -2279,12 +2284,15 @@ extension _GalleryHomeView on _GalleryGridPageState {
                 padding: const EdgeInsets.all(4),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final narrow = constraints.maxWidth < 600;
+                    final narrow = constraints.maxWidth < 760;
+                    final thumbWidth = narrow ? 224.0 : 264.0;
+                    final thumbHeight = thumbWidth * 4 / 3;
                     final thumb = SizedBox(
-                      width: narrow ? 112 : 132,
-                      child: _homeFavThumb(item),
+                      width: thumbWidth,
+                      height: thumbHeight,
+                      child: _homeFavThumb(item, fill: true),
                     );
-                    final body = Column(
+                    final bodyContent = Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
@@ -2317,6 +2325,15 @@ extension _GalleryHomeView on _GalleryGridPageState {
                         ),
                       ],
                     );
+                    final body = narrow
+                        ? bodyContent
+                        : SizedBox(
+                            height: thumbHeight,
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: bodyContent,
+                            ),
+                          );
 
                     if (narrow) {
                       return Column(
