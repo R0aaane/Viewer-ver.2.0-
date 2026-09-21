@@ -83,6 +83,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _masterLoading = false;
   Timer? _activityPersistDebounce;
   int? _pendingInitialPdfPage;
+  bool _preferInitialPdfPage = false;
   bool _canPersistReadingProgress = true;
   bool _hasMovedPdfPageSinceLoad = false;
 
@@ -125,6 +126,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
     _index = widget.initialIndex;
     _page = widget.initialPdfPage ?? 1;
     _pendingInitialPdfPage = widget.initialPdfPage;
+    _preferInitialPdfPage = widget.initialPdfPage != null;
     _readerController = DetailReaderController(
       repo: widget.repo,
       initialIndex: widget.initialIndex,

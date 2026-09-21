@@ -2439,7 +2439,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
             item.kind == MediaKind.pdf &&
             page != null
             ? page
-            : 1,
+            : null,
       ),
     );
   }
@@ -2641,50 +2641,143 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
-  Widget _buildHomeSearchResultRow(MediaItem item) {
-    final tags = _homeSearchTagsFor(item);
+  Widget _buildHomeSearchResultCard(MediaItem item) {
+    final artist = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.artist,
+      maxValues: 1,
+      emptyLabel: '未設定',
+    );
+    final series = _homeSearchPrimaryValueForCategory(
+      item,
+      TagCategory.series,
+      maxValues: 1,
+      emptyLabel: '未設定',
+    );
     return ControllerFocusable(
       debugLabel: 'home-search-${item.id}',
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(14),
       onPressed: () => _openDetailFromHome(item),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          children: [
-            SizedBox(width: 42, height: 56, child: _homeFavThumb(item, fill: true)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 760;
+              final thumbWidth = narrow ? 224.0 : 264.0;
+              final thumbHeight = thumbWidth * 4 / 3;
+              final thumb = SizedBox(
+                width: thumbWidth,
+                height: thumbHeight,
+                child: _homeFavThumb(item, fill: true),
+              );
+              final details = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _displayTitleForItem(item),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildHomeShelfMetaLine('作者', artist),
+                  const SizedBox(height: 4),
+                  _buildHomeShelfMetaLine('シリーズ', series),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () => _openDetailFromHome(item),
+                    icon: const Icon(Icons.open_in_new_rounded),
+                    label: const Text('開く'),
+                  ),
+                ],
+              );
+
+              if (narrow) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [thumb, const SizedBox(height: 12), details],
+                );
+              }
+
+              return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_displayTitleForItem(item), maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${ItemNameService.kindLabel(item)} · ${_folderLabelForItem(item)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
-                  ),
-                  if (tags.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Wrap(
-                      spacing: 4,
-                      children: [
-                        for (final tag in tags.take(3)) Chip(label: Text(tag), visualDensity: VisualDensity.compact),
-                        if (tags.length > 3) Chip(label: Text('+${tags.length - 3}'), visualDensity: VisualDensity.compact),
-                      ],
+                  thumb,
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: SizedBox(
+                      height: thumbHeight,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: details,
+                      ),
                     ),
-                  ],
+                  ),
                 ],
-              ),
-            ),
-            IconButton(
-              tooltip: '開く',
-              onPressed: () => _openDetailFromHome(item),
-              icon: const Icon(Icons.open_in_new, size: 18),
-            ),
-          ],
+              );
+            },
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildHomeSearchResultPager({
+    required int currentPage,
+    required int totalPages,
+  }) {
+    final pages = _detailedBrowsePagerItems(currentPage, totalPages);
+    final pager = Wrap(
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _buildDetailedBrowsePagerButton(
+          icon: Icons.chevron_left,
+          tooltip: '前の候補',
+          onTap: currentPage > 0
+              ? () => setState(() => _homeSearchPageIndex = currentPage - 1)
+              : null,
+        ),
+        for (final page in pages)
+          page == null
+              ? const SizedBox(width: 32, child: Center(child: Text('…')))
+              : _buildDetailedBrowsePagerButton(
+                  label: '${page + 1}',
+                  selected: page == currentPage,
+                  tooltip: '${page + 1} 件目',
+                  onTap: page == currentPage
+                      ? null
+                      : () => setState(() => _homeSearchPageIndex = page),
+                ),
+        _buildDetailedBrowsePagerButton(
+          icon: Icons.chevron_right,
+          tooltip: '次の候補',
+          onTap: currentPage < totalPages - 1
+              ? () => setState(() => _homeSearchPageIndex = currentPage + 1)
+              : null,
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final label = Text('${currentPage + 1} / $totalPages 件');
+          if (constraints.maxWidth < 640) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [label, const SizedBox(height: 8), pager],
+            );
+          }
+          return Row(children: [label, const Spacer(), pager]);
+        },
       ),
     );
   }
@@ -2704,7 +2797,13 @@ extension _GalleryHomeView on _GalleryGridPageState {
     }
 
     final documentCount = _homeAllItemsByShelfKind[_HomeShelfKind.recentAdded]?.length ?? 0;
-    final previews = _homeSearchResults.take(5).toList(growable: false);
+    final searchResultCount = _homeSearchResults.length;
+    final searchResultPage = searchResultCount == 0
+        ? 0
+        : _homeSearchPageIndex.clamp(0, searchResultCount - 1).toInt();
+    final searchResult = searchResultCount == 0
+        ? null
+        : _homeSearchResults[searchResultPage];
     return RefreshIndicator(
       onRefresh: _handlePullToRefresh,
       child: ListView(
@@ -2729,13 +2828,15 @@ extension _GalleryHomeView on _GalleryGridPageState {
               ],
             ),
             const Divider(),
-            if (previews.isEmpty)
+            if (searchResult == null)
               const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Text('一致する作品はありません。'))
-            else
-              for (final item in previews) ...[
-                _buildHomeSearchResultRow(item),
-                const Divider(),
-              ],
+            else ...[
+              _buildHomeSearchResultPager(
+                currentPage: searchResultPage,
+                totalPages: searchResultCount,
+              ),
+              _buildHomeSearchResultCard(searchResult),
+            ],
           ],
           const SizedBox(height: SceneSpace.x6),
           _buildContinueReadingCard(),
@@ -3125,7 +3226,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
 
   Future<void> _openDetailFromHome(
     MediaItem item, {
-    int initialPdfPage = 1,
+    int? initialPdfPage,
   }) async {
     final folderRaw = item.folderRaw;
 

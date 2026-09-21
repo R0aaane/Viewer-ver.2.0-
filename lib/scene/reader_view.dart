@@ -130,8 +130,9 @@ extension _ReaderView on _ImageDetailPageState {
 
   Future<void> _loadReadingProgressForCurrent(
     MediaItem item,
-    int loadVersion,
-  ) async {
+    int loadVersion, {
+    required bool preserveInitialPage,
+  }) async {
     if (item.kind != MediaKind.pdf) {
       return;
     }
@@ -147,7 +148,9 @@ extension _ReaderView on _ImageDetailPageState {
           progressTotalPages != null && progressTotalPages > 0
           ? progressTotalPages
           : _totalPages;
-      final nextPage = entry != null && !_hasMovedPdfPageSinceLoad
+      final nextPage = entry != null &&
+              !preserveInitialPage &&
+              !_hasMovedPdfPageSinceLoad
           ? (entry.isCompleted ? 1 : entry.currentPage)
           : _page;
 
@@ -156,7 +159,9 @@ extension _ReaderView on _ImageDetailPageState {
         _isBookmarked = entry?.isBookmarked ?? false;
         if (effectiveTotalPages > 0) {
           _totalPages = effectiveTotalPages;
-          _page = nextPage.clamp(1, _totalPages);
+          _page = preserveInitialPage && progressTotalPages == null
+              ? (nextPage < 1 ? 1 : nextPage)
+              : nextPage.clamp(1, _totalPages);
         } else {
           _page = nextPage < 1 ? 1 : nextPage;
         }
@@ -183,6 +188,10 @@ extension _ReaderView on _ImageDetailPageState {
     _kemonoVerticalBaseId = null;
     _kemonoVerticalItems = null;
     _kemonoVerticalLoading = false;
+    final preserveInitialPage =
+        item.kind == MediaKind.pdf &&
+        _pendingInitialPdfPage != null &&
+        _preferInitialPdfPage;
     if (mounted) {
       if (!_isEpub) {
         _disposeEpubController();
@@ -191,6 +200,7 @@ extension _ReaderView on _ImageDetailPageState {
           ? (_pendingInitialPdfPage ?? 1)
           : 1;
       _pendingInitialPdfPage = null;
+      _preferInitialPdfPage = false;
       _seedInitialReaderPreload(item, initialPage < 1 ? 1 : initialPage);
       setState(() {
         _canPersistReadingProgress = item.kind != MediaKind.pdf;
@@ -220,7 +230,13 @@ extension _ReaderView on _ImageDetailPageState {
     unawaited(_loadRatingForCurrent(loadVersion: loadVersion));
     unawaited(_loadTagsForCurrent(loadVersion: loadVersion));
     if (item.kind == MediaKind.pdf) {
-      unawaited(_loadReadingProgressForCurrent(item, loadVersion));
+      unawaited(
+        _loadReadingProgressForCurrent(
+          item,
+          loadVersion,
+          preserveInitialPage: preserveInitialPage,
+        ),
+      );
       unawaited(_loadPageCountForCurrent(item, loadVersion));
     }
     if (!_inReader) {
