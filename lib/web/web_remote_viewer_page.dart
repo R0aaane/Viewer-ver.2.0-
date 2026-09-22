@@ -68,6 +68,8 @@ enum _WebHomeMyListKind {
   rating,
 }
 
+enum _WebGamepadAction { previousPage, nextPage, toggleTwoPage, openDetail }
+
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
   defaultValue: 'unknown',
@@ -7445,6 +7447,11 @@ class WebPdfViewerPage extends StatefulWidget {
 class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   static const String _twoPagePrefsKey = 'prefs.readerTwoPage';
   static const int _pdfViewerRenderWidth = 1280;
+  static const Duration _gamepadPollInterval = Duration(milliseconds: 80);
+  static const Duration _gamepadInitialRepeatDelay = Duration(
+    milliseconds: 320,
+  );
+  static const Duration _gamepadRepeatInterval = Duration(milliseconds: 120);
   late final ReadingProgressService _readingProgressService =
       ReadingProgressService(WebRemoteReadingProgressRepository(widget.client));
 
@@ -7471,6 +7478,12 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   int? _rating;
   Future<List<WebRemoteEntry>>? _relatedEntriesFuture;
   StreamSubscription<html.Event>? _visibilitySubscription;
+  Timer? _gamepadPollTimer;
+  final Set<_WebGamepadAction> _pressedGamepadActions =
+      <_WebGamepadAction>{};
+  final Map<_WebGamepadAction, DateTime> _gamepadNextRepeatAt =
+      <_WebGamepadAction, DateTime>{};
+  bool _gamepadConnected = false;
 
   @override
   void initState() {
@@ -7480,6 +7493,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       if (html.document.visibilityState == 'hidden') {
         unawaited(_persistCurrentActivity(force: true));
       }
+    });
+    _gamepadPollTimer = Timer.periodic(_gamepadPollInterval, (_) {
+      _pollGamepad();
     });
     _loadViewer();
   }
@@ -7509,6 +7525,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   @override
   void dispose() {
     _visibilitySubscription?.cancel();
+    _gamepadPollTimer?.cancel();
     _activityPersistDebounce?.cancel();
     unawaited(_persistCurrentActivity(force: true));
     _viewerGeneration += 1;
@@ -7516,6 +7533,100 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     _activeViewerStableId = null;
     _clearViewerPageCaches();
     super.dispose();
+  }
+
+  void _pollGamepad() {
+    List<html.Gamepad?> gamepads;
+    try {
+      gamepads = html.window.navigator.getGamepads();
+    } catch (_) {
+      return;
+    }
+
+    final connected = gamepads
+        .whereType<html.Gamepad>()
+        .where((gamepad) => gamepad.connected == true)
+        .toList(growable: false);
+    final isConnected = connected.isNotEmpty;
+    if (_gamepadConnected != isConnected && mounted) {
+      setState(() => _gamepadConnected = isConnected);
+    }
+    if (!isConnected) {
+      _pressedGamepadActions.clear();
+      _gamepadNextRepeatAt.clear();
+      return;
+    }
+
+    final actions = <_WebGamepadAction>{};
+    for (final gamepad in connected) {
+      final buttons = gamepad.buttons ?? const <html.GamepadButton>[];
+      final axes = gamepad.axes ?? const <num>[];
+      final left = (axes.isNotEmpty && axes.first < -0.6) ||
+          _gamepadButtonPressed(buttons, 14) ||
+          _gamepadButtonPressed(buttons, 4) ||
+          _gamepadButtonPressed(buttons, 1);
+      final right = (axes.isNotEmpty && axes.first > 0.6) ||
+          _gamepadButtonPressed(buttons, 15) ||
+          _gamepadButtonPressed(buttons, 5) ||
+          _gamepadButtonPressed(buttons, 0);
+      if (left) actions.add(_WebGamepadAction.previousPage);
+      if (right) actions.add(_WebGamepadAction.nextPage);
+      if (_gamepadButtonPressed(buttons, 2)) {
+        actions.add(_WebGamepadAction.toggleTwoPage);
+      }
+      if (_gamepadButtonPressed(buttons, 3) ||
+          _gamepadButtonPressed(buttons, 9)) {
+        actions.add(_WebGamepadAction.openDetail);
+      }
+    }
+
+    final now = DateTime.now();
+    for (final action in actions) {
+      final justPressed = _pressedGamepadActions.add(action);
+      final repeatAt = _gamepadNextRepeatAt[action];
+      if (justPressed ||
+          (_isRepeatableGamepadAction(action) &&
+              repeatAt != null &&
+              !now.isBefore(repeatAt))) {
+        _invokeGamepadAction(action);
+        _gamepadNextRepeatAt[action] = now.add(
+          justPressed ? _gamepadInitialRepeatDelay : _gamepadRepeatInterval,
+        );
+      }
+    }
+    _pressedGamepadActions.removeWhere((action) => !actions.contains(action));
+    _gamepadNextRepeatAt.removeWhere(
+      (action, _) => !actions.contains(action),
+    );
+  }
+
+  bool _gamepadButtonPressed(List<html.GamepadButton> buttons, int index) {
+    if (index >= buttons.length) return false;
+    final button = buttons[index];
+    return button.pressed == true || (button.value ?? 0) > 0.5;
+  }
+
+  bool _isRepeatableGamepadAction(_WebGamepadAction action) {
+    return action == _WebGamepadAction.previousPage ||
+        action == _WebGamepadAction.nextPage;
+  }
+
+  void _invokeGamepadAction(_WebGamepadAction action) {
+    if (_loading) return;
+    switch (action) {
+      case _WebGamepadAction.previousPage:
+        _prev();
+        return;
+      case _WebGamepadAction.nextPage:
+        _next();
+        return;
+      case _WebGamepadAction.toggleTwoPage:
+        unawaited(_toggleTwoPage());
+        return;
+      case _WebGamepadAction.openDetail:
+        unawaited(_openDetailPage());
+        return;
+    }
   }
 
   void _evictPageImageProvider(int pageNumber) {
@@ -8520,6 +8631,18 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                         : Icons.menu_book_rounded,
                   ),
                 ),
+                if (_gamepadConnected)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 4),
+                    child: Tooltip(
+                      message: 'A / →: 次  B / ←: 前  X: 見開き  Y / Start: 作品詳細',
+                      child: Icon(
+                        Icons.sports_esports_rounded,
+                        size: 18,
+                        color: Colors.lightBlueAccent,
+                      ),
+                    ),
+                  ),
                 const Spacer(),
                 Container(
                   margin: const EdgeInsets.only(right: 12),
