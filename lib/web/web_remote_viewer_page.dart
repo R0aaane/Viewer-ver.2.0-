@@ -70,6 +70,240 @@ enum _WebHomeMyListKind {
 
 enum _WebGamepadAction { previousPage, nextPage, toggleTwoPage, openDetail }
 
+enum _WebGamepadNavigationAction {
+  left,
+  right,
+  up,
+  down,
+  activate,
+  back,
+  previousFocus,
+  nextFocus,
+}
+
+class _WebGamepadNavigationShell extends StatefulWidget {
+  final Widget child;
+
+  const _WebGamepadNavigationShell({required this.child});
+
+  @override
+  State<_WebGamepadNavigationShell> createState() =>
+      _WebGamepadNavigationShellState();
+}
+
+class _WebGamepadNavigationShellState
+    extends State<_WebGamepadNavigationShell> {
+  static const Duration _pollInterval = Duration(milliseconds: 80);
+  static const Duration _initialRepeatDelay = Duration(milliseconds: 320);
+  static const Duration _repeatInterval = Duration(milliseconds: 120);
+
+  final FocusNode _focusNode = FocusNode(debugLabel: 'web-gamepad-shell');
+  final Set<_WebGamepadNavigationAction> _pressedActions =
+      <_WebGamepadNavigationAction>{};
+  final Map<_WebGamepadNavigationAction, DateTime> _nextRepeatAt =
+      <_WebGamepadNavigationAction, DateTime>{};
+  Timer? _pollTimer;
+  bool _connected = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _pollGamepad());
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _pollGamepad() {
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) {
+      _pressedActions.clear();
+      _nextRepeatAt.clear();
+      return;
+    }
+
+    List<html.Gamepad?> gamepads;
+    try {
+      gamepads = html.window.navigator.getGamepads();
+    } catch (_) {
+      return;
+    }
+    final connected = gamepads
+        .whereType<html.Gamepad>()
+        .where((gamepad) => gamepad.connected == true)
+        .toList(growable: false);
+    final isConnected = connected.isNotEmpty;
+    if (_connected != isConnected && mounted) {
+      FocusManager.instance.highlightStrategy = isConnected
+          ? FocusHighlightStrategy.alwaysTraditional
+          : FocusHighlightStrategy.automatic;
+      setState(() => _connected = isConnected);
+    }
+    if (!isConnected) {
+      _pressedActions.clear();
+      _nextRepeatAt.clear();
+      return;
+    }
+
+    final actions = <_WebGamepadNavigationAction>{};
+    for (final gamepad in connected) {
+      final buttons = gamepad.buttons ?? const <html.GamepadButton>[];
+      final axes = gamepad.axes ?? const <num>[];
+      if ((axes.isNotEmpty && axes[0] < -0.6) ||
+          _buttonPressed(buttons, 14)) {
+        actions.add(_WebGamepadNavigationAction.left);
+      }
+      if ((axes.isNotEmpty && axes[0] > 0.6) ||
+          _buttonPressed(buttons, 15)) {
+        actions.add(_WebGamepadNavigationAction.right);
+      }
+      if ((axes.length > 1 && axes[1] < -0.6) ||
+          _buttonPressed(buttons, 12)) {
+        actions.add(_WebGamepadNavigationAction.up);
+      }
+      if ((axes.length > 1 && axes[1] > 0.6) ||
+          _buttonPressed(buttons, 13)) {
+        actions.add(_WebGamepadNavigationAction.down);
+      }
+      if (_buttonPressed(buttons, 0)) {
+        actions.add(_WebGamepadNavigationAction.activate);
+      }
+      if (_buttonPressed(buttons, 1)) {
+        actions.add(_WebGamepadNavigationAction.back);
+      }
+      if (_buttonPressed(buttons, 4)) {
+        actions.add(_WebGamepadNavigationAction.previousFocus);
+      }
+      if (_buttonPressed(buttons, 5)) {
+        actions.add(_WebGamepadNavigationAction.nextFocus);
+      }
+    }
+
+    final now = DateTime.now();
+    for (final action in actions) {
+      final justPressed = _pressedActions.add(action);
+      final repeatAt = _nextRepeatAt[action];
+      if (justPressed ||
+          (_isRepeatable(action) &&
+              repeatAt != null &&
+              !now.isBefore(repeatAt))) {
+        _invoke(action);
+        _nextRepeatAt[action] = now.add(
+          justPressed ? _initialRepeatDelay : _repeatInterval,
+        );
+      }
+    }
+    _pressedActions.removeWhere((action) => !actions.contains(action));
+    _nextRepeatAt.removeWhere((action, _) => !actions.contains(action));
+  }
+
+  bool _buttonPressed(List<html.GamepadButton> buttons, int index) {
+    if (index >= buttons.length) return false;
+    final button = buttons[index];
+    return button.pressed == true || (button.value ?? 0) > 0.5;
+  }
+
+  bool _isRepeatable(_WebGamepadNavigationAction action) {
+    return switch (action) {
+      _WebGamepadNavigationAction.left ||
+      _WebGamepadNavigationAction.right ||
+      _WebGamepadNavigationAction.up ||
+      _WebGamepadNavigationAction.down ||
+      _WebGamepadNavigationAction.previousFocus ||
+      _WebGamepadNavigationAction.nextFocus => true,
+      _ => false,
+    };
+  }
+
+  void _invoke(_WebGamepadNavigationAction action) {
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    switch (action) {
+      case _WebGamepadNavigationAction.left:
+        _moveFocus(primaryFocus, TraversalDirection.left);
+        return;
+      case _WebGamepadNavigationAction.right:
+        _moveFocus(primaryFocus, TraversalDirection.right);
+        return;
+      case _WebGamepadNavigationAction.up:
+        _moveFocus(primaryFocus, TraversalDirection.up);
+        return;
+      case _WebGamepadNavigationAction.down:
+        _moveFocus(primaryFocus, TraversalDirection.down);
+        return;
+      case _WebGamepadNavigationAction.activate:
+        final targetContext = primaryFocus?.context;
+        if (targetContext != null) {
+          Actions.invoke(targetContext, const ActivateIntent());
+        } else {
+          FocusScope.of(context).nextFocus();
+        }
+        return;
+      case _WebGamepadNavigationAction.back:
+        final navigator = Navigator.maybeOf(context);
+        if (navigator != null) {
+          unawaited(navigator.maybePop().then<void>((_) {}));
+        }
+        return;
+      case _WebGamepadNavigationAction.previousFocus:
+        FocusScope.of(context).previousFocus();
+        return;
+      case _WebGamepadNavigationAction.nextFocus:
+        FocusScope.of(context).nextFocus();
+        return;
+    }
+  }
+
+  void _moveFocus(FocusNode? primaryFocus, TraversalDirection direction) {
+    if (primaryFocus == null || primaryFocus == _focusNode) {
+      FocusScope.of(context).nextFocus();
+      return;
+    }
+    primaryFocus.focusInDirection(direction);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FocusTraversalGroup(
+      policy: ReadingOrderTraversalPolicy(),
+      child: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        skipTraversal: true,
+        child: Stack(
+          children: <Widget>[
+            widget.child,
+            if (_connected)
+              Positioned(
+                right: 12,
+                bottom: 12,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xE6101114),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.lightBlueAccent),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      child: Text(
+                        '🎮 十字キー: 選択  A: 決定  B: 戻る  L1/R1: 前後の項目',
+                        style: TextStyle(fontSize: 12, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
   defaultValue: 'unknown',
@@ -1349,31 +1583,34 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     if (!mounted || client == null) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (pageContext) => Scaffold(
-          appBar: AppBar(title: Text(_entryDisplayTitle(entry))),
-          body: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: WebMediaDetailView(
-                client: client,
-                entry: entry,
-                isFavorite: _isFavoriteEntry(entry),
-                onFavoriteChanged: (isFavorite) =>
-                    _setFavoriteForEntry(entry, isFavorite),
-                rating: _ratingForEntry(entry),
-                onRatingChanged: (rating) => _setRatingForEntry(entry, rating),
-                onApplyTagQuery: (query) async {
-                  _searchController.text = query;
-                  await _loadEntries();
-                  if (pageContext.mounted) {
-                    Navigator.of(pageContext).pop();
-                  }
-                },
-                onRenameRequested: (name) => _renameEntry(entry, name),
-                onDeleteRequested: () => _deleteEntry(entry),
-                onOpenPdfViewerPage: allowOpenPdfViewer && entry.isPdf
-                    ? () => _openPdfViewerPage(entry)
-                    : null,
+        builder: (pageContext) => _WebGamepadNavigationShell(
+          child: Scaffold(
+            appBar: AppBar(title: Text(_entryDisplayTitle(entry))),
+            body: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: WebMediaDetailView(
+                  client: client,
+                  entry: entry,
+                  isFavorite: _isFavoriteEntry(entry),
+                  onFavoriteChanged: (isFavorite) =>
+                      _setFavoriteForEntry(entry, isFavorite),
+                  rating: _ratingForEntry(entry),
+                  onRatingChanged: (rating) =>
+                      _setRatingForEntry(entry, rating),
+                  onApplyTagQuery: (query) async {
+                    _searchController.text = query;
+                    await _loadEntries();
+                    if (pageContext.mounted) {
+                      Navigator.of(pageContext).pop();
+                    }
+                  },
+                  onRenameRequested: (name) => _renameEntry(entry, name),
+                  onDeleteRequested: () => _deleteEntry(entry),
+                  onOpenPdfViewerPage: allowOpenPdfViewer && entry.isPdf
+                      ? () => _openPdfViewerPage(entry)
+                      : null,
+                ),
               ),
             ),
           ),
@@ -2297,8 +2534,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
+    return _WebGamepadNavigationShell(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
         final showSidebar = constraints.maxWidth >= 980;
         final splitView = constraints.maxWidth >= 1180;
         final compactScreen = constraints.maxWidth < 720;
@@ -2398,7 +2636,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             ),
           ),
         );
-      },
+        },
+      ),
     );
   }
 
@@ -7536,6 +7775,12 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _pollGamepad() {
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) {
+      _pressedGamepadActions.clear();
+      _gamepadNextRepeatAt.clear();
+      return;
+    }
     List<html.Gamepad?> gamepads;
     try {
       gamepads = html.window.navigator.getGamepads();
