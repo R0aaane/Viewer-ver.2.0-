@@ -68,7 +68,13 @@ enum _WebHomeMyListKind {
   rating,
 }
 
-enum _WebGamepadAction { previousPage, nextPage, toggleTwoPage, openDetail }
+enum _WebGamepadAction {
+  previousPage,
+  nextPage,
+  toggleTwoPage,
+  openDetail,
+  back,
+}
 
 enum _WebGamepadNavigationAction {
   left,
@@ -7808,8 +7814,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       final axes = gamepad.axes ?? const <num>[];
       final left = (axes.isNotEmpty && axes.first < -0.6) ||
           _gamepadButtonPressed(buttons, 14) ||
-          _gamepadButtonPressed(buttons, 4) ||
-          _gamepadButtonPressed(buttons, 1);
+          _gamepadButtonPressed(buttons, 4);
       final right = (axes.isNotEmpty && axes.first > 0.6) ||
           _gamepadButtonPressed(buttons, 15) ||
           _gamepadButtonPressed(buttons, 5) ||
@@ -7818,6 +7823,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
       if (right) actions.add(_WebGamepadAction.nextPage);
       if (_gamepadButtonPressed(buttons, 2)) {
         actions.add(_WebGamepadAction.toggleTwoPage);
+      }
+      if (_gamepadButtonPressed(buttons, 1)) {
+        actions.add(_WebGamepadAction.back);
       }
       if (_gamepadButtonPressed(buttons, 3) ||
           _gamepadButtonPressed(buttons, 9)) {
@@ -7857,6 +7865,13 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _invokeGamepadAction(_WebGamepadAction action) {
+    if (action == _WebGamepadAction.back) {
+      final navigator = Navigator.maybeOf(context);
+      if (navigator != null) {
+        unawaited(navigator.maybePop().then<void>((_) {}));
+      }
+      return;
+    }
     if (_loading) return;
     switch (action) {
       case _WebGamepadAction.previousPage:
@@ -7870,6 +7885,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         return;
       case _WebGamepadAction.openDetail:
         unawaited(_openDetailPage());
+        return;
+      case _WebGamepadAction.back:
         return;
     }
   }
@@ -8838,13 +8855,21 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
             height: 56,
             child: Row(
               children: <Widget>[
-                IconButton(
-                  onPressed: canReturn
-                      ? () => _handleOpenDetail(context)
-                      : null,
-                  tooltip: '戻る',
-                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
-                ),
+                constraints.maxWidth >= 620
+                    ? TextButton.icon(
+                        onPressed: canReturn
+                            ? () => _handleOpenDetail(context)
+                            : null,
+                        icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                        label: const Text('戻る'),
+                      )
+                    : IconButton(
+                        onPressed: canReturn
+                            ? () => _handleOpenDetail(context)
+                            : null,
+                        tooltip: '戻る',
+                        icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                      ),
                 if (widget.onOpenDetail != null)
                   constraints.maxWidth >= 520
                       ? TextButton.icon(
@@ -8880,7 +8905,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                   const Padding(
                     padding: EdgeInsets.only(left: 4),
                     child: Tooltip(
-                      message: 'A / →: 次  B / ←: 前  X: 見開き  Y / Start: 作品詳細',
+                      message: 'A / →: 次  B: 戻る  ← / L1: 前  X: 見開き  Y / Start: 作品詳細',
                       child: Icon(
                         Icons.sports_esports_rounded,
                         size: 18,
