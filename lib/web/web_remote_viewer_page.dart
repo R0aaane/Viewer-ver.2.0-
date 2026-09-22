@@ -286,24 +286,87 @@ class _WebGamepadNavigationShellState
               Positioned(
                 right: 12,
                 bottom: 12,
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: const Color(0xE6101114),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.lightBlueAccent),
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      child: Text(
-                        '🎮 十字キー: 選択  A: 決定  B: 戻る  L1/R1: 前後の項目',
-                        style: TextStyle(fontSize: 12, color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ),
+                child: IgnorePointer(child: _buildGamepadGuide(context)),
               ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGamepadGuide(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHigh,
+      elevation: 8,
+      shadowColor: Colors.black54,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 310),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Icon(
+                Icons.sports_esports_rounded,
+                size: 17,
+                color: scheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  Text(
+                    'コントローラー',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                  _buildGamepadGuideItem('十字キー', '選択', scheme),
+                  _buildGamepadGuideItem('A', '決定', scheme),
+                  _buildGamepadGuideItem('B', '戻る', scheme),
+                  _buildGamepadGuideItem('L1/R1', '前後', scheme),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGamepadGuideItem(
+    String input,
+    String action,
+    ColorScheme scheme,
+  ) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        child: Text(
+          '$input $action',
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: scheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
@@ -8902,14 +8965,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                   ),
                 ),
                 if (_gamepadConnected)
-                  const Padding(
-                    padding: EdgeInsets.only(left: 4),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
                     child: Tooltip(
                       message: 'A / →: 次  B: 戻る  ← / L1: 前  X: 見開き  Y / Start: 作品詳細',
                       child: Icon(
                         Icons.sports_esports_rounded,
                         size: 18,
-                        color: Colors.lightBlueAccent,
+                        color: Theme.of(context).colorScheme.primary,
                       ),
                     ),
                   ),
