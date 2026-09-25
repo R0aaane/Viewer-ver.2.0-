@@ -890,7 +890,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         if (resetPage) {
           _browserPage = 1;
         }
-        if (rawQuery.isEmpty) {
+        if (rawQuery.isEmpty && myListKind == null) {
           _homeEntries = filtered;
           _homeErrorMessage = null;
         }
@@ -1087,18 +1087,39 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (mediaId != null && mediaId.isNotEmpty) {
         entryStableIdByKnownId[mediaId] = stableId;
       }
+      final lookupKey = _activityLookupKey(entry.folderRaw, entry.displayName);
+      if (lookupKey.isNotEmpty && stableId.isNotEmpty) {
+        entryStableIdByKnownId[lookupKey] = stableId;
+      }
     }
     final mapped = <String, ReadingProgressEntry>{};
     for (final activity in activityEntries) {
       final mediaId = activity.mediaId.trim();
-      final stableId = entryStableIdByKnownId[mediaId];
-      if (mediaId.isEmpty || stableId == null) {
+      final stableId = entryStableIdByKnownId[mediaId] ??
+          entryStableIdByKnownId[
+            _activityLookupKey(activity.folderRaw, activity.title)
+          ];
+      if (stableId == null) {
         continue;
       }
-      mapped.putIfAbsent(mediaId, () => activity);
+      if (mediaId.isNotEmpty) {
+        mapped.putIfAbsent(mediaId, () => activity);
+      }
       mapped.putIfAbsent(stableId, () => activity);
     }
     return mapped;
+  }
+
+  String _activityLookupKey(String folderRaw, String title) {
+    final normalizedFolder = folderRaw
+        .trim()
+        .replaceAll('/', '\\')
+        .toLowerCase();
+    final normalizedTitle = title.trim().toLowerCase();
+    if (normalizedFolder.isEmpty || normalizedTitle.isEmpty) {
+      return '';
+    }
+    return '$normalizedFolder|$normalizedTitle';
   }
 
   Future<void> _recordEntryView(WebRemoteEntry entry) async {
@@ -2775,6 +2796,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   onTap: () {
                     setState(() {
                       _surface = _WebRemoteSurface.home;
+                      _browseMyListKind = null;
                     });
                   },
                 ),
@@ -2785,9 +2807,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   title: const Text('PDF一覧'),
                   subtitle: const Text('PDF を検索して詳細を確認'),
                   onTap: () {
+                    final wasBrowsingMyList = _browseMyListKind != null;
                     setState(() {
                       _surface = _WebRemoteSurface.browse;
+                      _browseMyListKind = null;
                     });
+                    if (wasBrowsingMyList) {
+                      unawaited(_loadEntries());
+                    }
                   },
                 ),
                 ListTile(
@@ -2851,7 +2878,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   int _viewCountForEntry(WebRemoteEntry entry) {
-    return entry.stats?.viewCount ?? 0;
+    final recordedCount = entry.stats?.viewCount ?? 0;
+    return _hasReadingProgressForEntry(entry)
+        ? (recordedCount < 1 ? 1 : recordedCount)
+        : recordedCount;
   }
 
   bool _hasReadingProgressForEntry(WebRemoteEntry entry) {
@@ -2864,7 +2894,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   DateTime? _lastViewedAtForEntry(WebRemoteEntry entry) {
-    return entry.stats?.lastViewedAt?.toLocal();
+    return entry.stats?.lastViewedAt?.toLocal() ??
+        _recentActivityForEntry(entry)?.lastReadAt.toLocal();
   }
 
   ReadingProgressEntry? _recentActivityForEntry(WebRemoteEntry entry) {
