@@ -231,7 +231,20 @@ class WebRemoteEntry {
   bool get isPdf => kind == 'pdf';
   bool get isImage => kind == 'image';
 
-  String get stableId => mediaId ?? fullPath ?? entryId;
+  String? get resolvedMediaId {
+    final value = mediaId?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  bool get hasMediaId => resolvedMediaId != null;
+
+  String get stableId {
+    final path = fullPath?.trim();
+    final mediaId = resolvedMediaId;
+    if (mediaId != null) return mediaId;
+    if (path != null && path.isNotEmpty) return path;
+    return entryId.trim();
+  }
 
   WebRemoteEntry copyWith({
     String? entryId,

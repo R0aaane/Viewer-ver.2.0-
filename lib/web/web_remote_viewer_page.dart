@@ -6455,11 +6455,11 @@ class _EntryMetadataSummaryState extends State<_EntryMetadataSummary> {
   Future<_EntrySummaryData> _loadSummary() async {
     if (widget.entry.isFolder ||
         widget.client == null ||
-        widget.entry.mediaId == null) {
+        !widget.entry.hasMediaId) {
       return _EntrySummaryData.forFolder(widget.entry);
     }
 
-    final mediaId = widget.entry.mediaId!;
+    final mediaId = widget.entry.resolvedMediaId!;
     final metaFuture = widget.client!.fetchMediaMeta(mediaId);
     final tagsFuture = widget.client!.fetchItemTags(mediaId);
     final meta = await metaFuture;
@@ -7366,7 +7366,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     });
   }
 
-  Widget _detailRow(String label, String value) {
+  Widget _detailRow(String label, String value, {bool selectable = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -7383,7 +7383,12 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
             ),
           ),
           Expanded(
-            child: Text(value, style: const TextStyle(color: Colors.white70)),
+            child: selectable
+                ? SelectableText(
+                    value,
+                    style: const TextStyle(color: Colors.white70),
+                  )
+                : Text(value, style: const TextStyle(color: Colors.white70)),
           ),
         ],
       ),
@@ -7526,6 +7531,12 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
               ],
             ),
             const SizedBox(height: 16),
+            _detailRow(
+              '作品ID',
+              widget.entry.resolvedMediaId ?? '未登録',
+              selectable: widget.entry.hasMediaId,
+            ),
+            const SizedBox(height: 8),
             _buildFavoriteSelector(),
             const SizedBox(height: 16),
             _buildRatingSelector(),
@@ -7566,10 +7577,10 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                           label: const Text('PDF 表示ページ'),
                         ),
                       FilledButton.icon(
-                        onPressed: widget.entry.mediaId == null
+                        onPressed: !widget.entry.hasMediaId
                             ? null
                             : () => widget.client.openPdfInNewTab(
-                                widget.entry.mediaId!,
+                                widget.entry.resolvedMediaId!,
                               ),
                         icon: const Icon(Icons.open_in_new),
                         label: const Text('別タブで開く'),
@@ -9064,9 +9075,11 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         ),
         actions: <Widget>[
           IconButton(
-            onPressed: widget.entry.mediaId == null
+            onPressed: !widget.entry.hasMediaId
                 ? null
-                : () => widget.client.openPdfInNewTab(widget.entry.mediaId!),
+                : () => widget.client.openPdfInNewTab(
+                    widget.entry.resolvedMediaId!,
+                  ),
             tooltip: '新しいタブで開く',
             icon: const Icon(Icons.open_in_new),
           ),
@@ -9348,12 +9361,12 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
     final client = widget.client;
     if (client == null ||
         widget.entry.isFolder ||
-        widget.entry.mediaId == null) {
+        !widget.entry.hasMediaId) {
       _future = null;
       return;
     }
     _future = client.fetchThumbnail(
-      widget.entry.mediaId!,
+      widget.entry.resolvedMediaId!,
       width: (widget.width * 1.8).round(),
       height: (widget.height * 1.8).round(),
       page: widget.entry.isPdf ? 1 : null,
