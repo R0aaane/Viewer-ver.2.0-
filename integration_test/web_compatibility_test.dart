@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:pdf_viewer/web/pdfjs_safety.dart';
+import 'package:pdf_viewer/web/pdfjs_runtime_config.dart';
 import 'package:pdf_viewer/web/web_remote_api_client.dart';
 
 extension type _TestLibrary._(JSObject _) implements JSObject {
@@ -17,9 +18,83 @@ extension type _TestLibrary._(JSObject _) implements JSObject {
 }
 
 extension type _TestOptions._(JSObject _) implements JSObject {
-  external factory _TestOptions({bool isEvalSupported, String url});
+  external factory _TestOptions({
+    bool isEvalSupported,
+    String url,
+    String? standardFontDataUrl,
+    String? wasmUrl,
+  });
   external bool get isEvalSupported;
   external String get url;
+  external String get standardFontDataUrl;
+  external String get wasmUrl;
+}
+
+@JS('pdfjsLib')
+external _RuntimeLibrary get _runtime;
+
+extension type _RuntimeLibrary(JSObject _) implements JSObject {
+  external String get version;
+  external _LoadingTask getDocument(_LoadOptions options);
+}
+
+extension type _LoadOptions._(JSObject _) implements JSObject {
+  external factory _LoadOptions({
+    String url,
+    String cMapUrl,
+    bool cMapPacked,
+    _PdfWorker worker,
+  });
+}
+
+@JS('pdfjsLib.PDFWorker')
+extension type _PdfWorker._(JSObject _) implements JSObject {
+  external factory _PdfWorker();
+  external JSPromise<JSAny?> get promise;
+  external _WorkerPort get port;
+  external void destroy();
+}
+
+extension type _WorkerPort(JSObject _) implements JSObject {
+  external _Constructor get constructor;
+}
+
+extension type _Constructor(JSObject _) implements JSObject {
+  external String get name;
+}
+
+extension type _LoadingTask(JSObject _) implements JSObject {
+  external JSPromise<_Document> get promise;
+  external JSPromise<JSAny?> destroy();
+}
+
+extension type _FakeTask._(JSObject _) implements JSObject {
+  external factory _FakeTask({JSPromise<JSObject> promise, JSFunction destroy});
+}
+
+@JS('Promise.reject')
+external JSPromise<JSObject> _rejectedPromise(JSAny error);
+
+extension type _TestPromise(JSObject _) implements JSObject {
+  external JSPromise<JSAny?> then(JSFunction? onValue, JSFunction? onError);
+}
+
+extension type _Document(JSObject _) implements JSObject {
+  external int get numPages;
+  external JSPromise<_Page> getPage(int page);
+  external JSPromise<JSAny?> destroy();
+}
+
+extension type _Page(JSObject _) implements JSObject {
+  external JSPromise<_TextContent> getTextContent();
+}
+
+extension type _TextContent(JSObject _) implements JSObject {
+  external JSArray<_TextItem> get items;
+}
+
+extension type _TextItem(JSObject _) implements JSObject {
+  external String? get str;
 }
 
 void main() {
@@ -32,14 +107,30 @@ void main() {
     tester,
   ) async {
     var calls = 0;
+    final tasks = <JSObject>[];
     final source = _TestLibrary(
       version: '3.11.174',
       getDocument: ((JSObject raw) {
         final options = _TestOptions._(raw);
         expect(options.isEvalSupported, isFalse);
         expect(options.url, 'sample.pdf');
+        expect(
+          options.standardFontDataUrl,
+          calls == 0
+              ? '${pdfJsDistributionUrl}standard_fonts/'
+              : 'custom-fonts/',
+        );
+        expect(
+          options.wasmUrl,
+          calls == 0 ? '${pdfJsDistributionUrl}wasm/' : 'custom-wasm/',
+        );
         calls++;
-        return 7.toJS;
+        final task = _FakeTask(
+          promise: Future<JSObject>.value(JSObject()).toJS,
+          destroy: (() => Future<JSAny?>.value(null).toJS).toJS,
+        );
+        tasks.add(task);
+        return task;
       }).toJS,
     );
     final safe = _TestLibrary._(securePdfJsLibrary(source));
@@ -49,9 +140,58 @@ void main() {
       safe,
       _TestOptions(isEvalSupported: true, url: 'sample.pdf'),
     );
-    expect((result as JSNumber).toDartInt, 7);
+    expect(result, same(tasks.first));
     expect(calls, 1);
+    safe.getDocument.callAsFunction(
+      safe,
+      _TestOptions(
+        url: 'sample.pdf',
+        standardFontDataUrl: 'custom-fonts/',
+        wasmUrl: 'custom-wasm/',
+      ),
+    );
+    expect(calls, 2);
   });
+
+  testWidgets(
+    'PDF.js compatibility closes successful and failed loading tasks',
+    (tester) async {
+      for (final failOpen in [false, true]) {
+        var destroyed = 0;
+        final failure = JSObject();
+        final source = _TestLibrary(
+          version: pdfJsVersion,
+          getDocument: ((JSObject _) => _FakeTask(
+            promise: failOpen
+                ? _rejectedPromise(failure)
+                : Future<JSObject>.value(JSObject()).toJS,
+            destroy: (() {
+              destroyed++;
+              return Future<JSAny?>.value(null).toJS;
+            }).toJS,
+          )).toJS,
+        );
+        final safe = _RuntimeLibrary(securePdfJsLibrary(source));
+        final task = safe.getDocument(_LoadOptions(url: 'test.pdf'));
+        if (failOpen) {
+          // Native JS callbacks run outside the test zone; return the identity
+          // check and assert in the Dart test continuation.
+          final preserved = await _TestPromise(task.promise)
+              .then(
+                ((JSAny? value) => false.toJS).toJS,
+                ((JSAny? error) => identical(error, failure).toJS).toJS,
+              )
+              .toDart;
+          expect((preserved as JSBoolean).toDart, isTrue);
+        } else {
+          final document = await task.promise.toDart;
+          expect(destroyed, 0);
+          await document.destroy().toDart;
+        }
+        expect(destroyed, 1);
+      }
+    },
+  );
 
   testWidgets(
     'failed folder requests can retry without secondary async errors',
@@ -157,4 +297,38 @@ void main() {
       );
     },
   );
+
+  testWidgets('pinned PDF.js uses a real worker and decodes Japanese cMaps', (
+    tester,
+  ) async {
+    final client = WebRemoteApiClient(baseUrl: apiBase);
+    // Exercise the application's actual loader and pdfx renderer first.
+    expect(
+      await client.fetchThumbnail('japanese', page: 1, width: 320),
+      isNotEmpty,
+    );
+    expect(_runtime.version, pdfJsVersion);
+    final worker = _PdfWorker();
+    _LoadingTask? task;
+    try {
+      await worker.promise.toDart;
+      expect(worker.port.constructor.name, 'Worker');
+      task = _runtime.getDocument(
+        _LoadOptions(
+          url: '$apiBase/media/japanese/download',
+          cMapUrl: '${pdfJsDistributionUrl}cmaps/',
+          cMapPacked: true,
+          worker: worker,
+        ),
+      );
+      final document = await task.promise.toDart;
+      expect(document.numPages, 1);
+      final page = await document.getPage(1).toDart;
+      final text = await page.getTextContent().toDart;
+      expect(text.items.toDart.map((item) => item.str ?? '').join(), '日本語');
+    } finally {
+      await task?.destroy().toDart;
+      worker.destroy();
+    }
+  });
 }

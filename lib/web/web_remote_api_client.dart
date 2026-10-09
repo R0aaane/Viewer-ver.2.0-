@@ -13,12 +13,9 @@ import '../repository/mediaRepository.dart';
 import '../models/tag.dart';
 import '../models/reading_progress.dart';
 import 'pdfjs_safety.dart';
+import 'pdfjs_runtime_config.dart';
 
 const String _pdfJsScriptId = 'pdfjs-runtime-loader';
-const String _pdfJsLibraryUrl =
-    'https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js';
-const String _pdfJsWorkerUrl =
-    'https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
 
 Future<void>? _pdfJsLoadFuture;
 
@@ -55,7 +52,7 @@ void _configurePdfJsWorkerSource(_PdfJsLib? lib) {
 
   final currentText = options.workerSrc?.trim() ?? '';
   if (currentText.isEmpty) {
-    options.workerSrc = _pdfJsWorkerUrl;
+    options.workerSrc = pdfJsWorkerUrl;
   }
 }
 
@@ -122,10 +119,11 @@ Future<void> _loadPdfJsScript() async {
               ? existingElement
               : html.ScriptElement()
           ..id = _pdfJsScriptId
+          ..type = 'module'
           ..async = true
           ..defer = true
           ..crossOrigin = 'anonymous'
-          ..src = _pdfJsLibraryUrl;
+          ..src = pdfJsLibraryUrl;
 
     loadSubscription = script.onLoad.listen((_) {
       finishSuccessfully();

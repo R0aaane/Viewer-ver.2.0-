@@ -17,8 +17,16 @@ extension type TestOptions._(JSObject _) implements JSObject {
   external String get url;
 }
 
+extension type TestTask._(JSObject _) implements JSObject {
+  external factory TestTask({JSPromise<JSObject> promise, JSFunction destroy});
+}
+
 void main() {
   var calls = 0;
+  final task = TestTask(
+    promise: Future<JSObject>.value(JSObject()).toJS,
+    destroy: (() => Future<JSAny?>.value(null).toJS).toJS,
+  );
   final library = TestLibrary(
     version: 'test',
     getDocument: ((JSObject raw) {
@@ -27,7 +35,7 @@ void main() {
         throw StateError('Unsafe or changed PDF options');
       }
       calls++;
-      return 7.toJS;
+      return task;
     }).toJS,
   );
   final safe = TestLibrary._(securePdfJsLibrary(library));
@@ -35,7 +43,7 @@ void main() {
     safe,
     TestOptions(isEvalSupported: true, url: 'sample.pdf'),
   );
-  if ((result as JSNumber).toDartInt != 7 ||
+  if (!identical(result, task) ||
       calls != 1 ||
       safe.version != 'test' ||
       !identical(securePdfJsLibrary(safe), safe)) {

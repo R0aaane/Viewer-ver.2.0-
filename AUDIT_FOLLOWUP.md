@@ -9,7 +9,7 @@
 | --- | --- | --- | --- |
 | 1 | 既存テスト失敗と文字化け | Git履歴などの根拠から正しいデータ・仕様を特定し、無効化や根拠のない期待値変更なしでFlutter／Python全件成功 | 完了 |
 | 2 | PDF統合検証 | 大容量、切替、描画とファイル操作の競合、破損、ページ編集、履歴、ズーム／スクロールを検証。端末／環境不足は未検証として記録し、完了に含めない | Windows自動実機検証6/6成功。Android SAFは端末不在で未検証 |
-| 3 | Web・PDF.js更新 | ブラウザー回帰テストを実行し、更新したPDF.jsの描画・worker・cMap・破損ファイル処理を確認。更新は独立コミット | 更新前の実Chrome回帰6/6成功。PDF.js更新を準備中 |
+| 3 | Web・PDF.js更新 | ブラウザー回帰テストを実行し、更新したPDF.jsの描画・worker・cMap・破損ファイル処理を確認。更新は独立コミット | Chrome検証完了（8/8成功）。他ブラウザーは未検証 |
 | 4 | 段階的な構造整理 | 使用されない旧UI、State責務、無効化／キャンセル、サーバー起動失敗時の解放を小単位で修正し、関連テストとビルドを確認。構造整理はPDF.js更新と別コミット | 未着手 |
 
 仕様の根拠が不足する項目は保留して他項目を進める。未検証を完了扱いにしない。
@@ -45,3 +45,13 @@
 - PDF生成ライブラリの赤／青定数はMaterial色だったため、テストfixtureを明示RGB原色へ訂正。画素の期待値は緩めていない。
 - PDF.js更新前（3.11.174）のChrome実行 **6/6成功**。`audit_web_driver.log`。Chrome 154.0.8037.98／公式ChromeDriver 154.0.8037.92。
 - 再実行: ルートで `dart run tool/web_test_server.dart`、ChromeDriverをポート4444で起動後、`flutter drive --driver=test_driver/integration_test.dart --target=integration_test/web_compatibility_test.dart -d web-server --web-hostname=127.0.0.1 --web-port=8765 --driver-port=4444 --headless --no-web-resources-cdn --no-pub`。
+- 通信修正の復元点: `dcb9fb6`。PDF.js更新とは独立。
+
+### PDF.js更新
+
+- Mozilla公式 [v6.4.299](https://github.com/mozilla/pdf.js/releases/tag/v6.4.299) へ更新。本体・worker・cMaps・standard fonts・WasmのURLを同一版へ固定。モジュールscriptに対応し、eval無効化も維持。
+- pdfx 2.9.2が呼ぶdocument.destroyはPDF.js 6でloadingTask.destroyへ移っていた。実ブラウザーで失敗を再現し、既存pdfxを変更せず互換関数を付与。開けなかったtaskも終了処理へ渡す。元のPromiseとJS例外を維持する（Dart Future往復による例外の変質を回避）。
+- 外部cMapを必要とする非埋め込み日本語CIDフォントの合成PDFを追加。アプリのpdfx経由で描画し、別途「日本語」のテキスト復元を確認。PDFWorkerのportが実際のWorkerでありfake workerではないことも確認。
+- 成功・失敗taskの終了回数、例外同一性、asset URL既定値と明示値の保持を追加検証。Chrome **8/8成功**（`audit_web_upgrade.log`）。追加interopコード・テストの限定解析0件、Nodeスモーク成功。
+- **1.0.209+219**: Windows Release成功、exeのProductVersionと更新日時を確認。Web Release成功、version.jsonも一致。既存CMake／Wasm dry-run／CupertinoIcons／PWA引数の警告は残る。
+- Chrome以外、オフラインCDN遮断時、全PDF機能／全フォントを網羅した互換性は未検証。既存のCDN依存は維持し、自己配信への変更は今回含めない。
