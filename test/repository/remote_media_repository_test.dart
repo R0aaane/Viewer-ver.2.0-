@@ -208,22 +208,26 @@ void main() {
     test('throws when the deletion cannot be verified', () async {
       final apiClient = _FakeRemoteMediaApiClient()
         ..markDeletedOnDelete = false;
+      final idResolver = _FakeMediaIdResolver();
       final repository = RemoteMediaRepository(
         apiClient: apiClient,
-        idResolver: _FakeMediaIdResolver(),
+        idResolver: idResolver,
         localPickerRepository: const _StubMediaRepository(),
       );
 
-      expect(
+      await expectLater(
         () => repository.deleteItem(_imageItem()),
         throwsA(
           isA<RemoteMediaException>().having(
             (error) => error.message,
             'message',
-            contains('削除結果を確認できませんでした'),
+            '削除確認に失敗しました: old.jpg',
           ),
         ),
       );
+      expect(apiClient.deleteCalls, hasLength(1));
+      expect(apiClient.metaRequests, hasLength(1));
+      expect(idResolver.forgotten, isEmpty);
     });
   });
 
