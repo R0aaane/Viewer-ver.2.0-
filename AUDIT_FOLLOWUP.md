@@ -9,7 +9,7 @@
 | --- | --- | --- | --- |
 | 1 | 既存テスト失敗と文字化け | Git履歴などの根拠から正しいデータ・仕様を特定し、無効化や根拠のない期待値変更なしでFlutter／Python全件成功 | 完了 |
 | 2 | PDF統合検証 | 大容量、切替、描画とファイル操作の競合、破損、ページ編集、履歴、ズーム／スクロールを検証。端末／環境不足は未検証として記録し、完了に含めない | Windows自動実機検証6/6成功。Android SAFは端末不在で未検証 |
-| 3 | Web・PDF.js更新 | ブラウザー回帰テストを実行し、更新したPDF.jsの描画・worker・cMap・破損ファイル処理を確認。更新は独立コミット | 実行環境を調査中 |
+| 3 | Web・PDF.js更新 | ブラウザー回帰テストを実行し、更新したPDF.jsの描画・worker・cMap・破損ファイル処理を確認。更新は独立コミット | 更新前の実Chrome回帰6/6成功。PDF.js更新を準備中 |
 | 4 | 段階的な構造整理 | 使用されない旧UI、State責務、無効化／キャンセル、サーバー起動失敗時の解放を小単位で修正し、関連テストとビルドを確認。構造整理はPDF.js更新と別コミット | 未着手 |
 
 仕様の根拠が不足する項目は保留して他項目を進める。未検証を完了扱いにしない。
@@ -36,3 +36,12 @@
 - 実行例: `flutter test --no-pub -d windows integration_test/pdf_windows_test.dart --reporter expanded`。Windowsネイティブアプリとして実行しており、PDFエンジンはfakeではない。
 - 計測例（Debug・fixture生成も同じプロセス）: 36描画341ms、47MB PDFの2ページ描画252ms。生成後RSS 547MB→描画後626MB。fixture生成時のヒープを含むためアプリ実利用のピークや改善率を示すベンチマークではない。低メモリ実機・連続長時間測定は未検証。
 - Android SAF実機は接続なし。Windowsでの自動操作をもってAndroid実機や人による操作感の確認済みとはしない。
+
+## 工程3: Web回帰基盤と通信エラー
+
+- Windows SDKの `flutter test --platform chrome` はCanvasKit配信パスの区切り文字処理で404となる。SDKは変更せず、公式integration_test／ChromeDriver経由へ移行。元のWebテスト3件は `integration_test/web_compatibility_test.dart` へ移動し、無効化していない。
+- `tool/web_test_server.dart` はループバック専用の合成PDF／API。実ブラウザーで400応答後の再通信、memoized futureの失敗除去、不正JSON、401、PDF2ページの画素、破損後の正常描画を検証。
+- 実行して、HTTPエラーが `HttpRequest.request` のProgressEventとして到着しステータスを失う不具合を確認。400を再試行し、401でもPDF本体へのフォールバックが起き得た。本文・バイナリ両経路で元のHTTPステータスとメッセージを保持する。非JSON応答もAPI例外へ統一。
+- PDF生成ライブラリの赤／青定数はMaterial色だったため、テストfixtureを明示RGB原色へ訂正。画素の期待値は緩めていない。
+- PDF.js更新前（3.11.174）のChrome実行 **6/6成功**。`audit_web_driver.log`。Chrome 154.0.8037.98／公式ChromeDriver 154.0.8037.92。
+- 再実行: ルートで `dart run tool/web_test_server.dart`、ChromeDriverをポート4444で起動後、`flutter drive --driver=test_driver/integration_test.dart --target=integration_test/web_compatibility_test.dart -d web-server --web-hostname=127.0.0.1 --web-port=8765 --driver-port=4444 --headless --no-web-resources-cdn --no-pub`。

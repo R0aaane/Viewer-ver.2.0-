@@ -1588,6 +1588,17 @@ class WebRemoteApiClient {
     );
   }
 
+  dynamic _decodeJsonResponse(String raw) {
+    if (raw.trim().isEmpty) {
+      return <String, dynamic>{};
+    }
+    try {
+      return jsonDecode(raw);
+    } on FormatException {
+      throw const WebRemoteException('API response is not valid JSON');
+    }
+  }
+
   Future<dynamic> _getJson(
     String path, {
     Map<String, String>? queryParameters,
@@ -1597,10 +1608,7 @@ class WebRemoteApiClient {
       path,
       queryParameters: queryParameters,
     );
-    if (raw.trim().isEmpty) {
-      return <String, dynamic>{};
-    }
-    return jsonDecode(raw);
+    return _decodeJsonResponse(raw);
   }
 
   Future<dynamic> _postJson(
@@ -1616,10 +1624,7 @@ class WebRemoteApiClient {
       body: body,
       requestTimeout: requestTimeout,
     );
-    if (raw.trim().isEmpty) {
-      return <String, dynamic>{};
-    }
-    return jsonDecode(raw);
+    return _decodeJsonResponse(raw);
   }
 
   Future<dynamic> _putJson(
@@ -1635,10 +1640,7 @@ class WebRemoteApiClient {
       body: body,
       requestTimeout: requestTimeout,
     );
-    if (raw.trim().isEmpty) {
-      return <String, dynamic>{};
-    }
-    return jsonDecode(raw);
+    return _decodeJsonResponse(raw);
   }
 
   Future<dynamic> _deleteJson(
@@ -1652,10 +1654,7 @@ class WebRemoteApiClient {
       queryParameters: queryParameters,
       requestTimeout: requestTimeout,
     );
-    if (raw.trim().isEmpty) {
-      return <String, dynamic>{};
-    }
-    return jsonDecode(raw);
+    return _decodeJsonResponse(raw);
   }
 
   Future<String> _requestText(
@@ -1708,6 +1707,10 @@ class WebRemoteApiClient {
     } catch (error) {
       if (error is WebRemoteException) {
         rethrow;
+      }
+      final responseError = _httpResponseError(error);
+      if (responseError != null) {
+        throw responseError;
       }
       throw const WebRemoteException(
         'サーバーに接続できません。CORS / HTTPS / トークン設定を確認してください',
@@ -1772,10 +1775,38 @@ class WebRemoteApiClient {
       if (error is WebRemoteException) {
         rethrow;
       }
+      final responseError = _httpResponseError(error);
+      if (responseError != null) {
+        throw responseError;
+      }
       throw const WebRemoteException(
         'サーバーに接続できません。CORS / HTTPS / トークン設定を確認してください',
       );
     }
+  }
+
+  WebRemoteException? _httpResponseError(Object error) {
+    // HttpRequest.request rejects non-2xx responses with a ProgressEvent.
+    // Preserve HTTP status so authorization failures are not retried/fallbacked.
+    if (error is! html.ProgressEvent) {
+      return null;
+    }
+    final request = error.target;
+    if (request is! html.HttpRequest) {
+      return null;
+    }
+    final status = request.status ?? 0;
+    if (status == 0) {
+      return null; // Network/CORS failures have no readable HTTP response.
+    }
+    final response = request.response;
+    final payload = response is String
+        ? response
+        : utf8.decode(_responseBytes(response), allowMalformed: true);
+    return WebRemoteException(
+      _extractErrorMessage(payload) ?? _messageForStatus(status),
+      statusCode: status,
+    );
   }
 
   Uri _buildUri(String path, {Map<String, String>? queryParameters}) {
