@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -222,6 +223,58 @@ void main() {
     expect(await rendering, hasLength(3));
     expect(await File(item.id).exists(), isFalse);
     await expectLater(repo.getPageCount(item), throwsA(anything));
+  });
+
+  testWidgets('delayed stale history cannot overwrite the actual PDF count', (
+    tester,
+  ) async {
+    final item = await _pdf(temp, 'stale-history', 6);
+    final releaseHistory = Completer<void>();
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      if (request.method == 'GET') {
+        await releaseHistory.future;
+        request.response.write(
+          jsonEncode({
+            'mediaId': request.uri.pathSegments.last,
+            'currentPage': 20,
+            'totalPages': 60,
+            'isBookmarked': true,
+          }),
+        );
+      } else {
+        request.response.write(await utf8.decoder.bind(request).join());
+      }
+      await request.response.close();
+    });
+    addTearDown(() async {
+      if (!releaseHistory.isCompleted) releaseHistory.complete();
+      await server.close(force: true);
+    });
+    await AppSettingsService().saveMetadataSettings(
+      MetadataSettings(
+        appMode: AppMode.client,
+        clientApiBaseUrl: 'http://127.0.0.1:${server.port}',
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ImageDetailPage(
+          repo: repo,
+          tagService: _NoTags(),
+          items: [item],
+          initialIndex: 0,
+        ),
+      ),
+    );
+    await _until(tester, () => find.text('1/6').evaluate().isNotEmpty);
+    releaseHistory.complete();
+    await _until(tester, () => find.byTooltip('しおりを外す').evaluate().isNotEmpty);
+    expect(find.text('6/6'), findsOneWidget);
+    expect(find.text('20/60'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('reader page navigation, zoom/pan, bookmark and resume', (

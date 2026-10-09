@@ -228,7 +228,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   Set<String> _favoriteResolvedIds = <String>{};
   bool _loadingFavAll = false;
   bool _homeShowcaseLoading = false;
-  String? _homeShowcaseErrorMessage;
   List<MediaItem> _homeRecentAddedItems = const [];
   List<MediaItem> _homeUnreadItems = const [];
   List<MediaItem> _homeFavoriteShowcaseItems = const [];
@@ -238,7 +237,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   List<MediaItem> _homeBookmarkedReadingItems = const [];
   Map<_HomeShelfKind, List<MediaItem>> _homeAllItemsByShelfKind =
       <_HomeShelfKind, List<MediaItem>>{};
-  _HomeShelfKind _homeMyListKind = _HomeShelfKind.favorites;
   _HomeShelfKind? _homeDetailedBrowseMyListKind;
   Map<String, ReadingProgressEntry> _homeRecentViewEntriesByItemId =
       <String, ReadingProgressEntry>{};

@@ -2,7 +2,7 @@
 
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -61,50 +61,47 @@ web_build_dir = _resolve_web_build_dir()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    sqlite_store = SqliteStore(settings.sqlite_path)
-    sqlite_store.init_schema()
+    with ExitStack() as resources:
+        sqlite_store = SqliteStore(settings.sqlite_path)
+        resources.callback(sqlite_store.close)
+        sqlite_store.init_schema()
 
-    tag_alias_service = TagAliasService.load_default(
-        project_root / "assets" / "config" / "tag_aliases.json"
-    )
-    metadata_store = MetadataStore(sqlite_store, tag_alias_service=tag_alias_service)
-    index_service = MediaIndexService(sqlite_store)
-    stream_service = MediaStreamService(metadata_store, settings)
-    thumbnail_service = ThumbnailService(metadata_store, settings.thumbs_dir)
-    url_download_service = UrlDownloadService()
-
-    app.state.settings = settings
-    app.state.sqlite_store = sqlite_store
-    app.state.metadata_store = metadata_store
-    app.state.index_service = index_service
-    app.state.stream_service = stream_service
-    app.state.thumbnail_service = thumbnail_service
-    app.state.url_download_service = url_download_service
-    app.state.url_download_statuses = {}
-    app.state.client_app_versions = set()
-
-    if settings.startup_rescan and settings.media_roots:
-        index_service.rescan_configured_roots(settings.media_roots)
-
-    seeded_stats = metadata_store.seed_missing_media_stats()
-    if seeded_stats:
-        logger.info("Seeded media stats for %s PDF(s)", seeded_stats)
-
-    backfill_result = metadata_store.backfill_configured_tag_aliases()
-    if backfill_result["removedAliasCount"] or backfill_result["migratedLinkCount"]:
-        logger.info(
-            "Tag alias backfill completed removedAliases=%s migratedLinks=%s",
-            backfill_result["removedAliasCount"],
-            backfill_result["migratedLinkCount"],
+        tag_alias_service = TagAliasService.load_default(
+            project_root / "assets" / "config" / "tag_aliases.json"
         )
+        metadata_store = MetadataStore(sqlite_store, tag_alias_service=tag_alias_service)
+        index_service = MediaIndexService(sqlite_store)
+        stream_service = MediaStreamService(metadata_store, settings)
+        thumbnail_service = ThumbnailService(metadata_store, settings.thumbs_dir)
+        resources.callback(thumbnail_service.close)
+        url_download_service = UrlDownloadService()
 
-    try:
+        app.state.settings = settings
+        app.state.sqlite_store = sqlite_store
+        app.state.metadata_store = metadata_store
+        app.state.index_service = index_service
+        app.state.stream_service = stream_service
+        app.state.thumbnail_service = thumbnail_service
+        app.state.url_download_service = url_download_service
+        app.state.url_download_statuses = {}
+        app.state.client_app_versions = set()
+
+        if settings.startup_rescan and settings.media_roots:
+            index_service.rescan_configured_roots(settings.media_roots)
+
+        seeded_stats = metadata_store.seed_missing_media_stats()
+        if seeded_stats:
+            logger.info("Seeded media stats for %s PDF(s)", seeded_stats)
+
+        backfill_result = metadata_store.backfill_configured_tag_aliases()
+        if backfill_result["removedAliasCount"] or backfill_result["migratedLinkCount"]:
+            logger.info(
+                "Tag alias backfill completed removedAliases=%s migratedLinks=%s",
+                backfill_result["removedAliasCount"],
+                backfill_result["migratedLinkCount"],
+            )
+
         yield
-    finally:
-        try:
-            thumbnail_service.close()
-        finally:
-            sqlite_store.close()
 
 
 app = FastAPI(

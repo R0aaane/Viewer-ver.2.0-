@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/folder.dart';
 import '../models/mediaItem.dart';
+import '../models/reader_position.dart';
 import '../repository/mediaRepository.dart';
 
 import '../database/tag_service.dart';
@@ -86,6 +87,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _preferInitialPdfPage = false;
   bool _canPersistReadingProgress = true;
   bool _hasMovedPdfPageSinceLoad = false;
+  int? _resolvedPdfPageCount;
 
   bool _tagsLoading = false;
   String? _loadedTagItemId;
@@ -163,7 +165,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _activityPersistDebounce?.cancel();
-    _readerController.clearCaches();
+    _readerController.dispose();
     _tagController.dispose();
     unawaited(_persistCurrentActivity());
     for (final controller in _candidateScrollControllers.values) {

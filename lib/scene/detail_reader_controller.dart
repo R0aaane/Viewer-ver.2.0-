@@ -20,6 +20,8 @@ class DetailReaderController {
   bool gifAnimationPaused = false;
   bool _initialReaderPreloadConsumed = false;
   bool _initialPageCountConsumed = false;
+  int _cacheGeneration = 0;
+  bool _disposed = false;
 
   final LinkedHashMap<int, Future<Uint8List>> _readerFutureCache =
       LinkedHashMap<int, Future<Uint8List>>();
@@ -40,11 +42,20 @@ class DetailReaderController {
   });
 
   void clearCaches() {
+    _cacheGeneration++;
     _readerFutureCache.clear();
     _staticReaderFutureCache.clear();
     _thumbFutureCache.clear();
     _imageFutureCache.clear();
     _renderQueue.clearPending();
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    clearCaches();
+    leftFuture = null;
+    rightFuture = null;
   }
 
   void removeReaderPage(int page) {
@@ -93,6 +104,7 @@ class DetailReaderController {
     required _RenderPriority priority,
     required int maxEntries,
   }) {
+    if (_disposed) throw StateError('Reader controller is disposed');
     final future = _renderQueue.schedule(load, priority: priority);
     cache[key] = future;
     _trim(cache, maxEntries);
@@ -127,7 +139,11 @@ class DetailReaderController {
   }
 
   Future<T> _loadAfterFirstPaint<T>(Future<T> Function() load) async {
+    final generation = _cacheGeneration;
     await SchedulerBinding.instance.endOfFrame;
+    if (_disposed || generation != _cacheGeneration) {
+      throw const _PdfRenderCancelled();
+    }
     return load();
   }
 

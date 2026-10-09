@@ -10,7 +10,7 @@
 | 1 | 既存テスト失敗と文字化け | Git履歴などの根拠から正しいデータ・仕様を特定し、無効化や根拠のない期待値変更なしでFlutter／Python全件成功 | 完了 |
 | 2 | PDF統合検証 | 大容量、切替、描画とファイル操作の競合、破損、ページ編集、履歴、ズーム／スクロールを検証。端末／環境不足は未検証として記録し、完了に含めない | Windows自動実機検証6/6成功。Android SAFは端末不在で未検証 |
 | 3 | Web・PDF.js更新 | ブラウザー回帰テストを実行し、更新したPDF.jsの描画・worker・cMap・破損ファイル処理を確認。更新は独立コミット | Chrome検証完了（8/8成功）。他ブラウザーは未検証 |
-| 4 | 段階的な構造整理 | 使用されない旧UI、State責務、無効化／キャンセル、サーバー起動失敗時の解放を小単位で修正し、関連テストとビルドを確認。構造整理はPDF.js更新と別コミット | 未着手 |
+| 4 | 段階的な構造整理 | 使用されない旧UI、State責務、無効化／キャンセル、サーバー起動失敗時の解放を小単位で修正し、関連テストとビルドを確認。構造整理はPDF.js更新と別コミット | 第1段階の修正・回帰確認済み。全体の責務分割／全転送キャンセルは継続課題 |
 
 仕様の根拠が不足する項目は保留して他項目を進める。未検証を完了扱いにしない。
 
@@ -55,3 +55,35 @@
 - 成功・失敗taskの終了回数、例外同一性、asset URL既定値と明示値の保持を追加検証。Chrome **8/8成功**（`audit_web_upgrade.log`）。追加interopコード・テストの限定解析0件、Nodeスモーク成功。
 - **1.0.209+219**: Windows Release成功、exeのProductVersionと更新日時を確認。Web Release成功、version.jsonも一致。既存CMake／Wasm dry-run／CupertinoIcons／PWA引数の警告は残る。
 - Chrome以外、オフラインCDN遮断時、全PDF機能／全フォントを網羅した互換性は未検証。既存のCDN依存は維持し、自己配信への変更は今回含めない。
+
+## 工程4: 小単位の構造・終了処理整理
+
+PDF.js更新の復元点は `9f9e5d2`。以下は別変更として実施。
+
+### 問題・原因・変更ファイル
+
+- `server/main.py`: 初期化がyieldの手前で失敗すると従来のfinallyに到達しなかった。ExitStackでDB生成直後からcloseを登録し、サムネイル→DBの依存順で解放する。`server/tests/test_lifespan.py` はschema、サムネイル生成、rescan、統計補完、alias補完の失敗、正常終了、close失敗を検証。修正前5失敗→修正後5テスト成功（subTestを含む）。
+- `lib/models/reader_position.dart`（新規）、`lib/scene/reader_view.dart`、`detailImage.dart`、`detail_actions.dart`: ページ位置決定を純粋関数へ分離。PDFから解決済みのページ数を遅延履歴より優先し、ページ編集時にも更新。手動移動・明示初期ページ・読了時に先頭へ戻る既存契約は維持。
+- `lib/scene/detail_reader_controller.dart`: endOfFrame待機中は、キュー上では開始済みでもPDFエンジンは未開始だった。この間の切替／disposeを世代番号で検知してキャンセルし、dispose後の新規描画要求も拒否する。エンジンで既に動いている描画は強制中断しない。
+- `lib/scene/gallery_home_view.dart`、`gridGallery.dart`、`lib/web/web_remote_viewer_page.dart`: 静的解析で参照なしの旧ホーム、旧棚／マイリスト、旧ヘッダー／メタ情報widget、専用補助関数・未読フィールド、return後の到達不能Webカードを削除。旧UI関連は約1,000行減。現行表示で共有されるenum／項目選択関数は保持。現行UI文言・レイアウト・操作を意図的に変更していない。
+
+### 確認結果
+
+- `test/models/reader_position_test.dart` 5件、reader controller 4件、計 **9/9成功**。
+- `integration_test/pdf_windows_test.dart` に、6ページPDFの読込後に「20/60」の古い履歴を遅延返却する実機回帰を追加。実表示が **6/6** に留まることを確認。Windows統合 **7/7成功**。
+- Flutter全件 **91/91成功**（`audit_flutter_structure.log`）。Python全件 **120/120成功**（`audit_server_structure.log`）。
+- 最終全体解析: **error 0 / warning 11 / info 90**。前回110件→101件。既存指摘が残るため解析の終了コードは1であり、警告ゼロとしては扱わない。
+- **1.0.210+220**: `flutter build windows --release` 成功。exe更新日時2026-10-10 02:55:35／ProductVersion一致。Web Releaseも成功し、version.jsonのversion 1.0.210／build_number 220を確認。ビルド警告は工程3記載の既存項目と同じ。
+- `git diff --check` と変更16ファイルの厳密UTF-8デコードに成功。
+- 性能上の改善: 切替／終了後の未開始描画を省き、旧UI約1,000行を削除して保守対象を削減。エンジン自体の速度向上やメモリ削減率は測定していない。
+
+## 未完了・未検証・残存リスク
+
+- **Android SAF実機**: 接続端末がなく未検証。Windowsの実機結果で代用せず、工程2全体は完了扱いにしない。
+- **Edge／Firefox／Safari、低メモリ／長時間連続利用、CDN遮断**: 今回未検証。Chrome 8件の成功は全ブラウザー／全PDFを保証しない。
+- **構造整理の残り**: 巨大なGallery／Web State、Hitomi拡張のprotected setState警告9件、Galleryの非表示旧サイドバー、API内の不要cast、非推奨APIが残る。画面全体のテストが不足するため全面分割や一括非推奨置換は行わない。
+- **無効化／キャンセルの残り**: 実行中のPDFエンジン・HTTP転送の統一キャンセル契約、外部編集のmtime監視、Android／Remoteのファイル変更とPDF利用の原子的連携は未完了。今回はWindows mutationバリアと詳細画面の未開始描画キャンセルまで。
+- **保存の安全性**: PDFページ編集の電源断時の原子保存、ページ情報読込失敗時の履歴保存方針などは追加の仕様確認・失敗注入テストが必要。実ユーザーファイル／DB／設定の破壊的操作は実行していない。
+- 元から存在する日本語コメントの文字化けは一括変換せず維持。復元の根拠が確認できたテストfixtureのみ工程1で修復した。
+
+4工程すべての検証完了とはしていない。利用可能なWindows／Chrome環境で再現・確認できた修正を保存し、上記を継続課題として残す。

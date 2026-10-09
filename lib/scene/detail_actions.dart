@@ -443,6 +443,9 @@ extension _DetailActions on _ImageDetailPageState {
       setState(() {
         _items[_index] = updated;
         _totalPages = (_totalPages - 1).clamp(1, _totalPages);
+        if (_resolvedPdfPageCount != null) {
+          _resolvedPdfPageCount = _totalPages;
+        }
         _page = page.clamp(1, _totalPages);
         _readerController.clearCaches();
         _syncReaderFutures(updated);

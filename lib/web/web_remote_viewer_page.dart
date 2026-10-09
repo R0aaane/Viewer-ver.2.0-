@@ -375,7 +375,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.209+219',
+  defaultValue: '1.0.210+220',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -3846,28 +3846,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       ),
     );
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Text(
-              'Web 未対応機能',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 10),
-            bullet('ローカル Library の直接参照、フォルダ追加、ホスト取込み'),
-            bullet('Host API サーバーの起動 / 停止、ローカル DB の編集'),
-            bullet('ファイル名変更、削除、タグ編集、URL 取込みなどの書き込み操作'),
-            bullet(
-              'ネイティブ版と同等の PDF ビューア全機能。Web ではページ画像プレビュー、同じタブ内の PDF 表示ページ、別タブ表示を提供',
-            ),
-            bullet('HTTPS の Web ページから HTTP API へはブラウザ制限で接続できません'),
-          ],
-        ),
-      ),
-    );
   }
 
   String _formatDateTime(DateTime? value) {
@@ -4504,131 +4482,6 @@ class _WebHomeStatLine extends StatelessWidget {
   }
 }
 
-class _BrowserHeader extends StatelessWidget {
-  final String? folderName;
-  final int itemCount;
-  final TextEditingController searchController;
-  final bool isLoading;
-  final bool actionsBusy;
-  final bool parentFolderAvailable;
-  final Future<void> Function() onSearch;
-  final VoidCallback? onGoParent;
-  final VoidCallback? onImportUrl;
-  final VoidCallback? onOrganizeFolder;
-  final VoidCallback? onRescan;
-  final _WebMediaFilter filter;
-  final ValueChanged<_WebMediaFilter> onFilterChanged;
-
-  const _BrowserHeader({
-    required this.folderName,
-    required this.itemCount,
-    required this.searchController,
-    required this.isLoading,
-    required this.actionsBusy,
-    required this.parentFolderAvailable,
-    required this.onSearch,
-    required this.onGoParent,
-    required this.onImportUrl,
-    required this.onOrganizeFolder,
-    required this.onRescan,
-    required this.filter,
-    required this.onFilterChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: <Widget>[
-                if (folderName != null)
-                  Chip(
-                    avatar: const Icon(Icons.folder_open, size: 18),
-                    label: Text(folderName!),
-                  ),
-                if (parentFolderAvailable)
-                  OutlinedButton.icon(
-                    onPressed: onGoParent,
-                    icon: const Icon(Icons.arrow_upward),
-                    label: const Text('一つ上へ'),
-                  ),
-                Text(
-                  '$itemCount 件',
-                  style: const TextStyle(color: Colors.white60),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: TextField(
-                    controller: searchController,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => onSearch(),
-                    decoration: const InputDecoration(
-                      labelText: '検索',
-                      hintText: 'artist:"作家名"  type:pdf  #tag  untagged',
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                FilledButton(
-                  onPressed: isLoading ? null : onSearch,
-                  child: const Text('検索'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _WebMediaFilter.values
-                  .map(
-                    (entry) => ChoiceChip(
-                      label: Text(entry.label),
-                      selected: filter == entry,
-                      onSelected: (_) => onFilterChanged(entry),
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: <Widget>[
-                FilledButton.icon(
-                  onPressed: actionsBusy ? null : onImportUrl,
-                  icon: const Icon(Icons.download_outlined),
-                  label: const Text('URL取り込み'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: actionsBusy ? null : onOrganizeFolder,
-                  icon: const Icon(Icons.auto_fix_high_outlined),
-                  label: const Text('整理'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: actionsBusy ? null : onRescan,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('再スキャン'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 enum _BrowserHeaderMenuAction { goRoot, goParent, importUrl, organize, rescan }
 
 class _ResponsiveBrowserHeader extends StatelessWidget {
@@ -5155,13 +5008,6 @@ String _formatBrowseBytes(int? bytes) {
   }
   final digits = value >= 100 ? 0 : 1;
   return '${value.toStringAsFixed(digits)} ${units[index]}';
-}
-
-String _filterLabel(_WebMediaFilter filter) {
-  switch (filter) {
-    case _WebMediaFilter.pdf:
-      return 'PDF';
-  }
 }
 
 MediaKind _entryMediaKind(WebRemoteEntry entry) {
@@ -5848,151 +5694,6 @@ class _EntryGridTileCard extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _EntryHeader extends StatelessWidget {
-  final WebRemoteEntry entry;
-  final String Function(String raw) folderName;
-
-  const _EntryHeader({required this.entry, required this.folderName});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          _entryDisplayTitle(entry),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: <Widget>[
-            Chip(
-              avatar: Icon(
-                entry.isFolder
-                    ? Icons.folder_outlined
-                    : entry.isPdf
-                    ? Icons.picture_as_pdf_outlined
-                    : Icons.image_outlined,
-                size: 18,
-              ),
-              label: Text(
-                entry.isFolder
-                    ? 'フォルダ'
-                    : entry.isPdf
-                    ? 'PDF'
-                    : '画像',
-              ),
-            ),
-            if (!entry.isFolder)
-              Chip(
-                avatar: const Icon(Icons.folder_open, size: 18),
-                label: Text(folderName(entry.folderRaw)),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _EntryMeta extends StatelessWidget {
-  final WebRemoteEntry entry;
-
-  const _EntryMeta({required this.entry});
-
-  String _formatDateTime(DateTime? value) {
-    if (value == null) {
-      return '未取得';
-    }
-    final local = value.toLocal();
-    final two = (int number) => number.toString().padLeft(2, '0');
-    return '${local.year}/${two(local.month)}/${two(local.day)} '
-        '${two(local.hour)}:${two(local.minute)}';
-  }
-
-  String _formatBytes(int? bytes) {
-    if (bytes == null) {
-      return '未取得';
-    }
-    if (bytes < 1024) {
-      return '$bytes B';
-    }
-    const units = <String>['KB', 'MB', 'GB', 'TB'];
-    var value = bytes.toDouble();
-    var index = -1;
-    while (value >= 1024 && index < units.length - 1) {
-      value /= 1024;
-      index += 1;
-    }
-    final digits = value >= 100 ? 0 : 1;
-    return '${value.toStringAsFixed(digits)} ${units[index]}';
-  }
-
-  Widget _row(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          SizedBox(
-            width: 58,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white60,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white70),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (entry.isFolder) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            entry.fullPath ?? entry.entryId,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white70),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'タップするとこのフォルダへ移動します。',
-            style: TextStyle(color: Colors.white60),
-          ),
-        ],
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        _row('場所', entry.folderRaw),
-        _row('更新', _formatDateTime(entry.modifiedAt)),
-        _row('サイズ', _formatBytes(entry.sizeBytes)),
-      ],
     );
   }
 }

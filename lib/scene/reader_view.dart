@@ -97,6 +97,7 @@ extension _ReaderView on _ImageDetailPageState {
 
       setState(() {
         _totalPages = total < 1 ? 1 : total;
+        _resolvedPdfPageCount = _totalPages;
         _page = _page.clamp(1, _totalPages);
         _syncReaderFutures(item);
       });
@@ -131,28 +132,20 @@ extension _ReaderView on _ImageDetailPageState {
         return;
       }
 
-      final progressTotalPages = entry?.totalPages;
-      final effectiveTotalPages =
-          progressTotalPages != null && progressTotalPages > 0
-          ? progressTotalPages
-          : _totalPages;
-      final nextPage = entry != null &&
-              !preserveInitialPage &&
-              !_hasMovedPdfPageSinceLoad
-          ? (entry.isCompleted ? 1 : entry.currentPage)
-          : _page;
+      final position = resolveReaderPosition(
+        currentPage: _page,
+        currentTotalPages: _totalPages,
+        documentTotalPages: _resolvedPdfPageCount,
+        progress: entry,
+        preserveInitialPage: preserveInitialPage,
+        hasMovedPage: _hasMovedPdfPageSinceLoad,
+      );
 
       setState(() {
         _canPersistReadingProgress = true;
         _isBookmarked = entry?.isBookmarked ?? false;
-        if (effectiveTotalPages > 0) {
-          _totalPages = effectiveTotalPages;
-          _page = preserveInitialPage && progressTotalPages == null
-              ? (nextPage < 1 ? 1 : nextPage)
-              : nextPage.clamp(1, _totalPages);
-        } else {
-          _page = nextPage < 1 ? 1 : nextPage;
-        }
+        _totalPages = position.totalPages;
+        _page = position.page;
         _syncReaderFutures(item);
       });
       _schedulePersistCurrentActivity();
@@ -193,6 +186,7 @@ extension _ReaderView on _ImageDetailPageState {
       setState(() {
         _canPersistReadingProgress = item.kind != MediaKind.pdf;
         _hasMovedPdfPageSinceLoad = false;
+        _resolvedPdfPageCount = null;
         _readerController.gifAnimationPaused = false;
         _isFavorite = false;
         _isBookmarked = false;
