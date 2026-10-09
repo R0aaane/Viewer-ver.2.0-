@@ -87,4 +87,87 @@ void main() {
     expect(doc.closeCount, 1);
     await cache.dispose();
   });
+
+  test(
+    'mutation drains readers and prevents reopening until the change finishes',
+    () async {
+      final cache = PdfDocumentCache();
+      final old = FakePdfDocument();
+      final replacement = FakePdfDocument();
+      final readingStarted = Completer<void>();
+      final releaseReader = Completer<void>();
+      final mutationStarted = Completer<void>();
+      final releaseMutation = Completer<void>();
+      var opens = 0;
+      final reading = cache.use('a', () async => old, (_) async {
+        readingStarted.complete();
+        await releaseReader.future;
+        expect(old.closed, isFalse);
+      });
+      await readingStarted.future;
+      final changing = cache.mutateWhere((key) => key == 'a', () async {
+        expect(old.closed, isTrue);
+        mutationStarted.complete();
+        await releaseMutation.future;
+      });
+      final reopened = cache.use('a', () async {
+        opens++;
+        return replacement;
+      }, (doc) async => doc);
+      await Future<void>.delayed(Duration.zero);
+      expect(mutationStarted.isCompleted, isFalse);
+      releaseReader.complete();
+      await mutationStarted.future;
+      expect(opens, 0);
+      releaseMutation.complete();
+      await Future.wait([reading, changing]);
+      expect(await reopened, same(replacement));
+      expect(old.closeCount, 1);
+      await cache.dispose();
+      expect(replacement.closeCount, 1);
+    },
+  );
+
+  test('overlapping mutations preserve accepted operation order', () async {
+    final cache = PdfDocumentCache();
+    final events = <String>[];
+    final first = cache.mutateWhere(
+      (_) => true,
+      () async => events.add('first'),
+    );
+    final between = cache.run('a', () async => events.add('between'));
+    final second = cache.mutateWhere(
+      (_) => true,
+      () async => events.add('second'),
+    );
+    final after = cache.run('b', () async => events.add('after'));
+    await Future.wait([first, between, second, after]);
+    expect(events, ['first', 'between', 'second', 'after']);
+    await cache.dispose();
+  });
+
+  test(
+    'failed mutation releases the barrier and disposal drains accepted work',
+    () async {
+      final cache = PdfDocumentCache();
+      final release = Completer<void>();
+      final changing = cache.mutateWhere((_) => true, () async {
+        await release.future;
+        throw StateError('mutation failed');
+      });
+      final failure = expectLater(changing, throwsStateError);
+      final doc = FakePdfDocument();
+      final reading = cache.use('a', () async => doc, (_) async => 42);
+      final disposal = cache.dispose();
+      await expectLater(
+        cache.mutateWhere((_) => true, () async {}),
+        throwsStateError,
+      );
+      release.complete();
+      await failure;
+      expect(await reading, 42);
+      await disposal;
+      expect(doc.closeCount, 1);
+    },
+  );
 }

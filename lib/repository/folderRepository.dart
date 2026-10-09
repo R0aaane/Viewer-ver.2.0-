@@ -634,31 +634,33 @@ class WindowsFolderRepository implements MediaRepository {
   @override
   Future<bool> deleteItem(MediaItem item) async {
     try {
-      if (item.kind == MediaKind.folder) {
-        await _pdfDocuments.evictWhere((key) => _isInsideLibrary(key, item.id));
-
-        final dir = Directory(item.id);
-        if (await dir.exists()) {
-          await dir.delete(recursive: true);
-        }
-
-        _thumbCache.clear();
-        return true;
-      }
-
-      await _pdfDocuments.evictWhere((key) => key == item.id);
-
-      final f = File(item.id);
-      if (await f.exists()) {
-        await f.delete();
-      }
-
-      _thumbCache.clear();
-
-      return true;
+      return await _pdfDocuments.mutateWhere(
+        (key) => _isInsideLibrary(key, item.id),
+        () => _deleteItemWithoutPdfReaders(item),
+      );
     } catch (_) {
       return false;
     }
+  }
+
+  Future<bool> _deleteItemWithoutPdfReaders(MediaItem item) async {
+    if (item.kind == MediaKind.folder) {
+      final dir = Directory(item.id);
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+
+      _thumbCache.clear();
+      return true;
+    }
+
+    final f = File(item.id);
+    if (await f.exists()) {
+      await f.delete();
+    }
+
+    _thumbCache.clear();
+    return true;
   }
 
   @override
@@ -677,16 +679,16 @@ class WindowsFolderRepository implements MediaRepository {
       throw ArgumentError('PDF ではありません');
     }
 
-    final total = await getPageCount(item);
-    if (total <= 1) {
-      throw StateError('最後の1ページは削除できません');
-    }
-    if (pageNumber < 1 || pageNumber > total) {
-      throw RangeError.range(pageNumber, 1, total, 'pageNumber');
-    }
+    return _pdfDocuments.mutateWhere(
+      (key) => _isInsideLibrary(key, item.id),
+      () => _deletePdfPageWithoutReaders(item, pageNumber),
+    );
+  }
 
-    await _pdfDocuments.evictWhere((key) => key == item.id);
-
+  Future<MediaItem> _deletePdfPageWithoutReaders(
+    MediaItem item,
+    int pageNumber,
+  ) async {
     final bytes = await _withFsRetry(
       item.id,
       () => File(item.id).readAsBytes(),
@@ -694,6 +696,13 @@ class WindowsFolderRepository implements MediaRepository {
     final document = sf.PdfDocument(inputBytes: bytes);
     late final List<int> updatedBytes;
     try {
+      final total = document.pages.count;
+      if (total <= 1) {
+        throw StateError('最後の1ページは削除できません');
+      }
+      if (pageNumber < 1 || pageNumber > total) {
+        throw RangeError.range(pageNumber, 1, total, 'pageNumber');
+      }
       document.pages.removeAt(pageNumber - 1);
       updatedBytes = await document.save();
     } finally {
@@ -1095,6 +1104,18 @@ class WindowsFolderRepository implements MediaRepository {
     final fixedName = ItemNameService.buildDisplayName(item, newDisplayName);
     final newPath = '${item.folderRaw}${Platform.pathSeparator}$fixedName';
 
+    return _pdfDocuments.mutateWhere(
+      (key) => _isInsideLibrary(key, oldPath) || _isInsideLibrary(key, newPath),
+      () => _renameWithoutPdfReaders(item, fixedName, newPath),
+    );
+  }
+
+  Future<MediaItem> _renameWithoutPdfReaders(
+    MediaItem item,
+    String fixedName,
+    String newPath,
+  ) async {
+    final oldPath = item.id;
     if (item.kind == MediaKind.folder) {
       final oldDir = Directory(oldPath);
       if (!await oldDir.exists()) {
@@ -1107,9 +1128,6 @@ class WindowsFolderRepository implements MediaRepository {
         isDirectory: true,
       );
       _thumbCache.clear();
-      await _pdfDocuments.evictWhere(
-        (key) => _isInsideLibrary(key, oldPath) || _isInsideLibrary(key, newPath),
-      );
 
       return MediaItem(
         id: newPath,
@@ -1132,6 +1150,7 @@ class WindowsFolderRepository implements MediaRepository {
       targetPath: newPath,
       isDirectory: false,
     );
+    _thumbCache.clear();
 
     return MediaItem(
       id: newPath,
