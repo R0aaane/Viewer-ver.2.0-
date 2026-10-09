@@ -468,6 +468,17 @@ class ThumbnailService:
                     context="pdf_delete_evict",
                 )
 
+    def close(self) -> None:
+        with self._pdf_lock:
+            while self._pdf_cache:
+                path, document = self._pdf_cache.popitem(last=False)
+                self._close_pdf(
+                    document,
+                    media_id="<shutdown>",
+                    path=path,
+                    context="pdf_shutdown",
+                )
+
     def _normalize_page_image_format(
         self,
         image_format: str | None,

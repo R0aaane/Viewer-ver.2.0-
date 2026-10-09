@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:pdf_viewer/models/mediaItem.dart';
 import 'package:pdf_viewer/services/home_activity_store.dart';
+import 'package:pdf_viewer/services/media_id_resolver.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -37,7 +38,7 @@ void main() {
 
       final entries = HomeActivityStore.readRecentViews(prefs);
       expect(entries, hasLength(1));
-      expect(entries.single.itemId, pdf.id);
+      expect(entries.single.itemId, (await MediaIdResolver().resolve(pdf)).stableId);
       expect(entries.single.lastPage, 18);
       expect(
         entries.single.viewedAt,
@@ -64,7 +65,7 @@ void main() {
 
     final entries = HomeActivityStore.readRecentViews(prefs);
     expect(entries, hasLength(1));
-    expect(entries.single.itemId, image.id);
+    expect(entries.single.itemId, (await MediaIdResolver().resolve(image)).stableId);
     expect(entries.single.lastPage, isNull);
   });
 
@@ -107,7 +108,7 @@ void main() {
 
       final entries = HomeActivityStore.readRecentViews(prefs);
       expect(entries, hasLength(1));
-      expect(entries.single.itemId, image.id);
+      expect(entries.single.itemId, (await MediaIdResolver().resolve(image)).stableId);
     },
   );
 }

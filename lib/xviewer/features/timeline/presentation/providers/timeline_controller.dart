@@ -32,11 +32,13 @@ final xApiDioProvider = Provider<Dio>(
     if (kDebugMode) {
       dio.interceptors.add(
         LogInterceptor(
+          requestHeader: false,
           requestBody: false,
           responseBody: false,
         ),
       );
     }
+    ref.onDispose(() => dio.close(force: true));
     return dio;
   },
 );

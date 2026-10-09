@@ -376,10 +376,6 @@ extension _DetailTagPanel on _ImageDetailPageState {
     return _tagController.categoryOrder(category);
   }
 
-  String _categoryLabel(TagCategory category) {
-    return _tagController.categoryLabel(category);
-  }
-
   String _categoryLongLabel(TagCategory category) {
     return _tagController.categoryLongLabel(category);
   }
@@ -394,10 +390,6 @@ extension _DetailTagPanel on _ImageDetailPageState {
 
   List<TagWithId> _sortTagWithIdList(Iterable<TagWithId> source) {
     return _tagController.sortTagWithIdList(source);
-  }
-
-  List<TagWithId> _filteredAssignedTags() {
-    return _tagController.filteredAssignedTags(_tags);
   }
 
   Map<TagCategory, List<TagWithId>> _groupAssignedTags() {

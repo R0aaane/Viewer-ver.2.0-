@@ -107,7 +107,7 @@ class XOAuthService {
   }
 
   Future<AuthSession> handleOAuthCallback(Uri callbackUri) async {
-    debugPrint('[xviewer][flutter] OAuth callback received: $callbackUri');
+    debugPrint('[xviewer][flutter] OAuth callback received.');
     final pendingAuth = await _pendingAuthStorageService.read();
     if (pendingAuth == null) {
       debugPrint(
@@ -140,7 +140,7 @@ class XOAuthService {
     }
 
     debugPrint(
-      '[xviewer][flutter] OAuth callback parsed: scheme=${callbackUri.scheme}, host=${callbackUri.host}, path=${callbackUri.path}, code=$code, state=$returnedState, error=$error',
+      '[xviewer][flutter] OAuth callback parsed: hasCode=${code.isNotEmpty} hasState=${returnedState.isNotEmpty} hasError=${error != null}',
     );
     if (returnedState != pendingAuth.state) {
       debugPrint(
@@ -149,7 +149,7 @@ class XOAuthService {
       await _pendingAuthStorageService.clear();
       throw AppException(
         'X OAuth state verification failed.',
-        details: callbackUri.toString(),
+        details: callbackUri.replace(query: '', fragment: '').toString(),
       );
     }
 
@@ -160,7 +160,7 @@ class XOAuthService {
       await _pendingAuthStorageService.clear();
       throw AppException(
         'X OAuth callback did not contain an authorization code.',
-        details: callbackUri.toString(),
+        details: callbackUri.replace(query: '', fragment: '').toString(),
       );
     }
 
@@ -175,7 +175,7 @@ class XOAuthService {
     }
 
     debugPrint(
-      '[xviewer][flutter] [OAuth] token exchange starting: redirectUri=${pendingAuth.redirectUri} expectedState=${pendingAuth.state} actualState=$returnedState hasCode=${code.isNotEmpty} hasCodeVerifier=${codeVerifier.isNotEmpty}',
+      '[xviewer][flutter] [OAuth] token exchange starting: stateMatches=${pendingAuth.state == returnedState} hasCode=${code.isNotEmpty} hasCodeVerifier=${codeVerifier.isNotEmpty}',
     );
 
     try {
@@ -280,9 +280,8 @@ class XOAuthService {
     required String? error,
     required bool hasCodeVerifier,
   }) {
-    debugPrint('[xviewer][flutter] [OAuth] callback uri=$callbackUri');
     debugPrint(
-      '[xviewer][flutter] [OAuth] callback validation: returnedState=$actualState expectedState=$expectedState stateMatches=${expectedState == actualState} hasCode=${code.isNotEmpty} hasCodeVerifier=$hasCodeVerifier hasError=${(error ?? '').isNotEmpty}',
+      '[xviewer][flutter] [OAuth] callback validation: stateMatches=${expectedState == actualState} hasCode=${code.isNotEmpty} hasCodeVerifier=$hasCodeVerifier hasError=${(error ?? '').isNotEmpty}',
     );
   }
 

@@ -24,7 +24,7 @@ def _request(indexed_folders: list[dict[str, object | None]], media_roots: list[
 
 
 class SearchRoutesTest(unittest.TestCase):
-    def test_list_folders_includes_configured_media_roots_before_indexed_entries(self) -> None:
+    def test_list_folders_excludes_indexed_folders_outside_configured_roots(self) -> None:
         request = _request(
             indexed_folders=[
                 {
@@ -45,7 +45,7 @@ class SearchRoutesTest(unittest.TestCase):
 
         self.assertEqual(
             [entry.folderRaw for entry in response.items],
-            [r'C:\library', r'C:\empty-root', r'C:\extra'],
+            [r'C:\library', r'C:\empty-root'],
         )
         self.assertEqual(response.items[1].displayName, 'empty-root')
 

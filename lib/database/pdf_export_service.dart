@@ -95,7 +95,7 @@ class PdfExportService {
     if (created == null) return null;
 
     return PdfExportResult(
-      savedName: created.name ?? '$safeName.pdf',
+      savedName: created.name,
       savedUri: created.uri,
       savedFolderRaw: dir.uri,
     );
@@ -221,6 +221,9 @@ class _PdfWorker {
     _sendPort.send({'cmd': 'save', 'reply': rp.sendPort});
     final msg = await rp.first;
     rp.close();
+    if (msg is Map && msg['error'] is String) {
+      throw Exception(msg['error'] as String);
+    }
     final ttd = msg as TransferableTypedData;
     return ttd.materialize().asUint8List();
   }
@@ -256,8 +259,7 @@ void _pdfIsolateEntry(_IsolateInit init) {
 
         final decoded = im.decodeImage(bytes);
         if (decoded == null || decoded.width <= 0 || decoded.height <= 0) {
-          reply.send(true);
-          return;
+          throw StateError('Source image could not be decoded');
         }
 
         final w = decoded.width.toDouble();
@@ -301,8 +303,12 @@ void _pdfIsolateEntry(_IsolateInit init) {
 
     if (cmd == 'save') {
       final SendPort reply = msg['reply'] as SendPort;
-      final out = await pdf.save();
-      reply.send(TransferableTypedData.fromList([out]));
+      try {
+        final out = await pdf.save();
+        reply.send(TransferableTypedData.fromList([out]));
+      } catch (error, stackTrace) {
+        reply.send({'error': 'PDF save failed: $error\n$stackTrace'});
+      }
       return;
     }
 

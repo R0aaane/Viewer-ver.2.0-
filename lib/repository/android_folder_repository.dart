@@ -18,6 +18,7 @@ import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
 import '../services/import_source_normalizer.dart';
 import '../services/local_path_operation_service.dart';
+import '../services/pdf_document_cache.dart';
 import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
@@ -90,14 +91,9 @@ class AndroidFolderRepository implements MediaRepository {
   );
 
   // Small in-memory PDF document cache.
-  final Map<String, _AsyncMutex> _pdfLocks = {};
-  _AsyncMutex _lockOf(String uri) =>
-      _pdfLocks.putIfAbsent(uri, () => _AsyncMutex());
+  final PdfDocumentCache _pdfDocuments = PdfDocumentCache();
 
   final Map<String, Future<ThumbPair>> _thumbInFlight = {};
-
-  final LinkedHashMap<String, PdfDocument> _pdfCache = LinkedHashMap();
-  static const int _pdfCacheMaxEntries = 6;
 
   final Map<String, Future<void>> _folderIndexInFlight = {};
 
@@ -973,8 +969,7 @@ class AndroidFolderRepository implements MediaRepository {
   @override
   Future<int> getPageCount(MediaItem item) async {
     if (item.kind != MediaKind.pdf) return 1;
-    final doc = await _openPdf(item.id);
-    return doc.pagesCount;
+    return _usePdf(item.id, (doc) async => doc.pagesCount);
   }
 
   @override
@@ -995,12 +990,13 @@ class AndroidFolderRepository implements MediaRepository {
       }
       return bytes;
     }
-    final doc = await _openPdf(item.id);
-    final total = doc.pagesCount;
-    if (page < 1 || page > total) {
-      throw RangeError.range(page, 1, total, 'page');
-    }
-    return _renderPage(item.id, doc, page, maxWidth);
+    return _usePdf(item.id, (doc) async {
+      final total = doc.pagesCount;
+      if (page < 1 || page > total) {
+        throw RangeError.range(page, 1, total, 'page');
+      }
+      return _renderPage(doc, page, maxWidth);
+    });
   }
 
   @override
@@ -1069,11 +1065,11 @@ class AndroidFolderRepository implements MediaRepository {
       return ThumbPair(front: thumb, back: null);
     }
 
-    return _lockOf(item.id).synchronized(() async {
+    return _pdfDocuments.run(item.id, () async {
       PdfDocument? doc;
       try {
         doc = await _openPdfForThumbnail(item.id);
-        final front = await _renderPage(item.id, doc, 1, maxWidth);
+        final front = await _renderPage(doc, 1, maxWidth);
         return ThumbPair(front: front, back: null);
       } finally {
         if (doc != null) {
@@ -1129,61 +1125,32 @@ class AndroidFolderRepository implements MediaRepository {
       });
     }
 
-    final file = File(documentUri);
+    final filePath = documentUri.startsWith('file://')
+        ? Uri.parse(documentUri).toFilePath()
+        : documentUri;
+    final file = File(filePath);
     if (!await file.exists()) {
       throw Exception('PDF file not found: $documentUri');
     }
-    return PdfDocument.openFile(documentUri);
+    return PdfDocument.openFile(filePath);
   }
 
-  Future<PdfDocument> _openPdf(String documentUri) {
-    return _lockOf(documentUri).synchronized(() async {
-      final cached = _pdfCache.remove(documentUri);
-      if (cached != null) {
-        _pdfCache[documentUri] = cached;
-        return cached;
-      }
-
-      PdfDocument doc;
-
-      if (documentUri.startsWith('content://')) {
-        doc = await _docmanSync(() async {
-          final docFile = await DocumentFile.fromUri(documentUri);
-          if (docFile == null)
-            throw Exception('DocumentFile.fromUri failed: $documentUri');
-
-          final cachedFile = await docFile.cache();
-          if (cachedFile == null)
-            throw Exception('cache() failed: $documentUri');
-
-          return PdfDocument.openFile(cachedFile.path);
-        });
-      } else {
-        final f = File(documentUri);
-        if (!await f.exists())
-          throw Exception('PDF file not found: $documentUri');
-        doc = await PdfDocument.openFile(documentUri);
-      }
-
-      _pdfCache[documentUri] = doc;
-      while (_pdfCache.length > _pdfCacheMaxEntries) {
-        final oldestKey = _pdfCache.keys.first;
-        final oldest = _pdfCache.remove(oldestKey);
-        if (oldest != null) await oldest.close();
-      }
-      return doc;
-    });
-  }
+  Future<T> _usePdf<T>(
+    String documentUri,
+    Future<T> Function(PdfDocument) action,
+  ) => _pdfDocuments.use(
+    documentUri,
+    () => _openPdfForThumbnail(documentUri),
+    action,
+  );
 
   Future<Uint8List> _renderPage(
-    String documentUri,
     PdfDocument doc,
     int pageNumber,
     int maxWidth,
-  ) {
-    return _lockOf(documentUri).synchronized(() async {
-      final page = await doc.getPage(pageNumber);
-
+  ) async {
+    final page = await doc.getPage(pageNumber);
+    try {
       final scale = maxWidth / page.width;
       final double w = maxWidth.toDouble();
       final double h = (page.height * scale);
@@ -1194,21 +1161,18 @@ class AndroidFolderRepository implements MediaRepository {
         format: PdfPageImageFormat.png,
       );
 
-      await page.close();
-
       if (img == null) throw Exception('PDF render failed (page=$pageNumber)');
       return img.bytes;
-    });
+    } finally {
+      await page.close();
+    }
   }
 
   Future<void> dispose() async {
     _thumbInFlight.clear();
     _thumbCache.clear();
 
-    for (final doc in _pdfCache.values) {
-      await doc.close();
-    }
-    _pdfCache.clear();
+    await _pdfDocuments.dispose();
   }
 
   static String _lowerExt(String name) {
@@ -1339,12 +1303,7 @@ class AndroidFolderRepository implements MediaRepository {
       }
 
       _thumbCache.clear();
-      for (final doc in _pdfCache.values) {
-        try {
-          await doc.close();
-        } catch (_) {}
-      }
-      _pdfCache.clear();
+      await _pdfDocuments.evictWhere((_) => true);
       return MediaItem(
         id: newPath,
         displayName: fixedName,
@@ -1459,12 +1418,7 @@ class AndroidFolderRepository implements MediaRepository {
 
       _invalidateSafShallowAll();
       await _invalidateFolderIndex(item.folderRaw);
-      for (final doc in _pdfCache.values) {
-        try {
-          await doc.close();
-        } catch (_) {}
-      }
-      _pdfCache.clear();
+      await _pdfDocuments.evictWhere((_) => true);
 
       return MediaItem(
         id: moved.uri,

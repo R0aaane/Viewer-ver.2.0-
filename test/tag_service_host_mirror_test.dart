@@ -8,13 +8,12 @@ import 'package:pdf_viewer/database/app_db.dart';
 import 'package:pdf_viewer/database/tag_service.dart';
 import 'package:pdf_viewer/models/mediaItem.dart';
 import 'package:pdf_viewer/models/tag.dart';
-import 'package:pdf_viewer/models/tag_with_id.dart';
 import 'package:pdf_viewer/models/metadata_settings.dart';
 import 'package:pdf_viewer/services/media_id_resolver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  _HostMirrorBinding();
 
   late PathProviderPlatform originalPathProvider;
 
@@ -125,6 +124,11 @@ void main() {
       );
     });
   });
+}
+
+class _HostMirrorBinding extends AutomatedTestWidgetsFlutterBinding {
+  @override
+  bool get overrideHttpClient => false;
 }
 
 Set<String> _tagNames(Iterable<TagWithId> tags) {

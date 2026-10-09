@@ -40,8 +40,8 @@ extension _GalleryThumbnailCache on _GalleryGridPageState {
   }
 
   Uint8List? _folderPreviewCacheGet(String key) {
+    if (!_folderPreviewCache.containsKey(key)) return null;
     final v = _folderPreviewCache.remove(key);
-    if (v == null && !_folderPreviewCache.containsKey(key)) return null;
     _folderPreviewCache[key] = v;
     return v;
   }
@@ -168,8 +168,6 @@ extension _GalleryThumbnailCache on _GalleryGridPageState {
   }
 
   Future<Uint8List?> _getFolderPreviewBytes(MediaItem folderItem) {
-    //if (!_thumbsEnabled) return Future.value(null);
-
     final key = folderItem.id;
 
     if (_folderPreviewCache.containsKey(key)) {

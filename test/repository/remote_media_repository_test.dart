@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:pdf_viewer/models/folder.dart';
 import 'package:pdf_viewer/models/mediaItem.dart';
 import 'package:pdf_viewer/models/metadata_settings.dart';
@@ -13,6 +14,18 @@ import 'package:pdf_viewer/services/media_id_resolver.dart';
 import 'package:pdf_viewer/services/remote_media_api_client.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory cacheDirectory;
+  late PathProviderPlatform originalPaths;
+  setUp(() async {
+    cacheDirectory = await Directory.systemTemp.createTemp('remote-repository-test-');
+    originalPaths = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPathProvider(cacheDirectory.path);
+  });
+  tearDown(() async {
+    PathProviderPlatform.instance = originalPaths;
+    await cacheDirectory.delete(recursive: true);
+  });
   group('RemoteMediaRepository.rename', () {
     test(
       'returns the refreshed remote item after a successful rename',
@@ -242,7 +255,7 @@ void main() {
       final pair = await repository.readThumbPair(items.single, maxWidth: 240);
 
       expect(pair.front, isNotEmpty);
-      expect(apiClient.metaRequests, <String>['server-media-id']);
+      expect(apiClient.metaRequests, isEmpty);
       expect(apiClient.thumbnailRequests, <String>['server-media-id']);
     });
   });
@@ -470,6 +483,8 @@ void main() {
   });
   group('RemoteMediaRepository.importItemsIntoFolder', () {
     test('forwards import metadata to the upload api', () async {
+      final uploadFile = File('${cacheDirectory.path}/old.jpg');
+      await uploadFile.writeAsBytes([1, 2, 3]);
       final apiClient = _FakeRemoteMediaApiClient();
       final repository = RemoteMediaRepository(
         apiClient: apiClient,
@@ -487,7 +502,7 @@ void main() {
 
       final importedCount = await repository.importItemsIntoFolder(
         const FolderHandle(r'C:\library'),
-        <MediaItem>[_imageItem()],
+        <MediaItem>[_imageItem(id: uploadFile.path)],
         importMetadata: metadata,
       );
 
@@ -608,7 +623,7 @@ void main() {
         expect(standalone.capabilities.canImportToHost, isFalse);
         expect(remote.capabilities.canUpload, isTrue);
         expect(remote.capabilities.canExportPdf, isFalse);
-        expect(remote.capabilities.canOrganizeLibrary, isFalse);
+        expect(remote.capabilities.canOrganizeLibrary, isTrue);
         expect(remote.capabilities.canPickFolder, isFalse);
         expect(remote.capabilities.canAddLocalFolder, isFalse);
         expect(remote.capabilities.canImportToHost, isTrue);
@@ -616,6 +631,14 @@ void main() {
       },
     );
   });
+}
+
+class _TestPathProvider extends PathProviderPlatform {
+  _TestPathProvider(this.path);
+  final String path;
+
+  @override
+  Future<String?> getTemporaryPath() async => path;
 }
 
 MediaItem _imageItem({

@@ -417,6 +417,18 @@ class RemoteMediaApiClient {
       ..idleTimeout = timeout;
 
     IOSink? sink;
+    Future<void> discardPartialDownload() async {
+      final output = sink;
+      sink = null;
+      if (output == null) return;
+      try {
+        await output.close();
+      } catch (_) {}
+      try {
+        if (await destination.exists()) await destination.delete();
+      } catch (_) {}
+    }
+
     try {
       final request = await client.getUrl(uri);
       _applyHeaders(request.headers);
@@ -437,36 +449,25 @@ class RemoteMediaApiClient {
       }
 
       await destination.parent.create(recursive: true);
-      sink = destination.openWrite();
-      await response.forEach(sink.add);
-      await sink.flush();
+      final output = destination.openWrite();
+      sink = output;
+      await output.addStream(response.timeout(timeout));
+      await output.flush();
     } on TimeoutException {
-      await sink?.close();
-      try {
-        if (await destination.exists()) {
-          await destination.delete();
-        }
-      } catch (_) {}
+      await discardPartialDownload();
       throw const RemoteMediaException('サーバー応答がタイムアウトしました');
     } on SocketException {
-      await sink?.close();
-      try {
-        if (await destination.exists()) {
-          await destination.delete();
-        }
-      } catch (_) {}
+      await discardPartialDownload();
       throw const RemoteMediaException('サーバーに接続できません');
     } catch (_) {
-      await sink?.close();
-      try {
-        if (await destination.exists()) {
-          await destination.delete();
-        }
-      } catch (_) {}
+      await discardPartialDownload();
       rethrow;
     } finally {
-      await sink?.close();
-      client.close(force: true);
+      try {
+        await sink?.close();
+      } finally {
+        client.close(force: true);
+      }
     }
   }
 

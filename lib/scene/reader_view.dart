@@ -26,14 +26,6 @@ extension _ReaderView on _ImageDetailPageState {
     await prefs.setInt(_PrefsKeys.readingDirection, value.index);
   }
 
-  Future<Uint8List> _loadReaderBytes(MediaItem item, int page) {
-    return _readerController.loadReaderBytes(
-      item,
-      page,
-      useStaticFrame: _readerController.gifAnimationPaused,
-    );
-  }
-
   Future<Uint8List> _loadThumbBytes(MediaItem item, int page) {
     return _readerController.loadThumbBytes(item, page);
   }
@@ -52,10 +44,6 @@ extension _ReaderView on _ImageDetailPageState {
         .then((bytes) => EpubTextExtractor.parse(bytes));
     _epubDocumentItemId = item.id;
     return _epubDocumentFuture!;
-  }
-
-  bool _canUseInitialPreload(MediaItem item) {
-    return _readerController.canUseInitialPreload(item, _index);
   }
 
   void _seedInitialReaderPreload(MediaItem item, int page) {

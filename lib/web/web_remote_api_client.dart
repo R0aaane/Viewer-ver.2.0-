@@ -12,6 +12,7 @@ import 'package:pdfx/pdfx.dart';
 import '../repository/mediaRepository.dart';
 import '../models/tag.dart';
 import '../models/reading_progress.dart';
+import 'pdfjs_safety.dart';
 
 const String _pdfJsScriptId = 'pdfjs-runtime-loader';
 const String _pdfJsLibraryUrl =
@@ -23,6 +24,8 @@ Future<void>? _pdfJsLoadFuture;
 
 @JS('pdfjsLib')
 external _PdfJsLib? get _pdfJsLib;
+@JS('pdfjsLib')
+external set _pdfJsLib(_PdfJsLib? value);
 
 extension type _PdfJsLib(JSObject _) implements JSObject {
   @JS('getDocument')
@@ -42,6 +45,9 @@ _PdfJsLib? _pdfJsLibObject() => _pdfJsLib;
 bool _pdfJsHasGetDocument(_PdfJsLib? lib) => lib?.getDocumentMethod != null;
 
 void _configurePdfJsWorkerSource(_PdfJsLib? lib) {
+  if (lib != null && _pdfJsHasGetDocument(lib)) {
+    _pdfJsLib = _PdfJsLib(securePdfJsLibrary(lib));
+  }
   final options = lib?.globalWorkerOptions;
   if (options == null) {
     return;
@@ -658,11 +664,13 @@ class WebRemoteApiClient {
     }
     final future = loader();
     cache[key] = future;
-    future.catchError((_) {
-      if (identical(cache[key], future)) {
-        cache.remove(key);
-      }
-    });
+    unawaited(
+      future.then<void>((_) {}, onError: (Object error, StackTrace stack) {
+        if (identical(cache[key], future)) {
+          cache.remove(key);
+        }
+      }),
+    );
     return future;
   }
 
@@ -739,11 +747,13 @@ class WebRemoteApiClient {
           .toList(growable: false);
     }();
     _foldersFuture = future;
-    future.catchError((_) {
-      if (identical(_foldersFuture, future)) {
-        _foldersFuture = null;
-      }
-    });
+    unawaited(
+      future.then<void>((_) {}, onError: (Object error, StackTrace stack) {
+        if (identical(_foldersFuture, future)) {
+          _foldersFuture = null;
+        }
+      }),
+    );
     return future;
   }
 
@@ -1463,8 +1473,11 @@ class WebRemoteApiClient {
     } catch (error) {
       throw WebRemoteException('PDF.js render failed: $error');
     } finally {
-      await page?.close();
-      await document?.close();
+      try {
+        await page?.close();
+      } finally {
+        await document?.close();
+      }
     }
   }
 

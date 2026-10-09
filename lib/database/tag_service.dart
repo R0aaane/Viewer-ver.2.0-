@@ -1406,18 +1406,6 @@ class TagService {
     return hash & 0x7FFFFFFF;
   }
 
-  Future<List<ResolvedMediaIdentity>> _resolveIdentities(
-    List<MediaItem> items,
-  ) async {
-    final result = <ResolvedMediaIdentity>[];
-    final chunks = _chunkItems(items, 8);
-    for (final chunk in chunks) {
-      final resolved = await Future.wait(chunk.map(_idResolver.resolve));
-      result.addAll(resolved);
-    }
-    return result;
-  }
-
   Future<List<String>> _mapStableIdsToItemIds(
     List<MediaItem> items,
     Set<String> stableIds,

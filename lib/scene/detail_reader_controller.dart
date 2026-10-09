@@ -18,6 +18,8 @@ class DetailReaderController {
   Future<Uint8List>? leftFuture;
   Future<Uint8List>? rightFuture;
   bool gifAnimationPaused = false;
+  bool _initialReaderPreloadConsumed = false;
+  bool _initialPageCountConsumed = false;
 
   final LinkedHashMap<int, Future<Uint8List>> _readerFutureCache =
       LinkedHashMap<int, Future<Uint8List>>();
@@ -167,15 +169,28 @@ class DetailReaderController {
 
   void seedInitialReaderPreload(MediaItem item, int page, int currentIndex) {
     final future = initialReaderBytesFuture;
-    if (future == null || !canUseInitialPreload(item, currentIndex)) {
+    if (future == null ||
+        _initialReaderPreloadConsumed ||
+        !canUseInitialPreload(item, currentIndex)) {
       return;
     }
+    _initialReaderPreloadConsumed = true;
     _readerFutureCache.putIfAbsent(page, () => future);
+    unawaited(
+      future.then<void>((_) {}, onError: (Object error, StackTrace stack) {
+        if (identical(_readerFutureCache[page], future)) {
+          _readerFutureCache.remove(page);
+        }
+      }),
+    );
   }
 
   Future<int> getPageCountForCurrent(MediaItem item, int currentIndex) {
     final future = initialPageCountFuture;
-    if (future != null && canUseInitialPreload(item, currentIndex)) {
+    if (future != null &&
+        !_initialPageCountConsumed &&
+        canUseInitialPreload(item, currentIndex)) {
+      _initialPageCountConsumed = true;
       return future;
     }
     return repo.getPageCount(item);

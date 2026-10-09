@@ -163,6 +163,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _activityPersistDebounce?.cancel();
+    _readerController.clearCaches();
     _tagController.dispose();
     unawaited(_persistCurrentActivity());
     for (final controller in _candidateScrollControllers.values) {

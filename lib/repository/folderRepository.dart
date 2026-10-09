@@ -19,6 +19,7 @@ import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
 import '../services/import_source_normalizer.dart';
 import '../services/local_path_operation_service.dart';
+import '../services/pdf_document_cache.dart';
 import '../services/url_import_downloader_service.dart';
 import 'mediaRepository.dart';
 
@@ -165,13 +166,7 @@ class WindowsFolderRepository implements MediaRepository {
 
   // Keep a small LRU of open documents.  An unbounded cache made long gallery
   // sessions retain native PDF handles and their backing memory indefinitely.
-  final LinkedHashMap<String, PdfDocument> _pdfCache =
-      LinkedHashMap<String, PdfDocument>();
-  final Map<String, Future<PdfDocument>> _pdfOpenInFlight =
-      <String, Future<PdfDocument>>{};
-  final Map<String, Future<void>> _pdfRenderTails = <String, Future<void>>{};
-  final Map<String, int> _activePdfRenders = <String, int>{};
-  static const int _pdfCacheMaxEntries = 6;
+  final PdfDocumentCache _pdfDocuments = PdfDocumentCache();
   Directory? _thumbDiskDir;
 
   bool _isUncPath(String path) => path.startsWith(r'\\');
@@ -640,17 +635,7 @@ class WindowsFolderRepository implements MediaRepository {
   Future<bool> deleteItem(MediaItem item) async {
     try {
       if (item.kind == MediaKind.folder) {
-        final keys = _pdfCache.keys.toList(growable: false);
-        for (final k in keys) {
-          if (_isInsideLibrary(k, item.id)) {
-            final doc = _pdfCache.remove(k);
-            if (doc != null) {
-              try {
-                await doc.close();
-              } catch (_) {}
-            }
-          }
-        }
+        await _pdfDocuments.evictWhere((key) => _isInsideLibrary(key, item.id));
 
         final dir = Directory(item.id);
         if (await dir.exists()) {
@@ -661,12 +646,7 @@ class WindowsFolderRepository implements MediaRepository {
         return true;
       }
 
-      final doc = _pdfCache.remove(item.id);
-      if (doc != null) {
-        try {
-          await doc.close();
-        } catch (_) {}
-      }
+      await _pdfDocuments.evictWhere((key) => key == item.id);
 
       final f = File(item.id);
       if (await f.exists()) {
@@ -705,10 +685,7 @@ class WindowsFolderRepository implements MediaRepository {
       throw RangeError.range(pageNumber, 1, total, 'pageNumber');
     }
 
-    final cachedDoc = _pdfCache.remove(item.id);
-    if (cachedDoc != null) {
-      await cachedDoc.close();
-    }
+    await _pdfDocuments.evictWhere((key) => key == item.id);
 
     final bytes = await _withFsRetry(
       item.id,
@@ -899,8 +876,7 @@ class WindowsFolderRepository implements MediaRepository {
     if (ItemNameService.isGifCollection(item)) {
       return (await _gifCollectionPageFiles(Directory(item.id))).length;
     }
-    final doc = await _openPdf(item.id);
-    return doc.pagesCount;
+    return _usePdf(item.id, (doc) async => doc.pagesCount);
   }
 
   // ---- PDF/image page rendering ----
@@ -921,13 +897,13 @@ class WindowsFolderRepository implements MediaRepository {
       return pages[page - 1].readAsBytes();
     }
 
-    final doc = await _openPdf(item.id);
-    final total = doc.pagesCount;
-    if (page < 1 || page > total) {
-      throw RangeError.range(page, 1, total, 'page');
-    }
-
-    return _renderPage(item.id, doc, page, maxWidth);
+    return _usePdf(item.id, (doc) async {
+      final total = doc.pagesCount;
+      if (page < 1 || page > total) {
+        throw RangeError.range(page, 1, total, 'page');
+      }
+      return _renderPage(doc, page, maxWidth);
+    });
   }
 
   @override
@@ -1011,126 +987,58 @@ class WindowsFolderRepository implements MediaRepository {
     }
 
     // PDF: render the first page for the thumbnail.
-    final doc = await _withFsRetry(
-      item.id,
-      () => PdfDocument.openFile(item.id),
-    );
-    try {
-      final front = await _renderPage(item.id, doc, 1, maxWidth);
-      return ThumbPair(front: front, back: null);
-    } finally {
-      await doc.close();
-    }
+    return _pdfDocuments.run(item.id, () async {
+      final doc = await _withFsRetry(
+        item.id,
+        () => PdfDocument.openFile(item.id),
+      );
+      try {
+        final front = await _renderPage(doc, 1, maxWidth);
+        return ThumbPair(front: front, back: null);
+      } finally {
+        await doc.close();
+      }
+    });
   }
 
   // ---- PDF open with cache ----
-  Future<PdfDocument> _openPdf(String path) async {
-    final cached = _pdfCache.remove(path);
-    if (cached != null) {
-      _pdfCache[path] = cached;
-      return cached;
-    }
-
-    final opening = _pdfOpenInFlight[path];
-    if (opening != null) {
-      return opening;
-    }
-
-    final future = _withFsRetry(path, () => PdfDocument.openFile(path));
-    _pdfOpenInFlight[path] = future;
-    try {
-      final doc = await future;
-      _pdfCache[path] = doc;
-      await _trimPdfCache();
-      return doc;
-    } finally {
-      if (identical(_pdfOpenInFlight[path], future)) {
-        _pdfOpenInFlight.remove(path);
-      }
-    }
-  }
-
-  Future<void> _trimPdfCache() async {
-    while (_pdfCache.length > _pdfCacheMaxEntries) {
-      String? keyToEvict;
-      for (final key in _pdfCache.keys) {
-        if ((_activePdfRenders[key] ?? 0) == 0) {
-          keyToEvict = key;
-          break;
-        }
-      }
-      if (keyToEvict == null) {
-        return;
-      }
-      final doc = _pdfCache.remove(keyToEvict);
-      if (doc != null) {
-        await doc.close();
-      }
-    }
-  }
-
-  Future<T> _withPdfRenderLock<T>(
+  Future<T> _usePdf<T>(
     String path,
-    Future<T> Function() action,
-  ) async {
-    final previous = _pdfRenderTails[path];
-    final gate = Completer<void>();
-    _pdfRenderTails[path] = gate.future;
-    try {
-      if (previous != null) {
-        await previous;
-      }
-      _activePdfRenders[path] = (_activePdfRenders[path] ?? 0) + 1;
-      return await action();
-    } finally {
-      final active = (_activePdfRenders[path] ?? 1) - 1;
-      if (active <= 0) {
-        _activePdfRenders.remove(path);
-      } else {
-        _activePdfRenders[path] = active;
-      }
-      gate.complete();
-      if (identical(_pdfRenderTails[path], gate.future)) {
-        _pdfRenderTails.remove(path);
-      }
-      unawaited(_trimPdfCache());
-    }
-  }
+    Future<T> Function(PdfDocument) action,
+  ) => _pdfDocuments.use(
+    path,
+    () => _withFsRetry(path, () => PdfDocument.openFile(path)),
+    action,
+  );
 
   // ---- PDF page render ----
   Future<Uint8List> _renderPage(
-    String documentPath,
     PdfDocument doc,
     int pageNumber,
     int maxWidth,
   ) async {
-    return _withPdfRenderLock(documentPath, () async {
-      final page = await doc.getPage(pageNumber);
-      try {
-        final scale = maxWidth / page.width;
-        final img = await page.render(
-          width: maxWidth.toDouble(),
-          height: page.height * scale,
-          format: PdfPageImageFormat.png,
-        );
-        if (img == null) {
-          throw Exception('PDF render failed (page=$pageNumber)');
-        }
-        return img.bytes;
-      } finally {
-        await page.close();
+    final page = await doc.getPage(pageNumber);
+    try {
+      final scale = maxWidth / page.width;
+      final img = await page.render(
+        width: maxWidth.toDouble(),
+        height: page.height * scale,
+        format: PdfPageImageFormat.png,
+      );
+      if (img == null) {
+        throw Exception('PDF render failed (page=$pageNumber)');
       }
-    });
+      return img.bytes;
+    } finally {
+      await page.close();
+    }
   }
 
   /// Releases cached PDF documents and thumbnail state.
   Future<void> dispose() async {
     _thumbInFlight.clear();
     _thumbCache.clear();
-    for (final doc in _pdfCache.values) {
-      await doc.close();
-    }
-    _pdfCache.clear();
+    await _pdfDocuments.dispose();
   }
 
   static String _fileName(String path) {
@@ -1199,17 +1107,9 @@ class WindowsFolderRepository implements MediaRepository {
         isDirectory: true,
       );
       _thumbCache.clear();
-      final keys = _pdfCache.keys.toList(growable: false);
-      for (final key in keys) {
-        if (_isInsideLibrary(key, oldPath) || _isInsideLibrary(key, newPath)) {
-          final doc = _pdfCache.remove(key);
-          if (doc != null) {
-            try {
-              await doc.close();
-            } catch (_) {}
-          }
-        }
-      }
+      await _pdfDocuments.evictWhere(
+        (key) => _isInsideLibrary(key, oldPath) || _isInsideLibrary(key, newPath),
+      );
 
       return MediaItem(
         id: newPath,

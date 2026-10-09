@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -5,6 +6,65 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdf_viewer/services/remote_media_api_client.dart';
 
 void main() {
+  test(
+    'stalled download bodies time out and remove the partial file',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final temp = await Directory.systemTemp.createTemp(
+        'download-timeout-test-',
+      );
+      final finish = Completer<void>();
+      addTearDown(() async {
+        finish.complete();
+        await server.close(force: true);
+        await temp.delete(recursive: true);
+      });
+      server.listen((request) async {
+        try {
+          request.response.add([1, 2, 3]);
+          await request.response.flush();
+          await finish.future;
+          await request.response.close();
+        } catch (_) {}
+      });
+      final client = RemoteMediaApiClient(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        timeout: const Duration(milliseconds: 200),
+      );
+      final destination = File('${temp.path}/partial.pdf');
+      await expectLater(
+        client
+            .downloadMediaToFile('pdf', destination)
+            .timeout(const Duration(seconds: 5)),
+        throwsA(isA<RemoteMediaException>()),
+      );
+      expect(await destination.exists(), isFalse);
+    },
+  );
+
+  test('an HTTP error preserves a destination that was never opened', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final temp = await Directory.systemTemp.createTemp('download-error-test-');
+    addTearDown(() async {
+      await server.close(force: true);
+      await temp.delete(recursive: true);
+    });
+    server.listen((request) async {
+      request.response.statusCode = 404;
+      await request.response.close();
+    });
+    final destination = File('${temp.path}/existing.pdf');
+    await destination.writeAsBytes([7, 8, 9]);
+    final client = RemoteMediaApiClient(
+      baseUrl: 'http://${server.address.host}:${server.port}',
+    );
+    await expectLater(
+      client.downloadMediaToFile('missing', destination),
+      throwsA(isA<RemoteMediaException>()),
+    );
+    expect(await destination.readAsBytes(), [7, 8, 9]);
+  });
+
   test(
     'downloadUrl uses uploadTimeout for long-running server responses',
     () async {

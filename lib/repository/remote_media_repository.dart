@@ -19,6 +19,7 @@ import '../services/import_tag_rule_service.dart';
 import '../services/import_source_normalizer.dart';
 import '../services/item_name_service.dart';
 import '../services/media_id_resolver.dart';
+import '../services/pdf_document_cache.dart';
 import '../services/remote_media_api_client.dart';
 import 'mediaRepository.dart';
 
@@ -47,12 +48,9 @@ class RemoteMediaRepository implements MediaRepository {
   final Map<String, Future<File>> _downloadInFlight = <String, Future<File>>{};
   final Map<String, Future<Uint8List>> _previewInFlight =
       <String, Future<Uint8List>>{};
-  final Map<String, Future<PdfDocument>> _pdfOpenInFlight =
-      <String, Future<PdfDocument>>{};
   final Queue<Completer<void>> _pdfThumbFallbackWaiters =
       Queue<Completer<void>>();
-  final LinkedHashMap<String, PdfDocument> _pdfCache =
-      LinkedHashMap<String, PdfDocument>();
+  final PdfDocumentCache _pdfDocuments = PdfDocumentCache();
   final Map<String, Future<RemoteMediaMeta>> _metaInFlight =
       <String, Future<RemoteMediaMeta>>{};
   final Map<String, RemoteMediaMeta> _metaCache = <String, RemoteMediaMeta>{};
@@ -549,13 +547,7 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<void> _evictCachedPdfDocument(String filePath) async {
-    final cached = _pdfCache.remove(filePath);
-    if (cached == null) {
-      return;
-    }
-    try {
-      await cached.close();
-    } catch (_) {}
+    await _pdfDocuments.evictWhere((key) => key == filePath);
   }
 
   Future<File> _ensureCachedMediaFile(
@@ -629,7 +621,10 @@ class RemoteMediaRepository implements MediaRepository {
     if (regularFiles.length <= maxEntries) {
       return;
     }
-    final pinnedPaths = <String>{..._downloadInFlight.keys, ..._pdfCache.keys};
+    final pinnedPaths = <String>{
+      ..._downloadInFlight.keys,
+      ..._pdfDocuments.pinnedPaths,
+    };
     final children = regularFiles
         .where((file) => !pinnedPaths.contains(file.path))
         .toList(growable: true);
@@ -650,61 +645,41 @@ class RemoteMediaRepository implements MediaRepository {
     }
   }
 
-  Future<PdfDocument> _openCachedPdf(MediaItem item) async {
+  Future<T> _useCachedPdf<T>(
+    MediaItem item,
+    Future<T> Function(PdfDocument) action,
+  ) async {
     final file = await _ensureCachedMediaFile(item);
-    final inFlight = _pdfOpenInFlight[file.path];
-    if (inFlight != null) {
-      return inFlight;
-    }
-
-    final future = (() async {
-      final cached = _pdfCache.remove(file.path);
-      if (cached != null) {
-        _pdfCache[file.path] = cached;
-        return cached;
-      }
-
-      Future<PdfDocument> openAndCache(File targetFile) async {
-        final doc = await PdfDocument.openFile(targetFile.path);
-        _pdfCache[targetFile.path] = doc;
-        while (_pdfCache.length > 6) {
-          final oldestKey = _pdfCache.keys.first;
-          final oldest = _pdfCache.remove(oldestKey);
-          if (oldest != null) {
-            try {
-              await oldest.close();
-            } catch (_) {}
-          }
-        }
-        return doc;
-      }
-
-      try {
-        return await openAndCache(file);
-      } catch (error, stackTrace) {
-        debugPrint(
-          '[remote-media] pdf open failed, retrying with fresh download: '
-          'path=${file.path} error=$error',
-        );
-        debugPrintStack(
-          label: '[remote-media] pdf open retry',
-          stackTrace: stackTrace,
-        );
-        await _evictCachedPdfDocument(file.path);
-        await _deleteFileQuietly(file);
-        final refreshedFile = await _ensureCachedMediaFile(
-          item,
-          forceRefresh: true,
-        );
-        return openAndCache(refreshedFile);
-      }
-    })();
-
-    _pdfOpenInFlight[file.path] = future;
+    var openFailed = false;
     try {
-      return await future;
-    } finally {
-      _pdfOpenInFlight.remove(file.path);
+      return await _pdfDocuments.use(file.path, () async {
+        try {
+          return await PdfDocument.openFile(file.path);
+        } catch (_) {
+          openFailed = true;
+          rethrow;
+        }
+      }, action);
+    } catch (error, stackTrace) {
+      if (!openFailed) rethrow;
+      debugPrint(
+        '[remote-media] pdf open failed, retrying with fresh download: '
+        'path=${file.path} error=$error',
+      );
+      debugPrintStack(
+        label: '[remote-media] pdf open retry',
+        stackTrace: stackTrace,
+      );
+      // Refresh after releasing the lease: refresh also evicts the document.
+      final refreshedFile = await _ensureCachedMediaFile(
+        item,
+        forceRefresh: true,
+      );
+      return _pdfDocuments.use(
+        refreshedFile.path,
+        () => PdfDocument.openFile(refreshedFile.path),
+        action,
+      );
     }
   }
 
@@ -714,17 +689,20 @@ class RemoteMediaRepository implements MediaRepository {
     int maxWidth,
   ) async {
     final page = await doc.getPage(pageNumber);
-    final scale = maxWidth / page.width;
-    final image = await page.render(
-      width: maxWidth.toDouble(),
-      height: page.height * scale,
-      format: PdfPageImageFormat.png,
-    );
-    await page.close();
-    if (image == null) {
-      throw const RemoteMediaException('PDF ページの描画に失敗しました');
+    try {
+      final scale = maxWidth / page.width;
+      final image = await page.render(
+        width: maxWidth.toDouble(),
+        height: page.height * scale,
+        format: PdfPageImageFormat.png,
+      );
+      if (image == null) {
+        throw const RemoteMediaException('PDF ページの描画に失敗しました');
+      }
+      return image.bytes;
+    } finally {
+      await page.close();
     }
-    return image.bytes;
   }
 
   MediaItem _toMediaItem(RemoteFolderEntry entry) {
@@ -1385,25 +1363,26 @@ class RemoteMediaRepository implements MediaRepository {
     MediaItem item, {
     required int maxWidth,
   }) async {
-    final doc = await _openCachedPdf(item);
-    final totalPages = doc.pagesCount < 1 ? 1 : doc.pagesCount;
-    final targetWidth = maxWidth.clamp(160, 480).toInt();
-    final candidatePages = {
-      1,
-      if (totalPages >= 2) 2,
-      if (totalPages >= 3) (totalPages / 2).ceil(),
-    }.toList(growable: false);
+    return _useCachedPdf(item, (doc) async {
+      final totalPages = doc.pagesCount < 1 ? 1 : doc.pagesCount;
+      final targetWidth = maxWidth.clamp(160, 480).toInt();
+      final candidatePages = {
+        1,
+        if (totalPages >= 2) 2,
+        if (totalPages >= 3) (totalPages / 2).ceil(),
+      }.toList(growable: false);
 
-    Uint8List? fallback;
-    for (final pageNumber in candidatePages) {
-      final bytes = await _renderPdfPage(doc, pageNumber, targetWidth);
-      fallback ??= bytes;
-      if (!_looksMostlyBlankImage(bytes)) {
-        return bytes;
+      Uint8List? fallback;
+      for (final pageNumber in candidatePages) {
+        final bytes = await _renderPdfPage(doc, pageNumber, targetWidth);
+        fallback ??= bytes;
+        if (!_looksMostlyBlankImage(bytes)) {
+          return bytes;
+        }
       }
-    }
 
-    return fallback ?? _renderPdfPage(doc, 1, targetWidth);
+      return fallback ?? _renderPdfPage(doc, 1, targetWidth);
+    });
   }
 
   @override
@@ -1569,8 +1548,7 @@ class RemoteMediaRepository implements MediaRepository {
     if (meta.mimeType == 'application/x.gif-collection') {
       return meta.pageCount ?? 1;
     }
-    final doc = await _openCachedPdf(item);
-    return doc.pagesCount;
+    return _useCachedPdf(item, (doc) async => doc.pagesCount);
   }
 
   @override
@@ -1597,12 +1575,13 @@ class RemoteMediaRepository implements MediaRepository {
       }
       return _client.fetchPageImage(meta.mediaId, page, width: maxWidth);
     }
-    final doc = await _openCachedPdf(item);
-    final total = doc.pagesCount;
-    if (page < 1 || page > total) {
-      throw RangeError.range(page, 1, total, 'page');
-    }
-    return _renderPdfPage(doc, page, maxWidth);
+    return _useCachedPdf(item, (doc) async {
+      final total = doc.pagesCount;
+      if (page < 1 || page > total) {
+        throw RangeError.range(page, 1, total, 'page');
+      }
+      return _renderPdfPage(doc, page, maxWidth);
+    });
   }
 
   @override
@@ -2687,12 +2666,7 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<void> dispose() async {
-    for (final doc in _pdfCache.values) {
-      try {
-        await doc.close();
-      } catch (_) {}
-    }
-    _pdfCache.clear();
+    await _pdfDocuments.dispose();
   }
 }
 

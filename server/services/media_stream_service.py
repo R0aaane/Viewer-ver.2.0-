@@ -1,11 +1,12 @@
 ﻿from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from typing import Iterator
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from server.core.config import Settings
@@ -107,20 +108,33 @@ class MediaStreamService:
         if "," in raw:
             raise bad_request("複数 Range は未対応です")
 
-        start_raw, _, end_raw = raw.partition("-")
-        if not start_raw and not end_raw:
+        match = re.fullmatch(r"([0-9]*)-([0-9]*)", raw)
+        if match is None or not any(match.groups()):
             raise bad_request("Range ヘッダーの形式が不正です")
+        start_raw, end_raw = match.groups()
 
-        if not start_raw:
-            suffix = int(end_raw)
+        try:
+            start = int(start_raw) if start_raw else None
+            end = int(end_raw) if end_raw else None
+        except ValueError:
+            raise bad_request("Range ヘッダーの形式が不正です") from None
+
+        if file_size == 0 or (start is not None and start >= file_size):
+            raise HTTPException(
+                status_code=416,
+                detail="Range ヘッダーの範囲が不正です",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        if start is None:
+            suffix = end
             if suffix <= 0:
                 raise bad_request("Range ヘッダーの形式が不正です")
             start = max(file_size - suffix, 0)
             end = file_size - 1
             return start, end
 
-        start = int(start_raw)
-        end = int(end_raw) if end_raw else file_size - 1
-        if start < 0 or end < start or start >= file_size:
+        end = end if end is not None else file_size - 1
+        if end < start:
             raise bad_request("Range ヘッダーの範囲が不正です")
         return start, min(end, file_size - 1)

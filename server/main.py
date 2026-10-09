@@ -101,7 +101,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        sqlite_store.close()
+        try:
+            thumbnail_service.close()
+        finally:
+            sqlite_store.close()
 
 
 app = FastAPI(
