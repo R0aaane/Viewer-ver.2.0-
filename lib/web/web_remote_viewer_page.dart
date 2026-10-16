@@ -19,6 +19,7 @@ import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
 import '../services/reading_progress_service.dart';
+import 'hitomi_import_match.dart';
 import 'web_remote_api_client.dart';
 import 'web_remote_reading_progress_repository.dart';
 import 'web_url_import_sheet.dart';
@@ -375,7 +376,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.210+220',
+  defaultValue: '1.0.211+221',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -440,6 +441,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   int _webSeriesSuggestionLoadVersion = 0;
   int _hitomiSearchLoadVersion = 0;
   bool _hitomiSearching = false;
+  bool _hitomiImporting = false;
+  final Map<int, WebHitomiSearchResult> _hitomiSelectedResults = {};
+  Set<int> _hitomiImportedIds = {};
   bool _bulkSelectionMode = false;
   final Set<String> _selectedMediaIds = <String>{};
   String? _hitomiSearchErrorMessage;
@@ -1768,6 +1772,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Future<void> _runHitomiSearch() async {
     final client = _client;
     final query = _hitomiSearchController.text.trim();
+    final loadVersion = ++_hitomiSearchLoadVersion;
+    setState(() {
+      _hitomiSelectedResults.clear();
+      _hitomiImportedIds = {};
+      _hitomiSearching = false;
+    });
     if (client == null || query.isEmpty) {
       setState(() {
         _hitomiSearchResults = const <WebHitomiSearchResult>[];
@@ -1777,7 +1787,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
-    final loadVersion = ++_hitomiSearchLoadVersion;
     setState(() {
       _hitomiSearching = true;
       _hitomiSearchPage = 0;
@@ -1794,6 +1803,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _hitomiSearchResults = results;
         _hitomiSearchPage = 0;
       });
+      await _refreshHitomiImportedResults(loadVersion);
     } catch (error) {
       if (!mounted || loadVersion != _hitomiSearchLoadVersion) return;
       setState(() {
@@ -1805,34 +1815,77 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
   }
 
-  Future<void> _importHitomiResult(WebHitomiSearchResult result) async {
+  Future<void> _refreshHitomiImportedResults(int loadVersion) async {
+    final client = _client;
+    if (client == null) return;
+    client.clearCaches();
+    final ids = <int>{};
+    try {
+      // Search all library entries, including images and later result pages.
+      for (var offset = 0;;) {
+        final entries = await client.search(
+          const WebSearchQuery(raw: ''), limit: 200, offset: offset,
+        );
+        if (!mounted || client != _client ||
+            loadVersion != _hitomiSearchLoadVersion) {
+          return;
+        }
+        for (final result in _hitomiSearchResults) {
+          if (entries.any((entry) => !entry.isFolder && matchesImportedHitomi(
+            galleryId: result.galleryId, title: result.title,
+            displayName: entry.displayName,
+            path: entry.fullPath ?? entry.entryId,
+          ))) {
+            ids.add(result.galleryId);
+          }
+        }
+        if (entries.isEmpty) break;
+        offset += entries.length;
+      }
+      setState(() {
+        _hitomiImportedIds = ids;
+        _hitomiSelectedResults.removeWhere((id, _) => ids.contains(id));
+      });
+    } catch (error) {
+      if (!mounted || client != _client ||
+          loadVersion != _hitomiSearchLoadVersion) {
+        return;
+      }
+      setState(() => _statusMessage = '取り込み済み状態を確認できませんでした: $error');
+    }
+  }
+
+  Future<void> _importHitomiResults(List<WebHitomiSearchResult> results) async {
+    if (_actionBusy || _hitomiImporting) return;
+    final targets = results.where(
+      (result) => !_hitomiImportedIds.contains(result.galleryId),
+    ).toList();
     final folderRaw = _urlImportTargetFolderRaw();
-    if (folderRaw == null || folderRaw.isEmpty) {
-      return;
+    if (targets.isEmpty || folderRaw == null || folderRaw.isEmpty) return;
+    setState(() => _hitomiImporting = true);
+    try {
+      final importResult = await _runRemoteAction<WebRemoteUrlImportResult>(
+        workingStatus: 'Hitomi を取り込み中（${targets.length} 件）...',
+        action: (client) => client.downloadUrl(
+          folderRaw: folderRaw,
+          sourceUrl: targets.map((result) => result.galleryUrl).join('\n'),
+          options: const UrlImportOptions(convertHitomiToPdf: true),
+        ),
+      );
+      if (!mounted) return;
+      // Reconcile actual files even after partial failures or a timeout.
+      _client?.clearCaches();
+      await _refreshHitomiImportedResults(_hitomiSearchLoadVersion);
+      await _refreshHomeEntries(force: true);
+      await _loadEntries();
+      if (!mounted || importResult == null) return;
+      final message = '取り込み完了: 追加 ${importResult.importedCount} 件 / '
+          'スキップ ${importResult.skippedCount} 件 / 失敗 ${importResult.failedCount} 件';
+      setState(() => _statusMessage = message);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) setState(() => _hitomiImporting = false);
     }
-    final importResult = await _runRemoteAction<WebRemoteUrlImportResult>(
-      workingStatus: 'Hitomi import is running...',
-      action: (client) => client.downloadUrl(
-        folderRaw: folderRaw,
-        sourceUrl: result.galleryUrl,
-        options: const UrlImportOptions(convertHitomiToPdf: true),
-      ),
-    );
-    if (importResult == null || !mounted) {
-      return;
-    }
-    await _refreshHomeEntries(force: true);
-    await _loadEntries();
-    if (!mounted) {
-      return;
-    }
-    final message =
-        'Hitomi import completed: ${importResult.importedCount} imported / '
-        '${importResult.skippedCount} skipped / ${importResult.failedCount} failed';
-    setState(() => _statusMessage = message);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _setHitomiOrderingQuery(String query) {
@@ -2239,6 +2292,37 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               child: LinearProgressIndicator(),
             ),
           const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: _actionBusy || _hitomiImporting ||
+                    _hitomiSelectedResults.isEmpty ||
+                    _urlImportTargetFolderRaw() == null
+                    ? null
+                    : () => _importHitomiResults(_hitomiSelectedResults.values.toList()),
+                icon: const Icon(Icons.download_outlined),
+                label: Text('${_hitomiSelectedResults.length}件を一括取り込み'),
+              ),
+              TextButton(
+                onPressed: _actionBusy || _hitomiImporting || _hitomiSearchResults.isEmpty
+                    ? null : () => setState(() {
+                        for (final result in _hitomiSearchResults) {
+                          if (!_hitomiImportedIds.contains(result.galleryId)) {
+                            _hitomiSelectedResults[result.galleryId] = result;
+                          }
+                        }
+                      }),
+                child: const Text('未取り込みをすべて選択'),
+              ),
+              TextButton(
+                onPressed: _actionBusy || _hitomiImporting || _hitomiSelectedResults.isEmpty
+                    ? null : () => setState(_hitomiSelectedResults.clear),
+                child: const Text('選択解除'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           Expanded(child: _buildHitomiSearchResults()),
         ],
       ),
@@ -2466,6 +2550,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Widget _buildHitomiResultCard(WebHitomiSearchResult result) {
+    final imported = _hitomiImportedIds.contains(result.galleryId);
     final theme = Theme.of(context);
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -2474,6 +2559,19 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
+            Checkbox(
+              value: _hitomiSelectedResults.containsKey(result.galleryId),
+              semanticLabel: '${result.title}を選択',
+              onChanged: imported || _actionBusy || _hitomiImporting ? null : (selected) {
+                setState(() {
+                  if (selected == true) {
+                    _hitomiSelectedResults[result.galleryId] = result;
+                  } else {
+                    _hitomiSelectedResults.remove(result.galleryId);
+                  }
+                });
+              },
+            ),
             _buildHitomiThumbnail(result),
             const SizedBox(width: 12),
             Expanded(
@@ -2509,11 +2607,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                       ),
                       TextButton.icon(
                         onPressed:
-                            _urlImportTargetFolderRaw() == null || _actionBusy
+                            _urlImportTargetFolderRaw() == null || _actionBusy || _hitomiImporting || imported
                             ? null
-                            : () => _importHitomiResult(result),
-                        icon: const Icon(Icons.download_outlined),
-                        label: const Text('取り込み'),
+                            : () => _importHitomiResults([result]),
+                        icon: Icon(imported ? Icons.check_circle : Icons.download_outlined),
+                        label: Text(imported ? '取り込み済み' : '取り込み'),
                       ),
                     ],
                   ),

@@ -42,6 +42,11 @@ def start_host_update(
     project_root: Path,
     request_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    if os.getenv("MEDIA_SERVER_RELEASE_MANAGED") == "true":
+        request_path = Path(os.environ["MEDIA_SERVER_RELEASE_REQUEST"])
+        request_path.touch()
+        return {"ok": True, "state": "queued", "message": "release check requested"}
+
     runner_path = settings.host_update_runner_path
     if not runner_path.is_file():
         raise bad_request(f"host update runner was not found: {runner_path}")

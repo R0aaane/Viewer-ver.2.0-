@@ -4,6 +4,8 @@
 .pub/
 .pub-cache/
 build/
+dist/
+wheelhouse/
 .flutter-plugins
 .flutter-plugins-dependencies
 
