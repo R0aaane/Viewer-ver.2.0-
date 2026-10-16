@@ -148,6 +148,64 @@ class ActivationTests(unittest.TestCase):
             agent.start.assert_called_once_with("old")
             self.assertNotIn("pending", agent.state)
 
+    def test_initial_failure_continues_polling_and_accepts_next_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            agent.state = {}
+            agent.process = None
+            failed_process = Mock()
+            failed_process.poll.return_value = 1
+
+            def fail_start(name):
+                agent.process = failed_process
+                raise RuntimeError("initial startup failed")
+
+            agent.start.side_effect = fail_start
+            with self.assertRaisesRegex(RuntimeError, "initial startup failed"):
+                agent.activate("first", "host-1-1")
+            agent.stop.assert_called_once_with(failed_process, agent.stop_file)
+            self.assertIsNone(agent.process)
+            agent.supervise()
+            agent.latest = Mock(return_value={"tag_name": "host-1-1"})
+            agent.prepare = Mock(return_value="second")
+            agent.tick()
+            agent.latest.assert_called_once()
+            agent.prepare.assert_not_called()
+            agent.latest.return_value = {"tag_name": "host-2-1"}
+            agent.start.side_effect = None
+            agent.tick()
+            self.assertEqual(agent.state["current"], "second")
+            self.assertEqual(agent.state["tag"], "host-2-1")
+
+    def test_failed_initial_shutdown_keeps_process_and_pending_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            agent.state = {}
+            agent.process = None
+            failed_process = Mock()
+            failed_process.poll.return_value = None
+
+            def fail_start(name):
+                agent.process = failed_process
+                raise RuntimeError("unhealthy")
+
+            agent.start.side_effect = fail_start
+            agent.stop.side_effect = RuntimeError("shutdown timeout")
+            with self.assertRaisesRegex(RuntimeError, "shutdown timeout"):
+                agent.activate("first", "host-1-1")
+            self.assertIs(agent.process, failed_process)
+            self.assertEqual(agent.state["pending"], "first")
+            agent.latest = Mock()
+            agent.supervise()
+            agent.tick()
+            agent.latest.assert_not_called()
+            failed_process.poll.return_value = 0
+            agent.latest.return_value = None
+            agent.tick()
+            self.assertIsNone(agent.process)
+            agent.supervise()
+            self.assertEqual(agent.state["failedTag"], "host-1-1")
+
 
 class ManagedUpdateTests(unittest.TestCase):
     def test_existing_api_queues_release_check_without_powershell(self):

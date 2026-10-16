@@ -266,6 +266,7 @@ class Agent:
         except Exception:
             if self.process:
                 self.stop(self.process, self.stop_file)
+                self.process = None
             self.state["failedTag"] = tag
             self.state.pop("pending", None)
             self.state.pop("pendingTag", None)
@@ -285,6 +286,7 @@ class Agent:
             # A timed-out drain must finish before retrying any switch.
             if self.process and self.process.poll() is None:
                 return
+            self.process = None
             self.state["failedTag"] = self.state.pop("pendingTag")
             self.state.pop("pending")
             self.save()
