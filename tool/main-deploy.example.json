@@ -1,0 +1,10 @@
+{
+  "repository": "E:\\_workspace\\Flutter\\pdf_viewer",
+  "remote": "Viewer(ver.2.0)",
+  "branch": "feature_hitomi",
+  "python": "C:\\Path\\To\\Python313\\python.exe",
+  "buildWindows": false,
+  "pollSeconds": 60,
+  "retrySeconds": 300,
+  "transport": null
+}

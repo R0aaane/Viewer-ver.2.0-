@@ -22,6 +22,34 @@ import zipfile
 LOG = logging.getLogger("host-release")
 
 
+def release_order(tag):
+    if not isinstance(tag, str) or not re.fullmatch(r"host-\d+-\d+", tag):
+        raise ValueError("Invalid release tag")
+    return tuple(map(int, tag.split("-")[1:]))
+
+
+def file_hash(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def inbox_release(path):
+    release = read_json(path)
+    release_order(release.get("tag_name"))
+    if path.name != release["tag_name"] + ".json":
+        raise ValueError("Release descriptor name mismatch")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", release.get("revision", "")):
+        raise ValueError("Invalid source revision")
+    if not re.fullmatch(r"[0-9a-f]{64}", release.get("sha256", "")):
+        raise ValueError("Invalid archive checksum")
+    if not re.fullmatch(re.escape(release["tag_name"]) + r"-[0-9a-f]{32}\.zip", release.get("archive", "")):
+        raise ValueError("Invalid archive name")
+    return release
+
+
 def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
@@ -29,7 +57,10 @@ def read_json(path):
 def write_json(path, value):
     path = Path(path)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temporary, path)
 
 
@@ -57,7 +88,8 @@ def extract_bundle(archive, destination):
         if len({name.casefold() for name in names}) != len(names):
             raise ValueError("Duplicate bundle paths")
         manifest = json.loads(bundle.read("release.json"))
-        if (manifest.get("format"), manifest.get("dataEpoch"), manifest.get("python"), manifest.get("platform")) != (1, 1, "3.10", "win-amd64"):
+        runtime = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if (manifest.get("format"), manifest.get("dataEpoch"), manifest.get("python"), manifest.get("platform")) != (1, 1, runtime, "win-amd64"):
             raise ValueError("Incompatible release: requires manual migration")
         if set(names) != set(manifest["files"]) | {"release.json"}:
             raise ValueError("Bundle manifest mismatch")
@@ -92,6 +124,11 @@ class Agent:
         self.config_path = Path(config_path).resolve()
         self.config = read_json(self.config_path)
         self.root = self.config_path.parent
+        # Fixed inbox: transferred files never choose a data/configuration path.
+        self.inbox = self.root / "inbox"
+        self.inbox.mkdir(exist_ok=True)
+        self.report_dir = self.root / "report"
+        self.report_dir.mkdir(exist_ok=True)
         self.releases = self.root / "releases"
         self.releases.mkdir(exist_ok=True)
         self.state_path = self.root / "state.json"
@@ -111,10 +148,10 @@ class Agent:
         for key in ("MEDIA_SERVER_DATA_DIR", "MEDIA_SERVER_DB_PATH", "MEDIA_SERVER_THUMBS_DIR",
                     "MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR"):
             path = Path(self.env.get(key, ""))
-            if not path.is_absolute() or path.resolve().is_relative_to(self.releases.resolve()):
-                raise ValueError(f"{key} must be an absolute path outside releases")
+            if not path.is_absolute() or any(path.resolve().is_relative_to(p.resolve()) for p in (self.releases, self.inbox, self.report_dir)):
+                raise ValueError(f"{key} must be an absolute path outside releases/inbox/report")
         roots = self.env.get("MEDIA_SERVER_MEDIA_ROOTS", "").split(";")
-        if not roots or any(not Path(p).is_absolute() or Path(p).resolve().is_relative_to(self.releases.resolve()) for p in roots):
+        if not roots or any(not Path(p).is_absolute() or any(Path(p).resolve().is_relative_to(d.resolve()) for d in (self.releases, self.inbox, self.report_dir)) for p in roots):
             raise ValueError("Explicit absolute media roots outside releases are required")
         self.data = Path(self.env["MEDIA_SERVER_DATA_DIR"])
         self.data.mkdir(parents=True, exist_ok=True)
@@ -128,59 +165,63 @@ class Agent:
         write_json(self.state_path, self.state)
 
     def status(self, state, message):
-        write_json(self.data / "host_update_status.json", {
-            "state": state, "message": message, "pid": os.getpid(),
-            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        })
+        self.state["lastStatus"] = {"state": state, "message": message}
+        self.save()
+        self.publish_status()
         LOG.info("%s: %s", state, message)
 
-    def request(self, url, binary=False):
-        # Only send the repository credential to GitHub's API.
-        if not url.startswith("https://api.github.com/"):
-            raise ValueError("Unexpected GitHub API URL")
-        headers = {"Accept": "application/octet-stream" if binary else "application/vnd.github+json",
-                   "User-Agent": "PDF-Viewer-host", "X-GitHub-Api-Version": "2022-11-28"}
-        token = os.environ.get(self.config.get("tokenEnv", "GITHUB_TOKEN"), "")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        # Strip credentials from signed cross-origin asset redirects.
-        class Redirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, hdrs, newurl):
-                redirect = super().redirect_request(req, fp, code, msg, hdrs, newurl)
-                if redirect and not newurl.startswith("https://api.github.com/"):
-                    redirect.remove_header("Authorization")
-                if not newurl.startswith("https://"):
-                    raise ValueError("Insecure asset redirect")
-                return redirect
-        with urllib.request.build_opener(Redirect).open(urllib.request.Request(url, headers=headers), timeout=120) as response:
-            value = response.read()
-        return value if binary else json.loads(value)
+    def publish_status(self):
+        current = self.state.get("current")
+        manifest = read_json(self.releases / current / "release.json") if current else {}
+        payload = {
+            **self.state.get("lastStatus", {"state": "idle", "message": "Waiting for a direct delivery"}),
+            "activeRevision": manifest.get("revision"),
+            "activeVersion": manifest.get("version"),
+            "attemptedTag": self.state.get("attemptedTag"),
+            "attemptedRevision": self.state.get("attemptedRevision"),
+            "serverRunning": self.process is not None and self.process.poll() is None,
+            "pid": os.getpid(),
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        write_json(self.data / "host_update_status.json", payload)
+        write_json(self.report_dir / "status.json", payload)
 
     def latest(self):
-        repo = self.config["repository"]
-        if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-            raise ValueError("Invalid repository")
-        releases = self.request(f"https://api.github.com/repos/{repo}/releases?per_page=100")
-        releases = [r for r in releases if not r["draft"] and not r["prerelease"] and re.fullmatch(r"host-\d+-\d+", r["tag_name"])]
-        return max(releases, key=lambda r: tuple(map(int, r["tag_name"].split("-")[1:])), default=None)
+        releases = []
+        for path in self.inbox.glob("host-*.json"):
+            try:
+                releases.append(inbox_release(path))
+            except (ValueError, KeyError, OSError):
+                LOG.exception("Rejected inbox descriptor: %s", path.name)
+        return max(releases, key=lambda r: release_order(r["tag_name"]), default=None)
 
     def prepare(self, release):
-        assets = {a["name"]: a for a in release["assets"]}
-        expected = self.request(assets["host.zip.sha256"]["url"], True).decode("utf-8").strip()
-        archive = self.request(assets["host.zip"]["url"], True)
-        if hashlib.sha256(archive).hexdigest() != expected:
+        archive = self.inbox / release["archive"]
+        if archive.is_symlink() or not archive.resolve().is_relative_to(self.inbox.resolve()):
+            raise ValueError("Archive escapes inbox")
+        if file_hash(archive) != release["sha256"]:
             raise ValueError("Archive checksum mismatch")
-        # Each staging directory is new; partially prepared releases are never reused.
-        target = self.releases / (release["tag_name"] + "-" + uuid.uuid4().hex[:8])
-        target.mkdir()
-        with tempfile.TemporaryFile() as handle:
-            handle.write(archive)
-            handle.seek(0)
-            extract_bundle(handle, target)
-        subprocess.run([sys.executable, "-m", "venv", str(target / ".venv")], check=True)
-        python = target / ".venv/Scripts/python.exe"
-        subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--only-binary=:all:",
-                        "--find-links", str(target / "wheelhouse"), "-r", str(target / "requirements.txt")], check=True)
+        stage = self.state.get("staged", {})
+        if stage.get("tag") != release["tag_name"] or stage.get("sha256") != release["sha256"]:
+            stage = {"tag": release["tag_name"], "sha256": release["sha256"],
+                     "target": release["tag_name"] + "-" + uuid.uuid4().hex[:8]}
+            self.state["staged"] = stage
+            self.save()
+        target = self.releases / stage["target"]
+        target.mkdir(exist_ok=True)
+        if not stage.get("unpacked"):
+            manifest = extract_bundle(archive, target)
+            if manifest.get("revision") != release["revision"]:
+                raise ValueError("Source revision mismatch")
+            stage["unpacked"] = True
+            self.save()
+        if not stage.get("installed"):
+            subprocess.run([sys.executable, "-m", "venv", str(target / ".venv")], check=True)
+            python = target / ".venv/Scripts/python.exe"
+            subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--only-binary=:all:",
+                            "--find-links", str(target / "wheelhouse"), "-r", str(target / "requirements.txt")], check=True)
+            stage["installed"] = True
+            self.save()
         self.smoke(target)
         return target.name
 
@@ -295,10 +336,13 @@ class Agent:
         release = self.latest()
         if not release or release["tag_name"] in {self.state.get("tag"), self.state.get("failedTag")}:
             return
-        if self.state.get("tag") and tuple(map(int, release["tag_name"].split("-")[1:])) <= tuple(map(int, self.state["tag"].split("-")[1:])):
+        if self.state.get("tag") and release_order(release["tag_name"]) <= release_order(self.state["tag"]):
             return
+        self.state.update(attemptedTag=release["tag_name"], attemptedRevision=release.get("revision"))
         self.status("running", "Preparing release while current server remains available")
         name = self.prepare(release)
+        if (self.root / "agent.stop").exists():
+            return
         self.activate(name, release["tag_name"])
 
     def supervise(self):
@@ -324,6 +368,8 @@ class Agent:
         self.health_failures = 0
 
     def run(self):
+        agent_stop = self.root / "agent.stop"
+        agent_stop.unlink(missing_ok=True)
         # An orphan from a previous agent receives the same graceful stop request.
         self.stop_file.touch()
         deadline = time.monotonic() + 100
@@ -352,15 +398,17 @@ class Agent:
                 except Exception:
                     self.health_failures = 3
                     self.supervise()
-            while True:
+            while not agent_stop.exists():
                 try:
                     self.supervise()
                     self.tick()
                 except Exception:
                     LOG.exception("Update failed; retry on next poll")
                     self.status("failed", "Update failed; see agent.log")
-                minimum = 10 if os.environ.get(self.config.get("tokenEnv", "GITHUB_TOKEN")) else 120
-                for _ in range(max(minimum, self.config.get("pollSeconds", 60))):
+                self.publish_status()
+                for _ in range(max(5, self.config.get("pollSeconds", 15))):
+                    if agent_stop.exists():
+                        break
                     request = self.root / "update.request"
                     if request.exists():
                         request.unlink(missing_ok=True)
@@ -374,8 +422,12 @@ class Agent:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--stop", action="store_true", help="Request graceful shutdown of the agent and its API")
     args = parser.parse_args()
     config = Path(args.config).resolve()
+    if args.stop:
+        (config.parent / "agent.stop").touch()
+        sys.exit(0)
     logging.basicConfig(filename=config.parent / "agent.log", level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", encoding="utf-8")
     with exclusive_lock(config.parent / "agent.lock"):

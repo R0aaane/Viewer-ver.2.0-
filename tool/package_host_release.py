@@ -4,10 +4,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 import zipfile
 
 
-def package(root: Path, output: Path, revision: str) -> Path:
+def package(root: Path, output: Path, revision: str, python_version: str | None = None) -> Path:
     version = re.search(r"^version:\s*(\S+)", (root / "pubspec.yaml").read_text(encoding="utf-8"), re.M)[1]
     files = {"requirements.txt": root / "requirements.txt"}
     for directory, suffixes in [("server", {".py"}), ("build/web", None), ("wheelhouse", {".whl"})]:
@@ -20,7 +21,7 @@ def package(root: Path, output: Path, revision: str) -> Path:
     if "build/web/index.html" not in files or not any(name.startswith("wheelhouse/") for name in files):
         raise ValueError("Web build and Windows Python wheels are required")
     manifest = {"format": 1, "dataEpoch": 1, "version": version, "revision": revision,
-                "python": "3.10", "platform": "win-amd64",
+                "python": python_version or f"{sys.version_info.major}.{sys.version_info.minor}", "platform": "win-amd64",
                 "files": {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in files.items()}}
     output.mkdir(parents=True, exist_ok=True)
     archive = output / "host.zip"

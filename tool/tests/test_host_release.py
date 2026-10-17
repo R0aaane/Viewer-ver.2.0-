@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
@@ -15,7 +16,7 @@ class BundleTests(unittest.TestCase):
     def bundle(self, extra=None, **changes):
         files = {"server/main.py": b"", "build/web/index.html": b"web", "requirements.txt": b""}
         files.update(extra or {})
-        manifest = dict(format=1, dataEpoch=1, python="3.10", platform="win-amd64",
+        manifest = dict(format=1, dataEpoch=1, python=f"{sys.version_info.major}.{sys.version_info.minor}", platform="win-amd64",
                         version="1.0.0+1", files={p: hashlib.sha256(v).hexdigest() for p, v in files.items()})
         manifest.update(changes)
         result = io.BytesIO()
@@ -39,7 +40,7 @@ class BundleTests(unittest.TestCase):
                     extract_bundle(self.bundle({name: b"bad"}), directory)
 
     def test_rejects_checksum_and_incompatible_migration(self):
-        for changes in ({"files": {}}, {"dataEpoch": 2}, {"python": "3.12"}):
+        for changes in ({"files": {}}, {"dataEpoch": 2}, {"python": "0.0"}):
             with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
                 extract_bundle(self.bundle(**changes), directory)
 

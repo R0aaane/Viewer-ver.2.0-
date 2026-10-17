@@ -1,7 +1,6 @@
 param(
     [Parameter(Mandatory)][string]$InstallRoot,
     [Parameter(Mandatory)][string]$EnvFile,
-    [Parameter(Mandatory)][string]$Repository,
     [string]$Python = 'python',
     [string]$TaskName = 'PdfViewerHostRelease',
     [string]$User = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -14,21 +13,21 @@ if (![IO.Path]::IsPathRooted($InstallRoot) -or ![IO.Path]::IsPathRooted($EnvFile
 }
 $envPath = (Resolve-Path -LiteralPath $EnvFile).Path
 $pythonPath = (Get-Command $Python).Source
-& $pythonPath -c "import sys,struct; assert sys.version_info[:2] == (3,10) and struct.calcsize('P') == 8, 'Python 3.10 x64 required'"
+& $pythonPath -c "import sys,struct; assert sys.version_info >= (3,10) and struct.calcsize('P') == 8, 'Python 3.10+ x64 required; minor version must match the build PC'"
 if ($LASTEXITCODE -ne 0) { throw 'Unsupported Python' }
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $installPath = (Resolve-Path -LiteralPath $InstallRoot).Path
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existingTask -and $existingTask.State -eq 'Running') { throw 'Stop the agent and API before updating bootstrap files' }
 Copy-Item -LiteralPath 'tool/host_release_agent.py','tool/host_runtime.py' -Destination $installPath
-$config = @{ repository = $Repository; envFile = $envPath; pollSeconds = 60; healthTimeoutSeconds = 120; tokenEnv = 'GITHUB_TOKEN' }
+$config = @{ source = 'inbox'; envFile = $envPath; pollSeconds = 15; healthTimeoutSeconds = 120 }
 $configPath = Join-Path $installPath 'agent.json'
 if (!(Test-Path -LiteralPath $configPath)) {
     [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 } else {
     $currentConfig = Get-Content -LiteralPath $configPath -Raw -Encoding utf8 | ConvertFrom-Json
-    if ($currentConfig.repository -ne $Repository -or $currentConfig.envFile -ne $envPath) {
-        throw 'Existing configuration differs; review agent.json before changing repository or data settings'
+    if ($currentConfig.envFile -ne $envPath) {
+        throw 'Existing data settings differ; review agent.json before changing them'
     }
 }
 # Validate paths/settings before installing anything that starts automatically.
@@ -44,5 +43,5 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances 
     -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
     -User $credential.UserName -Password $credential.GetNetworkCredential().Password `
-    -Description 'Download verified host releases; no Git or Flutter builds on this host.' | Out-Null
+    -Description 'Apply verified SFTP deliveries; no GitHub, Flutter or native builds on this host.' -Force | Out-Null
 Write-Host "Registered $TaskName. Stop the legacy updater and server, then Start-ScheduledTask -TaskName $TaskName"

@@ -1,47 +1,49 @@
-# ホストの自動更新
+# メインPCから直接配信する自動更新
 
-## 調査結果と採用方式
+## 調査結果
 
-現在の `tool/host_auto_update.ps1` は60秒間隔でGitを取得し、更新時にAPI・Windowsアプリを停止して、pip install、Flutter Web・Windows（指定時はAndroid）ビルド、再起動を行う。ビルド失敗時の復旧・稼働確認がない。Windowsアプリからも同じスクリプトが起動される。
+旧 `host_auto_update.ps1` はホストでGit取得・pip install・Flutter Web/Windowsビルド・再起動を行っていた。APIは `server.main:app`（FastAPI/Uvicorn）で、同一ポートからWebを配信する。WindowsアプリはAPIの実行に不要。ホスト報告では稼働版1.0.210+220、ポート8090、Python 3.13、設定は `D:\PdfViewerHost\host.env` / `agent.json`。これらはホストからの報告であり、この開発PCからの実機確認ではない。
 
-APIは `server.main:app`（FastAPI / Uvicorn）。同じポートで `build/web` を配信する。SQLiteはWALで、起動時にスキーマ初期化、インデックス再走査、統計補完、タグ別名の移行を行う。WindowsアプリはAPI運用に必須ではないが、アプリ経由の起動ではSharedPreferencesから保存先・認証設定を渡している。この設定を移行せず `.env` だけで起動すると別のDBを参照する恐れがある。
+SQLiteはWALを使用し、起動時にスキーマ初期化・再走査・統計補完・タグ別名移行がある。新旧APIを同じ本番DBに同時起動しない。既存のPDF・DB・設定は配布物へ含めず、現在の絶対パスを引き継ぐ。
 
-採用方式は **Actionsでビルド → GitHub Release → ホストの常駐エージェントが取得 → 起動検証 → 短時間再起動**。同じSQLiteへ新旧APIを同時起動するBlue/Green方式は採用しない。ダウンロード・依存関係展開・DBコピーによる事前検証中は旧APIを稼働させる。切り替えではUvicornを正常終了させ、DB接続の解放後に新版を起動する。完全無停止ではなく、再起動・起動時処理に応じた停止時間がある。長時間のPDF送信・ダウンロードは切り替え時に中断される場合がある。
+## 新方式
 
-## 自動処理
+1. メインPCの `main_pc_deploy.py` が60秒ごとに `git ls-remote` で対象ブランチのGitHub側のSHAを確認する。SourceTree/Codex/CLIのどこからpushしても検知する。ローカルコミットだけでは配信しない。短時間の複数pushは最新SHAを優先する。
+2. 専用bare repositoryへfetchし、そのSHAの必要ソースだけを新しい作業フォルダーへ展開する。開発中のcheckout・未コミット変更・本番データには触れない。取得中にブランチが進んだ場合は最新SHAでやり直す。
+3. Python依存wheel取得、Python/Flutterテスト、生成Dartコード作成、Web Releaseビルド、ZIP作成をメインPCで行う。バックエンドはPythonコードと完成済みwheelで配布する。
+4. Windows版は `buildWindows: true` の場合だけメインPCでビルドする。通常はfalse。Windows成果物はメインPCの該当ビルドフォルダーに保持し、ホストへ送らない。Android APKの既存配布API・保存済みファイルは維持するが、この経路ではAPKをビルドしない。
+5. SFTP（SSH鍵認証・ホスト鍵検証）でLAN/Tailscale経由のinboxへ転送する。ZIPを一時名から確定名へrenameし、最後にJSON完了通知をrenameする。転送途中の.partはホストが無視する。GitHub Releaseは使わない。
+6. ホストはハッシュ・許可パス・Python版・データ互換epoch・ソースSHAを検証する。別フォルダーへ展開し、wheelからvenvをオフライン作成する。コンパイラは使わない。DBの整合性あるコピーで隔離起動検証する。この間、旧APIは稼働する。
+7. 検証後だけ旧APIを正常停止し、新APIのヘルスとWebバージョンを確認する。失敗時は旧コード・旧venvへ戻る。完全無停止ではなく、再起動・起動時処理の時間だけ停止する。長時間転送やバックグラウンドダウンロードは切り替えの影響を受け得る。
+8. メインPCはSFTPでホストの稼働SHA・適用状態・最終更新時刻を読み戻す。転送済みと適用済みを区別し、古い応答や異なるSHAを成功扱いしない。
 
-- `.github/workflows/host-release.yml` は配信ブランチへの対象変更のpush、または手動実行で起動する。既定はリポジトリのdefault branch。別ブランチを使う場合はRepository variable `HOST_RELEASE_BRANCH` を設定する。
-- Windows runner / Python 3.10 x64 / Flutter 3.41.5でPython・Flutterテスト、Web Releaseビルドを実行する。生成DartコードもCIで作成する。
-- 配布内容はサーバーPythonコード（vendorを含む）、Web、タグ別名定義、requirements、Windows用wheelだけ。Windowsアプリ・Android APKはこのサーバー更新経路でビルドしない。既存APK配信APIと保存済みAPKは維持する。APKを更新する場合は従来の手動アップロード等を別途利用する。
-- Webに元から含まれる `env.json` は公開クライアント設定（Xのclient ID / redirect URI）として維持する。秘密情報はこのファイルに入れず、ホスト専用のenvファイルに置く。
-- `host-<run_number>-<run_attempt>` のReleaseへZIPとSHA-256をアップロードし、全ファイルが揃ってから公開する。他のアプリReleaseのlatest指定には影響させない。
-- ホストは60秒ごとにReleaseを確認（トークンなしではAPI制限を避けるため120秒以上）。ZIPと内部ファイルのハッシュ、許可パス、データ互換epochを検証する。ホストではGit / Flutter / コンパイラ不要。Python venvへ配布済みwheelをオフラインインストールする。
-- 新版を本番DBのSQLite backupコピーと隔離した一時保存先で起動。APIとWebの版を確認する。公開ポートの切り替え後も連続したヘルスチェックを通過してからstate.jsonを確定する。
-- 新版の起動失敗時は旧コードと旧venvを起動する。失敗版を記録して同じ版への更新ループを防ぐ。更新途中の電源断では最後に確定した版に戻る。初回導入には旧版がないためロールバックできない。
-- 確定後も定期監視し、プロセス終了または3回連続のヘルス失敗で旧版へ戻す。旧版のない初回導入では同じ版を再起動する。
-- `/host-update/run` はエージェントに再確認を要求する。`/host-update/status` は従来の保存先で状態を返す。
+`.github/workflows/host-release.yml` は削除した。この変更をpushした後、この仕組みはGitHub Actionsや有料runnerを使わない。GitHubはソース管理とブランチSHA取得だけに使う。既に走っている旧workflowがある場合はGitHub側で停止・無効化する。
 
-## 初回移行（ホストで一度だけ）
+## 中断・再試行・ログ
 
-1. GitHub側へ変更をpushし、配信ブランチのworkflow成功と `host-...` Release公開を確認する。ここではpush・公開・本番変更は自動実行していない。
-2. 現在実際に使っているPDF、DB、サムネイル、X画像、認証トークン、ポートを確認する。Windowsアプリが使用しているAppData配下のDBと、リポジトリ直下のdataを混同しない。DB・設定のバックアップを取得する。
-3. リポジトリやreleasesの外に、例えば `D:\PdfViewerHost\host.env` を保存する。値は現在の運用値を使う（以下は例）。エージェントはこのファイルを書き換えない。相対パスは禁止。
+- `main-state.json` に対象SHA・配信ID・転送済み状態・ホスト確認結果を保存する。
+- `jobs/<SHA>/build.json` に成功済み工程とZIPのハッシュを保存する。成功済みビルドを再実行せず、中断工程から再試行する。完了記録を書ける前に電源断した工程は再実行する。
+- ビルド中の新pushは転送前に再確認し、古い成果物を送らない。転送開始後の新pushは次の監視で扱う。
+- 完了通知がホストにあれば、応答喪失・再起動後も同じZIPを再転送しない。未完成の転送は先頭からやり直す。
+- ファイルロックで多重起動を防ぎ、Windows Job Objectで監視プロセス終了時にそのビルド子プロセスも終了させる。
+- メイン側エラーは既定300秒後に再試行する。ホスト適用失敗版は隔離し、同じ版の適用ループを防ぐ。修正版の新コミットをpushする。
+- メインPCのログ: `main-agent.log`、`jobs/<SHA>/build.log`。
+- ホストのログ: `agent.log`、`server.log`、`report/status.json`、既存data配下の `host_update_status.json`。
+- ホストは確定後も監視し、プロセス終了または3回連続のヘルス失敗時に旧版へ戻す。初回には旧版がないため旧起動方式を保管する。
 
-```dotenv
-MEDIA_SERVER_HOST=0.0.0.0
-MEDIA_SERVER_PORT=8000
-MEDIA_SERVER_DATA_DIR=D:\PdfViewerData
-MEDIA_SERVER_DB_PATH=D:\PdfViewerData\metadata.db
-MEDIA_SERVER_THUMBS_DIR=D:\PdfViewerData\thumbs
-MEDIA_SERVER_MEDIA_ROOTS=D:\PDF;E:\Library
-MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR=D:\Xsaved_images
-MEDIA_SERVER_AUTH_TOKEN=既存の値
-MEDIA_SERVER_STARTUP_RESCAN=true
-MEDIA_SERVER_CORS_ORIGINS=*
-```
+## 接続とPythonの初回準備
 
-4. Python **3.10 x64** をホストにインストールする。private repositoryなら、このタスクの実行アカウントの環境変数 `GITHUB_TOKEN` に対象repositoryのContents read権限を持つトークンを設定する。トークンは配布物・JSONに保存しない。タスク開始時に環境変数が反映されることを確認する。
-5. プロジェクトルートで管理者PowerShellから実行する。タスク実行アカウントの資格情報がWindowsの登録ダイアログで必要になる。PDF/DB/設定/インストール先へのアクセス権とネットワークアクセスを付与する。
+1. ホストのLAN/Tailscaleホスト名・SSHユーザー・ポートを確定する。Windows OpenSSH Serverと公開鍵認証を設定する。インターネットへのポート公開は不要。LAN/Tailscale内のメインPCからだけ接続できるようにする。
+2. メインPCのタスク実行アカウントからGitHubへのSSH認証とホストへのSFTP鍵認証が対話入力なしで使えることを確認する。SourceTree専用の鍵設定だけではタスクから使えない場合がある。
+3. ホスト鍵のfingerprintをホスト側で照合してknown_hostsへ登録する。自動処理はStrictHostKeyChecking=yesを強制する。秘密鍵・トークンはGitへ登録しない。
+4. SFTPアカウントはinboxへの書込、reportへの読取だけを許可し、PDF・DB・host.env・エージェント本体・releasesへの書込権限を与えない。ホストAPI実行アカウントは既存データを操作できる別アカウントを推奨。配布ZIPは実行コードなので、配信鍵は開発者相当の信頼で管理する。
+5. メインPCのビルド用PythonとホストのPythonを同じメジャー・マイナー版のx64に揃える。3.13ホストならメインPCにも3.13を用意し、設定でその実行ファイルを指定できる。検証済みローカル環境は3.10。3.13の依存wheel・テストは初回ビルドで確認する。異なる版のZIPはホストが拒否する。
+
+## ホスト側
+
+既存host.envの正しい保存先・認証・ポート8090を引き継ぐ。DATA_DIR、DB_PATH、THUMBS_DIR、MEDIA_ROOTS、XVIEWER_SAVED_IMAGES_DIRはMEDIA_SERVER_接頭辞を持つ既存設定キーを使い、絶対パスでreleases/inbox/reportの外を指定する。PDF・DBを移動する必要はない。
+
+既存agent.jsonのenvFile・稼働設定は維持する。旧repository/tokenEnvは不要となり無視される。ホストのプロジェクトルートで管理者PowerShellから登録する。
 
 ```powershell
 Get-Location
@@ -49,21 +51,70 @@ if (!(Test-Path pubspec.yaml)) { throw 'Not project root' }
 .\tool\install_host_release_task.ps1 `
   -InstallRoot D:\PdfViewerHost `
   -EnvFile D:\PdfViewerHost\host.env `
-  -Repository 'R0aaane/Viewer-ver.2.0-'
+  -Python 'C:\実際のPythonパス\python.exe'
 ```
 
-6. 既存の `PdfViewerHostAutoUpdate` タスク（独自名ならその名前）を無効化し、既存PowerShell更新ループと旧APIを正常停止する。Windowsアプリのホスト起動機能は使用しない。同じポートで旧APIが稼働中の場合、新エージェントはそのプロセスを強制終了しない。
-7. `Start-ScheduledTask -TaskName PdfViewerHostRelease` で開始する。以後はOS起動時に自動開始し、ログインなしで稼働する。初回はダウンロード・環境作成分の停止時間が必要。
-8. 認証付き `/health`、ブラウザー表示、既存PDF閲覧、タグ・既読情報、ダウンロードを確認する。`agent.log`、`server.log`、保存先の `host_update_status.json` を確認する。失敗した場合は新タスクを停止し、旧起動方法へ戻す（元のcheckoutとデータは残る）。
+タスク実行アカウントの資格情報を入力する。inbox/reportは設定検証時に作成される。SFTPから見えるWindowsパスは通常 `/D:/PdfViewerHost/inbox` だが、SFTPのルート設定によるため実際に確認する。登録直後は新サーバーを開始しない。
 
-## 復旧と互換性
+## メインPC側
 
-`agent.json` は運用設定、`state.json` は確定版・旧版・失敗版の管理情報、`releases` は版ごとのコードとvenv。データ・設定をreleasesに置かない。自動削除は行わないため、容量を監視し、停止中にcurrent/previous以外の不要版と古いログを整理する。
+1. `tool/main-deploy.example.json` を、例として `D:\PdfViewerBuild\main-deploy.json` へコピーする。
+2. repositoryに開発checkoutのルート、remoteにGitのremote名、branchに配信ブランチを指定する。現在のremote名は `Viewer(ver.2.0)`、ブランチは `feature_hitomi`。GitHub URLはremote設定から読む。
+3. pythonにホストと同じ版のビルド用Pythonを指定する。SSH準備前は例のまま `transport: null` でビルド・監視できる。完成後は `awaiting_transport` で保持する。buildWindowsは通常false。
+4. メインPCのプロジェクトルートから実行する。
 
-自動ロールバックは **コードと依存関係** の復帰であり、DBを古いコピーで上書きしない。更新後の書き込みを失わないためである。`dataEpoch: 1` の配布では旧版でも読めるスキーマ・データの後方互換性を守る。破壊的なDB変更はepochを変更し、別途バックアップと計画移行を行う。epochが違う配布は現エージェントが拒否する。epoch宣言だけで互換性が証明されるわけではないため、スキーマ変更のレビューは必要。
+```powershell
+Get-Location
+if (!(Test-Path pubspec.yaml)) { throw 'Not project root' }
+.\tool\install_main_deploy_task.ps1 `
+  -InstallRoot D:\PdfViewerBuild `
+  -ConfigFile D:\PdfViewerBuild\main-deploy.json
+Start-ScheduledTask -TaskName PdfViewerMainDeploy
+```
 
-bootstrap（`host_release_agent.py` / `host_runtime.py`）は自動で上書きしない。安定した復旧経路を維持するため、これらの更新は保守時にタスクとAPIを停止してコピーする。通常のAPI/Web更新は完全自動。
+タスクはOS起動時に開始し、ログインなしで動作する。実行アカウントのPATHからgit/flutter/dart/sftpを利用できるようにする。設定検証だけではネットワーク認証を保証しない。登録前に `python tool/main_pc_deploy.py --config ... --once` で一巡実行することもできる。
 
-GitHub Releaseへの書き込み権限が配布の信頼境界になる。SHA-256は破損検出であり署名ではない。配信ブランチ保護とRelease immutabilityを推奨。初回登録後に同名ブランチを切り替えない。別のリポジトリへ切り替える際はstateを移行計画に含める。
+状態確認:
 
-参考: [GitHub Releases API](https://docs.github.com/en/rest/releases/releases)、[Release immutability](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/prevent-release-changes)、[Uvicorn deployment](https://www.uvicorn.org/deployment/)。
+```powershell
+python D:\PdfViewerBuild\main_pc_deploy.py --config D:\PdfViewerBuild\main-deploy.json --status
+```
+
+phase=awaiting_transportは接続設定待ち、awaiting_applyは転送済み、appliedは稼働SHA確認済み、apply_failedはホスト適用失敗またはロールバック。hostErrorとホストのupdatedAtも確認する。以前のapplied記録だけで現在の稼働を判断しない。
+
+SSH準備後は監視タスクを停止し、設定のtransportを下記に置き換えて再開する。接続設定だけの変更では完成済みビルドを再利用する。鍵ファイル不足などの設定不備でもビルドを先に行い、転送は保留する。設定の再読込には監視の再起動が必要。
+
+```json
+"transport": {
+  "target": "実際のSSHユーザー名@100.100.18.16",
+  "port": 22,
+  "identityFile": "C:\\Users\\実際のユーザー\\.ssh\\pdfviewer_deploy",
+  "knownHostsFile": "C:\\Users\\実際のユーザー\\.ssh\\known_hosts",
+  "inbox": "/D:/PdfViewerHost/inbox",
+  "status": "/D:/PdfViewerHost/report/status.json"
+}
+```
+
+Windows OpenSSHの初期設定は [host-openssh.md](host-openssh.md) を参照。
+
+## 初回切り替え・復旧
+
+メインPCでビルド・転送まで進め、ホストinboxにZIPと完了JSONが揃ったことを先に確認できる。準備ができるまで旧APIを停止する必要はない。ただしpushに反応する旧更新ループは先に停止し、ホストビルドを防ぐ。
+
+準備完了後に旧更新タスクを無効化し、実行中の旧PowerShellループと旧APIを停止する。Windowsアプリから旧ループが再起動しないよう旧ホスト起動機能を併用しない。SQLite/WALを考慮したバックアップを確認し、`Start-ScheduledTask -TaskName PdfViewerHostRelease` で開始する。
+
+認証付き/health、Web、既存PDF、タグ・既読情報、アップロード・ダウンロードを確認する。初回失敗時は新方式を停止し、保管した旧起動方法へ戻す。旧checkout・データ・設定を削除しない。
+
+新エージェントとAPIの保守停止は、ホストで次を実行し、タスク終了とAPI停止を確認する。
+
+```powershell
+python D:\PdfViewerHost\host_release_agent.py --config D:\PdfViewerHost\agent.json --stop
+```
+
+処理中の準備が終わってから正常停止するため即時停止ではない。停止待ちが終わらない場合は別APIを起動せずログを調べる。通常更新の停止・再起動はエージェントが行う。
+
+自動ロールバックはコード・依存関係を戻す。更新後の書込を失わないようDBを古いコピーで自動上書きしない。dataEpoch: 1では旧版との後方互換性を守る。破壊的なDB変更はepochを変えて通常更新から除外し、別途計画移行する。
+
+エージェント本体は自動上書きしない。各PCの保守時に導入スクリプトで更新する。ログ・jobs・古いreleases・転送失敗時の孤立ファイルは自動削除しない。容量を監視し、両タスク停止中にcurrent/previous/処理中以外だけを整理する。
+
+参考: [Git ls-remote](https://git-scm.com/docs/git-ls-remote)、[OpenSSH SFTP](https://man.openbsd.org/sftp.1)、[Windows Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)。
