@@ -82,8 +82,10 @@ class Builder:
                 self.transport = SftpTransport(destination, self.root)
             except (ValueError, KeyError, OSError) as error:
                 self.transport_error = str(error)
+        # Git for Windows may resolve its bundled SSH, which cannot use the Windows agent.
+        ssh = (Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/OpenSSH/ssh.exe").as_posix() if os.name == "nt" else "ssh"
         self.env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="Never",
-                        GIT_SSH_COMMAND="ssh -oBatchMode=yes -oStrictHostKeyChecking=yes -oConnectTimeout=15")
+                        GIT_SSH_COMMAND=f'"{ssh}" -oBatchMode=yes -oStrictHostKeyChecking=yes -oConnectTimeout=15')
 
     def save(self):
         write_json(self.state_path, self.state)

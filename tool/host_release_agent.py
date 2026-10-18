@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import logging
@@ -282,7 +282,7 @@ class Agent:
             # Exercise startup against a consistent copy, never against the live DB.
             source = Path(self.env["MEDIA_SERVER_DB_PATH"])
             if source.is_file():
-                with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True) as src, sqlite3.connect(directory / "test.db") as dst:
+                with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as src, closing(sqlite3.connect(directory / "test.db")) as dst:
                     src.backup(dst)
             stop = directory / "stop"
             process = self.launch(target, env, stop)

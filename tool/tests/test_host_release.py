@@ -1,7 +1,9 @@
 import hashlib
 import io
 import json
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 import tempfile
 import sys
 import unittest
@@ -61,6 +63,29 @@ class BundleTests(unittest.TestCase):
 
 
 class ActivationTests(unittest.TestCase):
+    def test_smoke_closes_backup_connections_before_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "live.db"
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute("CREATE TABLE preserved (value TEXT)")
+                connection.execute("INSERT INTO preserved VALUES ('original')")
+            agent = Agent.__new__(Agent)
+            agent.root = root
+            agent.env = {"MEDIA_SERVER_DB_PATH": str(database)}
+            agent.launch = Mock(return_value=Mock())
+            agent.wait_healthy = Mock()
+            agent.stop = Mock()
+            target = root / "release"
+            target.mkdir()
+            (target / "release.json").write_text('{"version":"1.0.0+1"}', encoding="utf-8")
+            agent.smoke(target)
+            self.assertFalse(Path(agent.launch.call_args.args[1]["MEDIA_SERVER_DB_PATH"]).exists())
+            renamed = database.with_name("renamed.db")
+            database.rename(renamed)
+            with closing(sqlite3.connect(renamed)) as connection:
+                self.assertEqual(connection.execute("SELECT value FROM preserved").fetchone()[0], "original")
+
     def agent(self, directory):
         agent = Agent.__new__(Agent)
         agent.root = Path(directory)
