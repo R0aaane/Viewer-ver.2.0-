@@ -74,6 +74,10 @@ Start-ScheduledTask -TaskName PdfViewerMainDeploy
 
 タスクはOS起動時に開始し、ログインなしで動作する。実行アカウントのPATHからgit/flutter/dart/sftpを利用できるようにする。設定検証だけではネットワーク認証を保証しない。登録前に `python tool/main_pc_deploy.py --config ... --once` で一巡実行することもできる。
 
+メインPCでも、実際の検証タスクでGitHub/SFTPの鍵認証とFlutter起動を確認できた場合は、導入コマンドに `-LogonType S4U` を追加するとパスワード入力・保存なしで登録できる。管理者PowerShellから実行する。タスクはLimitedで動作する。S4UではWindowsのネットワーク資格情報や暗号化ファイルに制限があるため、ホスト側のS4U試験成功だけをメインPC側の成功として扱わない。ログアウト・再起動後の鍵認証も別途確認する。既定のPassword方式は従来どおり。
+
+開発ソースとビルド作業領域を外付けドライブへ配置した場合、監視中は接続を維持する。OS起動時に同じドライブ文字で利用可能になることも確認する。
+
 状態確認:
 
 ```powershell

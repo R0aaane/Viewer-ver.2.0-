@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$ConfigFile,
     [string]$Python = 'python',
     [string]$TaskName = 'PdfViewerMainDeploy',
-    [string]$User = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    [string]$User = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name,
+    [ValidateSet('Password', 'S4U')][string]$LogonType = 'Password'
 )
 $ErrorActionPreference = 'Stop'
 Get-Location
@@ -25,13 +26,26 @@ if ($sourceConfig -ne $configPath) {
 Copy-Item -LiteralPath 'tool/main_pc_deploy.py','tool/deploy_transport.py','tool/package_host_release.py','tool/host_release_agent.py','tool/windows_process_job.py' -Destination $installPath
 & $pythonPath (Join-Path $installPath 'main_pc_deploy.py') --config $configPath --check
 if ($LASTEXITCODE -ne 0) { throw 'Configuration validation failed' }
-$credential = Get-Credential -UserName $User -Message 'Build account with Flutter, GitHub SSH and host SFTP access'
 $scriptPath = Join-Path $installPath 'main_pc_deploy.py'
 $action = New-ScheduledTaskAction -Execute $pythonPath -Argument "`"$scriptPath`" --config `"$configPath`"" -WorkingDirectory $installPath
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger (New-ScheduledTaskTrigger -AtStartup) `
-    -Settings $settings -User $credential.UserName -Password $credential.GetNetworkCredential().Password `
-    -Description 'Watch pushed commits, build locally and deliver host bundles over SFTP.' -Force | Out-Null
+$registration = @{
+    TaskName = $TaskName
+    Action = $action
+    Trigger = New-ScheduledTaskTrigger -AtStartup
+    Settings = $settings
+    Description = 'Watch pushed commits, build locally and deliver host bundles over SFTP.'
+    Force = $true
+}
+if ($LogonType -eq 'S4U') {
+    # Verify GitHub/SFTP signing and Flutter in a real S4U task before choosing this mode.
+    $registration.Principal = New-ScheduledTaskPrincipal -UserId $User -LogonType S4U -RunLevel Limited
+} else {
+    $credential = Get-Credential -UserName $User -Message 'Build account with Flutter, GitHub SSH and host SFTP access'
+    $registration.User = $credential.UserName
+    $registration.Password = $credential.GetNetworkCredential().Password
+}
+Register-ScheduledTask @registration | Out-Null
 Write-Host "Registered $TaskName. Start-ScheduledTask -TaskName $TaskName"
