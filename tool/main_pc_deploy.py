@@ -223,8 +223,12 @@ class Builder:
         self.save()
 
     def tick(self):
+        self.state["watcherLastPollAt"] = datetime.now(timezone.utc).isoformat()
+        self.state["watcherPid"] = os.getpid()
         self.refresh_host()
         revision = self.remote_head()
+        self.state["remoteRevision"] = revision
+        self.save()
         delivery = self.state.get("delivery")
         if not delivery or delivery["revision"] != revision:
             sequence = max(time.time_ns(), self.state.get("sequence", 0) + 1)
@@ -297,4 +301,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        LOG.exception("Watcher terminated; see traceback and Task Scheduler result")
+        raise

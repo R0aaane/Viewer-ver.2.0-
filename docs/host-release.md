@@ -78,6 +78,8 @@ Start-ScheduledTask -TaskName PdfViewerMainDeploy
 
 開発ソースとビルド作業領域を外付けドライブへ配置した場合、監視中は接続を維持する。OS起動時に同じドライブ文字で利用可能になることも確認する。
 
+監視タスクにはOS起動時に加えて1分間隔の起動トリガーを設定する。既に監視が動いている場合はIgnoreNewで追加起動を無視する。異常終了や起動時のドライブ未接続からも、ドライブ復帰後に再起動できるようにする。main-state.jsonのwatcherLastPollAtは監視の最終確認時刻、remoteRevisionはGitHubで確認したSHA。phase=appliedだけで現在の監視稼働を判断しない。main-agent.logには処理外の例外も記録する。原因不明の終了時はTask Schedulerの終了結果と併せて確認する。
+
 状態確認:
 
 ```powershell

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -22,6 +23,7 @@ import '../services/reading_progress_service.dart';
 import 'hitomi_import_match.dart';
 import 'web_remote_api_client.dart';
 import 'web_remote_reading_progress_repository.dart';
+import 'web_reader_keyboard_shortcuts.dart';
 import 'web_url_import_sheet.dart';
 
 enum _WebMediaFilter {
@@ -430,6 +432,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   _WebBrowserDisplayMode _browserDisplayMode = _WebBrowserDisplayMode.tile;
   int _homeRatingShelfRating = 5;
   _WebHomeMyListKind _homeMyListKind = _WebHomeMyListKind.favorites;
+  int _homeMyListShuffleSeed = Random().nextInt(1 << 30);
   _WebHomeMyListKind? _browseMyListKind;
   Set<String> _favorites = const <String>{};
   Map<String, int> _ratingsById = const <String, int>{};
@@ -2894,6 +2897,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   onTap: () {
                     setState(() {
                       _surface = _WebRemoteSurface.home;
+                      _homeMyListShuffleSeed = Random().nextInt(1 << 30);
                       _browseMyListKind = null;
                     });
                   },
@@ -3221,6 +3225,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Widget _buildWebHomeMyListSection(List<WebRemoteEntry> entries) {
     final kind = _homeMyListKind;
     final listEntries = _webHomeMyListEntries(entries, kind);
+    if (kind == _WebHomeMyListKind.favorites ||
+        kind == _WebHomeMyListKind.rating) {
+      listEntries.shuffle(Random(_homeMyListShuffleSeed));
+    }
     final label = _webHomeMyListLabel(kind);
     return Card(
       margin: EdgeInsets.zero,
@@ -8832,6 +8840,15 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
 
   @override
   Widget build(BuildContext context) {
+    return WebReaderKeyboardShortcuts(
+      enabled: !_loading,
+      onPreviousPage: _prev,
+      onNextPage: _next,
+      child: _buildViewerScaffold(context),
+    );
+  }
+
+  Widget _buildViewerScaffold(BuildContext context) {
     if (widget.entry.isPdf) {
       return Scaffold(
         backgroundColor: Colors.black,

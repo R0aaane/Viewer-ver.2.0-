@@ -31,10 +31,14 @@ $action = New-ScheduledTaskAction -Execute $pythonPath -Argument "`"$scriptPath`
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$recoveryTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
+$recoveryTrigger.Repetition.StopAtDurationEnd = $false
 $registration = @{
     TaskName = $TaskName
     Action = $action
-    Trigger = New-ScheduledTaskTrigger -AtStartup
+    # IgnoreNew keeps the existing watcher; the repeating trigger recovers a stopped one.
+    Trigger = @((New-ScheduledTaskTrigger -AtStartup), $recoveryTrigger)
     Settings = $settings
     Description = 'Watch pushed commits, build locally and deliver host bundles over SFTP.'
     Force = $true
