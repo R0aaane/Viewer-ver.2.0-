@@ -8426,6 +8426,10 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   Widget _buildRatingPage() {
+    return Center(child: SingleChildScrollView(child: _buildRatingPanel()));
+  }
+
+  Widget _buildRatingPanel() {
     final current = _rating;
     return Center(
       child: ConstrainedBox(
@@ -8520,12 +8524,22 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                                 SizedBox(
                                   width: 178,
                                   child: OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.all(8),
+                                    ),
                                     onPressed: widget.onOpenRelatedEntry == null
                                         ? null
                                         : () => unawaited(
                                             widget.onOpenRelatedEntry!(entry),
                                           ),
-                                    icon: const Icon(Icons.menu_book_outlined),
+                                    icon: _RemoteThumbnail(
+                                      key: ValueKey(entry.stableId),
+                                      client: widget.client,
+                                      entry: entry,
+                                      width: 64,
+                                      height: 88,
+                                      borderRadius: 8,
+                                    ),
                                     label: Text(
                                       _entryDisplayTitle(entry),
                                       maxLines: 2,
