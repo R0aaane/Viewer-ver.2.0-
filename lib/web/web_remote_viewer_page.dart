@@ -29,6 +29,7 @@ import 'web_pdf_page_editor.dart';
 import 'web_gamepad_poller.dart';
 import 'web_performance_policy.dart';
 import 'web_deferred_prefetch.dart';
+import 'web_top_entries.dart';
 import 'web_url_import_sheet.dart';
 
 final _webPerformance = WebPerformancePolicy.fromUserAgent(
@@ -393,7 +394,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.226+236',
+  defaultValue: '1.0.227+237',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -419,6 +420,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   late final TextEditingController _apiController;
   late final TextEditingController _tokenController;
   late final TextEditingController _searchController;
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+  Object? _homeSectionsCacheKey;
+  List<_WebHomeSectionData> _homeSectionsCache = const [];
   final Map<TagCategory, Tag> _browserTagFilters = {};
   bool _browserTagsLoading = false;
   late final TextEditingController _hitomiSearchController;
@@ -1761,6 +1765,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Future<void> _selectFolder(String folderRaw) async {
+    _scaffoldKey.currentState?.closeDrawer();
     final libraryRootRaw = _libraryRoot?.raw;
     if (libraryRootRaw != null && !_isPathWithin(folderRaw, libraryRootRaw)) {
       return;
@@ -2862,6 +2867,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         };
 
         return Scaffold(
+          key: _scaffoldKey,
           resizeToAvoidBottomInset: true,
           appBar: AppBar(
             title: const Text('Web メディアビューア'),
@@ -3006,6 +3012,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   title: const Text('ホーム'),
                   subtitle: const Text('新着 / 未読 / よく見る作品'),
                   onTap: () {
+                    _scaffoldKey.currentState?.closeDrawer();
                     setState(() {
                       _surface = _WebRemoteSurface.home;
                       _homeMyListShuffleSeed = Random().nextInt(1 << 30);
@@ -3021,6 +3028,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   subtitle: const Text('PDF を検索して詳細を確認'),
                   onTap: () {
                     final wasBrowsingMyList = _browseMyListKind != null;
+                    _scaffoldKey.currentState?.closeDrawer();
                     setState(() {
                       _surface = _WebRemoteSurface.browse;
                       _browseMyListKind = null;
@@ -3037,6 +3045,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   title: const Text('Hitomi検索'),
                   subtitle: const Text('Hitomi を検索して取り込み'),
                   onTap: () {
+                    _scaffoldKey.currentState?.closeDrawer();
                     setState(() {
                       _surface = _WebRemoteSurface.hitomiSearch;
                     });
@@ -3115,12 +3124,10 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return _homeRecentActivityById[entry.stableId];
   }
 
-  List<WebRemoteEntry> _recentlyViewedEntries(List<WebRemoteEntry> entries) {
+  List<WebRemoteEntry> _recentlyViewedEntries(List<WebRemoteEntry> entries, {int? limit}) {
     final recentActivityById = _homeRecentActivityById;
-    return entries
-        .where((entry) => recentActivityById.containsKey(entry.stableId))
-        .toList(growable: false)
-      ..sort((left, right) {
+    final selected = entries.where((entry) => recentActivityById.containsKey(entry.stableId));
+    int compare(WebRemoteEntry left, WebRemoteEntry right) {
         final rightViewed =
             recentActivityById[right.stableId]?.lastReadAt ??
             DateTime.fromMillisecondsSinceEpoch(0);
@@ -3128,11 +3135,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             recentActivityById[left.stableId]?.lastReadAt ??
             DateTime.fromMillisecondsSinceEpoch(0);
         return rightViewed.compareTo(leftViewed);
-      });
+      }
+    return limit == null ? (selected.toList()..sort(compare)) : webTopEntries(selected, limit, compare);
   }
 
   _WebHomeResumeData? _buildHomeResumeData(List<WebRemoteEntry> entries) {
-    final recentlyViewed = _recentlyViewedEntries(entries);
+    final recentlyViewed = _recentlyViewedEntries(entries.where((entry) {
+      final activity = _recentActivityForEntry(entry);
+      return activity != null && ReadingProgressService.shouldShowContinueCard(activity);
+    }).toList(), limit: 1);
     for (final entry in recentlyViewed) {
       final activity = _recentActivityForEntry(entry);
       if (activity == null ||
@@ -3147,10 +3158,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Widget _buildHomeRatingSection(List<WebRemoteEntry> entries) {
     final rating = _homeRatingShelfRating;
     final ratingEntries =
-        entries
-            .where((entry) => _ratingForEntry(entry) == rating)
-            .toList(growable: true)
-          ..sort(
+        webTopEntries(entries.where((entry) => _ratingForEntry(entry) == rating), 12,
             (left, right) =>
                 _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
           );
@@ -3181,18 +3189,23 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   List<_WebHomeSectionData> _buildHomeSections(List<WebRemoteEntry> entries) {
+    final key = (entries, _homeRecentActivityById);
+    if (_homeSectionsCacheKey == key) return _homeSectionsCache;
+    _homeSectionsCacheKey = key;
+    return _homeSectionsCache = _computeHomeSections(entries);
+  }
+
+  List<_WebHomeSectionData> _computeHomeSections(List<WebRemoteEntry> entries) {
     final recentActivityById = _homeRecentActivityById;
-    final recentlyAdded = entries.toList(growable: false)
-      ..sort(
+    final recentlyAdded = webTopEntries(entries, 10,
         (left, right) =>
             _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
       );
-    final recentlyViewed = _recentlyViewedEntries(entries);
+    final recentlyViewed = _recentlyViewedEntries(entries, limit: 10);
     final viewed = entries
         .where((entry) => !_isUnreadEntry(entry))
         .toList(growable: false);
-    final frequentlyViewed = viewed.toList(growable: false)
-      ..sort((left, right) {
+    final frequentlyViewed = webTopEntries(viewed, 12, (left, right) {
         final countCompare = _viewCountForEntry(
           right,
         ).compareTo(_viewCountForEntry(left));
@@ -3207,8 +3220,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             DateTime.fromMillisecondsSinceEpoch(0);
         return rightViewed.compareTo(leftViewed);
       });
-    final lightlyViewed = viewed.toList(growable: false)
-      ..sort((left, right) {
+    final lightlyViewed = webTopEntries(viewed, 12, (left, right) {
         final countCompare = _viewCountForEntry(
           left,
         ).compareTo(_viewCountForEntry(right));
@@ -3223,8 +3235,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             DateTime.fromMillisecondsSinceEpoch(0);
         return leftViewed.compareTo(rightViewed);
       });
-    final unread = entries.where(_isUnreadEntry).toList(growable: false)
-      ..sort(
+    final unread = webTopEntries(entries.where(_isUnreadEntry), 12,
         (left, right) =>
             _addedAtForEntry(right).compareTo(_addedAtForEntry(left)),
       );
@@ -3284,8 +3295,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   List<WebRemoteEntry> _webHomeMyListEntries(
     List<WebRemoteEntry> entries,
-    _WebHomeMyListKind kind,
-  ) {
+    _WebHomeMyListKind kind, {
+    int? limit,
+  }) {
     final selected = switch (kind) {
       _WebHomeMyListKind.recentlyAdded => entries.toList(growable: false),
       _WebHomeMyListKind.favorites =>
@@ -3304,7 +3316,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             .where((entry) => _ratingForEntry(entry) == _homeRatingShelfRating)
             .toList(growable: false),
     }.toList(growable: true);
-    selected.sort((left, right) {
+    int compare(WebRemoteEntry left, WebRemoteEntry right) {
       if (kind == _WebHomeMyListKind.recentlyViewed ||
           kind == _WebHomeMyListKind.bookmarks) {
         final rightViewed = _recentSortDateForEntry(right);
@@ -3314,8 +3326,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         }
       }
       return _addedAtForEntry(right).compareTo(_addedAtForEntry(left));
-    });
-    return selected;
+    }
+    return limit == null ? (selected..sort(compare)) : webTopEntries(selected, limit, compare);
   }
 
   Future<void> _openWebHomeMyListBrowse() async {
@@ -3336,7 +3348,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   Widget _buildWebHomeMyListSection(List<WebRemoteEntry> entries) {
     final kind = _homeMyListKind;
-    final listEntries = _webHomeMyListEntries(entries, kind);
+    final listEntries = _webHomeMyListEntries(entries, kind,
+      limit: kind == _WebHomeMyListKind.favorites || kind == _WebHomeMyListKind.rating ? null : 12,
+    );
     if (kind == _WebHomeMyListKind.favorites ||
         kind == _WebHomeMyListKind.rating) {
       listEntries.shuffle(Random(_homeMyListShuffleSeed));
