@@ -28,6 +28,7 @@ import 'web_reader_keyboard_shortcuts.dart';
 import 'web_pdf_page_editor.dart';
 import 'web_gamepad_poller.dart';
 import 'web_performance_policy.dart';
+import 'web_deferred_prefetch.dart';
 import 'web_url_import_sheet.dart';
 
 final _webPerformance = WebPerformancePolicy.fromUserAgent(
@@ -392,7 +393,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.225+235',
+  defaultValue: '1.0.226+236',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -1823,7 +1824,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }) async {
     final client = _client;
     if (!mounted || client == null || !entry.isPdf) return;
-    await _recordEntryView(entry);
+    unawaited(_recordEntryView(entry));
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => WebPdfViewerPage(
@@ -7778,6 +7779,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   bool _pageCountReliable = false;
   bool _twoPage = false;
   final _WebPdfRenderQueue _renderQueue = _WebPdfRenderQueue(maxConcurrent: 2);
+  final _deferredPrefetch = WebDeferredPrefetch();
   final Map<int, Future<Uint8List>> _pageFutureCache =
       <int, Future<Uint8List>>{};
   final Map<int, Uint8List> _pageBytesCache = <int, Uint8List>{};
@@ -7995,6 +7997,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   }
 
   void _clearViewerPageCaches() {
+    _deferredPrefetch.cancel();
     final pages = <int>{
       ..._pageFutureCache.keys,
       ..._pageBytesCache.keys,
@@ -8213,6 +8216,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         setState(() {
           _loading = false;
         });
+        _schedulePagePrefetch();
       }
     }
   }
@@ -8294,8 +8298,25 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     } else {
       _rightFuture = null;
     }
-    _prefetchAdjacentPages();
+    _schedulePagePrefetch();
     _pruneViewerPageCaches();
+  }
+
+  void _schedulePagePrefetch() {
+    if (!_webPerformance.reduceEffects) {
+      _prefetchAdjacentPages();
+      return;
+    }
+    _deferredPrefetch.cancel();
+    if (_loading || _leftFuture == null) return;
+    _deferredPrefetch.schedule([
+      _leftFuture!,
+      if (_rightFuture != null) _rightFuture!,
+    ], () {
+      if (!mounted || html.document.visibilityState == 'hidden' ||
+          !(ModalRoute.of(context)?.isCurrent ?? true)) return;
+      _prefetchAdjacentPages();
+    });
   }
 
   void _prefetchAdjacentPages() {
@@ -9348,6 +9369,9 @@ class _RemoteThumbnail extends StatefulWidget {
 }
 
 class _RemoteThumbnailState extends State<_RemoteThumbnail> {
+  static final _loads = _WebPdfRenderQueue(maxConcurrent: 2);
+  static int _nextRequestId = 0;
+  int? _requestId;
   Future<Uint8List>? _future;
   int _retryCount = 0;
   bool _retryScheduled = false;
@@ -9387,6 +9411,9 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
   }
 
   void _refreshFuture({bool refresh = false}) {
+    final previous = _requestId;
+    if (previous != null) _loads.cancel(previous);
+    final requestId = _requestId = ++_nextRequestId;
     final client = widget.client;
     _loadedPdfRevision = client?.pdfEditRevision(widget.entry.resolvedMediaId ?? '');
     if (client == null ||
@@ -9395,13 +9422,37 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
       _future = null;
       return;
     }
-    _future = client.fetchThumbnail(
-      widget.entry.resolvedMediaId!,
-      width: _webPerformance.thumbnailDimension(widget.width),
-      height: _webPerformance.thumbnailDimension(widget.height),
-      page: widget.entry.isPdf ? 1 : null,
-      refresh: refresh,
+    final mediaId = widget.entry.resolvedMediaId!;
+    final width = _webPerformance.thumbnailDimension(widget.width);
+    final height = _webPerformance.thumbnailDimension(widget.height);
+    final page = widget.entry.isPdf ? 1 : null;
+    Future<Uint8List> load() => client.fetchThumbnail(
+      mediaId, width: width, height: height, page: page, refresh: refresh,
     );
+    _future = !_webPerformance.reduceEffects ? load() : _loads.schedule(
+      requestId,
+      () async {
+        // Skip transient tiles and let scrolling finish before requesting images.
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        Future<void> waitForIdle() async {
+          while (mounted && _requestId == requestId &&
+              (Scrollable.maybeOf(context)?.position.isScrollingNotifier.value ?? false)) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+          if (!mounted || _requestId != requestId) {
+            throw const _WebPdfRenderCancelled();
+          }
+        }
+        await waitForIdle();
+        final bytes = await load();
+        // Network completion must not trigger image decoding during a fling.
+        await waitForIdle();
+        return bytes;
+      },
+      priority: _WebPdfRenderPriority.foreground,
+    );
+    // Queued work may be cancelled before FutureBuilder is attached.
+    unawaited(_future!.then<void>((_) {}, onError: (Object _, StackTrace __) {}));
   }
 
   void _scheduleRetry() {
@@ -9427,6 +9478,7 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
 
   @override
   void dispose() {
+    if (_requestId != null) _loads.cancel(_requestId!);
     widget.client?.pdfChanges.removeListener(_onPdfEdited);
     super.dispose();
   }
