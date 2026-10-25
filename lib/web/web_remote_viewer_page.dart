@@ -16,6 +16,7 @@ import '../models/mediaItem.dart';
 import '../models/metadata_settings.dart';
 import '../models/reading_progress.dart';
 import '../models/tag.dart';
+import '../widgets/gallery_tag_picker.dart';
 import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
@@ -391,7 +392,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.222+232',
+  defaultValue: '1.0.223+233',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -417,6 +418,8 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   late final TextEditingController _apiController;
   late final TextEditingController _tokenController;
   late final TextEditingController _searchController;
+  final Map<TagCategory, Tag> _browserTagFilters = {};
+  bool _browserTagsLoading = false;
   late final TextEditingController _hitomiSearchController;
   final FocusNode _hitomiSearchFocusNode = FocusNode();
 
@@ -890,6 +893,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 ),
               );
       }
+      final selectedTags = _browserTagFilters.values.toList();
+      if (selectedTags.isNotEmpty) {
+        final tagsById = await _loadBrowserTags(client, fetched);
+        if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return;
+        fetched = fetched.where((entry) => matchesGalleryTags(
+          tagsById[entry.resolvedMediaId] ?? const <Tag>[],
+          selectedTags,
+        )).toList();
+      }
       final filtered = _sortBrowserEntries(_applyFilter(fetched));
       WebRemoteEntry? nextSelected = _selectedEntry;
       if (nextSelected != null) {
@@ -910,12 +922,12 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         if (resetPage) {
           _browserPage = 1;
         }
-        if (rawQuery.isEmpty && myListKind == null) {
+        if (rawQuery.isEmpty && myListKind == null && selectedTags.isEmpty) {
           _homeEntries = filtered;
           _homeErrorMessage = null;
         }
         _statusMessage = myListKind == null
-            ? rawQuery.isEmpty
+            ? rawQuery.isEmpty && selectedTags.isEmpty
                   ? 'PDF 一覧: ${filtered.length}件'
                   : 'PDF 検索: ${filtered.length}件'
             : 'マイリスト（${_webHomeMyListLabel(myListKind)}）: ${filtered.length}件';
@@ -1264,6 +1276,54 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
 
   List<WebRemoteEntry> _applyFilter(List<WebRemoteEntry> items) {
     return items.where((entry) => entry.isPdf).toList();
+  }
+
+  Future<Map<String, List<Tag>>> _loadBrowserTags(
+    WebRemoteApiClient client,
+    List<WebRemoteEntry> entries,
+  ) async {
+    final ids = entries.where((entry) => entry.isPdf)
+        .map((entry) => entry.resolvedMediaId).whereType<String>().toSet().toList();
+    final result = <String, List<Tag>>{};
+    // Bound concurrent requests; the API client reuses its item-tag cache.
+    for (var offset = 0; offset < ids.length; offset += 8) {
+      final batch = ids.skip(offset).take(8);
+      final records = await Future.wait(batch.map((id) async =>
+          MapEntry(id, await client.fetchItemTags(id))));
+      if (!mounted || client != _client) return result;
+      result.addEntries(records);
+    }
+    return result;
+  }
+
+  Future<void> _openBrowserTagPicker() async {
+    final client = _client;
+    final folderRaw = _selectedFolderRaw;
+    if (client == null || folderRaw == null || _browserTagsLoading) return;
+    setState(() => _browserTagsLoading = true);
+    try {
+      final entries = await _loadPdfEntries(client, folderRaw: folderRaw, rawQuery: '');
+      if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return;
+      final tagsById = await _loadBrowserTags(client, entries);
+      if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return;
+      final tag = await showDialog<Tag>(
+        context: context,
+        builder: (_) => GalleryTagPicker(
+          candidates: galleryTagCandidates(tagsById.values),
+          selected: Map.of(_browserTagFilters),
+        ),
+      );
+      if (!mounted || tag == null || client != _client || folderRaw != _selectedFolderRaw) return;
+      setState(() => _browserTagFilters[tag.category] = tag);
+      await _loadEntries();
+    } catch (error) {
+      if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('タグ候補を読み込めませんでした。再度お試しください。\n$error')),
+      );
+    } finally {
+      if (mounted) setState(() => _browserTagsLoading = false);
+    }
   }
 
   p.Context _pathContext(String raw) {
@@ -1781,6 +1841,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Future<void> _applyTagQuery(String query) async {
     _searchController.text = query;
     setState(() {
+      _browserTagFilters.clear();
       _surface = _WebRemoteSurface.browse;
       _browseMyListKind = null;
     });
@@ -3240,6 +3301,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       _selectedFolderRaw = root;
       _selectedEntry = null;
       _searchController.clear();
+      _browserTagFilters.clear();
       _surface = _WebRemoteSurface.browse;
     });
     await _loadEntries();
@@ -3482,6 +3544,31 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           seriesSuggestions: _webSeriesSuggestions,
           isLoading: _isLoading,
           onSearch: _loadEntries,
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _isLoading || _browserTagsLoading || _client == null
+                  ? null : _openBrowserTagPicker,
+              icon: _browserTagsLoading
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.manage_search_outlined),
+              label: Text(_browserTagsLoading ? 'タグを読み込み中…' : 'タグから探す'),
+            ),
+            for (final tag in _browserTagFilters.values)
+              InputChip(
+                label: Text('${galleryTagCategoryLabels[tag.category]}: ${tag.name}'),
+                onDeleted: _isLoading || _browserTagsLoading ? null : () {
+                  setState(() => _browserTagFilters.remove(tag.category));
+                  unawaited(_loadEntries());
+                },
+              ),
+          ],
         ),
         const SizedBox(height: 12),
         _ResponsiveBrowserHeader(
