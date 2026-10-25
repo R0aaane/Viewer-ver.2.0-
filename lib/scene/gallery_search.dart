@@ -618,16 +618,19 @@ extension _GallerySearch on _GalleryGridPageState {
       );
       return;
     }
-    final candidates = galleryTagCandidates(
-      _gallerySearchCorpusItems()
-          .where((item) => item.kind == MediaKind.pdf)
-          .map((item) => _searchableTagDetailsFor(item).map((detail) => detail.tag)),
-    );
+    final pdfItems = _gallerySearchCorpusItems()
+        .where((item) => item.kind == MediaKind.pdf).toList(growable: false);
+    final candidates = galleryTagCandidates(pdfItems.map(
+      (item) => _searchableTagDetailsFor(item).map((detail) => detail.tag),
+    ));
     final tag = await showDialog<Tag>(
       context: context,
       builder: (_) => GalleryTagPicker(
         candidates: candidates,
         selected: Map.of(_galleryTagFilters),
+        loadThumbnail: (index) => widget.repo.renderStaticPageBytes(
+          pdfItems[index], 1, maxWidth: 80,
+        ),
       ),
     );
     if (!mounted || tag == null || _folder?.raw != folderRaw) return;

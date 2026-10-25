@@ -644,6 +644,7 @@ class WebRemoteApiClient implements PdfPageEditorClient {
   final Duration timeout;
   final Duration actionTimeout;
   Future<List<WebRemoteFolder>>? _foldersFuture;
+  int _tagCacheVersion = 0;
   final Map<String, Future<List<WebRemoteEntry>>> _folderChildrenCache =
       <String, Future<List<WebRemoteEntry>>>{};
   final Map<String, Future<List<WebRemoteEntry>>> _searchCache =
@@ -674,6 +675,7 @@ class WebRemoteApiClient implements PdfPageEditorClient {
   });
 
   void clearCaches() {
+    _tagCacheVersion++;
     _foldersFuture = null;
     _folderChildrenCache.clear();
     _searchCache.clear();
@@ -822,7 +824,9 @@ class WebRemoteApiClient implements PdfPageEditorClient {
     int offset = 0,
   }) async {
     final path = query.untagged ? '/untagged' : '/search';
+    final tagCacheVersion = _tagCacheVersion;
     final queryParameters = <String, String>{
+      if (!query.untagged) 'includeTags': 'true',
       if (folderRaw != null && folderRaw.trim().isNotEmpty)
         'folderRaw': folderRaw,
       if (!query.untagged && query.q != null && query.q!.isNotEmpty)
@@ -850,6 +854,19 @@ class WebRemoteApiClient implements PdfPageEditorClient {
       _cacheKey(path, queryParameters: queryParameters),
       () async {
         final json = await _getJson(path, queryParameters: queryParameters);
+        // Older hosts omit tags; retain the existing per-item fallback for them.
+        if (tagCacheVersion == _tagCacheVersion) {
+          for (final row in _unwrapItems(json).whereType<Map>()) {
+            final mediaId = row['mediaId']?.toString();
+            final tags = query.untagged ? const [] : row['tags'];
+            if (mediaId == null || tags is! List) continue;
+            final records = tags.whereType<Map>().map(_parseTagRecord).toList(growable: false);
+            _itemTagRecordsCache[mediaId] = Future.value(records);
+            _itemTagsCache[mediaId] = Future.value(
+              records.map((record) => record.tag).toList(growable: false),
+            );
+          }
+        }
         return _unwrapItems(
           json,
         ).whereType<Map>().map(_parseEntry).toList(growable: false);
@@ -988,6 +1005,8 @@ class WebRemoteApiClient implements PdfPageEditorClient {
   }
 
   void _clearItemTagCaches(String mediaId) {
+    _tagCacheVersion++;
+    _searchCache.clear();
     _itemTagsCache.remove(mediaId);
     _itemTagRecordsCache.remove(mediaId);
   }

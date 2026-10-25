@@ -392,7 +392,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.223+233',
+  defaultValue: '1.0.225+235',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -1245,7 +1245,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   Future<void> _refreshWebSeriesSuggestions(
     List<WebRemoteEntry> entries,
   ) async {
+    final loadVersion = ++_webSeriesSuggestionLoadVersion;
     final client = _client;
+    final folderRaw = _selectedFolderRaw;
     if (client == null || entries.isEmpty) {
       if (mounted) {
         setState(() => _webSeriesSuggestions = const <String>{});
@@ -1253,14 +1255,22 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       return;
     }
 
-    final loadVersion = ++_webSeriesSuggestionLoadVersion;
     final next = <String>{};
+    var processed = 0;
     for (final entry in entries.take(300)) {
+      if (++processed % 64 == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      if (!mounted || client != _client || folderRaw != _selectedFolderRaw ||
+          loadVersion != _webSeriesSuggestionLoadVersion) {
+        return;
+      }
       final mediaId = entry.mediaId?.trim();
       if (mediaId == null || mediaId.isEmpty) continue;
       try {
         final tags = await client.fetchItemTags(mediaId);
-        if (!mounted || loadVersion != _webSeriesSuggestionLoadVersion) {
+        if (!mounted || client != _client || folderRaw != _selectedFolderRaw ||
+            loadVersion != _webSeriesSuggestionLoadVersion) {
           return;
         }
         for (final tag in tags) {
@@ -1270,7 +1280,14 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         }
       } catch (_) {}
     }
-    if (!mounted || loadVersion != _webSeriesSuggestionLoadVersion) return;
+    if (!mounted || client != _client || folderRaw != _selectedFolderRaw ||
+        loadVersion != _webSeriesSuggestionLoadVersion) {
+      return;
+    }
+    if (next.length == _webSeriesSuggestions.length &&
+        next.containsAll(_webSeriesSuggestions)) {
+      return;
+    }
     setState(() => _webSeriesSuggestions = next);
   }
 
@@ -1282,15 +1299,18 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     WebRemoteApiClient client,
     List<WebRemoteEntry> entries,
   ) async {
+    final folderRaw = _selectedFolderRaw;
     final ids = entries.where((entry) => entry.isPdf)
         .map((entry) => entry.resolvedMediaId).whereType<String>().toSet().toList();
     final result = <String, List<Tag>>{};
     // Bound concurrent requests; the API client reuses its item-tag cache.
     for (var offset = 0; offset < ids.length; offset += 8) {
+      if (offset % 64 == 0) await Future<void>.delayed(Duration.zero);
+      if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return result;
       final batch = ids.skip(offset).take(8);
       final records = await Future.wait(batch.map((id) async =>
           MapEntry(id, await client.fetchItemTags(id))));
-      if (!mounted || client != _client) return result;
+      if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return result;
       result.addEntries(records);
     }
     return result;
@@ -1306,11 +1326,17 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return;
       final tagsById = await _loadBrowserTags(client, entries);
       if (!mounted || client != _client || folderRaw != _selectedFolderRaw) return;
+      final previewIds = tagsById.keys.toList(growable: false);
+      final candidates = galleryTagCandidates(tagsById.values);
       final tag = await showDialog<Tag>(
         context: context,
         builder: (_) => GalleryTagPicker(
-          candidates: galleryTagCandidates(tagsById.values),
+          candidates: candidates,
           selected: Map.of(_browserTagFilters),
+          // Omit page to avoid downloading/rendering a whole PDF as fallback.
+          loadThumbnail: (index) => client.fetchThumbnail(
+            previewIds[index], width: 80, height: 104,
+          ),
         ),
       );
       if (!mounted || tag == null || client != _client || folderRaw != _selectedFolderRaw) return;

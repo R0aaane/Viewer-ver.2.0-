@@ -153,6 +153,7 @@ class MediaItemDto(BaseModel):
     mimeType: str | None = None
     etag: str | None = None
     stats: MediaStatsDto | None = None
+    tags: list[TagDto] | None = None
 
 
 class FavoriteMediaListResponse(BaseModel):

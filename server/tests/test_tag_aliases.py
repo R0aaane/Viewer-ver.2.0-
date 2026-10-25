@@ -1,6 +1,8 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
+from types import SimpleNamespace
 
 from server.repositories.sqlite_store import SqliteStore
 from server.services.metadata_store import MetadataStore, SearchQuery, build_media_id
@@ -8,6 +10,49 @@ from server.services.tag_alias_service import TagAliasService
 
 
 class TagAliasMetadataStoreTest(unittest.TestCase):
+    def test_search_route_serializes_optional_tags_and_keeps_folder_scope(self) -> None:
+        from server.api.routes_search import search_media
+
+        store = MetadataStore(self.sqlite, tag_alias_service=self.alias_service)
+        media_id = self._insert_media("sample.jpg")
+        store.add_tags_to_media(media_id, [{"category": "artist", "name": "Artist One"}])
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            settings=SimpleNamespace(media_roots=[str(self.library_dir)]),
+            metadata_store=store,
+        )))
+        response = search_media(request, includeTags=True, folderRaw=str(self.library_dir))
+        self.assertEqual(response.items[0].tags[0].name, "Artist One")
+        plain = search_media(request, folderRaw=str(self.library_dir))
+        self.assertIsNone(plain.items[0].tags)
+        denied = search_media(request, includeTags=True, folderRaw=str(self.library_dir.parent / "outside"))
+        self.assertEqual(denied.items, [])
+
+    def test_search_includes_page_tags_without_per_item_queries(self) -> None:
+        from server.models.dto import SearchResponse
+
+        store = MetadataStore(self.sqlite, tag_alias_service=self.alias_service)
+        tagged_id = self._insert_media("tagged.jpg")
+        empty_id = self._insert_media("empty.jpg")
+        store.add_tags_to_media(tagged_id, [
+            {"category": "artist", "name": "Artist One"},
+            {"category": "series", "name": "Touhou Project"},
+        ])
+        expected = store.get_tags_for_media(tagged_id)
+        with patch.object(self.sqlite, "list_tags_for_media", side_effect=AssertionError("N+1 query")), \
+             patch.object(self.sqlite, "list_tag_links_for_media_ids", wraps=self.sqlite.list_tag_links_for_media_ids) as bulk:
+            items, total = store.search_media(SearchQuery(include_tags=True))
+            self.assertEqual(bulk.call_count, 1)
+        response = SearchResponse(items=items, total=total, limit=50, offset=0)
+        tags_by_id = {item.mediaId: [tag.model_dump() for tag in item.tags] for item in response.items}
+        self.assertEqual(tags_by_id[tagged_id], expected)
+        self.assertEqual(tags_by_id[empty_id], [])
+        plain, _ = store.search_media(SearchQuery())
+        self.assertTrue(all("tags" not in item for item in plain))
+        page, total = store.search_media(SearchQuery(include_tags=True, offset=1, limit=1))
+        self.assertEqual(total, 2)
+        self.assertEqual(len(page), 1)
+        self.assertEqual(page[0]["tags"], tags_by_id[page[0]["mediaId"]])
+
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp_dir.cleanup)

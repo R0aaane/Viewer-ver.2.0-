@@ -1,3 +1,6 @@
+import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../models/tag.dart';
@@ -20,16 +23,22 @@ bool matchesGalleryTags(Iterable<Tag> tags, Iterable<Tag> filters) =>
 class GalleryTagCandidate {
   final Tag tag;
   final int count;
-  const GalleryTagCandidate(this.tag, this.count);
+  final int? previewIndex;
+  const GalleryTagCandidate(this.tag, this.count, {this.previewIndex});
 }
 
 /// Count each PDF once, even when duplicate tags occur in its metadata.
 List<GalleryTagCandidate> galleryTagCandidates(
-  Iterable<Iterable<Tag>> pdfTags,
-) {
+  Iterable<Iterable<Tag>> pdfTags, {
+  Random? random,
+}) {
+  final rng = random ?? Random();
   final counts = <(TagCategory, String), int>{};
   final tags = <(TagCategory, String), Tag>{};
+  final previews = <(TagCategory, String), int>{};
+  var index = -1;
   for (final itemTags in pdfTags) {
+    index++;
     final seen = <(TagCategory, String)>{};
     for (final tag in itemTags) {
       final name = tag.name.trim();
@@ -40,21 +49,29 @@ List<GalleryTagCandidate> galleryTagCandidates(
       if (!seen.add(key)) continue;
       tags.putIfAbsent(key, () => Tag(name: name, category: tag.category));
       counts.update(key, (count) => count + 1, ifAbsent: () => 1);
+      // Reservoir sampling: one representative without storing every match.
+      if (rng.nextInt(counts[key]!) == 0) previews[key] = index;
     }
   }
   return [
     for (final key in counts.keys)
-      GalleryTagCandidate(tags[key]!, counts[key]!),
+      GalleryTagCandidate(
+        tags[key]!,
+        counts[key]!,
+        previewIndex: previews[key],
+      ),
   ];
 }
 
 class GalleryTagPicker extends StatefulWidget {
   final List<GalleryTagCandidate> candidates;
   final Map<TagCategory, Tag> selected;
+  final Future<Uint8List> Function(int index)? loadThumbnail;
   const GalleryTagPicker({
     super.key,
     required this.candidates,
     required this.selected,
+    this.loadThumbnail,
   });
 
   @override
@@ -65,24 +82,65 @@ class _GalleryTagPickerState extends State<GalleryTagPicker> {
   TagCategory _category = TagCategory.artist;
   String _query = '';
   bool _byName = false;
+  final Map<(TagCategory, bool), List<GalleryTagCandidate>> _sorted = {};
+  final _previewCache = <int, Uint8List>{};
+  final _previewLanes = [Future<void>.value(), Future<void>.value()];
+  var _nextLane = 0;
+
+  Future<Uint8List?> _loadPreview(int index, bool Function() visible) {
+    final lane = _nextLane++ % _previewLanes.length;
+    final future = _previewLanes[lane].then((_) async {
+      if (!mounted || !visible()) return null;
+      final cached = _previewCache.remove(index);
+      if (cached != null) {
+        _previewCache[index] = cached;
+        return cached;
+      }
+      try {
+        final bytes = await widget.loadThumbnail!(index);
+        if (!mounted) return null;
+        _previewCache[index] = bytes;
+        while (_previewCache.length > 32) {
+          _previewCache.remove(_previewCache.keys.first);
+        }
+        return bytes;
+      } catch (_) {
+        return null;
+      }
+    });
+    _previewLanes[lane] = future.then<void>((_) {});
+    return future;
+  }
+
+  @override
+  void didUpdateWidget(covariant GalleryTagPicker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.candidates, widget.candidates)) {
+      _sorted.clear();
+      _previewCache.clear();
+    }
+  }
+
+  List<GalleryTagCandidate> _sortedCandidates() =>
+      _sorted.putIfAbsent((_category, _byName), () {
+        final candidates = widget.candidates
+            .where((candidate) => candidate.tag.category == _category)
+            .toList();
+        candidates.sort((a, b) {
+          final count = _byName ? 0 : b.count.compareTo(a.count);
+          return count != 0
+              ? count
+              : a.tag.name.toLowerCase().compareTo(b.tag.name.toLowerCase());
+        });
+        return candidates;
+      });
 
   @override
   Widget build(BuildContext context) {
-    final options = widget.candidates
-        .where(
-          (candidate) =>
-              candidate.tag.category == _category &&
-              candidate.tag.name.toLowerCase().contains(
-                _query.trim().toLowerCase(),
-              ),
-        )
+    final needle = _query.trim().toLowerCase();
+    final options = _sortedCandidates()
+        .where((candidate) => candidate.tag.name.toLowerCase().contains(needle))
         .toList();
-    options.sort((a, b) {
-      final count = _byName ? 0 : b.count.compareTo(a.count);
-      return count != 0
-          ? count
-          : a.tag.name.toLowerCase().compareTo(b.tag.name.toLowerCase());
-    });
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
       child: SizedBox(
@@ -158,6 +216,7 @@ class _GalleryTagPickerState extends State<GalleryTagPicker> {
                         ),
                       )
                     : ListView.builder(
+                        cacheExtent: 0,
                         itemCount: options.length,
                         itemBuilder: (context, index) {
                           final option = options[index];
@@ -170,13 +229,33 @@ class _GalleryTagPickerState extends State<GalleryTagPicker> {
                               horizontal: 8,
                             ),
                             selected: active,
-                            leading: Icon(
-                              active ? Icons.check_circle : Icons.label_outline,
-                            ),
+                            leading:
+                                widget.loadThumbnail != null &&
+                                    option.previewIndex != null
+                                ? _TagPreview(
+                                    key: ValueKey((
+                                      option.tag.category,
+                                      option.tag.name,
+                                      option.previewIndex,
+                                    )),
+                                    index: option.previewIndex!,
+                                    load: _loadPreview,
+                                  )
+                                : const Icon(Icons.label_outline),
                             title: Text(option.tag.name),
-                            trailing: Text(
-                              '${option.count}件',
-                              style: Theme.of(context).textTheme.labelLarge,
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (active)
+                                  const Padding(
+                                    padding: EdgeInsets.only(right: 6),
+                                    child: Icon(Icons.check_circle, size: 18),
+                                  ),
+                                Text(
+                                  '${option.count}件',
+                                  style: Theme.of(context).textTheme.labelLarge,
+                                ),
+                              ],
                             ),
                             onTap: () => Navigator.pop(context, option.tag),
                           );
@@ -189,4 +268,55 @@ class _GalleryTagPickerState extends State<GalleryTagPicker> {
       ),
     );
   }
+}
+
+class _TagPreview extends StatefulWidget {
+  final int index;
+  final Future<Uint8List?> Function(int, bool Function()) load;
+  const _TagPreview({super.key, required this.index, required this.load});
+
+  @override
+  State<_TagPreview> createState() => _TagPreviewState();
+}
+
+class _TagPreviewState extends State<_TagPreview> {
+  late final Future<Uint8List?> _image;
+
+  @override
+  void initState() {
+    super.initState();
+    _image = Future<Uint8List?>.delayed(const Duration(milliseconds: 100), () {
+      if (!mounted) return null;
+      return widget.load(widget.index, () => mounted);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 40,
+    height: 52,
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: ColoredBox(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: FutureBuilder<Uint8List?>(
+          future: _image,
+          builder: (context, snapshot) {
+            const placeholder = Icon(Icons.picture_as_pdf_outlined, size: 22);
+            final bytes = snapshot.data;
+            return bytes == null
+                ? placeholder
+                : Image.memory(
+                    bytes,
+                    fit: BoxFit.cover,
+                    cacheWidth: 80,
+                    cacheHeight: 104,
+                    excludeFromSemantics: true,
+                    errorBuilder: (_, _, _) => placeholder,
+                  );
+          },
+        ),
+      ),
+    ),
+  );
 }

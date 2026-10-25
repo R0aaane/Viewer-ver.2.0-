@@ -276,6 +276,7 @@ class SearchQuery:
     folder_raw: str | None = None
     limit: int = 50
     offset: int = 0
+    include_tags: bool = False
 
 
 class MetadataStore:
@@ -1069,6 +1070,12 @@ class MetadataStore:
 
         total = len(filtered)
         sliced = filtered[query.offset : query.offset + query.limit]
+        if query.include_tags:
+            for row in sliced:
+                row["tags"] = [
+                    {"tagId": tag["tag_id"], "name": tag["name"], "category": tag["category"]}
+                    for tag in tags_by_media_id.get(row["mediaId"], [])
+                ]
         return self._attach_stats_to_media_items(sliced), total
 
     def list_untagged(
