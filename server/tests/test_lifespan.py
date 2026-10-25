@@ -25,6 +25,7 @@ class LifespanTests(unittest.IsolatedAsyncioTestCase):
             MediaIndexService=DEFAULT,
             MediaStreamService=DEFAULT,
             ThumbnailService=DEFAULT,
+            PdfEditService=DEFAULT,
             UrlDownloadService=DEFAULT,
         ) as services:
             metadata = services["MetadataStore"].return_value

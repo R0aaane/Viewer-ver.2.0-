@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
 MediaKind = Literal["image", "pdf", "folder"]
@@ -324,6 +324,24 @@ class FolderChildrenResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class PdfPageEdit(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    page: StrictInt = Field(ge=1)
+    rotation: StrictInt = Field(default=0)
+
+
+class EditPdfRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    revision: str = Field(pattern=r'^[0-9a-f]{64}$')
+    pages: list[PdfPageEdit] = Field(min_length=1, max_length=10000)
+
+
+class RestorePdfRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    revision: str = Field(pattern=r'^[0-9a-f]{64}$')
+    backupId: str = Field(pattern=r'^[0-9a-f]{32}$')
 
 
 class MediaMetaResponse(BaseModel):

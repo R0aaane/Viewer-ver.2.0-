@@ -7,11 +7,14 @@ import 'dart:html' as html;
 import 'dart:js_interop';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:pdfx/pdfx.dart';
 
 import '../repository/mediaRepository.dart';
 import '../models/tag.dart';
 import '../models/reading_progress.dart';
+import '../models/pdf_page_edit.dart';
 import 'pdfjs_safety.dart';
 import 'pdfjs_runtime_config.dart';
 
@@ -602,7 +605,39 @@ class WebSearchParser {
   }
 }
 
-class WebRemoteApiClient {
+class WebRemoteApiClient implements PdfPageEditorClient {
+  final ValueNotifier<int> pdfChanges = ValueNotifier(0);
+  final Map<String, String> _pdfEditRevisions = {};
+
+  String? pdfEditRevision(String mediaId) => _pdfEditRevisions[mediaId];
+
+  Future<Map<String, dynamic>> fetchPdfEditInfo(String mediaId) async {
+    final result = await _getJson('/media/${Uri.encodeComponent(mediaId)}/pdf-edit');
+    if (result is! Map<String, dynamic>) {
+      throw const WebRemoteException('PDF編集情報の形式が不正です');
+    }
+    return result;
+  }
+
+  Future<Map<String, dynamic>> savePdfPages(String mediaId, String revision, List<Map<String, int>> pages) async {
+    return _changePdf(mediaId, '/pdf-edit', {'revision': revision, 'pages': pages});
+  }
+
+  Future<Map<String, dynamic>> restorePdfBackup(String mediaId, String revision, String backupId) async {
+    return _changePdf(mediaId, '/pdf-edit/restore', {'revision': revision, 'backupId': backupId});
+  }
+
+  Future<Map<String, dynamic>> _changePdf(String mediaId, String path, Map<String, dynamic> payload) async {
+    final result = await _postJson('/media/${Uri.encodeComponent(mediaId)}$path', payload);
+    if (result is! Map<String, dynamic> || result['revision'] is! String) {
+      throw const WebRemoteException('PDF編集結果の形式が不正です');
+    }
+    clearCaches();
+    _pdfEditRevisions[mediaId] = result['revision'] as String;
+    pdfChanges.value++;
+    return result;
+  }
+
   final String baseUrl;
   final String? authToken;
   final String? appVersion;
@@ -1290,6 +1325,7 @@ class WebRemoteApiClient {
           if (height != null) 'height': '$height',
           if (page != null) 'page': '$page',
           if (refresh) 'refresh': '${DateTime.now().microsecondsSinceEpoch}',
+          if (_pdfEditRevisions[mediaId] case final String revision) 'editRevision': revision,
         },
       );
     } on WebRemoteException catch (error) {
@@ -1311,6 +1347,7 @@ class WebRemoteApiClient {
       queryParameters: <String, String>{
         if (width != null) 'width': '$width',
         if (format != null && format.trim().isNotEmpty) 'format': format.trim(),
+        if (_pdfEditRevisions[mediaId] case final String revision) 'editRevision': revision,
       },
     );
   }
@@ -1396,7 +1433,7 @@ class WebRemoteApiClient {
     unawaited(
       future.then<void>(
         (bytes) {
-          if (bytes.lengthInBytes <= _pdfBytesCacheMaxSize) {
+          if (identical(_pdfBytesInFlight[mediaId], future) && bytes.lengthInBytes <= _pdfBytesCacheMaxSize) {
             _putPdfBytesCache(mediaId, bytes);
           }
           if (identical(_pdfBytesInFlight[mediaId], future)) {
@@ -1550,12 +1587,13 @@ class WebRemoteApiClient {
   Future<Uint8List> fetchImageDownload(String mediaId) {
     return _getBytes(
       '/media/${Uri.encodeComponent(mediaId)}/download',
+      queryParameters: {if (_pdfEditRevisions[mediaId] case final String revision) 'editRevision': revision},
       requestTimeout: actionTimeout,
     );
   }
 
   Uri buildMediaDownloadUri(String mediaId) {
-    return _buildUri('/media/${Uri.encodeComponent(mediaId)}/download');
+    return _buildUri('/media/${Uri.encodeComponent(mediaId)}/download', queryParameters: {if (_pdfEditRevisions[mediaId] case final String revision) 'editRevision': revision});
   }
 
   Future<String> createPdfObjectUrl(String mediaId) async {

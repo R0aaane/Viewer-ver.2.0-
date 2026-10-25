@@ -24,6 +24,7 @@ import 'hitomi_import_match.dart';
 import 'web_remote_api_client.dart';
 import 'web_remote_reading_progress_repository.dart';
 import 'web_reader_keyboard_shortcuts.dart';
+import 'web_pdf_page_editor.dart';
 import 'web_url_import_sheet.dart';
 
 enum _WebMediaFilter {
@@ -6816,6 +6817,21 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   int? _rating;
   bool _loadingPdfPage = false;
   int _pdfPageRequestSerial = 0;
+  int _detailGeneration = 0;
+
+  Future<void> _editPdfPages() async {
+    final mediaId = widget.entry.resolvedMediaId;
+    if (mediaId == null) return;
+    final changed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => WebPdfPageEditor(
+        client: widget.client, mediaId: mediaId,
+        title: _entryDisplayTitle(widget.entry), initialPage: _pdfPageNo,
+      ),
+    );
+    if (changed == true && mounted) setState(_refresh);
+  }
 
   @override
   void initState() {
@@ -6856,6 +6872,7 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
   }
 
   void _refresh() {
+    _detailGeneration += 1;
     final mediaId = widget.entry.mediaId?.trim();
     final missingMediaIdError = StateError(
       'Missing mediaId for ${widget.entry.displayName}',
@@ -6895,13 +6912,16 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
     final mediaId = widget.entry.mediaId?.trim();
     if (mediaId == null || mediaId.isEmpty) return;
     final stableId = widget.entry.stableId;
+    final generation = _detailGeneration;
     try {
       final meta = await _metaFuture;
       final pageCountInfo = await widget.client.resolvePdfPageCountInfo(
         mediaId,
         pageCountHint: meta.pageCount,
       );
-      if (!mounted || widget.entry.stableId != stableId) return;
+      if (!mounted ||
+          widget.entry.stableId != stableId ||
+          generation != _detailGeneration) return;
       setState(() {
         _pdfTotalPages = pageCountInfo.isReliable || pageCountInfo.count > 1
             ? pageCountInfo.count
@@ -7377,6 +7397,11 @@ class _WebMediaDetailViewState extends State<WebMediaDetailView> {
                             : 'ページ $_pdfPageNo / $_pdfTotalPages',
                         style: const TextStyle(color: Colors.white70),
                       ),
+                      OutlinedButton.icon(
+                        onPressed: widget.entry.hasMediaId && !_loadingPdfPage ? _editPdfPages : null,
+                        icon: const Icon(Icons.edit_document),
+                        label: const Text('ページを削除・編集'),
+                      ),
                       if (widget.onOpenPdfViewerPage != null)
                         FilledButton.icon(
                           onPressed: widget.onOpenPdfViewerPage,
@@ -7641,6 +7666,18 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   final Map<_WebGamepadAction, DateTime> _gamepadNextRepeatAt =
       <_WebGamepadAction, DateTime>{};
   bool _gamepadConnected = false;
+  String? _loadedPdfRevision;
+
+  void _onPdfEdited() {
+    final mediaId = widget.entry.resolvedMediaId;
+    final revision = mediaId == null ? null : widget.client.pdfEditRevision(mediaId);
+    if (!mounted || revision == _loadedPdfRevision) return;
+    _loadedPdfRevision = revision;
+    _activityPersistDebounce?.cancel();
+    _lastPersistedProgressKey = null;
+    _clearViewerPageCaches();
+    _loadViewer();
+  }
 
   @override
   void initState() {
@@ -7651,6 +7688,8 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         unawaited(_persistCurrentActivity(force: true));
       }
     });
+    _loadedPdfRevision = widget.client.pdfEditRevision(widget.entry.resolvedMediaId ?? '');
+    widget.client.pdfChanges.addListener(_onPdfEdited);
     _gamepadPollTimer = Timer.periodic(_gamepadPollInterval, (_) {
       _pollGamepad();
     });
@@ -7660,7 +7699,12 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   @override
   void didUpdateWidget(covariant WebPdfViewerPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.entry.stableId != widget.entry.stableId) {
+    if (oldWidget.client != widget.client) {
+      oldWidget.client.pdfChanges.removeListener(_onPdfEdited);
+      widget.client.pdfChanges.addListener(_onPdfEdited);
+    }
+    if (oldWidget.entry.stableId != widget.entry.stableId || oldWidget.client != widget.client) {
+      _loadedPdfRevision = widget.client.pdfEditRevision(widget.entry.resolvedMediaId ?? '');
       _activityPersistDebounce?.cancel();
       _lastPersistedProgressKey = null;
       _canPersistReadingProgress = false;
@@ -7682,6 +7726,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   @override
   void dispose() {
     _visibilitySubscription?.cancel();
+    widget.client.pdfChanges.removeListener(_onPdfEdited);
     _gamepadPollTimer?.cancel();
     _activityPersistDebounce?.cancel();
     unawaited(_persistCurrentActivity(force: true));
@@ -7987,7 +8032,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         return;
       }
       final savedTotalPages = progress?.totalPages;
-      final effectiveTotalPages = [
+      final effectiveTotalPages = pageCountInfo.isReliable ? pageCountInfo.count : [
         pageCountInfo.count.clamp(1, 1 << 30),
         if (savedTotalPages != null && savedTotalPages > 0) savedTotalPages,
       ].reduce((left, right) => left > right ? left : right);
@@ -9167,16 +9212,31 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
   Future<Uint8List>? _future;
   int _retryCount = 0;
   bool _retryScheduled = false;
+  String? _loadedPdfRevision;
+
+  void _onPdfEdited() {
+    final revision = widget.client?.pdfEditRevision(widget.entry.resolvedMediaId ?? '');
+    if (!mounted || revision == _loadedPdfRevision) return;
+    setState(() {
+      _retryCount = 0;
+      _refreshFuture();
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     _refreshFuture();
+    widget.client?.pdfChanges.addListener(_onPdfEdited);
   }
 
   @override
   void didUpdateWidget(covariant _RemoteThumbnail oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.client != widget.client) {
+      oldWidget.client?.pdfChanges.removeListener(_onPdfEdited);
+      widget.client?.pdfChanges.addListener(_onPdfEdited);
+    }
     if (oldWidget.entry.stableId != widget.entry.stableId ||
         oldWidget.client != widget.client ||
         oldWidget.width != widget.width ||
@@ -9189,6 +9249,7 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
 
   void _refreshFuture({bool refresh = false}) {
     final client = widget.client;
+    _loadedPdfRevision = client?.pdfEditRevision(widget.entry.resolvedMediaId ?? '');
     if (client == null ||
         widget.entry.isFolder ||
         !widget.entry.hasMediaId) {
@@ -9223,6 +9284,12 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
         _refreshFuture(refresh: true);
       });
     });
+  }
+
+  @override
+  void dispose() {
+    widget.client?.pdfChanges.removeListener(_onPdfEdited);
+    super.dispose();
   }
 
   Widget _shell(Widget child) {

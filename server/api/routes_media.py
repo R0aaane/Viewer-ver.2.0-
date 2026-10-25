@@ -14,12 +14,29 @@ from server.models.dto import (
     ReadingProgressDto,
     ReadingProgressListResponse,
     UpdateReadingProgressRequest,
+    EditPdfRequest,
+    RestorePdfRequest,
 )
 from server.services.auth_service import require_bearer_token
 
 
 router = APIRouter(tags=["media"], dependencies=[Depends(require_bearer_token)])
 logger = logging.getLogger(__name__)
+
+
+@router.get('/media/{media_id}/pdf-edit')
+def get_pdf_edit_info(request: Request, media_id: str):
+    return request.app.state.pdf_edit_service.info(media_id)
+
+
+@router.post('/media/{media_id}/pdf-edit')
+def edit_pdf(request: Request, media_id: str, payload: EditPdfRequest):
+    return request.app.state.pdf_edit_service.edit(media_id, payload.revision, [page.model_dump() for page in payload.pages])
+
+
+@router.post('/media/{media_id}/pdf-edit/restore')
+def restore_pdf(request: Request, media_id: str, payload: RestorePdfRequest):
+    return request.app.state.pdf_edit_service.restore(media_id, payload.revision, payload.backupId)
 
 
 def _identity_from_query(request: Request) -> dict[str, object] | None:

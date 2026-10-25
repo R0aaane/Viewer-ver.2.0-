@@ -22,6 +22,7 @@ from server.services.media_stream_service import MediaStreamService
 from server.services.metadata_store import MetadataStore
 from server.services.tag_alias_service import TagAliasService
 from server.services.thumbnail_service import ThumbnailService
+from server.services.pdf_edit_service import PdfEditService
 from server.services.url_download_service import UrlDownloadService
 from server.web_static import mount_web_build
 
@@ -82,6 +83,7 @@ async def lifespan(app: FastAPI):
         app.state.index_service = index_service
         app.state.stream_service = stream_service
         app.state.thumbnail_service = thumbnail_service
+        app.state.pdf_edit_service = PdfEditService(metadata_store, index_service, thumbnail_service, settings)
         app.state.url_download_service = url_download_service
         app.state.url_download_statuses = {}
         app.state.client_app_versions = set()

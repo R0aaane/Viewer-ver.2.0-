@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -437,6 +438,13 @@ class ThumbnailService:
                 context="pdf_lru_evict",
             )
         return document
+
+    @contextmanager
+    def pdf_mutation(self, path: str):
+        # PDFium calls must not overlap rendering, including across documents.
+        with self._pdf_lock:
+            self.close_cached_pdf_documents([path])
+            yield
 
     def close_cached_pdf_documents(self, paths: list[str]) -> None:
         normalized_targets = [
