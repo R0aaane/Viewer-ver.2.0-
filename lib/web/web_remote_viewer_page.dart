@@ -25,7 +25,13 @@ import 'web_remote_api_client.dart';
 import 'web_remote_reading_progress_repository.dart';
 import 'web_reader_keyboard_shortcuts.dart';
 import 'web_pdf_page_editor.dart';
+import 'web_gamepad_poller.dart';
+import 'web_performance_policy.dart';
 import 'web_url_import_sheet.dart';
+
+final _webPerformance = WebPerformancePolicy.fromUserAgent(
+  html.window.navigator.userAgent,
+);
 
 enum _WebMediaFilter {
   pdf('PDF');
@@ -103,7 +109,6 @@ class _WebGamepadNavigationShell extends StatefulWidget {
 
 class _WebGamepadNavigationShellState
     extends State<_WebGamepadNavigationShell> {
-  static const Duration _pollInterval = Duration(milliseconds: 80);
   static const Duration _initialRepeatDelay = Duration(milliseconds: 320);
   static const Duration _repeatInterval = Duration(milliseconds: 120);
 
@@ -112,18 +117,25 @@ class _WebGamepadNavigationShellState
       <_WebGamepadNavigationAction>{};
   final Map<_WebGamepadNavigationAction, DateTime> _nextRepeatAt =
       <_WebGamepadNavigationAction, DateTime>{};
-  Timer? _pollTimer;
+  WebGamepadPoller? _pollTimer;
   bool _connected = false;
 
   @override
   void initState() {
     super.initState();
-    _pollTimer = Timer.periodic(_pollInterval, (_) => _pollGamepad());
+    _pollTimer = WebGamepadPoller(
+      isActive: () => html.document.visibilityState != 'hidden' &&
+          (ModalRoute.of(context)?.isCurrent ?? true),
+      poll: () {
+        _pollGamepad();
+        return _connected;
+      },
+    );
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    _pollTimer?.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -1503,7 +1515,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         _isConnecting ||
         _isLoading ||
         _homeLoading ||
-        _actionBusy) {
+        _actionBusy ||
+        html.document.visibilityState == 'hidden' ||
+        !(ModalRoute.of(context)?.isCurrent ?? true)) {
       return;
     }
 
@@ -2815,14 +2829,22 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 ),
             ],
           ),
-          drawer: showSidebar ? null : Drawer(child: _buildSidebar()),
+          drawer: showSidebar
+              ? null
+              : Drawer(child: RepaintBoundary(child: _buildSidebar())),
           body: SafeArea(
             child: Row(
               children: <Widget>[
-                if (showSidebar) SizedBox(width: 320, child: _buildSidebar()),
+                if (showSidebar)
+                  SizedBox(
+                    width: 320,
+                    child: RepaintBoundary(child: _buildSidebar()),
+                  ),
                 if (showSidebar) const VerticalDivider(width: 1),
                 Expanded(
-                  child: Padding(padding: contentPadding, child: mainContent),
+                  child: RepaintBoundary(
+                    child: Padding(padding: contentPadding, child: mainContent),
+                  ),
                 ),
               ],
             ),
@@ -5501,7 +5523,7 @@ class _EntryCard extends StatelessWidget {
             color: backgroundColor,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: borderColor, width: selected ? 1.6 : 1),
-            boxShadow: <BoxShadow>[
+            boxShadow: _webPerformance.reduceEffects ? const [] : <BoxShadow>[
               BoxShadow(
                 color: accent.withOpacity(selected ? 0.18 : 0.10),
                 blurRadius: selected ? 24 : 18,
@@ -5591,7 +5613,7 @@ class _EntrySingleTileCard extends StatelessWidget {
             color: backgroundColor,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: borderColor, width: selected ? 1.8 : 1),
-            boxShadow: <BoxShadow>[
+            boxShadow: _webPerformance.reduceEffects ? const [] : <BoxShadow>[
               BoxShadow(
                 color: accent.withOpacity(selected ? 0.16 : 0.08),
                 blurRadius: selected ? 24 : 18,
@@ -5758,7 +5780,7 @@ class _EntryGridTileCard extends StatelessWidget {
             color: const Color(0xFF0E141C),
             borderRadius: radius,
             border: Border.all(color: borderColor, width: selected ? 1.8 : 1),
-            boxShadow: <BoxShadow>[
+            boxShadow: _webPerformance.reduceEffects ? const [] : <BoxShadow>[
               BoxShadow(
                 color: shadowColor,
                 blurRadius: selected ? 20 : 14,
@@ -7629,7 +7651,6 @@ class WebPdfViewerPage extends StatefulWidget {
 class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   static const String _twoPagePrefsKey = 'prefs.readerTwoPage';
   static const int _pdfViewerRenderWidth = 1280;
-  static const Duration _gamepadPollInterval = Duration(milliseconds: 80);
   static const Duration _gamepadInitialRepeatDelay = Duration(
     milliseconds: 320,
   );
@@ -7660,7 +7681,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   int? _rating;
   Future<List<WebRemoteEntry>>? _relatedEntriesFuture;
   StreamSubscription<html.Event>? _visibilitySubscription;
-  Timer? _gamepadPollTimer;
+  WebGamepadPoller? _gamepadPollTimer;
   final Set<_WebGamepadAction> _pressedGamepadActions =
       <_WebGamepadAction>{};
   final Map<_WebGamepadAction, DateTime> _gamepadNextRepeatAt =
@@ -7690,9 +7711,14 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     });
     _loadedPdfRevision = widget.client.pdfEditRevision(widget.entry.resolvedMediaId ?? '');
     widget.client.pdfChanges.addListener(_onPdfEdited);
-    _gamepadPollTimer = Timer.periodic(_gamepadPollInterval, (_) {
-      _pollGamepad();
-    });
+    _gamepadPollTimer = WebGamepadPoller(
+      isActive: () => html.document.visibilityState != 'hidden' &&
+          (ModalRoute.of(context)?.isCurrent ?? true),
+      poll: () {
+        _pollGamepad();
+        return _gamepadConnected;
+      },
+    );
     _loadViewer();
   }
 
@@ -7727,7 +7753,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   void dispose() {
     _visibilitySubscription?.cancel();
     widget.client.pdfChanges.removeListener(_onPdfEdited);
-    _gamepadPollTimer?.cancel();
+    _gamepadPollTimer?.dispose();
     _activityPersistDebounce?.cancel();
     unawaited(_persistCurrentActivity(force: true));
     _viewerGeneration += 1;
@@ -9258,8 +9284,8 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
     }
     _future = client.fetchThumbnail(
       widget.entry.resolvedMediaId!,
-      width: (widget.width * 1.8).round(),
-      height: (widget.height * 1.8).round(),
+      width: _webPerformance.thumbnailDimension(widget.width),
+      height: _webPerformance.thumbnailDimension(widget.height),
       page: widget.entry.isPdf ? 1 : null,
       refresh: refresh,
     );
@@ -9306,6 +9332,16 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
     );
   }
 
+  Widget _loadingPlaceholder() => _shell(
+    SizedBox(
+      width: 28,
+      height: 28,
+      child: _webPerformance.reduceEffects
+          ? const Icon(Icons.image_outlined, color: Colors.white30)
+          : const CircularProgressIndicator(strokeWidth: 2),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     if (widget.entry.isFolder) {
@@ -9324,70 +9360,54 @@ class _RemoteThumbnailState extends State<_RemoteThumbnail> {
       );
     }
 
-    return FutureBuilder<Uint8List>(
-      future: _future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return _shell(
-            const SizedBox(
-              width: 28,
-              height: 28,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          );
-        }
-        if (snapshot.hasError) {
-          _scheduleRetry();
-          if (_retryScheduled) {
+    return RepaintBoundary(
+      child: FutureBuilder<Uint8List>(
+        future: _future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return _loadingPlaceholder();
+          }
+          if (snapshot.hasError) {
+            _scheduleRetry();
+            if (_retryScheduled) {
+              return _loadingPlaceholder();
+            }
             return _shell(
-              const SizedBox(
-                width: 28,
-                height: 28,
-                child: CircularProgressIndicator(strokeWidth: 2),
+              Icon(
+                widget.entry.isPdf
+                    ? Icons.picture_as_pdf
+                    : Icons.image_not_supported_outlined,
+                size: 40,
+                color: Colors.white54,
               ),
             );
           }
-          return _shell(
-            Icon(
-              widget.entry.isPdf
-                  ? Icons.picture_as_pdf
-                  : Icons.image_not_supported_outlined,
-              size: 40,
-              color: Colors.white54,
-            ),
-          );
-        }
-        final bytes = snapshot.data;
-        if (bytes == null || bytes.isEmpty) {
-          _scheduleRetry();
-          if (_retryScheduled) {
+          final bytes = snapshot.data;
+          if (bytes == null || bytes.isEmpty) {
+            _scheduleRetry();
+            if (_retryScheduled) {
+              return _loadingPlaceholder();
+            }
             return _shell(
-              const SizedBox(
-                width: 28,
-                height: 28,
-                child: CircularProgressIndicator(strokeWidth: 2),
+              const Icon(
+                Icons.image_not_supported_outlined,
+                size: 40,
+                color: Colors.white54,
               ),
             );
           }
-          return _shell(
-            const Icon(
-              Icons.image_not_supported_outlined,
-              size: 40,
-              color: Colors.white54,
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(widget.borderRadius),
+            child: Image.memory(
+              bytes,
+              width: widget.width,
+              height: widget.height,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
             ),
           );
-        }
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(widget.borderRadius),
-          child: Image.memory(
-            bytes,
-            width: widget.width,
-            height: widget.height,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-          ),
-        );
-      },
+        },
+      ),
     );
   }
 }
