@@ -666,6 +666,12 @@ extension _GalleryGridView on _GalleryGridPageState {
     required bool? pdfOnly,
   }) {
     Iterable<MediaItem> out = input;
+    if (_galleryTagFilters.isNotEmpty) {
+      out = out.where((item) => item.kind == MediaKind.pdf && matchesGalleryTags(
+        _searchableTagDetailsFor(item).map((detail) => detail.tag),
+        _galleryTagFilters.values,
+      ));
+    }
 
     if (pdfOnly != null) {
       if (pdfOnly) {

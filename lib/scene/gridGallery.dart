@@ -33,6 +33,7 @@ import 'tag_assign_after_import.dart';
 
 import '../repository/mediaRepository.dart';
 import '../widgets/controller_focusable.dart';
+import '../widgets/gallery_tag_picker.dart';
 
 import 'artistTagIndex.dart';
 import 'detailImage.dart';
@@ -209,6 +210,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   final TextEditingController _searchCtrl = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   String _query = '';
+  final Map<TagCategory, Tag> _galleryTagFilters = {};
   bool _gallerySearchSuggestionsEnabled = false;
   List<MediaItem>? _gallerySearchItemsAll;
   String? _gallerySearchFolderRaw;
@@ -2627,7 +2629,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                 actions: _buildGalleryAppBarActions(tabController),
                 bottom: PreferredSize(
                   preferredSize: Size.fromHeight(
-                    showSeriesFilterRow ? 206 : 160,
+                    (showSeriesFilterRow ? 206 : 160) +
+                        (_galleryTagFilters.isEmpty ? 0 : 44),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -2639,6 +2642,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                           child: _buildGallerySearchField(),
                         ),
                       ),
+                      if (_galleryTagFilters.isNotEmpty)
+                        _buildGalleryTagFilterChips(),
                       if (showSeriesFilterRow)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),

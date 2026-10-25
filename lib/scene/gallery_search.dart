@@ -17,7 +17,8 @@ extension _GallerySearch on _GalleryGridPageState {
     }
   }
 
-  bool get _isGallerySearchActive => _query.trim().isNotEmpty;
+  bool get _isGallerySearchActive =>
+      _query.trim().isNotEmpty || _galleryTagFilters.isNotEmpty;
 
   bool get _isGallerySearchBusy =>
       _gallerySearchLoading || _gallerySearchLoadingTags;
@@ -118,6 +119,7 @@ extension _GallerySearch on _GalleryGridPageState {
       setState(() {
         _gallerySearchLoading = false;
         _gallerySearchLoadingTags = false;
+        _gallerySearchItemsAll = null;
       });
     }
   }
@@ -569,6 +571,7 @@ extension _GallerySearch on _GalleryGridPageState {
   }
 
   void _clearGallerySearchQuery() {
+    setState(_galleryTagFilters.clear);
     _setGallerySearchQuery(
       '',
       enableSuggestions: _searchFocusNode.hasFocus,
@@ -577,13 +580,14 @@ extension _GallerySearch on _GalleryGridPageState {
   }
 
   Widget? _buildGallerySearchSuffix() {
-    if (!_isGallerySearchBusy && !_isGallerySearchActive) {
-      return null;
-    }
-
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        TextButton.icon(
+          label: const Text('タグから探す'),
+          icon: const Icon(Icons.manage_search_outlined),
+          onPressed: _isGallerySearchBusy ? null : _openGalleryTagPicker,
+        ),
         if (_isGallerySearchBusy)
           const Padding(
             padding: EdgeInsets.only(right: 4),
@@ -602,6 +606,57 @@ extension _GallerySearch on _GalleryGridPageState {
       ],
     );
   }
+
+  Future<void> _openGalleryTagPicker() async {
+    _searchFocusNode.unfocus();
+    final folderRaw = _folder?.raw;
+    await _ensureGallerySearchCacheLoaded();
+    if (!mounted || _folder?.raw != folderRaw) return;
+    if (_isGallerySearchBusy || _gallerySearchItemsAll == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('タグを読み込めませんでした。少し待ってから再度お試しください。')),
+      );
+      return;
+    }
+    final candidates = galleryTagCandidates(
+      _gallerySearchCorpusItems()
+          .where((item) => item.kind == MediaKind.pdf)
+          .map((item) => _searchableTagDetailsFor(item).map((detail) => detail.tag)),
+    );
+    final tag = await showDialog<Tag>(
+      context: context,
+      builder: (_) => GalleryTagPicker(
+        candidates: candidates,
+        selected: Map.of(_galleryTagFilters),
+      ),
+    );
+    if (!mounted || tag == null || _folder?.raw != folderRaw) return;
+    setState(() {
+      _galleryTagFilters[tag.category] = tag;
+      _gallerySearchPageIndex = 0;
+    });
+  }
+
+  Widget _buildGalleryTagFilterChips() => SizedBox(
+    height: 44,
+    child: ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      scrollDirection: Axis.horizontal,
+      children: [
+        for (final tag in _galleryTagFilters.values)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: InputChip(
+              label: Text('${galleryTagCategoryLabels[tag.category]}: ${tag.name}'),
+              onDeleted: () => setState(() {
+                _galleryTagFilters.remove(tag.category);
+                _gallerySearchPageIndex = 0;
+              }),
+            ),
+          ),
+      ],
+    ),
+  );
 
   Widget _buildGallerySearchField() {
     return RawAutocomplete<_GallerySearchSuggestion>(
