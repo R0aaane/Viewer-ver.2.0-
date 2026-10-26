@@ -61,6 +61,16 @@
   let active = null;
   let result = null;
   let version = null;
+  window.pdfViewerRecordRenderPhase = function (phase, milliseconds) {
+    const sample = active;
+    if (!sample || !Object.prototype.hasOwnProperty.call(sample.renderPhases, phase)) return;
+    sample.renderProbeSeen = true;
+    // Cap retained samples for devices with high refresh rates.
+    if (sample.renderPhases[phase].length < 5000) sample.renderPhases[phase].push(milliseconds);
+    if (milliseconds > 50 && sample.slowRenderPhases.length < 200) {
+      sample.slowRenderPhases.push({ phase: phase, atMs: Math.round(performance.now() - sample.start - milliseconds), durationMs: Math.round(milliseconds) });
+    }
+  };
   // This is only performed with ?perf=1, and never carries an API token.
   fetch(new URL('version.json', document.baseURI), { cache: 'no-store' })
     .then(function (response) { return response.ok ? response.json() : null; })
@@ -84,12 +94,16 @@
     });
     const resourceSummary = {};
     Object.keys(resources).forEach(function (group) { resourceSummary[group] = summarize(resources[group]); });
+    const renderSummary = {};
+    Object.keys(sample.renderPhases).forEach(function (phase) { renderSummary[phase] = summarize(sample.renderPhases[phase]); });
     result = {
       format: 1, reason: reason, version: version,
       startedAt: sample.startedAt, finishedAt: new Date().toISOString(),
       userAgent: navigator.userAgent, devicePixelRatio: window.devicePixelRatio,
       viewport: { width: window.innerWidth, height: window.innerHeight },
       rendererSignals: { cpuFallbackWarnings: rendererSignals.cpuFallbackWarnings, graphicsWarnings: rendererSignals.graphicsWarnings },
+      renderProbeSeen: sample.renderProbeSeen, renderPhases: renderSummary,
+      slowRenderPhases: sample.slowRenderPhases,
       durationMs: Math.round(end - sample.start),
       frames: summarize(sample.frames),
       framesOver50Ms: sample.frames.filter(function (ms) { return ms > 50; }).length,
@@ -114,6 +128,7 @@
       start: performance.now(), startedAt: new Date().toISOString(),
       frames: [], lastFrame: null, slowFrames: [],
       longTasks: [], health: [], healthErrors: [], healthSamples: [],
+      renderProbeSeen: false, renderPhases: { frameworkFrame: [], layout: [], paint: [] }, slowRenderPhases: [],
       longTasksSupported: typeof PerformanceObserver !== 'undefined' &&
         (PerformanceObserver.supportedEntryTypes || []).includes('longtask')
     };
@@ -169,6 +184,7 @@
   close.addEventListener('click', function () {
     finish('closed');
     ['warn', 'error'].forEach(function (level) { console[level] = originalConsole[level]; });
+    delete window.pdfViewerRecordRenderPhase;
     panel.remove();
   });
   document.addEventListener('visibilitychange', function () {

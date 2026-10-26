@@ -39,6 +39,9 @@ for(const search of ['', '?perf=1']) {
  button.events.click();
  function frame(time){now=time;const [id,callback]=frames.entries().next().value;frames.delete(id);callback(time)}
  frame(0);frame(16);frame(96);
+ context.window.pdfViewerRecordRenderPhase('layout',75);
+ context.window.pdfViewerRecordRenderPhase('paint',12);
+ context.window.pdfViewerRecordRenderPhase('frameworkFrame',92);
  await new Promise(resolve=>setImmediate(resolve));
  button.events.click();
  const result=JSON.parse(output.value);
@@ -50,6 +53,9 @@ for(const search of ['', '?perf=1']) {
  assert.equal(result.resources.font.count,1);
  assert.equal(result.rendererSignals.cpuFallbackWarnings,1);
  assert.equal(result.rendererSignals.graphicsWarnings,1);
+ assert.equal(result.renderProbeSeen,true);
+ assert.equal(result.renderPhases.layout.maxMs,75);
+ assert.equal(result.slowRenderPhases.length,2);
  assert.equal(result.health.count,1);
  assert.equal(output.value.includes('private'),false);
  assert.equal(frames.size,0);
@@ -57,5 +63,6 @@ for(const search of ['', '?perf=1']) {
  panel.children[2].events.click();
  assert.notEqual(context.console.warn,originalWarn);
  assert.equal(panel.removed,true);
+ assert.equal(context.window.pdfViewerRecordRenderPhase,undefined);
  console.log('PASS: default URL is inert; active diagnostics collect frames/API timings, redact URLs, and release timers');
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -1,15 +1,27 @@
+import 'dart:js_interop';
+
 import 'package:flutter/material.dart';
 
 import '../models/metadata_settings.dart';
 import '../services/app_settings_service.dart';
 import '../services/controller_navigation_service.dart';
 import '../web/web_remote_viewer_page.dart';
+import '../web/web_diagnostic_binding.dart';
 import 'app_bootstrap_shared.dart';
 import 'app_content_mode.dart';
 import 'app_theme.dart';
 
+@JS('pdfViewerRecordRenderPhase')
+external JSFunction? get _phaseReporter;
+
 Future<void> bootstrapApp() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  if (Uri.base.queryParameters['perf'] == '1') {
+    WebDiagnosticBinding(report: (phase, milliseconds) {
+      _phaseReporter?.callAsFunction(null, phase.toJS, milliseconds.toJS);
+    });
+  } else {
+    WidgetsFlutterBinding.ensureInitialized();
+  }
   configureGlobalErrorHandling();
 
   final settingsService = AppSettingsService();
