@@ -3,6 +3,23 @@
   'use strict';
   if (new URLSearchParams(window.location.search).get('perf') !== '1') return;
 
+  // Installed before Flutter starts, so its one-time rendering warning is not lost.
+  // Store categories only; console messages can contain private URLs or IDs.
+  const rendererSignals = { cpuFallbackWarnings: 0, graphicsWarnings: 0 };
+  const originalConsole = {};
+  ['warn', 'error'].forEach(function (level) {
+    const original = console[level];
+    originalConsole[level] = original;
+    console[level] = function () {
+      for (let i = 0; i < arguments.length; i++) {
+        if (typeof arguments[i] !== 'string') continue;
+        if (/Falling back to CPU-only rendering/i.test(arguments[i])) rendererSignals.cpuFallbackWarnings++;
+        if (/WebGL|GrContext|SkSurface|GPU context/i.test(arguments[i])) rendererSignals.graphicsWarnings++;
+      }
+      return original.apply(console, arguments);
+    };
+  });
+
   function summarize(values) {
     const sorted = values.slice().sort(function (a, b) { return a - b; });
     function percentile(fraction) {
@@ -18,7 +35,9 @@
     if (/\/page\/\d+$/.test(path)) return 'pdf-page';
     if (/\/download$/.test(path)) return 'download';
     if (path === '/health') return null; // Separately measured below.
-    if (/\.(js|wasm|woff2?|ttf)$/.test(path)) return 'app-assets';
+    if (/\.(woff2?|ttf|otf)$/.test(path)) return 'font';
+    if (/\.wasm$/.test(path)) return 'wasm';
+    if (/\.(js|mjs)$/.test(path)) return 'script';
     return 'other';
   }
 
@@ -70,6 +89,7 @@
       startedAt: sample.startedAt, finishedAt: new Date().toISOString(),
       userAgent: navigator.userAgent, devicePixelRatio: window.devicePixelRatio,
       viewport: { width: window.innerWidth, height: window.innerHeight },
+      rendererSignals: { cpuFallbackWarnings: rendererSignals.cpuFallbackWarnings, graphicsWarnings: rendererSignals.graphicsWarnings },
       durationMs: Math.round(end - sample.start),
       frames: summarize(sample.frames),
       framesOver50Ms: sample.frames.filter(function (ms) { return ms > 50; }).length,
@@ -146,7 +166,11 @@
     sample.endTimer = setTimeout(function () { finish('complete'); }, 20000);
   }
   button.addEventListener('click', start);
-  close.addEventListener('click', function () { finish('closed'); panel.remove(); });
+  close.addEventListener('click', function () {
+    finish('closed');
+    ['warn', 'error'].forEach(function (level) { console[level] = originalConsole[level]; });
+    panel.remove();
+  });
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) finish('tab-hidden');
   });

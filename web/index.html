@@ -191,12 +191,21 @@
     };
   </script>
   <script>
+    function startFlutter() {
+      var bootstrap = document.createElement('script');
+      bootstrap.src = 'flutter_bootstrap.js';
+      bootstrap.async = true;
+      document.body.appendChild(bootstrap);
+    }
     if (new URLSearchParams(window.location.search).get('perf') === '1') {
       var diagnostics = document.createElement('script');
       diagnostics.src = 'performance_diagnostics.js';
+      diagnostics.onload = startFlutter;
+      diagnostics.onerror = startFlutter;
       document.body.appendChild(diagnostics);
+    } else {
+      startFlutter();
     }
   </script>
-  <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
