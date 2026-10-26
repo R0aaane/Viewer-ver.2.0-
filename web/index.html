@@ -190,6 +190,13 @@
       GlobalWorkerOptions: {},
     };
   </script>
+  <script>
+    if (new URLSearchParams(window.location.search).get('perf') === '1') {
+      var diagnostics = document.createElement('script');
+      diagnostics.src = 'performance_diagnostics.js';
+      document.body.appendChild(diagnostics);
+    }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
