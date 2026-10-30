@@ -1,0 +1,24 @@
+{
+  "source": {
+    "revision": "66a36c8c94b1a5d992ee4e7f392fccfe4945767c",
+    "url": "https://raw.githubusercontent.com/google/fonts/66a36c8c94b1a5d992ee4e7f392fccfe4945767c/ofl/notosansjp/"
+  },
+  "sourceSha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+  "conversion": "fonttools 4.67.0 instantiateVariableFont, wght=400/700; WOFF2; no glyph subset",
+  "files": [
+    {
+      "file": "NotoSansJP-Regular.woff2",
+      "weight": 400,
+      "bytes": 2302708,
+      "glyphs": 16732,
+      "sha256": "61825160ddc660ec9830f42bccefd5bf47e5d317cb12aa129ac043ae523dfc85"
+    },
+    {
+      "file": "NotoSansJP-Bold.woff2",
+      "weight": 700,
+      "bytes": 2352612,
+      "glyphs": 16732,
+      "sha256": "091da1ce8a3691fa699ce86618336072c1620bffe59153156291c76638fd3f64"
+    }
+  ]
+}

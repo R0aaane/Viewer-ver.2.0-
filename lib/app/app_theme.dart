@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-ThemeData buildAppTheme() {
+ThemeData buildAppTheme({String? fontFamily}) {
   final scheme =
       ColorScheme.fromSeed(
         seedColor: const Color(0xFFF09AAF),
@@ -17,6 +17,7 @@ ThemeData buildAppTheme() {
 
   final base = ThemeData(
     useMaterial3: true,
+    fontFamily: fontFamily,
     colorScheme: scheme,
     brightness: Brightness.dark,
     scaffoldBackgroundColor: const Color(0xFF111214),
@@ -27,14 +28,15 @@ ThemeData buildAppTheme() {
   );
 
   return base.copyWith(
-    appBarTheme: const AppBarTheme(
+    appBarTheme: AppBarTheme(
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
       surfaceTintColor: Colors.transparent,
-      backgroundColor: Color(0xFF111214),
+      backgroundColor: const Color(0xFF111214),
       titleTextStyle: TextStyle(
-        color: Color(0xFFE8E8EA),
+        fontFamily: fontFamily,
+        color: const Color(0xFFE8E8EA),
         fontSize: 20,
         fontWeight: FontWeight.w600,
       ),
@@ -83,10 +85,11 @@ ThemeData buildAppTheme() {
       ),
     ),
     chipTheme: base.chipTheme.copyWith(
-      labelStyle: const TextStyle(fontSize: 12, color: Color(0xFFE8E8EA)),
-      secondaryLabelStyle: const TextStyle(
+      labelStyle: TextStyle(fontFamily: fontFamily, fontSize: 12, color: const Color(0xFFE8E8EA)),
+      secondaryLabelStyle: TextStyle(
+        fontFamily: fontFamily,
         fontSize: 12,
-        color: Color(0xFFE8E8EA),
+        color: const Color(0xFFE8E8EA),
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
       side: const BorderSide(color: Color(0xFF35373E)),
@@ -109,8 +112,8 @@ ThemeData buildAppTheme() {
       filled: true,
       fillColor: const Color(0xFF1A1B20),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      labelStyle: const TextStyle(color: Color(0xFFC9CBD2)),
-      hintStyle: const TextStyle(color: Color(0xFF9FA1AA)),
+      labelStyle: TextStyle(fontFamily: fontFamily, color: const Color(0xFFC9CBD2)),
+      hintStyle: TextStyle(fontFamily: fontFamily, color: const Color(0xFF9FA1AA)),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
         borderSide: const BorderSide(color: Color(0xFF35373E)),
@@ -125,7 +128,7 @@ ThemeData buildAppTheme() {
       ),
     ),
     dropdownMenuTheme: DropdownMenuThemeData(
-      textStyle: const TextStyle(color: Color(0xFFE8E8EA)),
+      textStyle: TextStyle(fontFamily: fontFamily, color: const Color(0xFFE8E8EA)),
       inputDecorationTheme: InputDecorationTheme(
         isDense: true,
         filled: true,
