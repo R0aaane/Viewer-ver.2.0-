@@ -1,0 +1,142 @@
+{
+  "mode": "profile",
+  "catalog_records": 30136,
+  "pages_visited": 628,
+  "full_catalog_browsed": true,
+  "browsing_seconds": 326.180386,
+  "cold_first_thumbnail_ms": 216.591,
+  "initial_delta_drain_ms": 10570.618,
+  "navigation_first_thumbnail": {
+    "n": 627,
+    "p50_ms": 215.646,
+    "p95_ms": 282.943,
+    "max_ms": 346.669
+  },
+  "page_top_middle_bottom": {
+    "n": 628,
+    "p50_ms": 477.699,
+    "p95_ms": 590.001,
+    "max_ms": 1589.965
+  },
+  "build_frames": {
+    "n": 15506,
+    "p50_ms": 0.66,
+    "p95_ms": 11.519,
+    "max_ms": 22.609
+  },
+  "raster_frames": {
+    "n": 15506,
+    "p50_ms": 1.997,
+    "p95_ms": 3.929,
+    "max_ms": 13.799
+  },
+  "rss_before_mib": 115.8671875,
+  "rss_peak_sampled_mib": 281.66015625,
+  "rss_peak_os_mib": 283.6171875,
+  "rss_after_mib": 263.3203125,
+  "decoded_cache_peak_mib": 99.984375,
+  "compressed_cache_peak_mib": 31.99899673461914,
+  "decoded_cache_limit_mib": 100.0,
+  "compressed_cache_limit_mib": 32.0,
+  "viewport_physical": [
+    1264.0,
+    681.0
+  ],
+  "device_pixel_ratio": 1.0,
+  "memory_checkpoints": [
+    {
+      "pages": 50,
+      "rss_mib": 237.41796875,
+      "decoded_mib": 99.9375,
+      "compressed_mib": 31.967570304870605
+    },
+    {
+      "pages": 100,
+      "rss_mib": 237.78125,
+      "decoded_mib": 99.984375,
+      "compressed_mib": 31.961557388305664
+    },
+    {
+      "pages": 150,
+      "rss_mib": 252.9140625,
+      "decoded_mib": 99.9375,
+      "compressed_mib": 31.967570304870605
+    },
+    {
+      "pages": 200,
+      "rss_mib": 246.234375,
+      "decoded_mib": 99.9375,
+      "compressed_mib": 31.967662811279297
+    },
+    {
+      "pages": 250,
+      "rss_mib": 251.078125,
+      "decoded_mib": 99.65625,
+      "compressed_mib": 31.979966163635254
+    },
+    {
+      "pages": 300,
+      "rss_mib": 249.80859375,
+      "decoded_mib": 99.984375,
+      "compressed_mib": 31.973966598510742
+    },
+    {
+      "pages": 350,
+      "rss_mib": 254.03515625,
+      "decoded_mib": 99.9375,
+      "compressed_mib": 31.974164962768555
+    },
+    {
+      "pages": 400,
+      "rss_mib": 249.73828125,
+      "decoded_mib": 99.984375,
+      "compressed_mib": 31.96775531768799
+    },
+    {
+      "pages": 450,
+      "rss_mib": 256.11328125,
+      "decoded_mib": 99.9375,
+      "compressed_mib": 31.96784782409668
+    },
+    {
+      "pages": 500,
+      "rss_mib": 263.3984375,
+      "decoded_mib": 99.984375,
+      "compressed_mib": 31.961557388305664
+    },
+    {
+      "pages": 550,
+      "rss_mib": 251.28515625,
+      "decoded_mib": 99.984375,
+      "compressed_mib": 31.974059104919434
+    },
+    {
+      "pages": 600,
+      "rss_mib": 265.82421875,
+      "decoded_mib": 99.984375,
+      "compressed_mib": 31.967662811279297
+    }
+  ],
+  "server_before": {
+    "thumbnail_requests": 96,
+    "thumbnail_bytes": 5021184,
+    "search_requests": 514,
+    "pid": 16940,
+    "memory": {
+      "working_set_mib": 79.98828125,
+      "peak_working_set_mib": 118.77734375,
+      "private_mib": 69.0078125
+    }
+  },
+  "server_after": {
+    "thumbnail_requests": 30244,
+    "thumbnail_bytes": 1678017176,
+    "search_requests": 1143,
+    "pid": 16940,
+    "memory": {
+      "working_set_mib": 85.9453125,
+      "peak_working_set_mib": 118.77734375,
+      "private_mib": 75.37109375
+    }
+  }
+}

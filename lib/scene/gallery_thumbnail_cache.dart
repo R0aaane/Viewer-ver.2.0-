@@ -69,7 +69,7 @@ extension _GalleryThumbnailCache on _GalleryGridPageState {
   String _mediaThumbCacheKey(MediaItem item) {
     final modified = item.modified?.millisecondsSinceEpoch ?? 0;
     final size = item.sizeBytes ?? -1;
-    return '${item.id}|$modified|$size|$_GalleryGridPageState._mediaThumbMaxWidth';
+    return '$_repositoryGeneration|${item.id}|$modified|$size|$_GalleryGridPageState._mediaThumbMaxWidth';
   }
 
   ThumbPair? _mediaThumbCacheGet(String key) {
@@ -168,7 +168,7 @@ extension _GalleryThumbnailCache on _GalleryGridPageState {
   }
 
   Future<Uint8List?> _getFolderPreviewBytes(MediaItem folderItem) {
-    final key = folderItem.id;
+    final key = '$_repositoryGeneration|${folderItem.id}';
 
     if (_folderPreviewCache.containsKey(key)) {
       return Future.value(_folderPreviewCacheGet(key));

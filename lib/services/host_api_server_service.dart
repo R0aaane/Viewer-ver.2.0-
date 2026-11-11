@@ -242,6 +242,18 @@ class HostApiServerService extends ChangeNotifier {
       return;
     }
 
+    if (settings.authToken?.trim().isNotEmpty != true ||
+        settings.authToken!.trim().startsWith('pv1.')) {
+      _setStatus(
+        _status.copyWith(
+          state: HostServerState.error,
+          message: '接続設定で認証トークンを生成・保存してから起動してください',
+          clearPid: true,
+        ),
+      );
+      return;
+    }
+
     final existingHealth = await _checkHealth(settings);
     if (existingHealth.state == MetadataConnectionState.connected) {
       await _startHostAutoUpdate(settings);
@@ -597,7 +609,8 @@ class HostApiServerService extends ChangeNotifier {
         'uvicorn',
         'server.main:app',
         '--host',
-        '0.0.0.0',
+        environment['MEDIA_SERVER_HOST'] ?? '127.0.0.1',
+        '--no-proxy-headers',
         '--port',
         '$port',
       ],
@@ -607,7 +620,8 @@ class HostApiServerService extends ChangeNotifier {
         'uvicorn',
         'server.main:app',
         '--host',
-        '0.0.0.0',
+        environment['MEDIA_SERVER_HOST'] ?? '127.0.0.1',
+        '--no-proxy-headers',
         '--port',
         '$port',
       ],
@@ -698,6 +712,10 @@ class HostApiServerService extends ChangeNotifier {
       remote,
       '-ServerPort',
       '${settings.hostPort}',
+      '-ServerHost',
+      Platform.environment['MEDIA_SERVER_HOST']?.trim().isNotEmpty == true
+          ? Platform.environment['MEDIA_SERVER_HOST']!.trim()
+          : '127.0.0.1',
       '-AppExePath',
       appExePath,
       '-SkipInitialServerStartWhenNoUpdate',
@@ -840,7 +858,10 @@ class HostApiServerService extends ChangeNotifier {
     final dataDir = await getHostApiDataDirectory();
 
     final env = Map<String, String>.from(Platform.environment);
-    env['MEDIA_SERVER_HOST'] = '0.0.0.0';
+    env['MEDIA_SERVER_HOST'] =
+        (env['MEDIA_SERVER_HOST']?.trim().isNotEmpty ?? false)
+        ? env['MEDIA_SERVER_HOST']!.trim()
+        : '127.0.0.1';
     env['MEDIA_SERVER_PORT'] = '${settings.hostPort}';
     env['MEDIA_SERVER_MEDIA_ROOTS'] = roots.join(';');
     env['MEDIA_SERVER_AUTH_TOKEN'] = settings.authToken?.trim() ?? '';
@@ -856,7 +877,6 @@ class HostApiServerService extends ChangeNotifier {
     _setDefaultEnv(env, 'MEDIA_SERVER_UPDATE_VERSION', defaultAppUpdateVersion);
     _setDefaultEnv(env, 'MEDIA_SERVER_UPDATE_URL', defaultAppUpdateUrl);
     env['MEDIA_SERVER_STARTUP_RESCAN'] = 'true';
-    env['MEDIA_SERVER_CORS_ORIGINS'] = '*';
     return env;
   }
 
@@ -918,12 +938,46 @@ class HostApiServerService extends ChangeNotifier {
 
     final endpoints = <HostAccessEndpoint>[
       HostAccessEndpoint(label: 'ローカル', url: 'http://127.0.0.1:$port'),
-      if (hostname.trim().isNotEmpty)
+      if (Platform.environment['MEDIA_SERVER_HOST'] == '0.0.0.0' &&
+          hostname.trim().isNotEmpty)
         HostAccessEndpoint(label: 'ホスト名', url: 'http://$hostname:$port'),
-      ...tailscaleIps.map(
-        (ip) => HostAccessEndpoint(label: 'Tailscale', url: 'http://$ip:$port'),
-      ),
+      ...tailscaleIps
+          .where(
+            (ip) =>
+                Platform.environment['MEDIA_SERVER_HOST'] == '0.0.0.0' ||
+                Platform.environment['MEDIA_SERVER_HOST'] == ip,
+          )
+          .map(
+            (ip) =>
+                HostAccessEndpoint(label: 'Tailscale', url: 'http://$ip:$port'),
+          ),
     ];
+
+    try {
+      final result = await Process.run('tailscale', [
+        'serve',
+        'status',
+        '--json',
+      ]).timeout(const Duration(seconds: 3));
+      if (result.exitCode == 0) {
+        final configuration = jsonDecode(result.stdout as String) as Map;
+        final web = configuration['Web'] as Map? ?? {};
+        for (final entry in web.entries) {
+          final handlers = (entry.value as Map)['Handlers'] as Map?;
+          if (handlers?['/']?['Proxy'] == 'http://127.0.0.1:$port') {
+            final address = Uri.parse('https://${entry.key}');
+            endpoints.add(
+              HostAccessEndpoint(
+                label: 'Tailscale HTTPS',
+                url: address.toString(),
+              ),
+            );
+          }
+        }
+      }
+    } catch (_) {
+      // The loopback endpoint remains usable while Tailscale is unavailable.
+    }
 
     return _NetworkInfo(
       hostname: hostname,

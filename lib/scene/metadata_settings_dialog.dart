@@ -5,6 +5,7 @@ import '../database/tag_service.dart';
 import '../models/metadata_settings.dart';
 import '../services/app_update_publish_service.dart';
 import '../services/app_version_service.dart';
+import '../services/auth_token_store.dart';
 import '../services/controller_navigation_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/url_import_project_cookie_store_service.dart';
@@ -1249,9 +1250,23 @@ class _MetadataSettingsDialogState extends State<MetadataSettingsDialog> {
                 controller: _authTokenController,
                 enabled: !_saving,
                 obscureText: true,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: '認証トークン',
-                  hintText: '未設定なら認証なしで接続します',
+                  hintText: draft.isHostMode
+                      ? 'ホスト用トークンを生成・保存してください'
+                      : '端末用トークンを入力してください',
+                  suffixIcon: draft.isHostMode
+                      ? IconButton(
+                          tooltip: '認証トークンを生成',
+                          icon: const Icon(Icons.key),
+                          onPressed: _saving
+                              ? null
+                              : () => setState(
+                                  () => _authTokenController.text =
+                                      AuthTokenStore.generate(),
+                                ),
+                        )
+                      : null,
                 ),
               ),
               const SizedBox(height: 12),

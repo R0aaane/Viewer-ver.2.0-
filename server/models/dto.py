@@ -35,6 +35,8 @@ class TagListResponse(BaseModel):
 
 
 class ItemTagsResponse(BaseModel):
+    epoch: str | None = None
+    version: int | None = None
     mediaId: str
     items: list[TagDto]
 
@@ -49,17 +51,23 @@ class ResolvedIdentityDto(BaseModel):
 
 
 class AddItemTagsRequest(BaseModel):
+    expectedEpoch: str | None = None
+    expectedVersion: int | None = Field(None, ge=0)
     tags: list[TagInput] = Field(default_factory=list)
     tag: TagInput | None = None
     identity: ResolvedIdentityDto | None = None
 
 
 class AddItemTagsResponse(BaseModel):
+    epoch: str | None = None
+    version: int | None = None
     ok: bool = True
     mediaId: str
 
 
 class DeleteItemTagsRequest(BaseModel):
+    expectedEpoch: str | None = None
+    expectedVersion: int | None = Field(None, ge=0)
     tagIds: list[str] = Field(default_factory=list)
 
 
@@ -78,6 +86,8 @@ class RatingListResponse(BaseModel):
 
 
 class SetFavoriteRequest(BaseModel):
+    expectedEpoch: str | None = None
+    expectedVersion: int | None = Field(None, ge=0)
     isFavorite: bool
     identity: ResolvedIdentityDto | None = None
 

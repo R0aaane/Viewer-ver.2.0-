@@ -3,6 +3,9 @@
 part of 'detailImage.dart';
 
 extension _DetailActions on _ImageDetailPageState {
+  String _mediaPref(String key) => widget.repo.isRemoteMode
+      ? widget.tagService.settings.mediaPreferenceKey(key) : key;
+
   Future<void> _popWithResult() async {
     if (_leaving) return;
     debugPrint('[detail-back] back pressed item=${_item.id}');
@@ -68,7 +71,7 @@ extension _DetailActions on _ImageDetailPageState {
     final version = loadVersion ?? _detailLoadVersion;
     final revision = _favoriteRevision;
     final prefs = await SharedPreferences.getInstance();
-    var favList = prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    var favList = prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[];
     final remoteFavorites = await widget.tagService
         .listRemoteFavoriteIds()
         .catchError((_) => null);
@@ -77,7 +80,7 @@ extension _DetailActions on _ImageDetailPageState {
     }
     if (remoteFavorites != null) {
       favList = remoteFavorites.toList(growable: false);
-      await prefs.setStringList(_PrefsKeys.favorites, favList);
+      await prefs.setStringList(_mediaPref(_PrefsKeys.favorites), favList);
     }
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
     final fav = lookupIds.any(favList.contains);
@@ -111,7 +114,7 @@ extension _DetailActions on _ImageDetailPageState {
     final version = loadVersion ?? _detailLoadVersion;
     final revision = _ratingRevision;
     final prefs = await SharedPreferences.getInstance();
-    var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    var ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
     final remoteRatings = await widget.tagService
         .listRemoteRatings()
         .catchError((_) => null);
@@ -120,7 +123,7 @@ extension _DetailActions on _ImageDetailPageState {
     }
     if (remoteRatings != null) {
       ratings = remoteRatings;
-      await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+      await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
     }
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(item);
     int? rating;
@@ -136,7 +139,7 @@ extension _DetailActions on _ImageDetailPageState {
     if (rating != null && (rating < 3 || rating > 5)) return;
     final revision = ++_ratingRevision;
     final prefs = await SharedPreferences.getInstance();
-    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(_item);
     if (revision != _ratingRevision) return;
     final usesHostMetadata =
@@ -158,7 +161,7 @@ extension _DetailActions on _ImageDetailPageState {
         ratings[id] = rating;
       }
     }
-    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
     if (!mounted) return;
     setState(() => _rating = rating);
     _ratingChanged = true;
@@ -168,7 +171,7 @@ extension _DetailActions on _ImageDetailPageState {
     final revision = ++_favoriteRevision;
     final prefs = await SharedPreferences.getInstance();
     final favList =
-        prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+        prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[];
     final next = favList.toSet();
     final lookupIds = await widget.tagService.favoriteLookupIdsForItem(_item);
     if (revision != _favoriteRevision) return;
@@ -187,7 +190,7 @@ extension _DetailActions on _ImageDetailPageState {
       next.add(remoteId ?? _item.id);
     }
     await prefs.setStringList(
-      _PrefsKeys.favorites,
+      _mediaPref(_PrefsKeys.favorites),
       next.toList(growable: false),
     );
     if (!mounted) return;
@@ -242,20 +245,20 @@ extension _DetailActions on _ImageDetailPageState {
       }
       final prefs = await SharedPreferences.getInstance();
       final favorites =
-          (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+          (prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[])
               .toSet();
       if (favorites.remove(item.id)) {
         favorites.add(updated.id);
         await prefs.setStringList(
-          _PrefsKeys.favorites,
+          _mediaPref(_PrefsKeys.favorites),
           favorites.toList(growable: false),
         );
       }
-      final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+      final ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
       final rating = ratings.remove(item.id);
       if (rating != null) {
         ratings[updated.id] = rating;
-        await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+        await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
       }
       if (!mounted) return;
 
@@ -380,16 +383,16 @@ extension _DetailActions on _ImageDetailPageState {
 
     // 縺頑ｰ励↓蜈･繧翫↓谿九▲縺ｦ繧九→繧ｴ繝溘↓縺ｪ繧九・縺ｧ螟悶☆
     final prefs = await SharedPreferences.getInstance();
-    final fav = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+    final fav = (prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[])
         .toSet();
     fav.remove(item.id);
     await prefs.setStringList(
-      _PrefsKeys.favorites,
+      _mediaPref(_PrefsKeys.favorites),
       fav.toList(growable: false),
     );
-    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
     ratings.remove(item.id);
-    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
 
     if (metadataWarning != null && mounted) {
       ScaffoldMessenger.of(

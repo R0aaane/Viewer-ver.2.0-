@@ -2,8 +2,13 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/metadata_settings.dart';
+import 'auth_token_store.dart';
 
 class AppSettingsService {
+  final AuthTokenStore _tokenStore;
+  AppSettingsService({AuthTokenStore? tokenStore})
+    : _tokenStore = tokenStore ?? AuthTokenStore();
+  static const _secureTokenPresentKey = 'prefs.metadata.hasSecureToken';
   static const String _legacyMetadataModeKey = 'prefs.metadata.storageMode';
   static const String _appModeKey = 'prefs.app.mode';
   static const String _clientApiBaseUrlKey = 'prefs.client.apiBaseUrl';
@@ -25,11 +30,31 @@ class AppSettingsService {
           prefs.getString(_legacyMetadataApiBaseUrlKey) ??
           '';
       final hostPort = prefs.getInt(_hostPortKey) ?? 8090;
+      final legacyToken = prefs.getString(_metadataAuthTokenKey)?.trim();
+      String? token;
+      if (!_tokenStore.persistent ||
+          prefs.getBool(_secureTokenPresentKey) == true ||
+          legacyToken?.isNotEmpty == true) {
+        token = await _tokenStore.read();
+      }
+      if (_tokenStore.persistent &&
+          token == null &&
+          legacyToken?.isNotEmpty == true) {
+        await _tokenStore.write(legacyToken);
+        token = legacyToken;
+        if (!await prefs.setBool(_secureTokenPresentKey, true)) {
+          throw StateError('Cannot persist the secure credential marker');
+        }
+      }
+      if (prefs.containsKey(_metadataAuthTokenKey) &&
+          !await prefs.remove(_metadataAuthTokenKey)) {
+        throw StateError('Cannot remove the legacy credential');
+      }
       final settings = MetadataSettings(
         appMode: mode,
         clientApiBaseUrl: clientApiBaseUrl,
         hostPort: hostPort < 1 ? 8090 : hostPort,
-        authToken: prefs.getString(_metadataAuthTokenKey),
+        authToken: token,
         autoStartHostServer: prefs.getBool(_hostAutoStartKey) ?? false,
         hostLibraryPath: prefs.getString(_hostLibraryPathKey) ?? '',
       );
@@ -65,9 +90,18 @@ class AppSettingsService {
   }
 
   Future<void> saveMetadataSettings(MetadataSettings settings) async {
-    _memorySettings = settings;
     try {
       final prefs = await SharedPreferences.getInstance();
+      final token = settings.authToken?.trim();
+      await _tokenStore.write(token == null || token.isEmpty ? null : token);
+      await prefs.setBool(
+        _secureTokenPresentKey,
+        _tokenStore.persistent && token?.isNotEmpty == true,
+      );
+      if (prefs.containsKey(_metadataAuthTokenKey) &&
+          !await prefs.remove(_metadataAuthTokenKey)) {
+        throw StateError('Cannot remove the legacy credential');
+      }
       await prefs.setInt(_appModeKey, settings.appMode.index);
       await prefs.setInt(_legacyMetadataModeKey, settings.storageMode.index);
       await prefs.setString(_clientApiBaseUrlKey, settings.clientApiBaseUrl);
@@ -84,18 +118,14 @@ class AppSettingsService {
         await prefs.setString(_hostLibraryPathKey, libraryPath);
       }
 
-      final token = settings.authToken?.trim();
-      if (token == null || token.isEmpty) {
-        await prefs.remove(_metadataAuthTokenKey);
-      } else {
-        await prefs.setString(_metadataAuthTokenKey, token);
-      }
+      _memorySettings = settings;
     } catch (error, stackTrace) {
       debugPrint('[AppSettingsService] Failed to save settings: $error');
       debugPrintStack(
         label: '[AppSettingsService] saveMetadataSettings',
         stackTrace: stackTrace,
       );
+      rethrow;
     }
   }
 }

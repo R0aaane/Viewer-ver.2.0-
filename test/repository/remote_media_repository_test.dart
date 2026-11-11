@@ -18,7 +18,9 @@ void main() {
   late Directory cacheDirectory;
   late PathProviderPlatform originalPaths;
   setUp(() async {
-    cacheDirectory = await Directory.systemTemp.createTemp('remote-repository-test-');
+    cacheDirectory = await Directory.systemTemp.createTemp(
+      'remote-repository-test-',
+    );
     originalPaths = PathProviderPlatform.instance;
     PathProviderPlatform.instance = _TestPathProvider(cacheDirectory.path);
   });
@@ -26,6 +28,40 @@ void main() {
     PathProviderPlatform.instance = originalPaths;
     await cacheDirectory.delete(recursive: true);
   });
+  test(
+    'disk thumbnail and preview budgets are shared across source-scoped keys',
+    () async {
+      final item = _imageItem(id: 'mid_cache');
+      final first = _FakeRemoteMediaApiClient();
+      final second = _FakeRemoteMediaApiClient(baseUrl: 'http://second.test');
+      for (final api in [first, second]) {
+        final repo = RemoteMediaRepository(
+          apiClient: api,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: const _StubMediaRepository(),
+          thumbnailBudget: 4,
+          previewBudget: 4,
+        );
+        await Future.wait([repo.readThumbPair(item), repo.readThumbPair(item)]);
+        await repo.readThumbPair(item);
+        expect(api.thumbnailRequests, hasLength(1));
+        await repo.renderPageBytes(item, 1);
+        await repo.renderPageBytes(item, 1, maxWidth: 500);
+        for (final sub in ['thumbs', 'previews']) {
+          final dir = Directory(
+            '${cacheDirectory.path}/remote_media_cache/$sub',
+          );
+          final bytes = dir.listSync().whereType<File>().fold<int>(
+            0,
+            (n, f) => n + f.lengthSync(),
+          );
+          expect(bytes, 3);
+        }
+        await repo.dispose();
+      }
+    },
+  );
+
   group('RemoteMediaRepository.rename', () {
     test(
       'returns the refreshed remote item after a successful rename',
@@ -232,6 +268,47 @@ void main() {
   });
 
   group('RemoteMediaRepository.readThumbPair', () {
+    test(
+      'host entry with a locally existing path stays scoped to its own host',
+      () async {
+        final file = File('${cacheDirectory.path}/collision.png');
+        await file.writeAsBytes([9]);
+        final client = _FakeRemoteMediaApiClient()
+          ..folderEntriesByFolder[cacheDirectory.path] = [
+            RemoteFolderEntry(
+              entryId: file.path,
+              displayName: 'collision.png',
+              folderRaw: cacheDirectory.path,
+              kind: 'image',
+              mediaId: 'mid_remote',
+              fullPath: file.path,
+              mimeType: 'image/png',
+              sizeBytes: 1,
+              modifiedAt: null,
+            ),
+          ];
+        final repository = RemoteMediaRepository(
+          apiClient: client,
+          idResolver: _FakeMediaIdResolver(),
+          localPickerRepository: const _StubMediaRepository(),
+        );
+        final entry = (await repository.listMedia(
+          FolderHandle(cacheDirectory.path),
+        )).single;
+        expect((await repository.readThumbPair(entry)).front, [1, 2, 3]);
+        final other = RemoteMediaRepository(
+          apiClient: _FakeRemoteMediaApiClient(baseUrl: 'http://other.test'),
+          localPickerRepository: const _StubMediaRepository(),
+        );
+        await expectLater(
+          other.readThumbPair(entry),
+          throwsA(isA<RemoteMediaException>()),
+        );
+        await repository.dispose();
+        await other.dispose();
+      },
+    );
+
     test('uses the server mediaId remembered from folder entries', () async {
       final apiClient = _FakeRemoteMediaApiClient()
         ..folderEntriesByFolder[r'C:\library'] = <RemoteFolderEntry>[
@@ -667,6 +744,11 @@ class _RenameCall {
 }
 
 class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
+  @override
+  Future<Map<String, dynamic>?> fetchChanges({
+    int after = 0,
+    String? epoch,
+  }) async => null;
   List<FolderHandle> availableFolders = const <FolderHandle>[];
   final Map<String, List<RemoteFolderEntry>> folderEntriesByFolder =
       <String, List<RemoteFolderEntry>>{};
@@ -689,7 +771,7 @@ class _FakeRemoteMediaApiClient extends RemoteMediaApiClient {
   bool markDeletedOnDelete = true;
   void Function(MediaItem afterItem)? onRename;
 
-  _FakeRemoteMediaApiClient() : super(baseUrl: 'http://example.com');
+  _FakeRemoteMediaApiClient({super.baseUrl = 'http://example.com'});
 
   @override
   Future<List<FolderHandle>> listAvailableFolders() async => availableFolders;

@@ -1,0 +1,308 @@
+{
+  "label": "final",
+  "fixture": {
+    "owner": "pdf-viewer-performance-fixture-v1",
+    "count": 30000,
+    "templates": [
+      {
+        "width": 512,
+        "height": 768
+      },
+      {
+        "width": 768,
+        "height": 512
+      },
+      {
+        "width": 768,
+        "height": 1024
+      },
+      {
+        "width": 1024,
+        "height": 768
+      }
+    ],
+    "created": 1794393301.5285006,
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "logical_cpus": 16,
+    "source_bytes": 8900077780,
+    "prepare_seconds": 37.08831509999982
+  },
+  "started": 1794414277.7704034,
+  "memory_before": {
+    "working_set_mib": 47.12890625,
+    "peak_working_set_mib": 47.12890625,
+    "private_mib": 36.4921875
+  },
+  "source_sha256": {
+    "server/services/generated_library.py": "75bbfe38953b6f014c2aa86f1ef5bfe2ec1811728fc175da9ce5dd253913fdef",
+    "server/services/generated_catalog.py": "589fbedadc2bae5fa358a9a56723d46ebab6af1c5005811430cb0856f939f428",
+    "server/services/generation_jobs.py": "a1a27098a21f2e7f1d7cf19a0f98dee0678267426c641584b2f7446b6feecec2"
+  },
+  "import_prefix_samples": [
+    {
+      "images": 500,
+      "seconds": 15.74
+    },
+    {
+      "images": 1000,
+      "seconds": 31.29
+    },
+    {
+      "images": 1500,
+      "seconds": 47.32
+    },
+    {
+      "images": 2000,
+      "seconds": 62.88
+    },
+    {
+      "images": 2500,
+      "seconds": 79.15
+    },
+    {
+      "images": 3000,
+      "seconds": 94.77
+    },
+    {
+      "images": 3500,
+      "seconds": 110.62
+    },
+    {
+      "images": 4000,
+      "seconds": 126.09
+    },
+    {
+      "images": 4500,
+      "seconds": 142.28
+    },
+    {
+      "images": 5000,
+      "seconds": 159.19
+    },
+    {
+      "images": 5500,
+      "seconds": 175.18
+    },
+    {
+      "images": 6000,
+      "seconds": 191.42
+    },
+    {
+      "images": 6500,
+      "seconds": 207.73
+    },
+    {
+      "images": 7000,
+      "seconds": 223.29
+    },
+    {
+      "images": 7500,
+      "seconds": 239.32
+    },
+    {
+      "images": 8000,
+      "seconds": 254.69
+    },
+    {
+      "images": 8500,
+      "seconds": 270.48
+    },
+    {
+      "images": 9000,
+      "seconds": 287.09
+    },
+    {
+      "images": 9500,
+      "seconds": 303.75
+    },
+    {
+      "images": 10000,
+      "seconds": 320.17
+    },
+    {
+      "images": 10500,
+      "seconds": 336.49
+    },
+    {
+      "images": 11000,
+      "seconds": 353.29
+    },
+    {
+      "images": 11500,
+      "seconds": 370.97
+    },
+    {
+      "images": 12000,
+      "seconds": 388.6
+    },
+    {
+      "images": 12500,
+      "seconds": 404.81
+    },
+    {
+      "images": 13000,
+      "seconds": 420.82
+    },
+    {
+      "images": 13500,
+      "seconds": 437.39
+    },
+    {
+      "images": 14000,
+      "seconds": 454.14
+    },
+    {
+      "images": 14500,
+      "seconds": 473.05
+    },
+    {
+      "images": 15000,
+      "seconds": 492.52
+    },
+    {
+      "images": 15500,
+      "seconds": 511.19
+    },
+    {
+      "images": 16000,
+      "seconds": 530.11
+    },
+    {
+      "images": 16500,
+      "seconds": 548.65
+    },
+    {
+      "images": 17000,
+      "seconds": 566.68
+    },
+    {
+      "images": 17500,
+      "seconds": 585.26
+    },
+    {
+      "images": 18000,
+      "seconds": 603.02
+    },
+    {
+      "images": 18500,
+      "seconds": 620.62
+    },
+    {
+      "images": 19000,
+      "seconds": 638.15
+    },
+    {
+      "images": 19500,
+      "seconds": 655.86
+    },
+    {
+      "images": 20000,
+      "seconds": 673.5
+    },
+    {
+      "images": 20500,
+      "seconds": 689.77
+    },
+    {
+      "images": 21000,
+      "seconds": 706.31
+    },
+    {
+      "images": 21500,
+      "seconds": 722.59
+    },
+    {
+      "images": 22000,
+      "seconds": 739.11
+    },
+    {
+      "images": 22500,
+      "seconds": 755.66
+    },
+    {
+      "images": 23000,
+      "seconds": 771.99
+    },
+    {
+      "images": 23500,
+      "seconds": 789.0
+    },
+    {
+      "images": 24000,
+      "seconds": 805.34
+    },
+    {
+      "images": 24500,
+      "seconds": 821.96
+    },
+    {
+      "images": 25000,
+      "seconds": 838.64
+    },
+    {
+      "images": 25500,
+      "seconds": 855.18
+    },
+    {
+      "images": 26000,
+      "seconds": 871.91
+    },
+    {
+      "images": 26500,
+      "seconds": 888.74
+    },
+    {
+      "images": 27000,
+      "seconds": 905.37
+    },
+    {
+      "images": 27500,
+      "seconds": 922.12
+    },
+    {
+      "images": 28000,
+      "seconds": 939.02
+    },
+    {
+      "images": 28500,
+      "seconds": 956.01
+    },
+    {
+      "images": 29000,
+      "seconds": 972.27
+    },
+    {
+      "images": 29500,
+      "seconds": 988.8
+    },
+    {
+      "images": 30000,
+      "seconds": 1006.33
+    }
+  ],
+  "observe_seconds": 8.285762199997407,
+  "import_seconds": 1006.3448267000022,
+  "initial_seconds_including_settle": 1016.7305888999996,
+  "initial_ready": 30000,
+  "unchanged_scan_seconds": [
+    2.3027230000006966,
+    1.9365388999976858,
+    1.9809129999994184
+  ],
+  "delta_100_seconds_including_settle": 9.007612400000653,
+  "scan_memory_peak": {
+    "working_set_mib": 116.7890625,
+    "peak_working_set_mib": 116.96484375,
+    "private_mib": 105.21875
+  },
+  "scan_memory_after": {
+    "working_set_mib": 112.98046875,
+    "peak_working_set_mib": 116.96484375,
+    "private_mib": 101.5234375
+  },
+  "library_bytes": {
+    "originals": 8919910880,
+    "thumbs": 1670485400
+  }
+}

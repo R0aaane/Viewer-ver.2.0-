@@ -24,11 +24,29 @@ class RemoteTagRecord {
 }
 
 class RemoteTagApiClient {
+  final _observedVersions = <String, int>{};
+  final _observedEpochs = <String, String>{};
+
+  void _rememberVersion(String requestedId, dynamic response) {
+    if (response is Map && response['version'] is int) {
+      _observedVersions[requestedId] = response['version'] as int;
+      if (response['epoch'] is String) {
+        _observedEpochs[requestedId] = response['epoch'] as String;
+        _observedEpochs['${response['mediaId'] ?? requestedId}'] =
+            response['epoch'] as String;
+      }
+      _observedVersions['${response['mediaId'] ?? requestedId}'] =
+          response['version'] as int;
+    }
+  }
+
+  final String? sourceId;
   final String baseUrl;
   final Duration timeout;
   final FutureOr<Map<String, String>> Function()? defaultHeadersProvider;
 
-  const RemoteTagApiClient({
+  RemoteTagApiClient({
+    this.sourceId,
     required this.baseUrl,
     this.timeout = const Duration(seconds: 15),
     this.defaultHeadersProvider,
@@ -77,6 +95,7 @@ class RemoteTagApiClient {
       '/tags/item/${Uri.encodeComponent(mediaId)}',
       queryParameters: _identityQueryParameters(identity),
     );
+    _rememberVersion(mediaId, json);
     final rows = _unwrapList(
       json,
       preferredKeys: const ['tags', 'items', 'results'],
@@ -89,13 +108,18 @@ class RemoteTagApiClient {
     Tag tag, {
     ResolvedMediaIdentity? identity,
   }) async {
-    await _postJson(
+    final json = await _postJson(
       '/tags/item/${Uri.encodeComponent(mediaId)}',
       <String, dynamic>{
+        if (_observedVersions.containsKey(mediaId))
+          'expectedVersion': _observedVersions[mediaId],
+        if (_observedEpochs.containsKey(mediaId))
+          'expectedEpoch': _observedEpochs[mediaId],
         'tag': _tagToJson(tag),
         if (identity != null) 'identity': identity.toJson(),
       },
     );
+    _rememberVersion(mediaId, json);
   }
 
   Future<void> replaceTagsForItem(
@@ -103,13 +127,18 @@ class RemoteTagApiClient {
     List<Tag> tags, {
     ResolvedMediaIdentity? identity,
   }) async {
-    await _putJson(
+    final json = await _putJson(
       '/tags/item/${Uri.encodeComponent(mediaId)}',
       <String, dynamic>{
+        if (_observedVersions.containsKey(mediaId))
+          'expectedVersion': _observedVersions[mediaId],
         'tags': tags.map(_tagToJson).toList(growable: false),
+        if (_observedEpochs.containsKey(mediaId))
+          'expectedEpoch': _observedEpochs[mediaId],
         if (identity != null) 'identity': identity.toJson(),
       },
     );
+    _rememberVersion(mediaId, json);
   }
 
   Future<void> deleteItemTag(
@@ -117,10 +146,17 @@ class RemoteTagApiClient {
     String tagId, {
     ResolvedMediaIdentity? identity,
   }) async {
-    await _deleteJson(
+    final json = await _deleteJson(
       '/tags/item/${Uri.encodeComponent(mediaId)}/${Uri.encodeComponent(tagId)}',
-      queryParameters: _identityQueryParameters(identity),
+      queryParameters: {
+        ...?_identityQueryParameters(identity),
+        if (_observedEpochs.containsKey(mediaId))
+          'expected_epoch': _observedEpochs[mediaId]!,
+        if (_observedVersions.containsKey(mediaId))
+          'expected_version': '${_observedVersions[mediaId]}',
+      },
     );
+    _rememberVersion(mediaId, json);
   }
 
   Future<List<RemoteTagRecord>> fetchMasterTags(
@@ -209,9 +245,14 @@ class RemoteTagApiClient {
       '/favorites/${Uri.encodeComponent(mediaId)}',
       <String, dynamic>{
         'isFavorite': isFavorite,
+        if (_observedEpochs.containsKey(mediaId))
+          'expectedEpoch': _observedEpochs[mediaId],
+        if (_observedVersions.containsKey(mediaId))
+          'expectedVersion': _observedVersions[mediaId],
         if (identity != null) 'identity': identity.toJson(),
       },
     );
+    _rememberVersion(mediaId, json);
     if (json is Map && json['mediaId'] != null) {
       return json['mediaId'].toString();
     }
@@ -583,6 +624,7 @@ class RemoteTagApiClient {
     final kindName = raw['kind']?.toString().trim().toLowerCase() ?? 'pdf';
     return MediaItem(
       id: fullPath.isNotEmpty ? fullPath : mediaId,
+      sourceId: sourceId,
       displayName: raw['displayName']?.toString() ?? mediaId,
       kind: kindName == 'image' ? MediaKind.image : MediaKind.pdf,
       folderRaw: raw['folderRaw']?.toString() ?? '',

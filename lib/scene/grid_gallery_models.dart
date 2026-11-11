@@ -15,6 +15,8 @@ enum _SortMode {
 enum _MainPage { home, gallery, search, hitomiSearch }
 
 enum _HomeMenuAction {
+  localLibrary,
+  generatedGallery,
   addFolder,
   importToLibrary,
   importUrlToLibrary,

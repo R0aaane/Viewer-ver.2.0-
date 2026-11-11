@@ -14,6 +14,8 @@ import 'package:pdf_viewer/database/tag_service.dart';
 import 'package:pdf_viewer/models/mediaItem.dart';
 import 'package:pdf_viewer/models/metadata_settings.dart';
 import 'package:pdf_viewer/repository/folderRepository.dart';
+import 'package:pdf_viewer/repository/remote_media_repository.dart';
+import 'package:pdf_viewer/models/folder.dart';
 import 'package:pdf_viewer/scene/detailImage.dart';
 import 'package:pdf_viewer/services/app_settings_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -112,6 +114,24 @@ void main() {
     await repo.dispose();
     PathProviderPlatform.instance = originalPaths;
     await temp.delete(recursive: true);
+  });
+
+  testWidgets('switch from a stopped host and read local image and PDF', (tester) async {
+    final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final endpoint = 'http://127.0.0.1:${socket.port}';
+    await socket.close();
+    final settings = MetadataSettings(appMode:AppMode.client,clientApiBaseUrl:endpoint);
+    final switching = SwitchingMediaRepository(repo, initialSettings:settings);
+    await expectLater(switching.listAvailableFolders(),throwsA(anything));
+    await AppSettingsService().saveMetadataSettings(settings.copyWith(appMode:AppMode.standalone));
+    await switching.reloadSettings();
+    final pdf = await _pdf(temp, 'offline-reader', 2);
+    await File('${temp.path}/offline.png').writeAsBytes(im.encodePng(im.Image(width:8,height:12)));
+    final page = await switching.listMediaPage(FolderHandle(temp.path),offset:0,limit:20);
+    final image = page.items.singleWhere((item)=>item.displayName=='offline.png');
+    expect(im.decodePng(await switching.readBytes(image))?.height,12);
+    expect(await switching.getPageCount(pdf),2);
+    expect(im.decodePng(await switching.renderPageBytes(pdf,2,maxWidth:320))?.width,320);
   });
 
   testWidgets('native 1000-page PDF, rapid switching, and resource release', (

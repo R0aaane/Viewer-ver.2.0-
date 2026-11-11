@@ -12,6 +12,7 @@ class SqliteStore:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._atomic_depth = 0
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
@@ -23,9 +24,11 @@ class SqliteStore:
             cursor = self._conn.cursor()
             try:
                 yield cursor
-                self._conn.commit()
+                if self._atomic_depth == 0:
+                    self._conn.commit()
             except Exception:
-                self._conn.rollback()
+                if self._atomic_depth == 0:
+                    self._conn.rollback()
                 raise
             finally:
                 cursor.close()
@@ -184,6 +187,38 @@ class SqliteStore:
                 "CREATE INDEX IF NOT EXISTS idx_reading_progress_bookmarked "
                 "ON reading_progress(is_bookmarked, last_read_at)"
             )
+
+        from server.services.change_log import initialize
+        initialize(self._conn)
+
+    @contextmanager
+    def versioned_edit(self, media_id, expected, epoch=None):
+        from fastapi import HTTPException
+        from server.services.change_log import version
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._atomic_depth += 1
+            try:
+                if epoch is not None and self.sync_epoch() != epoch:
+                    raise HTTPException(409, "ホストが復元されました。最新の内容を取得してください")
+                if isinstance(expected, int) and version(self._conn, media_id) != expected:
+                    raise HTTPException(409, "別の端末で更新されました。最新の内容を確認して編集し直してください")
+                yield
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+            finally:
+                self._atomic_depth -= 1
+
+    def media_version(self, media_id):
+        from server.services.change_log import version
+        with self._lock:
+            return version(self._conn, media_id)
+
+    def sync_epoch(self):
+        with self._lock:
+            return self._conn.execute("SELECT epoch FROM sync_meta WHERE id=1").fetchone()[0]
 
     def close(self) -> None:
         with self._lock:

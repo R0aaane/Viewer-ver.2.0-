@@ -81,15 +81,16 @@ class _LruCache<K, V> {
 class _FsPageEntry {
   final String path;
   final String name;
+  final String sortName;
   final MediaKind kind;
   final String? mimeType;
 
-  const _FsPageEntry({
+  _FsPageEntry({
     required this.path,
     required this.name,
     required this.kind,
     this.mimeType,
-  });
+  }) : sortName = name.toLowerCase();
 }
 
 class WindowsFolderRepository implements MediaRepository {
@@ -456,11 +457,7 @@ class WindowsFolderRepository implements MediaRepository {
       }
 
       if (ent is File) {
-        final name = ent.uri.pathSegments.isNotEmpty
-            ? ent.uri.pathSegments.last
-            : ent.path;
-        if (!_isTargetFileName(name)) continue;
-
+        final name = _fileName(ent.path);
         final ext = _lowerExt(name);
         final kind = _mediaKindForExt(ext);
         if (kind == null) continue;
@@ -474,7 +471,7 @@ class WindowsFolderRepository implements MediaRepository {
       if (leftKindOrder != rightKindOrder) {
         return leftKindOrder.compareTo(rightKindOrder);
       }
-      return left.name.toLowerCase().compareTo(right.name.toLowerCase());
+      return left.sortName.compareTo(right.sortName);
     });
 
     final total = entries.length;
@@ -800,22 +797,20 @@ class WindowsFolderRepository implements MediaRepository {
   }
 
   Future<bool> _isGifCollectionDirectory(Directory dir) async {
-    return (await _gifCollectionPageFiles(dir)).isNotEmpty;
+    return !(await _gifCollectionMembers(dir).isEmpty);
+  }
+
+  Stream<File> _gifCollectionMembers(Directory dir) async* {
+    if (!await dir.exists()) return;
+    await for (final ent in dir.list(recursive: false, followLinks: false)) {
+      if (ent is File && await _isGifCollectionMemberFile(ent)) {
+        yield ent;
+      }
+    }
   }
 
   Future<List<File>> _gifCollectionPageFiles(Directory dir) async {
-    if (!await dir.exists()) {
-      return const <File>[];
-    }
-    final pages = <File>[];
-    await for (final ent in dir.list(recursive: false, followLinks: false)) {
-      if (ent is! File) {
-        continue;
-      }
-      if (await _isGifCollectionMemberFile(ent)) {
-        pages.add(ent);
-      }
-    }
+    final pages = await _gifCollectionMembers(dir).toList();
     pages.sort(
       (a, b) => _fileName(
         a.path,

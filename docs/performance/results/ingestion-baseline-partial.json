@@ -1,0 +1,33 @@
+{
+  "observation_30000_seconds": 75.98,
+  "prefix_samples": [
+    {
+      "images": 500,
+      "seconds": 32.38
+    },
+    {
+      "images": 1000,
+      "seconds": 67.98
+    },
+    {
+      "images": 1500,
+      "seconds": 102.46
+    },
+    {
+      "images": 2000,
+      "seconds": 136.76
+    }
+  ],
+  "partial_ready_after_profiling": 2248,
+  "initial_full_scan_completed": false,
+  "source_sha256": {
+    "server/services/generated_library.py": "29c47f7d864c86c000e52ac68903acd2530c0bd6bf957984b54aaf44ccd1f978",
+    "server/services/generated_catalog.py": "175c89f45e3fd603fbd0855cdc56f2bd39d0a766b25cb22323dcd6e5918b0692",
+    "server/services/generation_jobs.py": "1740ac2fcf6ae6d8bb2d65da14a17917a58f8dc2a25a148e250dd436c2c976f9"
+  },
+  "unchanged_scan_30000_same_catalog_seconds": [
+    5.295378300001175,
+    5.594722499999989,
+    5.507888000000094
+  ]
+}

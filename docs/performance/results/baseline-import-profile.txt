@@ -1,0 +1,30 @@
+         213314 function calls (213228 primitive calls) in 5.323 seconds
+
+   Ordered by: cumulative time
+   List reduced from 515 to 22 due to restriction <22>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      100    0.020    0.000    5.323    0.053 E:\_workspace\Flutter\pdf_viewer\server\services\generated_library.py:209(_consider)
+      100    0.006    0.000    3.262    0.033 E:\_workspace\Flutter\pdf_viewer\server\services\generated_library.py:270(_publish)
+      100    0.003    0.000    1.782    0.018 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\Image.py:2474(save)
+      100    0.002    0.000    1.777    0.018 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\PngImagePlugin.py:1305(_save)
+      100    0.001    0.000    1.772    0.018 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\ImageFile.py:625(_save)
+      100    0.005    0.000    1.771    0.018 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\ImageFile.py:653(_encode_tile)
+      200    1.702    0.009    1.702    0.009 {method 'encode' of 'ImagingEncoder' objects}
+      800    1.215    0.002    1.218    0.002 {built-in method io.open}
+      400    0.001    0.000    1.189    0.003 C:\Users\koori\AppData\Local\Programs\Python\Python310\lib\pathlib.py:1111(open)
+      400    0.907    0.002    0.907    0.002 {method '__exit__' of 'sqlite3.Connection' objects}
+      100    0.003    0.000    0.610    0.006 E:\_workspace\Flutter\pdf_viewer\server\services\generated_library.py:36(_file_digest)
+      100    0.008    0.000    0.402    0.004 E:\_workspace\Flutter\pdf_viewer\server\services\generated_catalog.py:32(analyze)
+      200    0.397    0.002    0.397    0.002 {built-in method nt.fsync}
+      600    0.010    0.000    0.373    0.001 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\ImageFile.py:273(load)
+     1650    0.262    0.000    0.262    0.000 {method 'decode' of 'ImagingDecoder' objects}
+      100    0.002    0.000    0.161    0.002 E:\_workspace\Flutter\pdf_viewer\server\services\generation_metadata.py:6(read_generation)
+      100    0.001    0.000    0.144    0.001 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\Image.py:2704(thumbnail)
+      100    0.001    0.000    0.136    0.001 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\Image.py:2215(resize)
+      200    0.001    0.000    0.128    0.001 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\PngImagePlugin.py:1088(getexif)
+     1400    0.121    0.000    0.121    0.000 {method 'write' of '_io.BufferedWriter' objects}
+    13112    0.118    0.000    0.118    0.000 {method 'read' of '_io.BufferedReader' objects}
+      400    0.004    0.000    0.106    0.000 E:\_workspace\Flutter\pdf_viewer\.venv\lib\site-packages\PIL\Image.py:3459(open)
+
+

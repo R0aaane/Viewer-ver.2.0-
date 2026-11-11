@@ -176,7 +176,7 @@ class _ThumbTile extends StatelessWidget {
                 if (item.kind == MediaKind.pdf || item.kind == MediaKind.epub)
                   _PdfBadge(label: ItemNameService.kindLabel(item)),
                 const SizedBox(width: 6),
-                _FavButton(isFavorite: isFavorite, onPressed: onToggleFavorite),
+                GalleryFavoriteButton(isFavorite: isFavorite, onPressed: onToggleFavorite),
                 if ((canRenameItem && onRenameItem != null) ||
                     (canDeleteItem && onDeleteItem != null)) ...[
                   const SizedBox(width: 4),
@@ -246,33 +246,6 @@ class _ThumbTile extends StatelessWidget {
         alignment: Alignment.topRight,
         padding: const EdgeInsets.all(8),
         child: const Icon(Icons.check_circle, size: 26),
-      ),
-    );
-  }
-}
-
-class _FavButton extends StatelessWidget {
-  final bool isFavorite;
-  final VoidCallback onPressed;
-
-  const _FavButton({required this.isFavorite, required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.55),
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: onPressed,
-        child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Icon(
-            isFavorite ? Icons.star : Icons.star_border,
-            size: 18,
-            color: Colors.white,
-          ),
-        ),
       ),
     );
   }

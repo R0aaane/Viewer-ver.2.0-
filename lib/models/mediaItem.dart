@@ -3,6 +3,8 @@ import 'tag.dart';
 enum MediaKind { image, pdf, epub, folder }
 
 class MediaItem {
+  /// Present for host entries, including ones whose path also exists locally.
+  final String? sourceId;
   final String id; // Windowsはfull path / Android: document Uri
   final String displayName; // file name
   final DateTime? modified;
@@ -19,6 +21,7 @@ class MediaItem {
   final List<Tag> tags;
 
   const MediaItem({
+    this.sourceId,
     required this.id,
     required this.displayName,
     required this.kind,

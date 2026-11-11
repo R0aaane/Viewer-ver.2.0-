@@ -1,0 +1,201 @@
+{
+  "label": "improved",
+  "fixture": {
+    "owner": "pdf-viewer-performance-fixture-v1",
+    "count": 30000,
+    "templates": [
+      {
+        "width": 512,
+        "height": 768
+      },
+      {
+        "width": 768,
+        "height": 512
+      },
+      {
+        "width": 768,
+        "height": 1024
+      },
+      {
+        "width": 1024,
+        "height": 768
+      }
+    ],
+    "created": 1794393301.5285006,
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "logical_cpus": 16,
+    "source_bytes": 8900077780,
+    "prepare_seconds": 37.08831509999982
+  },
+  "started": 1794393871.2156434,
+  "memory_before": {
+    "working_set_mib": 47.37109375,
+    "peak_working_set_mib": 47.37109375,
+    "private_mib": 36.73828125
+  },
+  "observe_seconds": 5.259450599998672,
+  "import_seconds": 883.4546992000014,
+  "initial_seconds_including_settle": 890.8141498000001,
+  "initial_ready": 30000,
+  "unchanged_scan_seconds": [
+    1.5668979000001855,
+    1.3796837999998388,
+    1.3384984000003897
+  ],
+  "delta_100_seconds_including_settle": 9.289186300000438,
+  "scan_memory_peak": {
+    "working_set_mib": 110.99609375,
+    "peak_working_set_mib": 111.39453125,
+    "private_mib": 100.26171875
+  },
+  "scan_memory_after": {
+    "working_set_mib": 105.859375,
+    "peak_working_set_mib": 111.39453125,
+    "private_mib": 94.328125
+  },
+  "library_bytes": {
+    "originals": 8919910880,
+    "thumbs": 1670485400
+  },
+  "search_http": {
+    "first": {
+      "n": 30,
+      "p50_ms": 234.30085000018153,
+      "p95_ms": 451.9734999994398,
+      "max_ms": 468.8122999996267,
+      "mean_ms": 251.5705733332652
+    },
+    "middle": {
+      "n": 30,
+      "p50_ms": 261.2138000004052,
+      "p95_ms": 282.3470000002999,
+      "max_ms": 290.4613999999128,
+      "mean_ms": 263.5133333333215
+    },
+    "last": {
+      "n": 30,
+      "p50_ms": 260.0892999998905,
+      "p95_ms": 275.992299999416,
+      "max_ms": 337.01990000008664,
+      "mean_ms": 263.4640599999936
+    },
+    "name": {
+      "n": 30,
+      "p50_ms": 206.1683499996434,
+      "p95_ms": 217.83199999845237,
+      "max_ms": 219.10310000021127,
+      "mean_ms": 208.0725266666074
+    },
+    "oldest": {
+      "n": 30,
+      "p50_ms": 235.6395499991777,
+      "p95_ms": 277.81490000052145,
+      "max_ms": 330.80449999943085,
+      "mean_ms": 232.6108433333502
+    },
+    "prompt_common": {
+      "n": 30,
+      "p50_ms": 60.34914999963803,
+      "p95_ms": 66.83710000106657,
+      "max_ms": 69.6486000015284,
+      "mean_ms": 60.93510666669317
+    },
+    "prompt_rare": {
+      "n": 30,
+      "p50_ms": 64.26085000111925,
+      "p95_ms": 76.92470000074536,
+      "max_ms": 94.244300000355,
+      "mean_ms": 66.73180000010082
+    },
+    "favorite": {
+      "n": 30,
+      "p50_ms": 225.44645000016317,
+      "p95_ms": 238.56449999948381,
+      "max_ms": 241.22820000047795,
+      "mean_ms": 226.66152000025855
+    },
+    "tag_and": {
+      "n": 30,
+      "p50_ms": 269.5008999999118,
+      "p95_ms": 286.4905999995244,
+      "max_ms": 291.6690000001836,
+      "mean_ms": 269.48721666661487
+    },
+    "tag_not": {
+      "n": 30,
+      "p50_ms": 429.4324000002234,
+      "p95_ms": 583.3366999995633,
+      "max_ms": 592.1677999995154,
+      "mean_ms": 460.9293933333902
+    }
+  },
+  "thumbnail_http": {
+    "n": 48,
+    "p50_ms": 8.689149999554502,
+    "p95_ms": 10.30469999932393,
+    "max_ms": 14.002999998410814,
+    "mean_ms": 8.908118749900495
+  },
+  "concurrent_16_search": {
+    "n": 160,
+    "p50_ms": 1664.6284500002366,
+    "p95_ms": 3108.6113000001205,
+    "max_ms": 3354.9008999998478,
+    "mean_ms": 1576.076954375003,
+    "wall_seconds": 16.452069900000424
+  },
+  "mock_job_queue": {
+    "count": 12,
+    "states": [
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "wait": {
+      "n": 12,
+      "p50_ms": 1668.96390914917,
+      "p95_ms": 3311.211585998535,
+      "max_ms": 3311.211585998535,
+      "mean_ms": 1669.3106492360432
+    },
+    "total": {
+      "n": 12,
+      "p50_ms": 1984.578013420105,
+      "p95_ms": 3624.9921321868896,
+      "max_ms": 3624.9921321868896,
+      "mean_ms": 1977.228323618571
+    },
+    "mock_gpu_seconds": 0.2
+  },
+  "unchanged_scan_30000_same_catalog_seconds": [
+    1.5868124999997235,
+    1.8078186999991885,
+    1.8362242999992304
+  ],
+  "measurement_stage": "before_search_optimization",
+  "initial_ingestion_note": "Earlier ingestion run before final search indexes; see ingestion-final.json for final-code ingestion.",
+  "invalid_launcher_memory": {
+    "http_memory_start": {
+      "working_set_mib": 4.22265625,
+      "peak_working_set_mib": 4.22265625,
+      "private_mib": 0.87890625
+    },
+    "http_memory_peak": {
+      "working_set_mib": 4.22265625,
+      "peak_working_set_mib": 4.22265625,
+      "private_mib": 0.87890625
+    },
+    "reason": "Windows venv launcher, not Python worker; excluded from RAM results."
+  },
+  "launcher_pid": 7792
+}

@@ -13,12 +13,15 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app/app_content_mode.dart';
 import '../database/tag_service.dart';
 import '../models/folder.dart';
+import '../models/metadata_settings.dart';
 import '../models/mediaItem.dart';
 import '../models/reading_progress.dart';
 import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
 import '../services/app_reading_progress_service.dart';
 import '../services/app_version_service.dart';
+import '../services/local_ai_bridge.dart';
+import 'widgets/local_ai_panel.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
 import '../services/import_pdf_conversion_service.dart';
@@ -37,6 +40,7 @@ import '../widgets/gallery_tag_picker.dart';
 
 import 'artistTagIndex.dart';
 import 'detailImage.dart';
+import 'generated_gallery_page.dart';
 import 'metadata_settings_dialog.dart';
 import 'rename_item_dialog.dart';
 import 'TagResults.dart';
@@ -71,6 +75,22 @@ class GalleryGridPage extends StatefulWidget {
 }
 
 class _GalleryGridPageState extends State<GalleryGridPage> {
+  late final LocalAiBridge _localAiBridge;
+
+  Future<bool> _openLocalAiDocument(LocalAiDocument document) async {
+    if (!mounted || widget.tagService.settings.isClientMode ||
+        ModalRoute.of(context)?.isCurrent != true ||
+        !await File(document.path).exists()) {
+      return false;
+    }
+    if (!mounted) return false;
+    final item = MediaItem(id: document.path, displayName: document.title,
+        kind: MediaKind.pdf, folderRaw: p.dirname(document.path));
+    unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) =>
+        ImageDetailPage(repo: widget.repo, tagService: widget.tagService,
+            items: [item], initialIndex: 0))));
+    return true;
+  }
   final ExternalShareService _externalShareService = ExternalShareService();
   final AppVersionService _appVersionService = AppVersionService();
   final UrlImportDownloaderService _urlImportDownloaderService =
@@ -117,6 +137,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   int _mediaThumbCacheBytes = 0;
   int _mediaThumbActive = 0;
   int _visiblePrepareGeneration = 0;
+  int _repositoryGeneration = 0;
   final List<Completer<void>> _mediaThumbWaiters = [];
   static const int _mediaThumbMaxWidth = 160;
   static const int _mediaThumbCacheMaxEntries = 240;
@@ -367,6 +388,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   @override
   void initState() {
     super.initState();
+    _localAiBridge = LocalAiBridge(
+      dataDirectory: Platform.environment['LOCALAI_DATA_DIRECTORY'] ??
+          p.join(Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path, 'LocalAI'),
+      open: _openLocalAiDocument,
+      showHome: () { if (mounted) setState(() => _page = _MainPage.home); },
+    );
     _searchFocusNode.addListener(_handleGallerySearchFocusChange);
     _hitomiSearchCtrl.addListener(_handleHitomiSearchTextChanged);
     _loadPrefsAndAutoOpenFolder();
@@ -512,6 +539,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                   if (actionLabel != null && onAction != null) ...[
                     const SizedBox(height: 16),
                     FilledButton(onPressed: onAction, child: Text(actionLabel)),
+                    if (widget.repo.isRemoteMode && _initializationErrorMessage != null)
+                      TextButton.icon(onPressed: _openLocalLibrary, icon: const Icon(Icons.folder_open),
+                          label: const Text('ローカルの画像・PDFを開く')),
                   ],
                 ],
               ),
@@ -668,8 +698,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           .listRemoteFavoriteIds()
           .catchError((_) => null);
       var favList =
-          prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
-      var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+          prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[];
+      var ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
       final remoteRatingsFuture = widget.tagService
           .listRemoteRatings()
           .catchError((_) => null);
@@ -677,11 +707,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       final remoteRatings = await remoteRatingsFuture;
       if (remoteFavorites != null) {
         favList = remoteFavorites.toList(growable: false);
-        await prefs.setStringList(_PrefsKeys.favorites, favList);
+        await prefs.setStringList(_mediaPref(_PrefsKeys.favorites), favList);
       }
       if (remoteRatings != null) {
         ratings = remoteRatings;
-        await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+        await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
       }
       _tagsById = <String, List<String>>{};
       _tagDetailsById = <String, List<TagWithId>>{};
@@ -1047,13 +1077,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _reloadRatings() async {
     final prefs = await SharedPreferences.getInstance();
-    var ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    var ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
     final remoteRatings = await widget.tagService
         .listRemoteRatings()
         .catchError((_) => null);
     if (remoteRatings != null) {
       ratings = remoteRatings;
-      await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+      await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
     }
     if (!mounted) return;
     setState(() => _ratingsById = ratings);
@@ -1099,11 +1129,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   Future<void> _replaceRatingId(String oldId, String newId) async {
     final prefs = await SharedPreferences.getInstance();
-    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
     final rating = ratings.remove(oldId);
     if (rating == null) return;
     ratings[newId] = rating;
-    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
     if (!mounted) return;
     setState(() => _ratingsById = ratings);
   }
@@ -1112,13 +1142,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     final ids = itemIds.where((entry) => entry.trim().isNotEmpty).toSet();
     if (ids.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
-    final ratings = _decodeRatings(prefs.getString(_PrefsKeys.ratingsJson));
+    final ratings = _decodeRatings(prefs.getString(_mediaPref(_PrefsKeys.ratingsJson)));
     var changed = false;
     for (final id in ids) {
       changed = ratings.remove(id) != null || changed;
     }
     if (!changed) return;
-    await prefs.setString(_PrefsKeys.ratingsJson, jsonEncode(ratings));
+    await prefs.setString(_mediaPref(_PrefsKeys.ratingsJson), jsonEncode(ratings));
     if (!mounted) return;
     setState(() => _ratingsById = ratings);
   }
@@ -1263,13 +1293,13 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   // --------------------
   Future<void> _reloadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
-    var favList = prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[];
+    var favList = prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[];
     final remoteFavorites = await widget.tagService
         .listRemoteFavoriteIds()
         .catchError((_) => null);
     if (remoteFavorites != null) {
       favList = remoteFavorites.toList(growable: false);
-      await prefs.setStringList(_PrefsKeys.favorites, favList);
+      await prefs.setStringList(_mediaPref(_PrefsKeys.favorites), favList);
     }
     if (!mounted) return;
     setState(() => _favorites = favList.toSet());
@@ -1303,7 +1333,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(
-      _PrefsKeys.favorites,
+      _mediaPref(_PrefsKeys.favorites),
       next.toList(growable: false),
     );
     if (!mounted) return;
@@ -1363,14 +1393,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
     final prefs = await SharedPreferences.getInstance();
-    final next = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+    final next = (prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[])
         .toSet();
     if (!next.remove(oldId)) {
       return;
     }
     next.add(newId);
     await prefs.setStringList(
-      _PrefsKeys.favorites,
+      _mediaPref(_PrefsKeys.favorites),
       next.toList(growable: false),
     );
     if (!mounted) {
@@ -1537,11 +1567,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       return;
     }
     final prefs = await SharedPreferences.getInstance();
-    final next = (prefs.getStringList(_PrefsKeys.favorites) ?? const <String>[])
+    final next = (prefs.getStringList(_mediaPref(_PrefsKeys.favorites)) ?? const <String>[])
         .toSet();
     next.removeAll(ids);
     await prefs.setStringList(
-      _PrefsKeys.favorites,
+      _mediaPref(_PrefsKeys.favorites),
       next.toList(growable: false),
     );
     if (!mounted) return;
@@ -1702,6 +1732,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   @override
   void dispose() {
+    _localAiBridge.dispose();
     _thumbResumeDebounce?.cancel();
     _homeSearchDebounce?.cancel();
     _hitomiSuggestionDebounce?.cancel();
@@ -1728,7 +1759,22 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       hostServerService: widget.hostServerService,
     );
     if (changed != true || !mounted) return;
+    await _applyRepositorySettings(previousSettings, wasHostRunning);
+  }
+
+  String _mediaPref(String key) => widget.repo.isRemoteMode
+      ? widget.tagService.settings.mediaPreferenceKey(key) : key;
+
+  Future<void> _openLocalLibrary() async {
+    final previous = widget.tagService.settings;
+    if (!previous.isClientMode || _initializing) return;
+    await widget.tagService.updateMetadataSettings(previous.copyWith(appMode: AppMode.standalone));
+    if (mounted) await _applyRepositorySettings(previous, false);
+  }
+
+  Future<void> _applyRepositorySettings(MetadataSettings previousSettings, bool wasHostRunning) async {
     await widget.repo.reloadSettings();
+    _repositoryGeneration++;
     await widget.hostServerService.refresh();
     final nextSettings = widget.tagService.settings;
     final shouldRestartHostServer =
@@ -1796,6 +1842,16 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     switch (action) {
       case _HomeMenuAction.addFolder:
         await _addFolder();
+        return;
+      case _HomeMenuAction.generatedGallery:
+        final settings = widget.tagService.settings;
+        await Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
+          baseUrl: settings.isHostMode ? settings.hostLoopbackApiBaseUrl : settings.remoteApiBaseUrl,
+          token: settings.authToken,
+        )));
+        return;
+      case _HomeMenuAction.localLibrary:
+        await _openLocalLibrary();
         return;
       case _HomeMenuAction.importToLibrary:
         await _importToLibraryAndTag();
@@ -1886,6 +1942,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       icon: const Icon(Icons.more_vert),
       onSelected: _onHomeMenuSelected,
       itemBuilder: (context) => <PopupMenuEntry<_HomeMenuAction>>[
+        if (widget.repo.isRemoteMode)
+          PopupMenuItem(enabled: !_initializing, value: _HomeMenuAction.localLibrary, child: const Text('ローカルの画像・PDFを開く')),
+        if (!widget.tagService.settings.isStandaloneMode)
+          const PopupMenuItem(value: _HomeMenuAction.generatedGallery, child: Text('生成画像')),
         PopupMenuItem(
           value: _HomeMenuAction.addFolder,
           child: ListTile(

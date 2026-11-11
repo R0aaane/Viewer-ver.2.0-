@@ -17,6 +17,7 @@ import '../models/metadata_settings.dart';
 import '../models/reading_progress.dart';
 import '../models/tag.dart';
 import '../widgets/gallery_tag_picker.dart';
+import '../scene/generated_gallery_page.dart';
 import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
@@ -394,7 +395,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.231+241',
+  defaultValue: '1.0.240+250',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -609,8 +610,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   MetadataSettings _resolveInitialSettings(MetadataSettings settings) {
+    if (Uri.base.queryParameters.containsKey('token')) {
+      final parameters = Map<String, String>.from(Uri.base.queryParameters)..remove('token');
+      html.window.history.replaceState(null, '', Uri.base.replace(queryParameters: parameters).toString());
+    }
     final apiFromUri = Uri.base.queryParameters['api']?.trim();
-    final tokenFromUri = Uri.base.queryParameters['token']?.trim();
     final fallbackApiBaseUrl = _resolveInitialApiBaseUrl(
       settings,
       apiFromUri: apiFromUri,
@@ -618,8 +622,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return settings.copyWith(
       appMode: AppMode.client,
       clientApiBaseUrl: apiFromUri ?? fallbackApiBaseUrl,
-      authToken: tokenFromUri ?? settings.authToken,
-      clearAuthToken: tokenFromUri != null && tokenFromUri.isEmpty,
+      authToken: settings.authToken,
     );
   }
 
@@ -734,7 +737,15 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       _statusMessage = null;
       _isConnecting = true;
     });
-    await widget.settingsService.saveMetadataSettings(nextSettings);
+    try {
+      await widget.settingsService.saveMetadataSettings(nextSettings);
+    } catch (_) {
+      if (mounted) setState(() {
+        _errorMessage = '接続設定を保存できませんでした。再試行してください';
+        _isConnecting = false;
+      });
+      return;
+    }
 
     if (apiBaseUrl.isEmpty) {
       if (!mounted) return;
@@ -2897,6 +2908,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                         ? Icons.check_box
                         : Icons.check_box_outline_blank,
                   ),
+                ),
+              if (_client != null && _surface == _WebRemoteSurface.home)
+                IconButton(
+                  tooltip: '生成画像',
+                  icon: const Icon(Icons.collections_outlined),
+                  onPressed: () {
+                    final client = _client!;
+                    Navigator.push(context, MaterialPageRoute(builder: (_) =>
+                      GeneratedGalleryPage(baseUrl: client.baseUrl, token: client.authToken)));
+                  },
                 ),
               IconButton(
                 tooltip: 'タグ管理',

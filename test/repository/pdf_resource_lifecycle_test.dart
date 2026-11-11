@@ -33,6 +33,11 @@ class _RemoteIdentity extends MediaIdResolver {
 }
 
 class _RemotePdfApi extends RemoteMediaApiClient {
+  @override
+  Future<Map<String, dynamic>?> fetchChanges({
+    int after = 0,
+    String? epoch,
+  }) async => null;
   _RemotePdfApi() : super(baseUrl: 'http://localhost');
   int downloads = 0;
 
@@ -206,5 +211,22 @@ void main() {
     await rendering;
     await disposal;
     expect(pdf.documents.every((doc) => doc.closeCount == 1), isTrue);
+  });
+
+  test('oversize remote PDF is usable and released after reading', () async {
+    final api = _RemotePdfApi();
+    final repo = RemoteMediaRepository(
+      apiClient: api,
+      idResolver: _RemoteIdentity(),
+      localPickerRepository: _UnusedLocalRepository(),
+      fileBudget: 4,
+    );
+    addTearDown(repo.dispose);
+    expect(await repo.renderPageBytes(remoteItem('large'), 1), [1, 2, 3]);
+    expect(
+      Directory('${temp.path}/remote_media_cache/files').listSync(),
+      isEmpty,
+    );
+    expect(pdf.documents.every((doc) => doc.closed), isTrue);
   });
 }

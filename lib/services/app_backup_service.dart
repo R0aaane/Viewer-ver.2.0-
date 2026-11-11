@@ -14,6 +14,69 @@ class AppBackupService {
 
   final AppDb _db;
 
+  Future<void> exportDatabaseTo(File destination) async {
+    if (await destination.exists()) {
+      throw StateError('Choose a new backup file');
+    }
+    await _db.customStatement('VACUUM INTO ?', [destination.path]);
+  }
+
+  Future<bool> restoreDatabaseFrom(File source, File destination) async {
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final incoming = File('${destination.path}.restoring_$stamp');
+    final rollback = File('${destination.path}.previous_$stamp');
+    var attached = false;
+    try {
+      await destination.parent.create(recursive: true);
+      await source.copy(incoming.path);
+      await _db.customStatement('ATTACH DATABASE ? AS restore_validation', [
+        incoming.path,
+      ]);
+      attached = true;
+      final check = await _db
+          .customSelect('PRAGMA restore_validation.integrity_check')
+          .getSingle();
+      final schema = await _db
+          .customSelect(
+            "SELECT name FROM restore_validation.sqlite_master WHERE type='table'",
+          )
+          .get();
+      final version = await _db
+          .customSelect('PRAGMA restore_validation.user_version')
+          .getSingle();
+      if (check.data.values.first != 'ok' ||
+          version.data.values.first > _db.schemaVersion ||
+          !schema.map((row) => row.read<String>('name')).toSet().containsAll({
+            'media_items',
+            'tags',
+            'media_item_tags',
+          })) {
+        throw StateError('Invalid or newer application database');
+      }
+      await _db.customStatement('DETACH DATABASE restore_validation');
+      attached = false;
+      await _db.close();
+      if (await destination.exists()) await destination.rename(rollback.path);
+      try {
+        await incoming.rename(destination.path);
+      } catch (_) {
+        if (await rollback.exists()) await rollback.rename(destination.path);
+        rethrow;
+      }
+      // Keep the previous, checkpointed database for manual recovery.
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (attached) {
+        try {
+          await _db.customStatement('DETACH DATABASE restore_validation');
+        } catch (_) {}
+      }
+      if (await incoming.exists()) await incoming.delete();
+    }
+  }
+
   static const int _settingsSchemaVersion = 2;
 
   // SharedPreferences 側で現在使っているキー
@@ -33,8 +96,7 @@ class AppBackupService {
       final jsonStr = const JsonEncoder.withIndent('  ').convert(jsonMap);
 
       final now = DateTime.now();
-      final suggestedName =
-          'media_viewer_settings_${_yyyymmdd_HHmm(now)}.json';
+      final suggestedName = 'media_viewer_settings_${_yyyymmdd_HHmm(now)}.json';
 
       final location = await getSaveLocation(
         suggestedName: suggestedName,
@@ -91,7 +153,7 @@ class AppBackupService {
         ),
       );
 
-      await dbFile.copy(tempCopy.path);
+      await exportDatabaseTo(tempCopy);
       final bytes = await tempCopy.readAsBytes();
 
       final now = DateTime.now();
@@ -137,48 +199,8 @@ class AppBackupService {
       final picked = await openFile(acceptedTypeGroups: [typeGroup]);
       if (picked == null) return false;
 
-      final srcBytes = await picked.readAsBytes();
-      if (srcBytes.isEmpty) return false;
-
       final dbFile = await _getDbFile();
-      final dir = dbFile.parent;
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
-
-      final backupFile = File(
-        p.join(
-          dir.path,
-          'media_viewer.sqlite.bak_${DateTime.now().millisecondsSinceEpoch}',
-        ),
-      );
-
-      try {
-        // 開いているDBを閉じる
-        await _db.close();
-      } catch (_) {
-        // close失敗でも続行はするが、復元成功率は下がる
-      }
-
-      if (await dbFile.exists()) {
-        await dbFile.copy(backupFile.path);
-      }
-
-      try {
-        await dbFile.writeAsBytes(srcBytes, flush: true);
-        return true;
-      } catch (_) {
-        if (await backupFile.exists()) {
-          await backupFile.copy(dbFile.path);
-        }
-        return false;
-      } finally {
-        if (await backupFile.exists()) {
-          try {
-            await backupFile.delete();
-          } catch (_) {}
-        }
-      }
+      return restoreDatabaseFrom(File(picked.path), dbFile);
     } catch (_) {
       return false;
     }
@@ -214,13 +236,15 @@ class AppBackupService {
     final prefsMap = data['prefs'];
     if (prefsMap is! Map) return;
 
-    final folders = (prefsMap['folders'] as List?)
+    final folders =
+        (prefsMap['folders'] as List?)
             ?.map((e) => e.toString())
             .toList(growable: false) ??
         const <String>[];
 
     final currentFolder = _stringOrNull(prefsMap['currentFolder']);
-    final favorites = (prefsMap['favorites'] as List?)
+    final favorites =
+        (prefsMap['favorites'] as List?)
             ?.map((e) => e.toString())
             .toList(growable: false) ??
         const <String>[];
@@ -312,43 +336,44 @@ class AppBackupService {
 
     return <String, dynamic>{
       'mediaItems': mediaItems
-          .map((m) => {
-                'id': m.id,
-                'folderRaw': m.folderRaw,
-                'displayName': m.displayName,
-                'kind': m.kind,
-                'modifiedEpochMs': m.modifiedEpochMs,
-              })
+          .map(
+            (m) => {
+              'id': m.id,
+              'folderRaw': m.folderRaw,
+              'displayName': m.displayName,
+              'kind': m.kind,
+              'modifiedEpochMs': m.modifiedEpochMs,
+            },
+          )
           .toList(growable: false),
       'tags': tags
-          .map((t) => {
-                'tagId': t.tagId,
-                'name': t.name,
-                'category': t.category,
-              })
+          .map(
+            (t) => {'tagId': t.tagId, 'name': t.name, 'category': t.category},
+          )
           .toList(growable: false),
       'mediaItemTags': links
-          .map((l) => {
-                'itemId': l.itemId,
-                'tagId': l.tagId,
-              })
+          .map((l) => {'itemId': l.itemId, 'tagId': l.tagId})
           .toList(growable: false),
       'folderIndexes': folderIndexes
-          .map((f) => {
-                'folderRaw': f.folderRaw,
-                'scannedAtEpochMs': f.scannedAtEpochMs,
-                'totalCount': f.totalCount,
-              })
+          .map(
+            (f) => {
+              'folderRaw': f.folderRaw,
+              'scannedAtEpochMs': f.scannedAtEpochMs,
+              'totalCount': f.totalCount,
+            },
+          )
           .toList(growable: false),
       'folderEntries': folderEntries
-          .map((e) => {
-                'folderRaw': e.folderRaw,
-                'entryId': e.entryId,
-                'displayName': e.displayName,
-                'kind': e.kind,
-                'modifiedEpochMs': e.modifiedEpochMs,
-                'sortName': e.sortName,
-              })
+          .map(
+            (e) => {
+              'folderRaw': e.folderRaw,
+              'entryId': e.entryId,
+              'displayName': e.displayName,
+              'kind': e.kind,
+              'modifiedEpochMs': e.modifiedEpochMs,
+              'sortName': e.sortName,
+            },
+          )
           .toList(growable: false),
     };
   }

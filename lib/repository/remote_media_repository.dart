@@ -4,10 +4,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
 import 'package:image/image.dart' as im;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../media_file_types.dart';
 import '../models/folder.dart';
@@ -54,12 +56,74 @@ class RemoteMediaRepository implements MediaRepository {
   final Map<String, Future<RemoteMediaMeta>> _metaInFlight =
       <String, Future<RemoteMediaMeta>>{};
   final Map<String, RemoteMediaMeta> _metaCache = <String, RemoteMediaMeta>{};
+  bool _syncing = false;
+  bool _syncSupported = true;
+  bool _cursorLoaded = false;
+  int _metadataGeneration = 0;
+  int _syncCursor = 0;
+  String? _syncEpoch;
+
+  Future<void> synchronize() async {
+    if (_syncing || !_syncSupported) return;
+    _syncing = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'remote.sync.$_sourceId';
+      if (!_cursorLoaded) {
+        final raw = prefs.getString(key);
+        try {
+          if (raw != null) {
+            final saved = jsonDecode(raw) as Map;
+            _syncCursor = saved['cursor'] as int;
+            if (_syncCursor < 0) throw const FormatException('Invalid sync cursor');
+            _syncEpoch = saved['epoch'] as String?;
+          }
+        } catch (_) {
+          _syncCursor = 0;
+          _syncEpoch = null;
+          await prefs.remove(key);
+        }
+        _cursorLoaded = true;
+      }
+      for (var batch = 0; batch < 8; batch++) {
+        final page = await _client.fetchChanges(after: _syncCursor, epoch: _syncEpoch);
+        if (page == null) {
+          _syncSupported = false;
+          break;
+        }
+        if (page['resetRequired'] == true || (page['items'] as List).isNotEmpty) {
+          _metadataGeneration++;
+          _metaCache.clear();
+          _metaInFlight.clear();
+          _remoteMediaIdsByPath.clear();
+        }
+        _syncCursor = page['cursor'] as int;
+        _syncEpoch = page['epoch'] as String;
+        await prefs.setString(key, jsonEncode({'cursor': _syncCursor, 'epoch': _syncEpoch}));
+        if (page['resetRequired'] != true && page['hasMore'] != true) break;
+      }
+    } catch (_) {
+      // Folder loading keeps its existing error reporting and offline fallback.
+    } finally {
+      _syncing = false;
+    }
+  }
   final Map<String, String> _remoteMediaIdsByPath = <String, String>{};
 
   Directory? _cacheRoot;
+  final int fileBudget;
+  final int thumbnailBudget;
+  final int previewBudget;
+  int _fileReaders = 0;
+  bool _filesNeedTrim = true;
+  final _checkedSubdirs = <String>{};
+  late final String _sourceId = remoteSourceId(_client.baseUrl, _client.authToken);
   int _activePdfThumbFallbacks = 0;
 
   RemoteMediaRepository({
+    this.fileBudget = 512 * 1024 * 1024,
+    this.thumbnailBudget = 64 * 1024 * 1024,
+    this.previewBudget = 96 * 1024 * 1024,
     String baseUrl = '',
     String? authToken,
     required MediaRepository localPickerRepository,
@@ -121,6 +185,7 @@ class RemoteMediaRepository implements MediaRepository {
     if (!_client.isConfigured) {
       return const <FolderHandle>[];
     }
+    await synchronize();
     return _client.listAvailableFolders();
   }
 
@@ -144,6 +209,10 @@ class RemoteMediaRepository implements MediaRepository {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
+    if(name != 'files' && _checkedSubdirs.add(name)){
+      await _trimCacheDirectory(dir,maxEntries:name=='thumbs'?320:96,
+          maxBytes:name=='thumbs'?thumbnailBudget:previewBudget);
+    }
     return dir;
   }
 
@@ -158,18 +227,22 @@ class RemoteMediaRepository implements MediaRepository {
     if (inFlight != null) {
       return inFlight;
     }
-    final future = () async {
+    final generation = _metadataGeneration;
+    late final Future<RemoteMediaMeta> future;
+    future = () async {
       try {
         try {
           final meta = await _client.fetchMediaMeta(
             mediaId,
             identity: identity,
           );
-          _metaCache[meta.mediaId] = meta;
-          if (meta.mediaId != mediaId) {
-            _metaCache[mediaId] = meta;
+          if (generation == _metadataGeneration) {
+            _metaCache[meta.mediaId] = meta;
+            if (meta.mediaId != mediaId) {
+              _metaCache[mediaId] = meta;
+            }
+            _rememberRemoteMediaId(item.id, meta.mediaId);
           }
-          _rememberRemoteMediaId(item.id, meta.mediaId);
           return meta;
         } on RemoteMediaException catch (error) {
           if (error.statusCode != 404) {
@@ -189,15 +262,19 @@ class RemoteMediaRepository implements MediaRepository {
             refreshedId,
             identity: identity,
           );
-          _metaCache[meta.mediaId] = meta;
-          if (meta.mediaId != refreshedId) {
-            _metaCache[refreshedId] = meta;
+          if (generation == _metadataGeneration) {
+            _metaCache[meta.mediaId] = meta;
+            if (meta.mediaId != refreshedId) {
+              _metaCache[refreshedId] = meta;
+            }
+            _rememberRemoteMediaId(item.id, meta.mediaId);
           }
-          _rememberRemoteMediaId(item.id, meta.mediaId);
           return meta;
         }
       } finally {
-        _metaInFlight.remove(mediaId);
+        if (_metaInFlight[mediaId] == future) {
+          _metaInFlight.remove(mediaId);
+        }
       }
     }();
     _metaInFlight[mediaId] = future;
@@ -299,6 +376,9 @@ class RemoteMediaRepository implements MediaRepository {
     MediaItem item, {
     bool refresh = false,
   }) async {
+    if (item.sourceId != null && item.sourceId != _sourceId) {
+      throw const RemoteMediaException('接続先が変更されました。一覧を更新してください');
+    }
     final remembered = await _lookupRemoteMediaIdByPath(item, refresh: refresh);
     if (remembered != null && remembered.isNotEmpty) {
       return remembered;
@@ -365,13 +445,8 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   String _cacheHash(String source) {
-    var hash = 0x811C9DC5;
-    const prime = 0x01000193;
-    for (final unit in source.codeUnits) {
-      hash ^= unit;
-      hash = (hash * prime) & 0xFFFFFFFF;
-    }
-    return hash.toRadixString(16).padLeft(8, '0');
+    final scope = _syncEpoch == null ? _sourceId : '$_sourceId|$_syncEpoch';
+    return sha256.convert(utf8.encode('$scope|$source')).toString();
   }
 
   String _extensionForMeta(RemoteMediaMeta meta) {
@@ -591,7 +666,7 @@ class RemoteMediaRepository implements MediaRepository {
           await _deleteFileQuietly(file);
           throw const RemoteMediaException('キャッシュしたPDFファイルを開けません');
         }
-        await _trimCacheDirectory(fileDir, maxEntries: 48);
+        _filesNeedTrim = true;
         return file;
       } catch (error) {
         await _deleteFileQuietly(partialFile);
@@ -606,49 +681,65 @@ class RemoteMediaRepository implements MediaRepository {
     return future;
   }
 
-  Future<void> _trimCacheDirectory(
-    Directory dir, {
-    required int maxEntries,
-  }) async {
-    final files = await dir
-        .list()
-        .where((entity) => entity is File)
-        .cast<File>()
-        .toList();
-    final regularFiles = files
-        .where((file) => !file.path.endsWith('.part'))
-        .toList(growable: false);
-    if (regularFiles.length <= maxEntries) {
-      return;
+  Future<void> _trimCacheDirectory(Directory dir, {required int maxEntries, required int maxBytes}) async {
+    final records = <({File file, FileStat stat})>[];
+    var total = 0;
+    await for (final entity in dir.list(followLinks:false)) {
+      if (entity is! File) continue;
+      final stat = await entity.stat();
+      if(stat.type != FileSystemEntityType.file) continue;
+      if (entity.path.endsWith('.part')) {
+        if (DateTime.now().difference(stat.modified) > const Duration(days: 1)) {
+          await _deleteFileQuietly(entity);
+        }
+        continue;
+      }
+      records.add((file:entity,stat:stat));
+      total += stat.size;
     }
-    final pinnedPaths = <String>{
-      ..._downloadInFlight.keys,
-      ..._pdfDocuments.pinnedPaths,
-    };
-    final children = regularFiles
-        .where((file) => !pinnedPaths.contains(file.path))
-        .toList(growable: true);
-    if (children.isEmpty) {
-      return;
-    }
-    children.sort(
-      (a, b) => a.statSync().modified.compareTo(b.statSync().modified),
-    );
-    final removeCount = (regularFiles.length - maxEntries).clamp(
-      0,
-      children.length,
-    );
-    for (var index = 0; index < removeCount; index++) {
+    var count = records.length;
+    if(count <= maxEntries && total <= maxBytes) return;
+    records.sort((a,b)=>a.stat.modified.compareTo(b.stat.modified));
+    for(final record in records) {
+      if(count <= maxEntries && total <= maxBytes) break;
+      final path = record.file.path;
+      if(p.basename(dir.path)=='files'){
+        if(_fileReaders != 0) { _filesNeedTrim=true; return; }
+        if(_pdfDocuments.pinnedPaths.contains(path)) await _evictCachedPdfDocument(path);
+        if(_fileReaders != 0) { _filesNeedTrim=true; return; }
+      }
       try {
-        await children[index].delete();
-      } catch (_) {}
+        record.file.deleteSync();
+        total -= record.stat.size;
+        count--;
+      } on FileSystemException {
+        // Another cache operation may already have removed or opened it.
+      }
     }
   }
 
   Future<T> _useCachedPdf<T>(
     MediaItem item,
     Future<T> Function(PdfDocument) action,
-  ) async {
+  ) => _withFileCache(() => _usePdfFile(item, action));
+
+  Future<T> _withFileCache<T>(Future<T> Function() read) async {
+    _fileReaders++;
+    try {
+      return await read();
+    } finally {
+      _fileReaders--;
+      if (_fileReaders == 0 && _filesNeedTrim && _cacheRoot != null) {
+        final dir = Directory(p.join(_cacheRoot!.path, 'files'));
+        if (await dir.exists()) {
+          _filesNeedTrim = false;
+          await _trimCacheDirectory(dir,maxEntries:48,maxBytes:fileBudget);
+        }
+      }
+    }
+  }
+
+  Future<T> _usePdfFile<T>(MediaItem item, Future<T> Function(PdfDocument) action) async {
     final file = await _ensureCachedMediaFile(item);
     var openFailed = false;
     try {
@@ -715,6 +806,7 @@ class RemoteMediaRepository implements MediaRepository {
     };
     return MediaItem(
       id: rawId,
+      sourceId: _sourceId,
       displayName: entry.displayName,
       kind: kind,
       folderRaw: entry.folderRaw,
@@ -782,6 +874,7 @@ class RemoteMediaRepository implements MediaRepository {
     FolderHandle folder, {
     void Function(int processed, int total)? onProgress,
   }) async {
+    await synchronize();
     final items = <MediaItem>[];
     var offset = 0;
     const pageSize = 100;
@@ -1298,9 +1391,27 @@ class RemoteMediaRepository implements MediaRepository {
     Directory cacheDir,
     Uint8List bytes,
   ) async {
-    await cacheFile.parent.create(recursive: true);
-    await cacheFile.writeAsBytes(bytes, flush: false);
-    await _trimCacheDirectory(cacheDir, maxEntries: 320);
+    await _persistImage(cacheFile, cacheDir, bytes, 320, thumbnailBudget);
+  }
+
+  Future<void> _persistImage(File file, Directory dir, Uint8List bytes,int count,int budget) async {
+    if(bytes.lengthInBytes>budget) return;
+    final part = File('${file.path}.part');
+    try {
+      await part.writeAsBytes(bytes);
+      await part.rename(file.path);
+      await _trimCacheDirectory(dir,maxEntries:count,maxBytes:budget);
+    } finally {
+      await _deleteFileQuietly(part);
+    }
+  }
+
+  Future<Uint8List?> _readCachedImage(File file) async {
+    try {
+      return await file.readAsBytes();
+    } on PathNotFoundException {
+      return null;
+    }
   }
 
   Future<void> _acquirePdfThumbFallbackSlot() async {
@@ -1396,9 +1507,9 @@ class RemoteMediaRepository implements MediaRepository {
         '${_cacheHash('$mediaId|${item.modified?.millisecondsSinceEpoch ?? 0}|${item.sizeBytes ?? 0}|thumb-remote-v6|$maxWidth')}.bin';
     final cacheFile = File(p.join(cacheDir.path, cacheName));
 
-    final cached = await cacheFile.exists();
-    if (cached) {
-      return ThumbPair(front: await cacheFile.readAsBytes(), back: null);
+    final cached = await _readCachedImage(cacheFile);
+    if (cached != null) {
+      return ThumbPair(front: cached, back: null);
     }
 
     final inFlight = _thumbInFlight[cacheFile.path];
@@ -1449,14 +1560,14 @@ class RemoteMediaRepository implements MediaRepository {
 
   @override
   Future<Uint8List> readBytes(MediaItem item) async {
-    if (!await _isLocalExternalItem(item)) {
-      final meta = await _validatedMetaForItem(item);
-      if (meta.mimeType == 'application/x.gif-collection') {
-        return _client.fetchPageImage(meta.mediaId, 1, width: 1600);
-      }
+    if (await _isLocalExternalItem(item)) {
+      return _localPickerRepository.readBytes(item);
     }
-    final file = await _ensureCachedMediaFile(item);
-    return file.readAsBytes();
+    final meta = await _validatedMetaForItem(item);
+    if (meta.mimeType == 'application/x.gif-collection') {
+      return _client.fetchPageImage(meta.mediaId, 1, width: 1600);
+    }
+    return _withFileCache(() async => (await _ensureCachedMediaFile(item)).readAsBytes());
   }
 
   @override
@@ -1494,9 +1605,8 @@ class RemoteMediaRepository implements MediaRepository {
         '${_cacheHash('$mediaId|${meta.etag}|preview|$targetWidth|$targetHeight')}.jpg';
     final cacheFile = File(p.join(cacheDir.path, cacheName));
 
-    if (await cacheFile.exists()) {
-      return cacheFile.readAsBytes();
-    }
+    final cached = await _readCachedImage(cacheFile);
+    if(cached != null) return cached;
 
     final inFlight = _previewInFlight[cacheFile.path];
     if (inFlight != null) {
@@ -1506,9 +1616,7 @@ class RemoteMediaRepository implements MediaRepository {
     final future = _client
         .fetchThumbnail(mediaId, width: targetWidth, height: targetHeight)
         .then((bytes) async {
-          await cacheFile.parent.create(recursive: true);
-          await cacheFile.writeAsBytes(bytes, flush: false);
-          await _trimCacheDirectory(cacheDir, maxEntries: 96);
+          await _persistImage(cacheFile,cacheDir,bytes,96,previewBudget);
           _previewInFlight.remove(cacheFile.path);
           return bytes;
         })
@@ -1522,6 +1630,7 @@ class RemoteMediaRepository implements MediaRepository {
   }
 
   Future<bool> _isLocalExternalItem(MediaItem item) async {
+    if (item.sourceId != null) return false;
     final rawId = item.id.trim();
     if (rawId.isEmpty) {
       return false;
@@ -1557,15 +1666,15 @@ class RemoteMediaRepository implements MediaRepository {
     int page, {
     int maxWidth = 1600,
   }) async {
-    if (item.kind != MediaKind.pdf) {
-      return _readDisplayImageBytes(item, maxWidth: maxWidth);
-    }
     if (await _isLocalExternalItem(item)) {
       return _localPickerRepository.renderPageBytes(
         item,
         page,
         maxWidth: maxWidth,
       );
+    }
+    if (item.kind != MediaKind.pdf) {
+      return _readDisplayImageBytes(item, maxWidth: maxWidth);
     }
     final meta = await _validatedMetaForItem(item);
     if (meta.mimeType == 'application/x.gif-collection') {
@@ -1666,6 +1775,7 @@ class RemoteMediaRepository implements MediaRepository {
     final nextPath = _winPath.join(item.folderRaw, fixedName);
     final nextItem = MediaItem(
       id: nextPath,
+      sourceId: _sourceId,
       displayName: fixedName,
       kind: item.kind,
       folderRaw: item.folderRaw,
@@ -1711,6 +1821,7 @@ class RemoteMediaRepository implements MediaRepository {
 
     return MediaItem(
       id: refreshed?.fullPath ?? nextItem.id,
+      sourceId: _sourceId,
       displayName: refreshed?.displayName ?? nextItem.displayName,
       kind: refreshed == null
           ? nextItem.kind
@@ -2653,6 +2764,7 @@ class RemoteMediaRepository implements MediaRepository {
     required int limit,
     void Function(int processed, int total)? onProgress,
   }) async {
+    await synchronize();
     final page = await _client.listFolderChildren(
       folder.raw,
       offset: offset,

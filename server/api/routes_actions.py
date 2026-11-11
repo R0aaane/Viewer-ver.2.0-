@@ -33,6 +33,8 @@ from server.models.dto import (
     RescanRequest,
 )
 from server.services.auth_service import require_bearer_token
+from server.services.path_access import require_library_path, require_media_path, local_host_admin
+from fastapi import HTTPException
 from server.services.app_update_store import save_app_update_upload, update_download_path
 from server.services.import_tag_rule_service import (
     build_inferred_import_tags,
@@ -99,6 +101,8 @@ def request_rescan(
 
     target = (payload.folderRaw if payload else "") or ""
     target = os.path.normpath(target.strip()) if target.strip() else ""
+    if target:
+        require_library_path(request, target, allow_root=True)
 
     try:
         if target:
@@ -275,6 +279,7 @@ def organize_library(
     payload: OrganizeLibraryRequest,
 ) -> OrganizeLibraryResponse:
     settings = request.app.state.settings
+    require_library_path(request, payload.folderRaw, allow_root=True)
     folder_path = os.path.normpath(payload.folderRaw)
     if not os.path.isdir(folder_path):
         raise bad_request(f"Destination folder does not exist: {payload.folderRaw}")
@@ -358,6 +363,7 @@ async def upload_files(
         raise bad_request("No files were provided for upload")
 
     settings = request.app.state.settings
+    require_library_path(request, folderRaw, allow_root=True)
     folder_path = os.path.normpath(folderRaw)
     if not os.path.isdir(folder_path):
         raise bad_request(f"Destination folder does not exist: {folderRaw}")
@@ -722,6 +728,9 @@ async def download_url(
     request: Request,
     payload: DownloadUrlRequest,
 ) -> DownloadUrlResponse:
+    require_library_path(request, payload.folderRaw, allow_root=True)
+    if (payload.cookieFilePath or payload.urlListFilePath) and getattr(getattr(request, "state", None), "auth_identity", None) is not None and not local_host_admin(request):
+        raise HTTPException(403, "Host-local file inputs require local host administration")
     request_id = (payload.requestId or "").strip() or secrets.token_hex(8)
     _set_url_download_status(
         request,
@@ -909,6 +918,11 @@ def apply_rename(request: Request, payload: RenameRequest) -> MessageResponse:
     after = payload.after
     old_path = payload.oldPath or (before.path if before else None)
     new_path = payload.newPath or (after.path if after else None)
+    if old_path:
+        require_library_path(request, old_path)
+    if new_path:
+        require_library_path(request, new_path)
+    require_media_path(request, payload.oldMediaId or (before.mediaId if before else None), allow_missing=bool(old_path))
     thumbnail_service = getattr(request.app.state, "thumbnail_service", None)
     if thumbnail_service is not None and old_path:
         close_cached_pdf_documents = getattr(
@@ -961,6 +975,10 @@ def apply_delete(request: Request, payload: DeleteRequest) -> MessageResponse:
                 "hardDelete": payload.hardDelete,
             }
         ]
+    for item in items:
+        if item.get("path"):
+            require_library_path(request, item["path"])
+        require_media_path(request, item.get("mediaId"), allow_missing=True)
     thumbnail_service = getattr(request.app.state, "thumbnail_service", None)
     if thumbnail_service is not None:
         close_cached_pdf_documents = getattr(

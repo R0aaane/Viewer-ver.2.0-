@@ -11,6 +11,9 @@ from starlette.responses import PlainTextResponse, Response
 
 
 DEFAULT_API_PREFIXES: tuple[str, ...] = (
+    "/sync",
+    "/generated",
+    "/host-update",
     "/health",
     "/search",
     "/untagged",

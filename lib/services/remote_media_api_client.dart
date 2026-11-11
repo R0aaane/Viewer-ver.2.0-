@@ -187,6 +187,26 @@ class RemoteMediaApiClient {
         .toList(growable: false);
   }
 
+  Future<Map<String, dynamic>?> fetchChanges({
+    int after = 0,
+    String? epoch,
+  }) async {
+    try {
+      final response = await _getJson(
+        '/sync/changes',
+        queryParameters: {
+          'after': '$after',
+          if (epoch != null) 'epoch': epoch,
+          'limit': '250',
+        },
+      );
+      return Map<String, dynamic>.from(response as Map);
+    } on RemoteMediaException catch (error) {
+      if (error.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<RemoteFolderPage> listFolderChildren(
     String folderRaw, {
     int limit = 100,

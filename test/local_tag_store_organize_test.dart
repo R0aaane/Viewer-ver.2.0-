@@ -22,6 +22,38 @@ void main() {
     PathProviderPlatform.instance = originalPathProvider;
   });
 
+  test('batch tagging keeps artist and series searches separate', () async {
+    final temp = await Directory.systemTemp.createTemp('viewer_batch_tags_');
+    addTearDown(() => temp.delete(recursive: true));
+    PathProviderPlatform.instance = _FakePathProviderPlatform(temp.path);
+    final db = AppDb();
+    addTearDown(db.close);
+    final store = LocalTagStore(db);
+    final items = [
+      for (final name in ['one.png', 'two.png'])
+        MediaItem(
+          id: p.join(temp.path, name),
+          displayName: name,
+          kind: MediaKind.image,
+          folderRaw: temp.path,
+        ),
+    ];
+    const artist = Tag(name: '同名', category: TagCategory.artist);
+    const series = Tag(name: '同名', category: TagCategory.series);
+    await store.addTagToItems(items, artist);
+    await store.addTagToItem(items.first, series);
+    Future<List<String>> search(Tag tag) => store.findItemIdsByTag(
+      folderRaw: temp.path,
+      category: tag.category,
+      name: tag.name,
+    );
+    expect(await search(artist), unorderedEquals(items.map((item) => item.id)));
+    expect(await search(series), [items.first.id]);
+    await store.removeTagFromItem(items.first.id, await store.ensureTagId(artist));
+    expect(await search(artist), [items.last.id]);
+    expect(await search(series), [items.first.id]);
+  });
+
   test(
     'renameItem keeps tags when destination media record already exists',
     () async {

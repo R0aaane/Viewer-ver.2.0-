@@ -1,0 +1,17 @@
+{
+  "ready": 30136,
+  "counts": {
+    "images": 30136,
+    "generation_info": 30136,
+    "prompt_search": 30136,
+    "manual_tags": 60200,
+    "generated_favorites": 3010
+  },
+  "sqlite_integrity": [
+    "ok"
+  ],
+  "original_sha256_and_image_verify": 30136,
+  "thumbnail_existence": 30136,
+  "thumbnail_decode_samples": 61,
+  "seconds": 232.3806031999993
+}

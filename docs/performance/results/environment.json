@@ -1,0 +1,33 @@
+{
+  "owner": "pdf-viewer-performance-fixture-v1",
+  "count": 30000,
+  "templates": [
+    {
+      "width": 512,
+      "height": 768
+    },
+    {
+      "width": 768,
+      "height": 512
+    },
+    {
+      "width": 768,
+      "height": 1024
+    },
+    {
+      "width": 1024,
+      "height": 768
+    }
+  ],
+  "created": 1794393301.5285006,
+  "platform": "Windows-10-10.0.26200-SP0",
+  "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+  "logical_cpus": 16,
+  "source_bytes": 8900077780,
+  "prepare_seconds": 37.08831509999982,
+  "physical_ram_gib": 29.783729553222656,
+  "cpu_model": "AMD Ryzen 9 PRO 8945HS",
+  "python": "3.10.6",
+  "sqlite": "3.37.2",
+  "pillow": "11.3.0"
+}

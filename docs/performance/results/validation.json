@@ -1,0 +1,29 @@
+{
+  "version": "1.0.240+250",
+  "windows": {
+    "exe": "E:\\_workspace\\Flutter\\pdf_viewer\\build\\windows\\x64\\runner\\Release\\pdf_viewer.exe",
+    "product_version": "1.0.240+250",
+    "modified": "2026-11-11T20:24:49.6933088+09:00",
+    "sha256": "C0703025A3E77FCB8BAFF608301C917A35EB611FFE939AF6050FF601A72B5BC9",
+    "app_so_sha256": "0511E4BFDB872106E6C5346FBB518B8E7FD1BDC50A0FC1E9DFFC72AF26DC43FC"
+  },
+  "web": {
+    "version": "1.0.240",
+    "build_number": "250",
+    "modified": "2026-11-12T01:21:40.4111105+09:00",
+    "main_dart_js_sha256": "43F8325128B2961F8436FB1B2578E28AEC24E9445D3B7BAA77A273E4400F0E4C"
+  },
+  "tests": {
+    "python_unique_passed": 42,
+    "existing_db_copy_opt_in_passed": 1,
+    "flutter_unit_passed": 4,
+    "windows_profile_full_gallery_passed": true,
+    "targeted_analyze": "No issues found"
+  },
+  "free_gib_before_cleanup": 28.822,
+  "cleanup": {
+    "owned_fixture_directories_removed": true,
+    "control_token_file_removed": true,
+    "free_gib_after": 58.229
+  }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Query
+from contextlib import nullcontext
 
 from server.models.dto import (
     AddItemTagsRequest,
@@ -19,6 +20,17 @@ from server.services.auth_service import require_bearer_token
 
 
 router = APIRouter(tags=["tags"], dependencies=[Depends(require_bearer_token)])
+
+
+def _edit(request, media_id, identity, expected, operation, epoch=None):
+    store = getattr(request.app.state, "sqlite_store", None)
+    if store is None:
+        result = operation()
+        return AddItemTagsResponse(mediaId=result)
+    resolved = request.app.state.metadata_store.resolve_media_id(media_id, identity=identity)
+    with store.versioned_edit(resolved, expected, epoch):
+        result = operation()
+        return AddItemTagsResponse(mediaId=result, version=store.media_version(result), epoch=store.sync_epoch())
 
 
 def _identity_from_query(request: Request) -> dict[str, object] | None:
@@ -76,15 +88,13 @@ def list_tag_master(
 @router.get("/items/{media_id}/tags", response_model=ItemTagsResponse)
 def get_tags_for_item(request: Request, media_id: str) -> ItemTagsResponse:
     identity = _identity_from_query(request)
-    resolved_media_id = request.app.state.metadata_store.resolve_media_id(
-        media_id,
-        identity=identity,
-    )
-    items = request.app.state.metadata_store.get_tags_for_media(
-        media_id,
-        identity=identity,
-    )
-    return ItemTagsResponse(mediaId=resolved_media_id, items=items)
+    store = getattr(request.app.state, "sqlite_store", None)
+    with store.versioned_edit(None, None) if store else nullcontext():
+        resolved_media_id = request.app.state.metadata_store.resolve_media_id(media_id, identity=identity)
+        items = request.app.state.metadata_store.get_tags_for_media(media_id, identity=identity)
+        return ItemTagsResponse(mediaId=resolved_media_id, items=items,
+                                version=store.media_version(resolved_media_id) if store else None,
+                                epoch=store.sync_epoch() if store else None)
 
 
 @router.get("/favorites", response_model=FavoriteListResponse)
@@ -108,12 +118,8 @@ def set_favorite(
     payload: SetFavoriteRequest,
 ) -> AddItemTagsResponse:
     identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
-    resolved_media_id = request.app.state.metadata_store.set_media_favorite(
-        media_id,
-        payload.isFavorite,
-        identity=identity,
-    )
-    return AddItemTagsResponse(mediaId=resolved_media_id)
+    return _edit(request, media_id, identity, payload.expectedVersion,
+                 lambda: request.app.state.metadata_store.set_media_favorite(media_id, payload.isFavorite, identity=identity), payload.expectedEpoch)
 
 
 @router.get("/ratings", response_model=RatingListResponse)
@@ -175,12 +181,8 @@ def add_tags_to_item(
     if payload.tag is not None:
         tags.append(payload.tag.model_dump())
     identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
-    resolved_media_id = request.app.state.metadata_store.add_tags_to_media(
-        media_id,
-        tags,
-        identity=identity,
-    )
-    return AddItemTagsResponse(mediaId=resolved_media_id)
+    return _edit(request, media_id, identity, payload.expectedVersion,
+                 lambda: request.app.state.metadata_store.add_tags_to_media(media_id, tags, identity=identity), payload.expectedEpoch)
 
 
 @router.put("/tags/item/{media_id}", response_model=AddItemTagsResponse)
@@ -194,12 +196,8 @@ def replace_tags_for_item(
     if payload.tag is not None:
         tags.append(payload.tag.model_dump())
     identity = payload.identity.model_dump(exclude_none=True) if payload.identity else None
-    resolved_media_id = request.app.state.metadata_store.replace_tags_for_media(
-        media_id,
-        tags,
-        identity=identity,
-    )
-    return AddItemTagsResponse(mediaId=resolved_media_id)
+    return _edit(request, media_id, identity, payload.expectedVersion,
+                 lambda: request.app.state.metadata_store.replace_tags_for_media(media_id, tags, identity=identity), payload.expectedEpoch)
 
 
 @router.delete("/tags/item/{media_id}", response_model=AddItemTagsResponse)
@@ -209,12 +207,8 @@ def delete_tags_from_item(
     payload: DeleteItemTagsRequest,
 ) -> AddItemTagsResponse:
     identity = _identity_from_query(request)
-    resolved_media_id = request.app.state.metadata_store.remove_tags_from_media(
-        media_id,
-        payload.tagIds,
-        identity=identity,
-    )
-    return AddItemTagsResponse(mediaId=resolved_media_id)
+    return _edit(request, media_id, identity, payload.expectedVersion,
+                 lambda: request.app.state.metadata_store.remove_tags_from_media(media_id, payload.tagIds, identity=identity), payload.expectedEpoch)
 
 
 @router.delete("/tags/item/{media_id}/{tag_id}", response_model=AddItemTagsResponse)
@@ -223,11 +217,9 @@ def delete_single_tag_from_item(
     request: Request,
     media_id: str,
     tag_id: str,
+    expected_version: int | None = Query(None, ge=0),
+    expected_epoch: str | None = None,
 ) -> AddItemTagsResponse:
     identity = _identity_from_query(request)
-    resolved_media_id = request.app.state.metadata_store.remove_tags_from_media(
-        media_id,
-        [tag_id],
-        identity=identity,
-    )
-    return AddItemTagsResponse(mediaId=resolved_media_id)
+    return _edit(request, media_id, identity, expected_version,
+                 lambda: request.app.state.metadata_store.remove_tags_from_media(media_id, [tag_id], identity=identity), expected_epoch)

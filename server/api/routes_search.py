@@ -12,6 +12,7 @@ from server.models.dto import (
     SearchResponse,
 )
 from server.services.auth_service import require_bearer_token
+from server.services.path_access import require_library_path
 from server.services.metadata_store import SearchQuery
 from server.services.url_download_service import UrlDownloadError
 from server.core.errors import not_found
@@ -50,6 +51,11 @@ def _is_allowed_folder(folder_raw: str | None, roots: list[str]) -> bool:
     return False
 
 
+def _validate_requested_folder(request, folder_raw):
+    if folder_raw is not None:
+        require_library_path(request, folder_raw, allow_root=True)
+
+
 @router.get("/search", response_model=SearchResponse)
 def search_media(
     request: Request,
@@ -68,6 +74,7 @@ def search_media(
     safe_limit = max(1, min(limit, 1000))
     safe_offset = max(0, offset)
     roots = _configured_media_roots(request)
+    _validate_requested_folder(request, folderRaw)
     if not _is_allowed_folder(folderRaw, roots):
         return SearchResponse(items=[], total=0, limit=safe_limit, offset=safe_offset)
     items, total = request.app.state.metadata_store.search_media(
@@ -129,6 +136,7 @@ def list_untagged(
     safe_limit = max(1, min(limit, 1000))
     safe_offset = max(0, offset)
     roots = _configured_media_roots(request)
+    _validate_requested_folder(request, folderRaw)
     if not _is_allowed_folder(folderRaw, roots):
         return SearchResponse(items=[], total=0, limit=safe_limit, offset=safe_offset)
     items, total = request.app.state.metadata_store.list_untagged(
@@ -174,6 +182,7 @@ def list_folder_children(
     safe_limit = max(1, min(limit, 1000))
     safe_offset = max(0, offset)
     roots = _configured_media_roots(request)
+    _validate_requested_folder(request, folderRaw)
     if not _is_allowed_folder(folderRaw, roots):
         return FolderChildrenResponse(
             items=[],

@@ -80,6 +80,7 @@ class FolderEntries extends Table {
 )
 class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
+  AppDb.forExecutor(QueryExecutor executor) : super(executor);
 
   @override
   int get schemaVersion => 3;

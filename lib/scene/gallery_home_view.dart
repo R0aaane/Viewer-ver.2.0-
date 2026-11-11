@@ -2443,7 +2443,11 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
-  Widget _buildHomeBody() => _buildRedesignedHomeBody();
+  Widget _buildHomeBody() => Column(children: [
+    if (Platform.isWindows && !widget.tagService.settings.isClientMode)
+      LocalAiPanel(bridge: _localAiBridge),
+    Expanded(child: _buildRedesignedHomeBody()),
+  ]);
 
   Widget _buildHomeSearchGalleryBody() {
     if (_initializing) {

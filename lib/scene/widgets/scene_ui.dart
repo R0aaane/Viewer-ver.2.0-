@@ -1,5 +1,32 @@
 import 'package:flutter/material.dart';
 
+class GalleryFavoriteButton extends StatelessWidget {
+  final bool isFavorite;
+  final VoidCallback onPressed;
+
+  const GalleryFavoriteButton({super.key, required this.isFavorite, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            isFavorite ? Icons.star : Icons.star_border,
+            size: 18,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Shared desktop spacing and sizing tokens for the library screens.
 abstract final class SceneSpace {
   static const double x1 = 4;

@@ -1,0 +1,438 @@
+[
+  {
+    "id": "txt2img",
+    "name": "Text to Image",
+    "workflow": {
+      "3": {
+        "class_type": "KSampler",
+        "inputs": {
+          "seed": 0,
+          "steps": 20,
+          "cfg": 7,
+          "sampler_name": "euler",
+          "scheduler": "normal",
+          "denoise": 1,
+          "model": [
+            "4",
+            0
+          ],
+          "positive": [
+            "6",
+            0
+          ],
+          "negative": [
+            "7",
+            0
+          ],
+          "latent_image": [
+            "5",
+            0
+          ]
+        }
+      },
+      "4": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "REPLACE_WITH_INSTALLED_CHECKPOINT.safetensors"
+        }
+      },
+      "5": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+          "width": 512,
+          "height": 512,
+          "batch_size": 1
+        }
+      },
+      "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "",
+          "clip": [
+            "4",
+            1
+          ]
+        }
+      },
+      "7": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "",
+          "clip": [
+            "4",
+            1
+          ]
+        }
+      },
+      "8": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": [
+            "3",
+            0
+          ],
+          "vae": [
+            "4",
+            2
+          ]
+        }
+      },
+      "9": {
+        "class_type": "SaveImage",
+        "inputs": {
+          "filename_prefix": "PDFViewer",
+          "images": [
+            "8",
+            0
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "positive": {
+        "node": "6",
+        "input": "text",
+        "type": "text",
+        "label": "Positive Prompt",
+        "default": "",
+        "maxLength": 8192
+      },
+      "negative": {
+        "node": "7",
+        "input": "text",
+        "type": "text",
+        "label": "Negative Prompt",
+        "default": "",
+        "maxLength": 8192
+      },
+      "seed": {
+        "node": "3",
+        "input": "seed",
+        "type": "integer",
+        "label": "Seed",
+        "default": 0,
+        "min": 0,
+        "max": 9007199254740991
+      },
+      "steps": {
+        "node": "3",
+        "input": "steps",
+        "type": "integer",
+        "label": "Steps",
+        "default": 20,
+        "min": 1,
+        "max": 100
+      },
+      "cfg": {
+        "node": "3",
+        "input": "cfg",
+        "type": "number",
+        "label": "CFG",
+        "default": 7,
+        "min": 0,
+        "max": 30
+      },
+      "width": {
+        "node": "5",
+        "input": "width",
+        "type": "integer",
+        "label": "Width",
+        "default": 512,
+        "min": 64,
+        "max": 2048,
+        "step": 64
+      },
+      "height": {
+        "node": "5",
+        "input": "height",
+        "type": "integer",
+        "label": "Height",
+        "default": 512,
+        "min": 64,
+        "max": 2048,
+        "step": 64
+      },
+      "batch_size": {
+        "node": "5",
+        "input": "batch_size",
+        "type": "integer",
+        "label": "Batch Size",
+        "default": 1,
+        "min": 1,
+        "max": 8
+      },
+      "checkpoint": {
+        "node": "4",
+        "input": "ckpt_name",
+        "type": "choice",
+        "label": "Checkpoint",
+        "default": "REPLACE_WITH_INSTALLED_CHECKPOINT.safetensors",
+        "choices": [
+          "REPLACE_WITH_INSTALLED_CHECKPOINT.safetensors"
+        ]
+      },
+      "sampler": {
+        "node": "3",
+        "input": "sampler_name",
+        "type": "choice",
+        "label": "Sampler",
+        "default": "euler",
+        "choices": [
+          "euler",
+          "euler_ancestral"
+        ]
+      },
+      "scheduler": {
+        "node": "3",
+        "input": "scheduler",
+        "type": "choice",
+        "label": "Scheduler",
+        "default": "normal",
+        "choices": [
+          "normal",
+          "karras"
+        ]
+      }
+    }
+  },
+  {
+    "id": "txt2img-lora",
+    "name": "Text to Image + LoRA",
+    "workflow": {
+      "3": {
+        "class_type": "KSampler",
+        "inputs": {
+          "seed": 0,
+          "steps": 20,
+          "cfg": 7,
+          "sampler_name": "euler",
+          "scheduler": "normal",
+          "denoise": 1,
+          "model": [
+            "10",
+            0
+          ],
+          "positive": [
+            "6",
+            0
+          ],
+          "negative": [
+            "7",
+            0
+          ],
+          "latent_image": [
+            "5",
+            0
+          ]
+        }
+      },
+      "4": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "REPLACE_WITH_INSTALLED_CHECKPOINT.safetensors"
+        }
+      },
+      "5": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+          "width": 512,
+          "height": 512,
+          "batch_size": 1
+        }
+      },
+      "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "",
+          "clip": [
+            "10",
+            1
+          ]
+        }
+      },
+      "7": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "",
+          "clip": [
+            "10",
+            1
+          ]
+        }
+      },
+      "8": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": [
+            "3",
+            0
+          ],
+          "vae": [
+            "4",
+            2
+          ]
+        }
+      },
+      "9": {
+        "class_type": "SaveImage",
+        "inputs": {
+          "filename_prefix": "PDFViewer",
+          "images": [
+            "8",
+            0
+          ]
+        }
+      },
+      "10": {
+        "class_type": "LoraLoader",
+        "inputs": {
+          "model": [
+            "4",
+            0
+          ],
+          "clip": [
+            "4",
+            1
+          ],
+          "lora_name": "REPLACE_WITH_ALLOWED_LORA.safetensors",
+          "strength_model": 0.7,
+          "strength_clip": 0.7
+        }
+      }
+    },
+    "parameters": {
+      "positive": {
+        "node": "6",
+        "input": "text",
+        "type": "text",
+        "label": "Positive Prompt",
+        "default": "",
+        "maxLength": 8192
+      },
+      "negative": {
+        "node": "7",
+        "input": "text",
+        "type": "text",
+        "label": "Negative Prompt",
+        "default": "",
+        "maxLength": 8192
+      },
+      "seed": {
+        "node": "3",
+        "input": "seed",
+        "type": "integer",
+        "label": "Seed",
+        "default": 0,
+        "min": 0,
+        "max": 9007199254740991
+      },
+      "steps": {
+        "node": "3",
+        "input": "steps",
+        "type": "integer",
+        "label": "Steps",
+        "default": 20,
+        "min": 1,
+        "max": 100
+      },
+      "cfg": {
+        "node": "3",
+        "input": "cfg",
+        "type": "number",
+        "label": "CFG",
+        "default": 7,
+        "min": 0,
+        "max": 30
+      },
+      "width": {
+        "node": "5",
+        "input": "width",
+        "type": "integer",
+        "label": "Width",
+        "default": 512,
+        "min": 64,
+        "max": 2048,
+        "step": 64
+      },
+      "height": {
+        "node": "5",
+        "input": "height",
+        "type": "integer",
+        "label": "Height",
+        "default": 512,
+        "min": 64,
+        "max": 2048,
+        "step": 64
+      },
+      "batch_size": {
+        "node": "5",
+        "input": "batch_size",
+        "type": "integer",
+        "label": "Batch Size",
+        "default": 1,
+        "min": 1,
+        "max": 8
+      },
+      "checkpoint": {
+        "node": "4",
+        "input": "ckpt_name",
+        "type": "choice",
+        "label": "Checkpoint",
+        "default": "REPLACE_WITH_INSTALLED_CHECKPOINT.safetensors",
+        "choices": [
+          "REPLACE_WITH_INSTALLED_CHECKPOINT.safetensors"
+        ]
+      },
+      "sampler": {
+        "node": "3",
+        "input": "sampler_name",
+        "type": "choice",
+        "label": "Sampler",
+        "default": "euler",
+        "choices": [
+          "euler",
+          "euler_ancestral"
+        ]
+      },
+      "scheduler": {
+        "node": "3",
+        "input": "scheduler",
+        "type": "choice",
+        "label": "Scheduler",
+        "default": "normal",
+        "choices": [
+          "normal",
+          "karras"
+        ]
+      },
+      "lora": {
+        "node": "10",
+        "input": "lora_name",
+        "type": "choice",
+        "label": "LoRA",
+        "default": "REPLACE_WITH_ALLOWED_LORA.safetensors",
+        "choices": [
+          "REPLACE_WITH_ALLOWED_LORA.safetensors"
+        ]
+      },
+      "lora_model_strength": {
+        "node": "10",
+        "input": "strength_model",
+        "type": "number",
+        "label": "LoRA Model Strength",
+        "default": 0.7,
+        "min": -2,
+        "max": 2
+      },
+      "lora_clip_strength": {
+        "node": "10",
+        "input": "strength_clip",
+        "type": "number",
+        "label": "LoRA CLIP Strength",
+        "default": 0.7,
+        "min": -2,
+        "max": 2
+      }
+    }
+  }
+]

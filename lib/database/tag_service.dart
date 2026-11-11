@@ -1297,6 +1297,7 @@ class TagService {
 
     return RemoteTagApiClient(
       baseUrl: baseUrl,
+      sourceId: settings.isClientMode ? remoteSourceId(baseUrl, settings.authToken) : null,
       defaultHeadersProvider: () {
         final headers = <String, String>{};
         final token = settings.authToken?.trim();

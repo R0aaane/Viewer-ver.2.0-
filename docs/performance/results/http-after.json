@@ -1,0 +1,198 @@
+{
+  "label": "improved",
+  "fixture": {
+    "owner": "pdf-viewer-performance-fixture-v1",
+    "count": 30000,
+    "templates": [
+      {
+        "width": 512,
+        "height": 768
+      },
+      {
+        "width": 768,
+        "height": 512
+      },
+      {
+        "width": 768,
+        "height": 1024
+      },
+      {
+        "width": 1024,
+        "height": 768
+      }
+    ],
+    "created": 1794393301.5285006,
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "logical_cpus": 16,
+    "source_bytes": 8900077780,
+    "prepare_seconds": 37.08831509999982
+  },
+  "started": 1794393871.2156434,
+  "memory_before": {
+    "working_set_mib": 47.37109375,
+    "peak_working_set_mib": 47.37109375,
+    "private_mib": 36.73828125
+  },
+  "observe_seconds": 5.259450599998672,
+  "import_seconds": 883.4546992000014,
+  "initial_seconds_including_settle": 890.8141498000001,
+  "initial_ready": 30000,
+  "unchanged_scan_seconds": [
+    1.5668979000001855,
+    1.3796837999998388,
+    1.3384984000003897
+  ],
+  "delta_100_seconds_including_settle": 9.289186300000438,
+  "scan_memory_peak": {
+    "working_set_mib": 110.99609375,
+    "peak_working_set_mib": 111.39453125,
+    "private_mib": 100.26171875
+  },
+  "scan_memory_after": {
+    "working_set_mib": 105.859375,
+    "peak_working_set_mib": 111.39453125,
+    "private_mib": 94.328125
+  },
+  "library_bytes": {
+    "originals": 8919910880,
+    "thumbs": 1670485400
+  },
+  "server_pid": 16940,
+  "http_memory_start": {
+    "working_set_mib": 69.21484375,
+    "peak_working_set_mib": 69.21484375,
+    "private_mib": 57.8203125
+  },
+  "search_http": {
+    "first": {
+      "n": 30,
+      "p50_ms": 8.729149999453512,
+      "p95_ms": 10.819699999046861,
+      "max_ms": 12.861200000770623,
+      "mean_ms": 9.060316666727886
+    },
+    "middle": {
+      "n": 30,
+      "p50_ms": 77.78859999962151,
+      "p95_ms": 85.44690000053379,
+      "max_ms": 87.37590000055206,
+      "mean_ms": 78.01148333364836
+    },
+    "last": {
+      "n": 30,
+      "p50_ms": 134.65855000049487,
+      "p95_ms": 154.58829999988666,
+      "max_ms": 154.75210000113293,
+      "mean_ms": 136.87460333342946
+    },
+    "name": {
+      "n": 30,
+      "p50_ms": 157.7397999999448,
+      "p95_ms": 174.65769999944314,
+      "max_ms": 176.6631000009511,
+      "mean_ms": 155.21458333320575
+    },
+    "oldest": {
+      "n": 30,
+      "p50_ms": 8.974599999419297,
+      "p95_ms": 9.889900000416674,
+      "max_ms": 10.833000000275206,
+      "mean_ms": 8.870696666599542
+    },
+    "prompt_common": {
+      "n": 30,
+      "p50_ms": 5.721850000554696,
+      "p95_ms": 6.836499998826184,
+      "max_ms": 8.919199999581906,
+      "mean_ms": 5.89908000001742
+    },
+    "prompt_rare": {
+      "n": 30,
+      "p50_ms": 5.579250000664615,
+      "p95_ms": 7.6884999998583226,
+      "max_ms": 8.101399998849956,
+      "mean_ms": 5.689840000013646
+    },
+    "favorite": {
+      "n": 30,
+      "p50_ms": 10.256599999593163,
+      "p95_ms": 11.724599999070051,
+      "max_ms": 12.456900001780014,
+      "mean_ms": 10.088810000100542
+    },
+    "tag_and": {
+      "n": 30,
+      "p50_ms": 43.72944999977335,
+      "p95_ms": 49.90619999989576,
+      "max_ms": 51.538699999582605,
+      "mean_ms": 44.20155333330816
+    },
+    "tag_not": {
+      "n": 30,
+      "p50_ms": 10.64940000014758,
+      "p95_ms": 12.826700000005076,
+      "max_ms": 13.842799999110866,
+      "mean_ms": 10.836413333527162
+    }
+  },
+  "thumbnail_http": {
+    "n": 48,
+    "p50_ms": 7.336199999372184,
+    "p95_ms": 8.556200000384706,
+    "max_ms": 10.937499999272404,
+    "mean_ms": 7.459510416689834
+  },
+  "concurrent_16_search": {
+    "n": 160,
+    "p50_ms": 43.59844999999041,
+    "p95_ms": 672.7793000009115,
+    "max_ms": 762.7561000008427,
+    "mean_ms": 196.82014187500272,
+    "wall_seconds": 2.129107300001124
+  },
+  "http_memory_peak": {
+    "working_set_mib": 116.05078125,
+    "peak_working_set_mib": 118.77734375,
+    "private_mib": 107.3359375
+  },
+  "mock_job_queue": {
+    "count": 12,
+    "states": [
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "wait": {
+      "n": 12,
+      "p50_ms": 1668.96390914917,
+      "p95_ms": 3311.211585998535,
+      "max_ms": 3311.211585998535,
+      "mean_ms": 1669.3106492360432
+    },
+    "total": {
+      "n": 12,
+      "p50_ms": 1984.578013420105,
+      "p95_ms": 3624.9921321868896,
+      "max_ms": 3624.9921321868896,
+      "mean_ms": 1977.228323618571
+    },
+    "mock_gpu_seconds": 0.2
+  },
+  "unchanged_scan_30000_same_catalog_seconds": [
+    1.5868124999997235,
+    1.8078186999991885,
+    1.8362242999992304
+  ],
+  "measurement_stage": "after_search_optimization",
+  "initial_ingestion_note": "Earlier ingestion run before final search indexes; see ingestion-final.json for final-code ingestion."
+}

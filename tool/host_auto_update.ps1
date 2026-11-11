@@ -4,7 +4,7 @@ param(
     [string]$Branch = '',
     [int]$PollSeconds = 60,
     [string]$Python = 'python',
-    [string]$ServerHost = '0.0.0.0',
+    [string]$ServerHost = '127.0.0.1',
     [int]$ServerPort = 8000,
     [string]$EnvFile = 'server\.env',
     [string]$ServerLog = 'data\host_server.log',
@@ -398,6 +398,7 @@ function Start-HostServer {
     $arguments = @(
         '-m', 'uvicorn', 'server.main:app',
         '--host', $ServerHost,
+        '--no-proxy-headers',
         '--port', [string]$ServerPort
     )
     $process = Start-Process `

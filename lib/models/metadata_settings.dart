@@ -1,3 +1,9 @@
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
+
+String remoteSourceId(String url, String? token) =>
+    sha256.convert(utf8.encode(jsonEncode([url.trim(), token?.trim() ?? '']))).toString();
+
 enum AppMode {
   standalone,
   host,
@@ -38,6 +44,9 @@ class MetadataSettings {
       isClientMode ? MetadataStorageMode.remote : MetadataStorageMode.local;
 
   String get remoteApiBaseUrl => clientApiBaseUrl;
+
+  String mediaPreferenceKey(String key) =>
+      isClientMode ? '$key.${remoteSourceId(clientApiBaseUrl, authToken)}' : key;
 
   String get hostLoopbackApiBaseUrl => 'http://127.0.0.1:$hostPort';
 
