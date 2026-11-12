@@ -10,11 +10,28 @@ import unittest
 from unittest.mock import Mock, patch
 import zipfile
 
-from tool.host_release_agent import Agent, extract_bundle, read_json
+from tool.host_release_agent import Agent, extract_bundle, read_json, write_json
 from tool.package_host_release import package
 
 
 class BundleTests(unittest.TestCase):
+    def test_status_replace_retries_windows_sharing_failure(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            write_json(path, {"version": "old"})
+            replace = os.replace
+            attempts = []
+            def sharing_failure_once(source, target):
+                attempts.append(target)
+                if len(attempts) == 1:
+                    raise PermissionError("File in use")
+                replace(source, target)
+            with patch("tool.host_release_agent.os.replace", side_effect=sharing_failure_once), patch("tool.host_release_agent.time.sleep"):
+                write_json(path, {"version": "new"})
+            self.assertEqual(read_json(path), {"version": "new"})
+            self.assertEqual(len(attempts), 2)
+
     def bundle(self, extra=None, **changes):
         files = {"server/main.py": b"", "build/web/index.html": b"web", "requirements.txt": b""}
         files.update(extra or {})
@@ -63,6 +80,35 @@ class BundleTests(unittest.TestCase):
 
 
 class ActivationTests(unittest.TestCase):
+    def test_console_stop_persists_and_disables_automatic_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            request = agent.root / "console.request.json"
+            request.write_text('{"action":"stop"}', encoding="utf-8")
+            agent.control()
+            self.assertTrue(read_json(agent.state_path)["paused"])
+            self.assertIsNone(agent.process)
+            agent.tick()
+            agent.supervise()
+            agent.start.assert_not_called()
+            self.assertFalse(request.exists())
+
+    def test_console_selected_version_is_pinned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.agent(directory)
+            agent.inbox = agent.root / "inbox"
+            agent.prepare = Mock(return_value="chosen")
+            agent.activate = Mock()
+            agent.latest = Mock()
+            tag = "host-1-2"
+            (agent.root / "console.request.json").write_text(json.dumps({"action":"start", "tag":tag}), encoding="utf-8")
+            with patch("tool.host_release_agent.inbox_release", return_value={"tag_name":tag}):
+                agent.control()
+            agent.activate.assert_called_once_with("chosen", tag)
+            self.assertEqual(read_json(agent.state_path)["selectedTag"], tag)
+            agent.tick()
+            agent.latest.assert_not_called()
+
     def test_smoke_closes_backup_connections_before_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

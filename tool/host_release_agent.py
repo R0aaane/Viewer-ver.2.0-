@@ -61,7 +61,14 @@ def write_json(path, value):
         json.dump(value, handle, ensure_ascii=False, indent=2)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temporary, path)
+    for attempt in range(10):
+        try:
+            os.replace(temporary, path)
+            break
+        except PermissionError:
+            if attempt == 9:
+                raise
+            time.sleep(0.1)
 
 
 @contextmanager
@@ -180,6 +187,9 @@ class Agent:
             "attemptedTag": self.state.get("attemptedTag"),
             "attemptedRevision": self.state.get("attemptedRevision"),
             "serverRunning": self.process is not None and self.process.poll() is None,
+            "paused": self.state.get("paused", False),
+            "selectedTag": self.state.get("selectedTag"),
+            "controlProtocol": 1,
             "pid": os.getpid(),
             "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
@@ -210,18 +220,21 @@ class Agent:
         target = self.releases / stage["target"]
         target.mkdir(exist_ok=True)
         if not stage.get("unpacked"):
+            self.status("running", "配布ファイルを検証・展開しています")
             manifest = extract_bundle(archive, target)
             if manifest.get("revision") != release["revision"]:
                 raise ValueError("Source revision mismatch")
             stage["unpacked"] = True
             self.save()
         if not stage.get("installed"):
+            self.status("running", "実行環境を準備しています")
             subprocess.run([sys.executable, "-m", "venv", str(target / ".venv")], check=True)
             python = target / ".venv/Scripts/python.exe"
             subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--only-binary=:all:",
                             "--find-links", str(target / "wheelhouse"), "-r", str(target / "requirements.txt")], check=True)
             stage["installed"] = True
             self.save()
+        self.status("running", "配布版の起動テストを実行しています")
         self.smoke(target)
         return target.name
 
@@ -300,9 +313,11 @@ class Agent:
         previous = self.state.get("current")
         self.state.update(pending=name, pendingTag=tag)
         self.save()  # Recover the previous confirmed release after power loss.
+        self.status("running", "稼働中のWeb・APIを停止して切り替えています")
         if self.process:
             self.stop(self.process, self.stop_file)
         try:
+            self.status("running", "選択版を起動し、Web・APIの応答を確認しています")
             self.start(name)
         except Exception:
             if self.process:
@@ -322,7 +337,39 @@ class Agent:
         self.save()
         self.status("succeeded", f"Activated {tag}")
 
+    def control(self):
+        request = self.root / "console.request.json"
+        if not request.exists():
+            return
+        command = read_json(request)
+        request.unlink()
+        action = command.get("action")
+        if action == "stop":
+            self.state["paused"] = True
+            self.save()
+            self.status("running", "Web・APIの正常停止を待っています")
+            if self.process:
+                self.stop(self.process, self.stop_file)
+                self.process = None
+            self.status("idle", "Web・APIを停止しました")
+        elif action == "start":
+            tag = command.get("tag")
+            release_order(tag)
+            release = inbox_release(self.inbox / (tag + ".json"))
+            self.state.update(selectedTag=tag, paused=False, attemptedTag=tag,
+                              attemptedRevision=release.get("revision"))
+            self.save()
+            self.status("running", "選択した配布版を準備しています")
+            name = self.prepare(release)
+            if (self.root / "agent.stop").exists():
+                return
+            self.activate(name, tag)
+        else:
+            raise ValueError("Unknown console action")
+
     def tick(self):
+        if self.state.get("paused"):
+            return
         if self.state.get("pending"):
             # A timed-out drain must finish before retrying any switch.
             if self.process and self.process.poll() is None:
@@ -333,6 +380,8 @@ class Agent:
             self.save()
             if self.state.get("current"):
                 self.start(self.state["current"])
+        if self.state.get("selectedTag"):
+            return  # A manually selected version stays pinned across restarts.
         release = self.latest()
         if not release or release["tag_name"] in {self.state.get("tag"), self.state.get("failedTag")}:
             return
@@ -346,7 +395,7 @@ class Agent:
         self.activate(name, release["tag_name"])
 
     def supervise(self):
-        if not self.process or self.state.get("pending"):
+        if not self.process or self.state.get("pending") or self.state.get("paused"):
             return
         current = self.state["current"]
         version = read_json(self.releases / current / "release.json")["version"]
@@ -392,20 +441,27 @@ class Agent:
             self.state.pop("pending")
             self.save()
         try:
-            if self.state.get("current"):
+            if self.state.get("current") and not self.state.get("paused"):
                 try:
                     self.start(self.state["current"])
+                    self.status("succeeded", "保存された配布版の起動を確認しました")
                 except Exception:
                     self.health_failures = 3
                     self.supervise()
+            elif self.state.get("paused"):
+                self.status("idle", "Web・APIは停止状態を維持しています")
             while not agent_stop.exists():
                 try:
+                    self.control()
                     self.supervise()
                     self.tick()
                 except Exception:
                     LOG.exception("Update failed; retry on next poll")
                     self.status("failed", "Update failed; see agent.log")
-                self.publish_status()
+                try:
+                    self.publish_status()
+                except OSError:
+                    LOG.exception("Status publication failed; keeping API running and retrying next poll")
                 for _ in range(max(5, self.config.get("pollSeconds", 15))):
                     if agent_stop.exists():
                         break
@@ -431,4 +487,8 @@ if __name__ == "__main__":
     logging.basicConfig(filename=config.parent / "agent.log", level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", encoding="utf-8")
     with exclusive_lock(config.parent / "agent.lock"):
-        Agent(config).run()
+        try:
+            Agent(config).run()
+        except Exception:
+            LOG.exception("Agent terminated unexpectedly")
+            raise

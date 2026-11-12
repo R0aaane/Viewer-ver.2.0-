@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$EnvFile,
     [string]$Python = 'python',
     [string]$TaskName = 'PdfViewerHostRelease',
+    [ValidateSet('Password', 'S4U')][string]$LogonType = 'Password',
     [string]$User = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 )
 $ErrorActionPreference = 'Stop'
@@ -36,12 +37,20 @@ if ($LASTEXITCODE -ne 0) { throw 'Configuration validation failed; correct agent
 $agentPath = Join-Path $installPath 'host_release_agent.py'
 $action = New-ScheduledTaskAction -Execute $pythonPath -Argument "`"$agentPath`" --config `"$configPath`"" -WorkingDirectory $installPath
 $trigger = New-ScheduledTaskTrigger -AtStartup
-# Password logon allows network access and operation without an interactive login.
-$credential = Get-Credential -UserName $User -Message 'Host task account (requires access to PDF and database paths)'
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -User $credential.UserName -Password $credential.GetNetworkCredential().Password `
-    -Description 'Apply verified SFTP deliveries; no GitHub, Flutter or native builds on this host.' -Force | Out-Null
+if ($LogonType -eq 'S4U') {
+    # No password is stored. Validate local paths, Python and API networking under S4U first.
+    $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType S4U -RunLevel Limited
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
+        -Principal $principal `
+        -Description 'Apply verified SFTP deliveries using S4U; no stored password or host builds.' -Force | Out-Null
+} else {
+    # Password logon also supports authenticated network resources.
+    $credential = Get-Credential -UserName $User -Message 'Host task account (requires access to PDF and database paths)'
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
+        -User $credential.UserName -Password $credential.GetNetworkCredential().Password `
+        -Description 'Apply verified SFTP deliveries; no GitHub, Flutter or native builds on this host.' -Force | Out-Null
+}
 Write-Host "Registered $TaskName. Stop the legacy updater and server, then Start-ScheduledTask -TaskName $TaskName"
