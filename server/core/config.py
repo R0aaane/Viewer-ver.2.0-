@@ -59,6 +59,7 @@ class Settings:
     comfy_presets_path: Path | None = None
     generation_timeout_seconds: int = 21600
     allowed_networks: tuple[str, ...] = ("127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+    tailnet_without_token: bool = False
 
 
 def load_settings() -> Settings:
@@ -83,6 +84,7 @@ def load_settings() -> Settings:
 
     return Settings(
         service_name=os.getenv("MEDIA_SERVER_NAME", "metadata-media-server"),
+        tailnet_without_token=_parse_bool(os.getenv("MEDIA_SERVER_TAILNET_WITHOUT_TOKEN"), False),
         comfy_output_dir=Path(value).resolve() if (value := os.getenv("MEDIA_SERVER_COMFY_OUTPUT_DIR")) else None,
         generated_library_dir=Path(value).resolve() if (value := os.getenv("MEDIA_SERVER_GENERATED_LIBRARY_DIR")) else None,
         comfy_url=(os.getenv("MEDIA_SERVER_COMFY_URL") or "").strip() or None,

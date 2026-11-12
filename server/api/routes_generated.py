@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
-from server.services.auth_service import require_bearer_token, authenticate, authentication_configured
+from server.services.auth_service import require_bearer_token, authenticate_connection, authentication_configured
 
 router = APIRouter(prefix="/generated", tags=["generated"])
 
@@ -159,13 +159,13 @@ def events(after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=250),
 async def subscribe(socket: WebSocket, after: int = Query(0, ge=0)):
     state = socket.app.state
     authorization = socket.headers.get("authorization")
-    if not authenticate(state, authorization) or state.generated_library is None:
+    if not authenticate_connection(socket, authorization) or state.generated_library is None:
         await socket.close(code=1008)
         return
     await socket.accept()
     try:
         while True:
-            if not await run_in_threadpool(authenticate, state, authorization):
+            if not await run_in_threadpool(authenticate_connection, socket, authorization):
                 await socket.close(code=1008)
                 return
             rows = await run_in_threadpool(state.generated_library.events, after, 100)
