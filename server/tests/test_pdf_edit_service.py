@@ -150,7 +150,8 @@ class PdfEditTests(unittest.TestCase):
 
     def test_authenticated_http_edit_conflict_and_restore(self):
         app = FastAPI()
-        app.state.settings = SimpleNamespace(auth_token='test-secret')
+        app.state.settings = SimpleNamespace(auth_token='test-secret', media_roots=[str(self.library)])
+        app.state.metadata_store = self.metadata
         app.state.pdf_edit_service = self.service
         app.include_router(router)
         endpoint = f'/media/{self.mid}/pdf-edit'

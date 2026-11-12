@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import closing
 from pathlib import Path
 import subprocess
 import sys
@@ -21,7 +22,7 @@ class GeneratedLibraryTests(unittest.TestCase):
         image.save(path)
         self.tick()
         self.tick()
-        with self.library.connect() as db:
+        with closing(self.library.connect()) as db:
             digest = db.execute("SELECT digest FROM images WHERE state='ready'").fetchone()[0]
         with Image.open(self.library.media_path(digest, True)) as thumbnail:
             self.assertEqual(thumbnail.convert("RGBA").tobytes(), image.convert("RGBA").tobytes())
@@ -37,11 +38,11 @@ class GeneratedLibraryTests(unittest.TestCase):
         with patch.object(generated_catalog, "analyze", side_effect=fail_after_analysis):
             with self.assertRaises(OSError):
                 self.tick()
-        with self.library.connect() as db:
+        with closing(self.library.connect()) as db:
             self.assertEqual(db.execute("SELECT state FROM images").fetchone()[0], "staged")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM generation_info").fetchone()[0], 0)
         self.tick()
-        with self.library.connect() as db:
+        with closing(self.library.connect()) as db:
             self.assertEqual(db.execute("SELECT state FROM images").fetchone()[0], "ready")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM generation_info").fetchone()[0], 1)
     def setUp(self):

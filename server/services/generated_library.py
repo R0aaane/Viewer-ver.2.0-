@@ -240,7 +240,12 @@ class GeneratedLibrary:
         scratch = self.root / "incoming.part"
         digest = hashlib.sha256()
         with path.open("rb") as src, scratch.open("wb") as dst:
-            if _signature(os.fstat(src.fileno())) != signature:
+            # Windows can report different ctime values for lstat and fstat.
+            # Compare identity/content attributes across those APIs; retain
+            # the full path signature check after copying to detect changes.
+            opened = os.fstat(src.fileno())
+            fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+            if any(getattr(opened, field) != getattr(info, field) for field in fields):
                 return
             while data := src.read(BLOCK):
                 if self.stop.is_set():

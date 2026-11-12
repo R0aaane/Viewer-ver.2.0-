@@ -266,7 +266,8 @@ class BuilderTests(unittest.TestCase):
 class ProcessJobTests(unittest.TestCase):
     def test_exit_of_builder_terminates_only_its_child(self):
         code = "from tool.windows_process_job import contain_children; import subprocess,sys; contain_children(); p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(p.pid,flush=True)"
-        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=15)
+        # Test the job-owning interpreter, without the venv redirector process.
+        result = subprocess.run([sys._base_executable, "-c", code], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         pid = int(result.stdout.strip())
         import ctypes
