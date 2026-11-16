@@ -16,8 +16,9 @@ class GeneratedGalleryPage extends StatefulWidget {
   final String baseUrl;
   final String? token;
   final Future<void> Function(List<String>)? sendToHost;
+  final Future<void> Function()? reconnect;
 
-  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token, this.sendToHost});
+  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token, this.sendToHost, this.reconnect});
 
   @override
   State<GeneratedGalleryPage> createState() => _GeneratedGalleryPageState();
@@ -250,7 +251,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
               await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => GenerationJobsPage(repo: repo),
+                  builder: (_) => GenerationJobsPage(repo: repo, reconnect: widget.reconnect),
                 ),
               );
               if (mounted) reload(start: offset);

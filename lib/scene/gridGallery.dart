@@ -85,6 +85,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       final token = await service.start();
       if (!mounted) return;
       await Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
+        reconnect: () async { await service.start(); },
         baseUrl: LocalGenerationService.baseUrl,
         token: token,
         sendToHost: widget.repo.isRemoteMode ? (ids) async {

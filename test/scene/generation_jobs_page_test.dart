@@ -93,6 +93,20 @@ class _PagedRepository extends _Repository {
 }
 
 void main() {
+  testWidgets('reconnect starts the service without submitting another job', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final repo = _Repository();
+    var reconnects = 0;
+    await tester.pumpWidget(MaterialApp(home: GenerationJobsPage(repo: repo, reconnect: () async { reconnects++; })));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ComfyUIを起動・再接続'));
+    await tester.pumpAndSettle();
+    expect(reconnects, 1);
+    expect(repo.requests, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    repo.close();
+  });
+
   testWidgets('polling also refreshes a running job in older loaded history', (
     tester,
   ) async {

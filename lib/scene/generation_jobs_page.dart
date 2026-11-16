@@ -23,13 +23,15 @@ const _states = {
 
 class GenerationJobsPage extends StatefulWidget {
   final GeneratedMediaRepository repo;
-  const GenerationJobsPage({super.key, required this.repo});
+  final Future<void> Function()? reconnect;
+  const GenerationJobsPage({super.key, required this.repo, this.reconnect});
 
   @override
   State<GenerationJobsPage> createState() => _GenerationJobsPageState();
 }
 
 class _GenerationJobsPageState extends State<GenerationJobsPage> {
+  bool reconnecting = false;
   List<GalleryJson> presets = [];
   List<GalleryJson> jobs = [];
   GalleryJson? preset;
@@ -292,6 +294,21 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
     }
   }
 
+  Future<void> reconnect() async {
+    if (reconnecting) return;
+    setState(() => reconnecting = true);
+    try {
+      await widget.reconnect!();
+      await refresh();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('ComfyUIに接続しました。送信済みジョブは履歴を確認して復旧します。失敗したジョブは生成内容を確認して再度生成してください。')));
+    } catch (error) {
+      if (mounted) setState(() => actionError = '再接続できません: $error');
+    } finally {
+      if (mounted) setState(() => reconnecting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final specs = preset?['parameters'] as Map? ?? {};
@@ -353,6 +370,12 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                 ),
               ),
               const SizedBox(height: 16),
+              if (widget.reconnect != null)
+                Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: OutlinedButton.icon(
+                  onPressed: reconnecting ? null : reconnect,
+                  icon: const Icon(Icons.sync),
+                  label: Text(reconnecting ? 'ComfyUIの起動・接続を確認中…' : 'ComfyUIを起動・再接続'),
+                )),
               if (error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),

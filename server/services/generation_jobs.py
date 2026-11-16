@@ -225,15 +225,17 @@ class GenerationJobs:
         except requests.HTTPError as exc:
             if exc.response is not None and 400 <= exc.response.status_code < 500:
                 self._update(identifier, state="failed", error=f"ComfyUI HTTP {exc.response.status_code}")
+            elif job["submitted"] and time.time() - job["submitted"] > self.timeout_seconds:
+                self._update(identifier, state="failed", error="ComfyUIのサーバーエラーが続いたためタイムアウトしました。状態を確認してください")
             else:
-                self._update(identifier, error="ComfyUIとの通信を再試行しています")
+                self._update(identifier, error="ComfyUIがサーバーエラーを返しています。接続を確認して再試行します")
         except (requests.RequestException, OSError) as exc:
             if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
                 self._update(identifier, error="ストレージ容量不足です。空き容量の確保後に再試行します")
             elif job["state"] != "importing" and job["submitted"] and time.time() - job["submitted"] > self.timeout_seconds:
                 self._update(identifier, state="failed", error="生成がタイムアウトしました。ComfyUIの状態を確認してください")
             else:
-                self._update(identifier, error="ComfyUIとの通信を再試行しています")
+                self._update(identifier, error="ComfyUIに接続できません。ComfyUIを起動・再接続してください。送信済みジョブは履歴を照合します")
         except (ValueError, KeyError, TypeError) as exc:
             self._update(identifier, state="failed", error=str(exc)[:300])
 

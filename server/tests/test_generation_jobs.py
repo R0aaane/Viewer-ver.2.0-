@@ -269,6 +269,33 @@ class GenerationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             presets.build("txt2img", {"width": 513})
 
+    def test_disconnection_is_actionable_and_never_resubmits(self):
+        with serve(self.comfy) as port:
+            jobs = self.manager(port)
+            job = jobs.create("disconnect", "fixture", {})
+            jobs.tick()
+            with patch.object(jobs, "_get_json", side_effect=requests.ConnectionError("offline")):
+                jobs.tick()
+            self.assertIn("ComfyUIを起動・再接続", jobs.get(job["id"])["error"])
+            self.assertEqual(len(self.submissions), 1)
+            jobs.tick()
+            self.assertEqual(len(self.submissions), 1)
+
+    def test_repeated_http_503_has_bounded_wait(self):
+        with serve(self.comfy) as port:
+            jobs = self.manager(port)
+            jobs.timeout_seconds = 60
+            job = jobs.create("server-error-timeout", "fixture", {})
+            jobs.tick()
+            with closing(self.library.connect()) as db, db:
+                db.execute("UPDATE generation_jobs SET submitted=? WHERE id=?", (time.time() - 61, job["id"]))
+            response = requests.Response()
+            response.status_code = 503
+            with patch.object(jobs, "_get_json", side_effect=requests.HTTPError(response=response)):
+                jobs.tick()
+            self.assertEqual(jobs.get(job["id"])["state"], "failed")
+            self.assertEqual(len(self.submissions), 1)
+
     def test_timeout_does_not_resubmit_or_interrupt_other_prompts(self):
         with serve(self.comfy) as port:
             jobs = self.manager(port)
