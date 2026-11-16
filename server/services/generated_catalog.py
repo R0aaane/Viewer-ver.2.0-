@@ -99,7 +99,11 @@ def search(db, query):
         LEFT JOIN tag_revisions v ON v.digest=p.mediaId
         LEFT JOIN entity_versions e ON e.media_id=p.mediaId
         ORDER BY """ + page_order + ", p.mediaId", (*args, query.limit + 1, query.offset)).fetchall()
-    return {"items": [dict(r) for r in rows[:query.limit]], "hasMore": len(rows) > query.limit}
+    items = [dict(r) for r in rows[:query.limit]]
+    for item in items:
+        item["tags"] = [dict(tag) for tag in db.execute(
+            "SELECT category,name FROM manual_tags WHERE digest=? ORDER BY category,name", (item["mediaId"],))]
+    return {"items": items, "hasMore": len(rows) > query.limit}
 
 
 def detail(db, digest):

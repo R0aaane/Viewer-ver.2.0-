@@ -8,7 +8,7 @@ import 'widgets/scene_ui.dart';
 import 'generation_jobs_page.dart';
 
 typedef _Json = Map<String, dynamic>;
-const _categories = {'free': '手動タグ', 'character': 'キャラクター', 'series': 'シリーズ'};
+const _categories = {'artist': 'アーティスト', 'generation': '生成タグ', 'free': '手動タグ', 'character': 'キャラクター', 'series': 'シリーズ'};
 const _modes = {'all_tags': 'AND', 'any_tags': 'OR', 'no_tags': 'NOT'};
 const _pageSize = 48;
 
@@ -39,6 +39,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
   bool _sendingToHost = false;
   int offset = 0;
   late Future<_Json> page = fetch();
+  late Future<List<_Json>> tagIndex = repo.tags();
   late final Timer _connectionTimer;
 
   @override
@@ -97,6 +98,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
       selected.clear();
       offset = start;
       page = fetch();
+      tagIndex = repo.tags();
     });
   }
 
@@ -130,18 +132,18 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
   Future<void> deleteSelected() async {
     final ids = selected.keys.toList();
     final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: Text(deleted ? '選択した画像を復元' : '選択した画像を削除'),
-      content: Text(deleted ? '${ids.length}枚をギャラリーに戻します。' : '${ids.length}枚を削除済みに移動します。後から復元できます。'),
+      title: const Text('選択した画像を完全削除'),
+      content: Text('${ids.length}枚の原本・サムネイル・タグを完全に削除します。このサービスが管理するComfyUI出力元も削除します。復元できません。ホストへ送ったコピーは別途削除してください。'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('キャンセル')),
-        FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(deleted ? '復元' : '削除')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('完全削除')),
       ],
     ));
     if (confirmed != true || !mounted) return;
     await change(() async {
       for (final id in ids) {
         final detail = await repo.detail(id);
-        await repo.editImage(id, detail['version'] as int, deleted: !deleted, epoch: detail['epoch'] as String?);
+        await repo.purgeImage(id, detail['version'] as int, epoch: detail['epoch'] as String?);
       }
     });
   }
@@ -257,11 +259,11 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
           if (active) ...[
             TextButton.icon(
               onPressed: _sendingToHost ? null : deleteSelected,
-              icon: Icon(deleted ? Icons.restore : Icons.delete_outline),
-              label: Text(deleted ? '復元' : '削除'),
+              icon: const Icon(Icons.delete_forever),
+              label: const Text('完全削除'),
             ),
-            IconButton(
-              tooltip: '選択した画像のタグを編集',
+            TextButton.icon(
+              label: const Text('タグ編集'),
               icon: const Icon(Icons.sell_outlined),
               onPressed: () => chooseTag(filtering: false),
             ),
@@ -349,6 +351,26 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
                   ),
                 ],
               ),
+            ),
+            ExpansionTile(
+              title: const Text('アーティスト・生成タグから探す'),
+              children: [FutureBuilder<List<_Json>>(
+                future: tagIndex,
+                builder: (context, snapshot) => Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Wrap(spacing: 8, children: [
+                    if (!snapshot.hasData) const Text('タグを取得中'),
+                    if (snapshot.data?.isEmpty == true) const Text('画像を選択して「タグ編集」で分類できます'),
+                    for (final tag in snapshot.data ?? <_Json>[])
+                      ActionChip(label: Text('${_categories[tag['category']] ?? tag['category']}: ${tag['name']} (${tag['count']})'),
+                        onPressed: () {
+                          final entry = (mode: 'all_tags', category: tag['category'] as String, name: tag['name'] as String);
+                          if (!filters.contains(entry)) filters.add(entry);
+                          reload();
+                        }),
+                  ]),
+                ),
+              )],
             ),
             if (filters.isNotEmpty)
               SizedBox(
@@ -448,6 +470,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
                                         ),
                                         footer: GridTileBar(
                                           title: Text(row['name'] as String),
+                                          subtitle: Text((row['tags'] as List? ?? []).map((t) => '${_categories[t['category']] ?? t['category']}: ${t['name']}').join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis),
                                           backgroundColor: Colors.black54,
                                         ),
                                         child: _Thumbnail(
@@ -664,7 +687,7 @@ class _GeneratedDetailState extends State<_GeneratedDetail> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(action == 'delete' ? '画像を削除済みに移動' : '画像を復元'),
+          title: Text(action == 'purge' ? '画像を完全削除（復元不可）' : action == 'delete' ? '画像を削除済みに移動' : '画像を復元'),
           content: Text('${detail['name']}'),
           actions: [
             TextButton(
@@ -682,6 +705,11 @@ class _GeneratedDetailState extends State<_GeneratedDetail> {
     }
     if (!mounted) return;
     try {
+      if (action == 'purge') {
+        await widget.repo.purgeImage(widget.id, detail['version'], epoch: detail['epoch'] as String?);
+        if (mounted) Navigator.pop(context);
+        return;
+      }
       await widget.repo.editImage(
         widget.id,
         detail['version'],
@@ -758,6 +786,7 @@ class _GeneratedDetailState extends State<_GeneratedDetail> {
               onSelected: (action) => modify(detail!, action),
               itemBuilder: (_) => [
                 const PopupMenuItem(value: 'rename', child: Text('表示名を変更')),
+                const PopupMenuItem(value: 'purge', child: Text('完全削除（復元不可）')),
                 if (detail!['deleted'] == true)
                   const PopupMenuItem(value: 'restore', child: Text('復元'))
                 else

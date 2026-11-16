@@ -394,6 +394,9 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                                 ),
                               ),
                       ),
+                      if (specs.containsKey('lora_name'))
+                        const Padding(padding: EdgeInsets.only(top: 12), child: Text(
+                          'LoRAはチェックポイントと同じ系列（Illustrious / SDXLなど）を選んでください。必要なトリガーワードは描きたい内容に入力します。LoRAを使わない場合は通常プリセットを選択してください。')),
                       for (final name in controllers.keys)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),

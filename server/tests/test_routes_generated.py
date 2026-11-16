@@ -96,6 +96,30 @@ class GeneratedRoutesTests(unittest.TestCase):
                     self.assertEqual(uploaded.json()["mediaId"], digest)
                     self.assertEqual(upload(payload, auth).json()["mediaId"], digest)
                     self.assertEqual(get("/media/" + digest).content, payload)
+                    for category, name in (("artist", "Example artist"), ("generation", "watercolor")):
+                        tagged = requests.post(url + "/tags", headers=auth, json={"media_ids": [digest],
+                            "operation": "add", "tag": {"category": category, "name": name}}, timeout=3)
+                        self.assertEqual(tagged.status_code, 200, tagged.text)
+                    tags = get("/tags").json()["items"]
+                    self.assertTrue(any(t["category"] == "artist" and t["count"] == 1 for t in tags))
+                    filtered = requests.post(url + "/search", headers=auth,
+                        json={"all_tags": [{"category": "generation", "name": "watercolor"}]}, timeout=3).json()["items"]
+                    self.assertEqual(filtered[0]["mediaId"], digest)
+                    self.assertEqual(len(filtered[0]["tags"]), 2)
+                    repeat = requests.post(url + "/upload", headers=auth,
+                        files={"file": ("image.png", payload, "image/png")},
+                        data={"tags": json.dumps([{"category": "artist", "name": "Example artist"}])}, timeout=10)
+                    self.assertEqual(repeat.status_code, 200, repeat.text)
+                    self.assertEqual(len(get("/media/" + digest + "/details").json()["tags"]), 2)
+                    version = get("/media/" + digest + "/details").json()["version"]
+                    stale = requests.delete(url + "/media/" + digest, headers=auth,
+                        params={"expected_version": version + 1}, timeout=3)
+                    self.assertEqual(stale.status_code, 409)
+                    removed = requests.delete(url + "/media/" + digest, headers=auth,
+                        params={"expected_version": version}, timeout=3)
+                    self.assertEqual(removed.status_code, 200, removed.text)
+                    self.assertEqual(get("/media/" + digest).status_code, 404)
+                    self.assertEqual(get("/tags").json()["items"], [])
                     app.state.settings.auth_token = None
                     self.assertEqual(get("/events").status_code, 503)
             finally:

@@ -16,6 +16,7 @@ def initialize(db, generated=False):
     db.commit()
     if generated:
         rules = [
+            ("images", "digest", "update", "NEW.state='purging' AND OLD.state<>'purging'", "'delete'"),
             ("images", "digest", "insert", "NEW.state='ready'", "'import'"),
             ("images", "digest", "update", "NEW.state='ready' AND OLD.state<>'ready'", "'import'"),
             ("generation_info", "digest", "update", "NEW.normalized IS NOT OLD.normalized", "'metadata'"),
@@ -43,7 +44,7 @@ def initialize(db, generated=False):
     for target, column, operation, when, kind in rules:
         row = "OLD" if operation == "delete" else "NEW"
         db.executescript(f"""
-            CREATE TRIGGER IF NOT EXISTS sync_{target}_{operation} AFTER {operation.upper()} ON {target}
+            CREATE TRIGGER IF NOT EXISTS sync_{target}_{operation}{"_purge" if when.startswith("NEW.state='purging'") else ""} AFTER {operation.upper()} ON {target}
             WHEN {when} BEGIN
                 INSERT INTO entity_versions VALUES ({row}.{column},1)
                     ON CONFLICT(media_id) DO UPDATE SET version=version+1;

@@ -2405,7 +2405,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                 FilledButton.icon(
                   onPressed: _startingLocalGeneration ? null : _openLocalGeneration,
                   icon: const Icon(Icons.auto_awesome),
-                  label: Text(_startingLocalGeneration ? '生成環境を準備中…' : '画像生成を開く'),
+                  label: Text(_startingLocalGeneration ? '生成環境を準備中…' : '生成画像一覧を開く'),
                 ),
               ]),
             )),

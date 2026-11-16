@@ -13,6 +13,51 @@ from server.services.generated_library import GeneratedLibrary
 
 
 class GeneratedLibraryTests(unittest.TestCase):
+    def test_permanent_delete_removes_files_and_does_not_reimport(self):
+        from server.services import change_log
+        path = self.image()
+        payload = path.read_bytes()
+        self.tick()
+        self.tick()
+        digest = hashlib.sha256(payload).hexdigest()
+        original = self.library.media_path(digest, False)
+        thumb = self.library.media_path(digest, True)
+        with closing(self.library.connect()) as db:
+            version = change_log.version(db, digest)
+        with self.assertRaises(ValueError):
+            self.library.purge(digest, version + 1)
+        self.assertTrue(original.exists())
+        self.library.purge(digest, version)
+        self.assertFalse(original.exists())
+        self.assertFalse(thumb.exists())
+        self.assertFalse(path.exists())
+        path.write_bytes(payload)
+        self.tick()
+        self.tick()
+        self.assertIsNone(self.library.media_path(digest, False))
+        with self.assertRaises(ValueError):
+            self.library.import_download(path)
+        with closing(self.library.connect()) as db:
+            self.assertEqual(db.execute("SELECT state FROM images WHERE digest=?", (digest,)).fetchone()[0], "purged")
+            self.assertEqual(db.execute("SELECT kind FROM sync_changes WHERE media_id=? ORDER BY seq DESC", (digest,)).fetchone()[0], "delete")
+
+    def test_interrupted_delete_is_recovered_on_scan(self):
+        from server.services import change_log
+        self.image()
+        self.tick()
+        self.tick()
+        with closing(self.library.connect()) as db:
+            digest = db.execute("SELECT digest FROM images WHERE state='ready'").fetchone()[0]
+            version = change_log.version(db, digest)
+        original = self.library.media_path(digest, False)
+        with patch.object(Path, "unlink", side_effect=OSError("test interruption")):
+            with self.assertRaises(OSError):
+                self.library.purge(digest, version)
+        self.assertTrue(original.exists())
+        self.tick()
+        self.assertFalse(original.exists())
+        self.assertIsNone(self.library.media_path(digest, False))
+
     def test_thumbnail_keeps_palette_transparency_pixels(self):
         path = self.source / "palette.png"
         image = Image.new("P", (40, 20))

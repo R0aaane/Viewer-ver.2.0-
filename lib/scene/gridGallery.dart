@@ -102,11 +102,14 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
           }
           final settings = widget.tagService.settings;
           final remote = GeneratedMediaRepository(settings.remoteApiBaseUrl, settings.authToken);
+          final local = GeneratedMediaRepository(LocalGenerationService.baseUrl, token);
           try {
             for (final path in paths) {
-              await remote.uploadImage(path);
+              final detail = await local.detail(p.basenameWithoutExtension(path));
+              await remote.uploadImage(path, tags: detail['tags'] as List);
             }
           } finally {
+            local.close();
             remote.close();
           }
           final count = paths.length;

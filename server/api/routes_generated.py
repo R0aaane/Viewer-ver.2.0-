@@ -1,5 +1,6 @@
 import asyncio
 import re
+import json
 import tempfile
 from pathlib import Path
 from contextlib import closing
@@ -7,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, StringConstraints
 from server.services import generated_catalog, change_log
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -29,7 +30,7 @@ def library_for(request: Request, _=Depends(require_bearer_token)):
 
 
 class ManualTag(BaseModel):
-    category: Literal["free", "character", "series"]
+    category: Literal["free", "artist", "generation", "character", "series"]
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 
 
@@ -55,9 +56,16 @@ class TagEdit(BaseModel):
 
 
 @router.post("/upload")
-async def upload_generated(file: UploadFile = File(...), library=Depends(library_for)):
+async def upload_generated(file: UploadFile = File(...), tags: str = Form("[]", max_length=65536), library=Depends(library_for)):
     # Keep uploads isolated from the document import/organization pipeline.
     try:
+        try:
+            raw_tags = json.loads(tags)
+            if not isinstance(raw_tags, list) or len(raw_tags) > 100:
+                raise ValueError("Invalid tags")
+            validated_tags = [ManualTag.model_validate(tag) for tag in raw_tags]
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(422, "Invalid tags") from exc
         with tempfile.TemporaryDirectory(prefix="generated-upload-") as temp:
             path = Path(temp) / "image"
             size = 0
@@ -73,6 +81,14 @@ async def upload_generated(file: UploadFile = File(...), library=Depends(library
                 raise HTTPException(422, "Invalid image") from exc
             if digest is None:
                 raise HTTPException(503, "Generated library is busy; retry later")
+            with closing(library.connect()) as db, db:
+                # Union manual tags on repeat transfer; never remove host edits.
+                changed = 0
+                for tag in validated_tags:
+                    changed += db.execute("INSERT OR IGNORE INTO manual_tags VALUES(?,?,?)",
+                                          (digest, tag.category, tag.name)).rowcount
+                if changed:
+                    db.execute("INSERT INTO tag_revisions VALUES(?,1) ON CONFLICT(digest) DO UPDATE SET version=version+1", (digest,))
             return {"mediaId": digest}
     finally:
         await file.close()
@@ -123,6 +139,30 @@ class ImageEdit(BaseModel):
     expected_version: int = Field(ge=0)
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
     deleted: bool | None = None
+
+
+@router.delete("/media/{media_id}")
+def purge_image(media_id: str, request: Request, expected_version: int = Query(..., ge=0), library=Depends(library_for)):
+    if not re.fullmatch(r"[0-9a-f]{64}", media_id):
+        raise HTTPException(404, "Image unavailable")
+    try:
+        library.purge(media_id, expected_version, request.headers.get("x-sync-epoch"))
+    except FileNotFoundError:
+        raise HTTPException(404, "Image unavailable")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except BlockingIOError:
+        raise HTTPException(503, "Generated library is busy; retry later")
+    return {"deleted": True}
+
+
+@router.get("/tags")
+def list_tags(library=Depends(library_for)):
+    with closing(library.connect()) as db:
+        return {"items": [dict(row) for row in db.execute("""SELECT t.category,t.name,COUNT(*) AS count
+            FROM manual_tags t JOIN images i ON i.digest=t.digest AND i.state='ready'
+            LEFT JOIN generated_overrides o ON o.digest=t.digest WHERE COALESCE(o.deleted,0)=0
+            GROUP BY t.category,t.name ORDER BY t.category,t.name LIMIT 500""")]}
 
 
 @router.patch("/media/{media_id}")

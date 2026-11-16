@@ -7,6 +7,8 @@ from pathlib import Path
 
 class GenerationPresets:
     def __init__(self, path: Path):
+        self.path = path
+        self.modified = path.stat().st_mtime_ns
         entries = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(entries, list) or not entries:
             raise ValueError("Preset file must contain a nonempty array")
@@ -60,12 +62,20 @@ class GenerationPresets:
             raise ValueError(f"Invalid parameter: {name}")
         return value
 
+    def refresh(self):
+        if self.path.stat().st_mtime_ns != self.modified:
+            updated = GenerationPresets(self.path)
+            self.entries = updated.entries
+            self.modified = updated.modified
+
     def public(self):
+        self.refresh()
         return [{"id": key, "name": item.get("name", key), "parameters": {
             name: {k: v for k, v in spec.items() if k not in ("node", "input")}
             for name, spec in item["parameters"].items()}} for key, item in self.entries.items()]
 
     def build(self, identifier, values):
+        self.refresh()
         if identifier not in self.entries:
             raise ValueError("Unknown workflow preset")
         preset = self.entries[identifier]

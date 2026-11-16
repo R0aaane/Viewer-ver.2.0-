@@ -179,9 +179,20 @@ class GeneratedMediaRepository {
         queryParameters: {'value': value, 'expected_version': ?version},
         options: Options(headers: {'X-Sync-Epoch': ?epoch}),
       );
-  Future<void> uploadImage(String path) async {
+  Future<List<GalleryJson>> tags() async => List<GalleryJson>.from(
+    (await _client.get<GalleryJson>('/tags')).data!['items']);
+  Future<void> purgeImage(String id, int version, {String? epoch}) async {
+    await _client.delete('/media/$id', queryParameters: {'expected_version': version},
+      options: Options(headers: {'X-Sync-Epoch': ?epoch}));
+    final removed = _cache.remove(id);
+    if (removed != null) _bytes -= removed.lengthInBytes;
+    cacheGeneration++;
+  }
+
+  Future<void> uploadImage(String path, {List<dynamic> tags = const []}) async {
     await _client.post('/upload', data: FormData.fromMap({
       'file': await MultipartFile.fromFile(path),
+      'tags': jsonEncode(tags),
     }));
   }
 

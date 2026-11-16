@@ -19,6 +19,49 @@ class LocalGenerationService {
     _starting = null;
   });
 
+  Future<void> _configureLora(Dio client, Uri comfyUrl, String path) async {
+    final response = await client.get('$comfyUrl/object_info/LoraLoader');
+    final choices = List<String>.from(response.data['LoraLoader']['input']['required']['lora_name'][0]);
+    final file = File(path);
+    final original = await file.readAsString();
+    final presets = jsonDecode(original) as List;
+    presets.removeWhere((entry) => entry['id'] == 'local-txt2img-lora');
+    final bases = presets.where((entry) => entry['id'] == 'txt2img');
+    if (choices.isNotEmpty && bases.isNotEmpty) {
+      final entry = jsonDecode(jsonEncode(bases.first)) as Map<String, dynamic>;
+      final graph = entry['workflow'] as Map;
+      // Only extend the known standard workflow; custom workflows stay untouched.
+      if (graph['4']?['class_type'] == 'CheckpointLoaderSimple' &&
+          graph['3']?['class_type'] == 'KSampler' &&
+          graph['6']?['class_type'] == 'CLIPTextEncode' && graph['7']?['class_type'] == 'CLIPTextEncode') {
+        entry['id'] = 'local-txt2img-lora';
+        entry['name'] = 'イラスト（LoRAを使用）';
+        graph['local_lora'] = {'class_type': 'LoraLoader', 'inputs': {
+          'model': ['4', 0], 'clip': ['4', 1], 'lora_name': choices.first,
+          'strength_model': 0.8, 'strength_clip': 0.8,
+        }};
+        graph['3']['inputs']['model'] = ['local_lora', 0];
+        graph['6']['inputs']['clip'] = ['local_lora', 1];
+        graph['7']['inputs']['clip'] = ['local_lora', 1];
+        final parameters = entry['parameters'] as Map;
+        parameters['lora_name'] = {'node': 'local_lora', 'input': 'lora_name', 'type': 'choice',
+          'label': 'LoRA（選択モデルと同じ系列を指定）', 'choices': choices,
+          'default': choices.firstWhere((name) => name.toLowerCase().contains('illustrious'), orElse: () => choices.first)};
+        for (final target in ['model', 'clip']) {
+          parameters['lora_strength_$target'] = {'node': 'local_lora', 'input': 'strength_$target',
+            'type': 'number', 'label': 'LoRA強度（$target）', 'min': -2, 'max': 2, 'default': 0.8};
+        }
+        presets.add(entry);
+      }
+    }
+    final updated = const JsonEncoder.withIndent('  ').convert(presets);
+    if (jsonEncode(jsonDecode(original)) != jsonEncode(presets)) {
+      final temporary = File('$path.tmp');
+      await temporary.writeAsString(updated, flush: true);
+      await temporary.rename(path);
+    }
+  }
+
   Future<String> _start() async {
     Directory? root;
     for (final start in [
@@ -104,6 +147,7 @@ class LocalGenerationService {
         }
         if (!available) throw StateError('ComfyUIの起動が完了しませんでした。起動ログを確認してください。');
       }
+      await _configureLora(client, comfyUrl, config['presetsPath'] as String);
       if (await ready()) return token;
       // Refuse to replace an unrelated listener.
       try {

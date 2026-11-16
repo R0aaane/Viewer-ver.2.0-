@@ -96,7 +96,7 @@ class GeneratedLibrary:
                 return None
             with closing(self.connect()) as db:
                 # scan() owns recovery of any previously interrupted publication.
-                if db.execute("SELECT 1 FROM images WHERE state <> 'ready'").fetchone():
+                if db.execute("SELECT 1 FROM images WHERE state='staged'").fetchone():
                     return None
                 try:
                     with warnings.catch_warnings():
@@ -114,6 +114,8 @@ class GeneratedLibrary:
                         raise
                     raise ValueError("ComfyUIの出力画像を読み取れません") from exc
                 digest = _file_digest(path)
+                if db.execute("SELECT 1 FROM images WHERE digest=? AND state IN ('purging','purged')", (digest,)).fetchone():
+                    raise ValueError("Image was permanently deleted")
                 if db.execute("SELECT 1 FROM images WHERE digest=? AND state='ready'", (digest,)).fetchone():
                     return digest
                 with path.open("rb") as src, (self.root / "incoming.part").open("wb") as dst:
@@ -124,6 +126,40 @@ class GeneratedLibrary:
                     db.execute("INSERT INTO images VALUES (?, ?, 'staged')", (digest, ext))
                 self._publish(db, digest, ext)
                 return digest
+
+    def purge(self, digest, expected_version, epoch=None):
+        from server.services import change_log
+        with self._worker_lock() as acquired:
+            if not acquired:
+                raise BlockingIOError("Generated library is busy")
+            with closing(self.connect()) as db:
+                with db:
+                    db.execute("BEGIN IMMEDIATE")
+                    if epoch and db.execute("SELECT epoch FROM sync_meta WHERE id=1").fetchone()[0] != epoch:
+                        raise ValueError("Library was restored")
+                    row = db.execute("SELECT ext,state FROM images WHERE digest=?", (digest,)).fetchone()
+                    if row is None or row["state"] == "purged":
+                        raise FileNotFoundError(digest)
+                    if change_log.version(db, digest) != expected_version:
+                        raise ValueError("Image changed")
+                    db.execute("UPDATE images SET state='purging' WHERE digest=?", (digest,))
+                self._finish_purge(db, digest, row["ext"])
+
+    def _finish_purge(self, db, digest, ext):
+        # Journal the intent before unlinking. A scan retries interrupted deletes.
+        for source in db.execute("SELECT path,signature FROM sources WHERE digest=?", (digest,)):
+            path = self.source / source["path"]
+            if (path.is_file() and not _is_link(path.lstat()) and path.resolve().is_relative_to(self.source)
+                    and _signature(path.lstat()) == source["signature"] and _file_digest(path) == digest):
+                path.unlink()
+        (self.root / "originals" / f"{digest}.{ext}").unlink(missing_ok=True)
+        (self.root / "thumbs" / f"{digest}.png").unlink(missing_ok=True)
+        with db:
+            db.execute("DELETE FROM prompt_search WHERE rowid IN (SELECT rowid FROM generation_info WHERE digest=?)", (digest,))
+            for table in ("generation_info", "manual_tags", "generated_favorites", "tag_revisions", "generated_overrides"):
+                db.execute(f"DELETE FROM {table} WHERE digest=?", (digest,))
+            # Retain the tombstone and import/sync history to prevent reimport and cursor reuse.
+            db.execute("UPDATE images SET state='purged' WHERE digest=?", (digest,))
 
     def close(self):
         self.stop.set()
@@ -159,9 +195,11 @@ class GeneratedLibrary:
             if not acquired:
                 return
             with closing(self.connect()) as db:
+                for row in db.execute("SELECT digest,ext FROM images WHERE state='purging'").fetchall():
+                    self._finish_purge(db, row["digest"], row["ext"])
                 # At most one staged image owns incoming.part. Finish it before
                 # allowing another copy, even if the original source disappeared.
-                for row in db.execute("SELECT * FROM images WHERE state <> 'ready'"):
+                for row in db.execute("SELECT * FROM images WHERE state='staged'"):
                     original = self.root / "originals" / f"{row['digest']}.{row['ext']}"
                     staged = self.root / "incoming.part"
                     if not original.exists() and (not staged.is_file() or _file_digest(staged) != row["digest"]):
@@ -207,7 +245,7 @@ class GeneratedLibrary:
                                 Image.DecompressionBombWarning):
                             # Once a copy is journaled the scratch file belongs
                             # to it. Stop this pass and recover before reusing it.
-                            if db.execute("SELECT 1 FROM images WHERE state <> 'ready'").fetchone():
+                            if db.execute("SELECT 1 FROM images WHERE state='staged'").fetchone():
                                 raise
                             logger.warning("Generated image deferred: %s", path.name, exc_info=True)
                 self._record_observations(db, observations)
