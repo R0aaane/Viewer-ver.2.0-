@@ -80,3 +80,6 @@ data/*.log.err
 data/*.db-shm
 data/*.db-wal
 
+
+# Machine-specific generation configuration and images
+data/local_generation/

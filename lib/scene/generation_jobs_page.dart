@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -305,137 +306,214 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Text(error!),
+      bottomNavigationBar: presets.isEmpty
+          ? null
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 52),
+                  ),
+                  icon: const Icon(Icons.auto_awesome),
+                  onPressed: busy ? null : submit,
+                  label: Text(
+                    busy
+                        ? '送信中…'
+                        : pending == null
+                        ? '生成する'
+                        : '前回の送信を確認・再試行',
+                  ),
+                ),
+              ),
             ),
-          if (actionError != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Text(actionError!),
-            ),
-          if (!initialized && error == null) const LinearProgressIndicator(),
-          if (initialized && presets.isEmpty)
-            const Text('ホスト側でワークフロープリセットを登録してください'),
-          if (presets.isNotEmpty)
-            Form(
-              key: form,
-              child: Column(
-                children: [
-                  DropdownButtonFormField<String>(
-                    initialValue: preset?['id'],
-                    decoration: const InputDecoration(labelText: 'ワークフロープリセット'),
-                    items: [
-                      for (final item in presets)
-                        DropdownMenuItem(
-                          value: item['id'],
-                          child: Text(item['name']),
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 960),
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '描きたいイメージを画像に',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'プリセットを選び、描きたい内容を入力して「生成する」を押してください。進み具合と完成した画像は下の生成履歴で確認できます。',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(error!),
+                ),
+              if (actionError != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(actionError!),
+                ),
+              if (!initialized && error == null)
+                const LinearProgressIndicator(),
+              if (initialized && presets.isEmpty)
+                const Text('ホスト側でワークフロープリセットを登録してください'),
+              if (presets.isNotEmpty)
+                Form(
+                  key: form,
+                  child: Column(
+                    children: [
+                      DropdownButtonFormField<String>(
+                        isExpanded: true,
+                        initialValue: preset?['id'],
+                        decoration: const InputDecoration(
+                          labelText: 'ワークフロープリセット',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: [
+                          for (final item in presets)
+                            DropdownMenuItem(
+                              value: item['id'],
+                              child: Text(item['name']),
+                            ),
+                        ],
+                        onChanged: busy || pending != null
+                            ? null
+                            : (id) => setState(
+                                () => choose(
+                                  presets.firstWhere((p) => p['id'] == id),
+                                ),
+                              ),
+                      ),
+                      for (final name in controllers.keys)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: specs[name]['type'] == 'choice'
+                              ? DropdownButtonFormField<String>(
+                                  isExpanded: true,
+                                  key: ValueKey('${preset!['id']}.$name'),
+                                  initialValue: controllers[name]!.text,
+                                  decoration: InputDecoration(
+                                    labelText: specs[name]['label'] ?? name,
+                                    border: const OutlineInputBorder(),
+                                  ),
+                                  items: [
+                                    for (final item in specs[name]['choices'])
+                                      DropdownMenuItem(
+                                        value: item as String,
+                                        child: Text(item),
+                                      ),
+                                  ],
+                                  onChanged: busy || pending != null
+                                      ? null
+                                      : (choice) =>
+                                            controllers[name]!.text = choice!,
+                                )
+                              : TextFormField(
+                                  controller: controllers[name],
+                                  enabled: !busy && pending == null,
+                                  decoration: InputDecoration(
+                                    labelText: specs[name]['label'] ?? name,
+                                    border: const OutlineInputBorder(),
+                                    alignLabelWithHint: true,
+                                    helperText: name == 'positive'
+                                        ? '例: a small cat in a sunny garden, watercolor'
+                                        : name == 'negative'
+                                        ? '画像に含めたくない要素（省略可）'
+                                        : null,
+                                  ),
+                                  maxLines: specs[name]['type'] == 'text'
+                                      ? 3
+                                      : 1,
+                                  keyboardType: specs[name]['type'] == 'text'
+                                      ? TextInputType.multiline
+                                      : const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                  validator: (_) => validate(name, specs[name]),
+                                ),
+                        ),
+                      const SizedBox(height: 16),
+                      if (pending != null)
+                        TextButton(
+                          onPressed: busy ? null : clearPending,
+                          child: const Text('送信内容をクリア'),
                         ),
                     ],
-                    onChanged: busy || pending != null
-                        ? null
-                        : (id) => setState(
-                            () => choose(
-                              presets.firstWhere((p) => p['id'] == id),
-                            ),
-                          ),
                   ),
-                  for (final name in controllers.keys)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: specs[name]['type'] == 'choice'
-                          ? DropdownButtonFormField<String>(
-                              key: ValueKey('${preset!['id']}.$name'),
-                              initialValue: controllers[name]!.text,
-                              decoration: InputDecoration(
-                                labelText: specs[name]['label'] ?? name,
-                              ),
-                              items: [
-                                for (final item in specs[name]['choices'])
-                                  DropdownMenuItem(
-                                    value: item as String,
-                                    child: Text(item),
-                                  ),
-                              ],
-                              onChanged: busy || pending != null
-                                  ? null
-                                  : (choice) =>
-                                        controllers[name]!.text = choice!,
-                            )
-                          : TextFormField(
-                              controller: controllers[name],
-                              enabled: !busy && pending == null,
-                              decoration: InputDecoration(
-                                labelText: specs[name]['label'] ?? name,
-                              ),
-                              maxLines: specs[name]['type'] == 'text' ? 3 : 1,
-                              keyboardType: specs[name]['type'] == 'text'
-                                  ? TextInputType.multiline
-                                  : const TextInputType.numberWithOptions(
-                                      decimal: true,
+                ),
+              const SizedBox(height: 24),
+              Text('生成履歴', style: Theme.of(context).textTheme.titleMedium),
+              if (initialized && jobs.isEmpty) const Text('生成ジョブはありません'),
+              for (final job in jobs)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: (job['mediaIds'] as List).isEmpty
+                      ? Icon(
+                          job['state'] == 'failed'
+                              ? Icons.error_outline
+                              : Icons.hourglass_top,
+                        )
+                      : SizedBox(
+                          width: 64,
+                          height: 64,
+                          child: FutureBuilder<Uint8List>(
+                            future: widget.repo.thumbnail(job['mediaIds'][0]),
+                            builder: (context, snapshot) => snapshot.hasData
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.memory(
+                                      snapshot.data!,
+                                      fit: BoxFit.cover,
                                     ),
-                              validator: (_) => validate(name, specs[name]),
-                            ),
-                    ),
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    onPressed: busy ? null : submit,
-                    child: Text(
-                      busy
-                          ? '送信中…'
-                          : pending == null
-                          ? '生成する'
-                          : '前回の送信を確認・再試行',
-                    ),
+                                  )
+                                : const Icon(Icons.image_outlined),
+                          ),
+                        ),
+                  onTap: (job['mediaIds'] as List).isEmpty
+                      ? null
+                      : () => Navigator.maybePop(context),
+                  title: Text(
+                    '${_states[job['state']] ?? job['state']} · ${job['preset']}',
                   ),
-                  if (pending != null)
-                    TextButton(
-                      onPressed: busy ? null : clearPending,
-                      child: const Text('送信内容をクリア'),
-                    ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 24),
-          Text('生成履歴', style: Theme.of(context).textTheme.titleMedium),
-          if (initialized && jobs.isEmpty) const Text('生成ジョブはありません'),
-          for (final job in jobs)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                '${_states[job['state']] ?? job['state']} · ${job['preset']}',
-              ),
-              subtitle: Text(
-                [
-                  DateTime.fromMillisecondsSinceEpoch(
-                    ((job['created'] as num) * 1000).round(),
-                  ).toLocal().toString().split('.').first,
-                  if (job['progress'] is Map)
-                    '${job['progress']['value']} / ${job['progress']['max']}',
-                  if (job['error'] != null) job['error'],
-                  if ((job['mediaIds'] as List).isNotEmpty)
-                    '${(job['mediaIds'] as List).length}枚をギャラリーに登録',
-                ].join('\n'),
-              ),
-              trailing:
-                  ['queued', 'submitting', 'running'].contains(job['state'])
-                  ? IconButton(
-                      tooltip: '生成をキャンセル',
-                      icon: const Icon(Icons.cancel_outlined),
-                      onPressed: () => cancel(job),
-                    )
-                  : null,
-            ),
-          if (!historyEnd && jobs.isNotEmpty)
-            TextButton(
-              onPressed: () => refresh(older: true),
-              child: const Text('以前の履歴を読み込む'),
-            ),
-        ],
+                  subtitle: Text(
+                    [
+                      DateTime.fromMillisecondsSinceEpoch(
+                        ((job['created'] as num) * 1000).round(),
+                      ).toLocal().toString().split('.').first,
+                      if (job['progress'] is Map)
+                        '${job['progress']['value']} / ${job['progress']['max']}',
+                      if (job['error'] != null) job['error'],
+                      if ((job['mediaIds'] as List).isNotEmpty)
+                        '${(job['mediaIds'] as List).length}枚をギャラリーに登録 · タップして画像を確認',
+                    ].join('\n'),
+                  ),
+                  trailing:
+                      ['queued', 'submitting', 'running'].contains(job['state'])
+                      ? IconButton(
+                          tooltip: '生成をキャンセル',
+                          icon: const Icon(Icons.cancel_outlined),
+                          onPressed: () => cancel(job),
+                        )
+                      : null,
+                ),
+              if (!historyEnd && jobs.isNotEmpty)
+                TextButton(
+                  onPressed: () => refresh(older: true),
+                  child: const Text('以前の履歴を読み込む'),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

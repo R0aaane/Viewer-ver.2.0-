@@ -1,0 +1,162 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:dio/dio.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path/path.dart' as p;
+
+import 'auth_token_store.dart';
+
+/// A separate loopback worker reuses the durable generation queue without
+/// changing the remote library connection or sharing its credentials.
+class LocalGenerationService {
+  static final instance = LocalGenerationService();
+  static const baseUrl = 'http://127.0.0.1:18890';
+  Future<String>? _starting;
+  String? libraryPath;
+
+  Future<String> start() => _starting ??= _start().whenComplete(() {
+    _starting = null;
+  });
+
+  Future<String> _start() async {
+    Directory? root;
+    for (final start in [
+      Directory.current,
+      File(Platform.resolvedExecutable).parent,
+    ]) {
+      var candidate = start.absolute;
+      for (var i = 0; i < 10; i++) {
+        if (File(p.join(candidate.path, 'server', 'main.py')).existsSync() &&
+            File(p.join(candidate.path, 'pubspec.yaml')).existsSync()) {
+          root = candidate;
+          break;
+        }
+        candidate = candidate.parent;
+      }
+      if (root != null) break;
+    }
+    if (root == null) throw StateError('アプリのサーバーファイルが見つかりません。');
+    final configFile = File(
+      p.join(root.path, 'data', 'local_generation', 'connection.json'),
+    );
+    if (!await configFile.exists()) {
+      throw StateError('このPCのComfyUI接続設定がありません。');
+    }
+    final config = jsonDecode(await configFile.readAsString()) as Map;
+    libraryPath = config['libraryPath'] as String;
+    const storage = FlutterSecureStorage();
+    var token = await storage.read(key: 'pdf_viewer.localGenerationToken');
+    if (token == null) {
+      token = AuthTokenStore.generate();
+      await storage.write(key: 'pdf_viewer.localGenerationToken', value: token);
+    }
+    final client = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 2),
+        receiveTimeout: const Duration(seconds: 3),
+      ),
+    );
+    Future<bool> ready() async {
+      try {
+        await client.get(
+          '$baseUrl/generated/presets',
+          options: Options(headers: {'Authorization': 'Bearer $token'}),
+        );
+        return true;
+      } on DioException {
+        return false;
+      }
+    }
+
+    try {
+      final comfyUrl = Uri.parse(config['comfyUrl'] as String);
+      if (comfyUrl.host != '127.0.0.1' || comfyUrl.scheme != 'http') {
+        throw StateError('ComfyUIはこのPCの127.0.0.1を指定してください。');
+      }
+      try {
+        await client.get('$comfyUrl/system_stats');
+      } on DioException {
+        await Process.start(
+          config['pythonPath'] as String,
+          [
+            '-s',
+            'ComfyUI/main.py',
+            '--windows-standalone-build',
+            '--listen',
+            '127.0.0.1',
+            '--port',
+            '${comfyUrl.port}',
+          ],
+          workingDirectory: config['comfyRoot'] as String,
+          mode: ProcessStartMode.detached,
+        );
+        var available = false;
+        for (var i = 0; i < 180; i++) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+          try {
+            await client.get('$comfyUrl/system_stats');
+            available = true;
+            break;
+          } on DioException {
+            /* ComfyUI is still loading its nodes. */
+          }
+        }
+        if (!available) throw StateError('ComfyUIの起動が完了しませんでした。起動ログを確認してください。');
+      }
+      if (await ready()) return token;
+      // Refuse to replace an unrelated listener.
+      try {
+        final socket = await Socket.connect(
+          '127.0.0.1',
+          18890,
+          timeout: const Duration(seconds: 1),
+        );
+        socket.destroy();
+        throw StateError('ローカル生成用ポート18890が使用中です。');
+      } on SocketException {
+        /* available */
+      }
+      final data = configFile.parent.path;
+      await Process.start(
+        p.join(root.path, '.venv', 'Scripts', 'python.exe'),
+        [
+          '-m',
+          'uvicorn',
+          'server.main:app',
+          '--host',
+          '127.0.0.1',
+          '--port',
+          '18890',
+          '--no-proxy-headers',
+        ],
+        workingDirectory: root.path,
+        mode: ProcessStartMode.detached,
+        environment: {
+          'MEDIA_SERVER_HOST': '127.0.0.1',
+          'MEDIA_SERVER_PORT': '18890',
+          'MEDIA_SERVER_AUTH_TOKEN': token,
+          'MEDIA_SERVER_TAILNET_WITHOUT_TOKEN': 'false',
+          'MEDIA_SERVER_ALLOWED_NETWORKS': '127.0.0.0/8;::1/128',
+          'MEDIA_SERVER_DATA_DIR': data,
+          'MEDIA_SERVER_DB_PATH': p.join(data, 'metadata.db'),
+          'MEDIA_SERVER_THUMBS_DIR': p.join(data, 'thumbs'),
+          'MEDIA_SERVER_MEDIA_ROOTS': '',
+          'MEDIA_SERVER_STARTUP_RESCAN': 'false',
+          'MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR': p.join(data, 'xsaved'),
+          'MEDIA_SERVER_COMFY_URL': comfyUrl.toString(),
+          'MEDIA_SERVER_COMFY_OUTPUT_DIR': config['outputPath'] as String,
+          'MEDIA_SERVER_GENERATED_LIBRARY_DIR': libraryPath!,
+          'MEDIA_SERVER_COMFY_PRESETS_PATH': config['presetsPath'] as String,
+        },
+      );
+      for (var i = 0; i < 60; i++) {
+        if (await ready()) return token;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+      throw StateError('ローカル生成サービスを起動できませんでした。');
+    } finally {
+      client.close(force: true);
+    }
+  }
+}

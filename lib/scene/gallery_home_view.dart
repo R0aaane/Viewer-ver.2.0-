@@ -2393,6 +2393,23 @@ extension _GalleryHomeView on _GalleryGridPageState {
         padding: const EdgeInsets.all(SceneSpace.x6),
         children: [
           Text('ホーム', style: Theme.of(context).textTheme.titleLarge),
+          if (Platform.isWindows) ...[
+            const SizedBox(height: 16),
+            Card(child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('AI画像を生成', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                const Text('このPCのComfyUIで生成します。完成した画像を選んでホストへ送れます。'),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _startingLocalGeneration ? null : _openLocalGeneration,
+                  icon: const Icon(Icons.auto_awesome),
+                  label: Text(_startingLocalGeneration ? '生成環境を準備中…' : '画像生成を開く'),
+                ),
+              ]),
+            )),
+          ],
           const SizedBox(height: SceneSpace.x3),
           SizedBox(
             height: 44,
@@ -2443,11 +2460,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
     );
   }
 
-  Widget _buildHomeBody() => Column(children: [
-    if (Platform.isWindows && !widget.tagService.settings.isClientMode)
-      LocalAiPanel(bridge: _localAiBridge),
-    Expanded(child: _buildRedesignedHomeBody()),
-  ]);
+  Widget _buildHomeBody() => _buildRedesignedHomeBody();
 
   Widget _buildHomeSearchGalleryBody() {
     if (_initializing) {

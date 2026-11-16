@@ -159,7 +159,10 @@ void main() {
         'steps': 25,
       });
       expect(find.text('生成する'), findsOneWidget);
+      await tester.scrollUntilVisible(find.byTooltip('生成をキャンセル'), 250,
+          scrollable: find.byType(Scrollable).first);
       await tester.ensureVisible(find.byTooltip('生成をキャンセル'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('生成をキャンセル'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('キャンセルする'));

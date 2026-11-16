@@ -87,6 +87,15 @@ class GeneratedRoutesTests(unittest.TestCase):
                     self.assertEqual(get("/media/" + digest + "/thumbnail").headers["Content-Type"], "image/png")
                     self.assertEqual(get("/media/..%5Cgenerated.sqlite").status_code, 404)
                     self.assertEqual(get("/media/" + "a" * 64).status_code, 404)
+                    upload = lambda data, headers: requests.post(url + "/upload", headers=headers,
+                        files={"file": ("image.png", data, "image/png")}, timeout=10)
+                    self.assertEqual(upload(payload, {}).status_code, 401)
+                    self.assertEqual(upload(b"not an image", auth).status_code, 422)
+                    uploaded = upload(payload, auth)
+                    self.assertEqual(uploaded.status_code, 200, uploaded.text)
+                    self.assertEqual(uploaded.json()["mediaId"], digest)
+                    self.assertEqual(upload(payload, auth).json()["mediaId"], digest)
+                    self.assertEqual(get("/media/" + digest).content, payload)
                     app.state.settings.auth_token = None
                     self.assertEqual(get("/events").status_code, 503)
             finally:

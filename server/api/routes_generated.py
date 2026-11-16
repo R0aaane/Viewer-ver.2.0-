@@ -1,11 +1,13 @@
 import asyncio
 import re
+import tempfile
+from pathlib import Path
 from contextlib import closing
 from typing import Annotated, Literal
 from pydantic import BaseModel, Field, StringConstraints
 from server.services import generated_catalog, change_log
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -50,6 +52,30 @@ class TagEdit(BaseModel):
     media_ids: list[Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(min_length=1, max_length=100)
     tag: ManualTag
     operation: Literal["add", "remove"]
+
+
+@router.post("/upload")
+async def upload_generated(file: UploadFile = File(...), library=Depends(library_for)):
+    # Keep uploads isolated from the document import/organization pipeline.
+    try:
+        with tempfile.TemporaryDirectory(prefix="generated-upload-") as temp:
+            path = Path(temp) / "image"
+            size = 0
+            with path.open("wb") as output:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > 64 * 1024 * 1024:
+                        raise HTTPException(413, "Image exceeds 64 MiB")
+                    output.write(chunk)
+            try:
+                digest = await run_in_threadpool(library.import_download, path)
+            except ValueError as exc:
+                raise HTTPException(422, "Invalid image") from exc
+            if digest is None:
+                raise HTTPException(503, "Generated library is busy; retry later")
+            return {"mediaId": digest}
+    finally:
+        await file.close()
 
 
 @router.post("/search")

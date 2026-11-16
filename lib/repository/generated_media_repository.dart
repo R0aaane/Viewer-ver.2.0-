@@ -179,6 +179,12 @@ class GeneratedMediaRepository {
         queryParameters: {'value': value, 'expected_version': ?version},
         options: Options(headers: {'X-Sync-Epoch': ?epoch}),
       );
+  Future<void> uploadImage(String path) async {
+    await _client.post('/upload', data: FormData.fromMap({
+      'file': await MultipartFile.fromFile(path),
+    }));
+  }
+
   Future<void> editImage(
     String id,
     int version, {

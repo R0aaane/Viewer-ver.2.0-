@@ -20,8 +20,7 @@ import '../models/tag.dart';
 import '../database/pdf_export_service.dart';
 import '../services/app_reading_progress_service.dart';
 import '../services/app_version_service.dart';
-import '../services/local_ai_bridge.dart';
-import 'widgets/local_ai_panel.dart';
+import '../services/local_generation_service.dart';
 import '../services/host_api_server_service.dart';
 import '../services/import_tag_rule_service.dart';
 import '../services/import_pdf_conversion_service.dart';
@@ -35,6 +34,7 @@ import 'import_to_host_dialog.dart';
 import 'tag_assign_after_import.dart';
 
 import '../repository/mediaRepository.dart';
+import '../repository/generated_media_repository.dart';
 import '../widgets/controller_focusable.dart';
 import '../widgets/gallery_tag_picker.dart';
 
@@ -75,21 +75,55 @@ class GalleryGridPage extends StatefulWidget {
 }
 
 class _GalleryGridPageState extends State<GalleryGridPage> {
-  late final LocalAiBridge _localAiBridge;
+  bool _startingLocalGeneration = false;
 
-  Future<bool> _openLocalAiDocument(LocalAiDocument document) async {
-    if (!mounted || widget.tagService.settings.isClientMode ||
-        ModalRoute.of(context)?.isCurrent != true ||
-        !await File(document.path).exists()) {
-      return false;
+  Future<void> _openLocalGeneration() async {
+    if (_startingLocalGeneration) return;
+    setState(() => _startingLocalGeneration = true);
+    try {
+      final service = LocalGenerationService.instance;
+      final token = await service.start();
+      if (!mounted) return;
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
+        baseUrl: LocalGenerationService.baseUrl,
+        token: token,
+        sendToHost: widget.repo.isRemoteMode ? (ids) async {
+          final paths = <String>[];
+          for (final id in ids) {
+            if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) throw StateError('Invalid image ID');
+            final originals = Directory(p.join(service.libraryPath!, 'originals'));
+            final matches = <File>[];
+            for (final extension in ['png', 'jpg', 'webp']) {
+              final file = File(p.join(originals.path, '$id.$extension'));
+              if (await file.exists()) matches.add(file);
+            }
+            if (matches.length != 1) throw StateError('生成画像が見つかりません。');
+            paths.add(matches.single.path);
+          }
+          final settings = widget.tagService.settings;
+          final remote = GeneratedMediaRepository(settings.remoteApiBaseUrl, settings.authToken);
+          try {
+            for (final path in paths) {
+              await remote.uploadImage(path);
+            }
+          } finally {
+            remote.close();
+          }
+          final count = paths.length;
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('$count枚をホストの生成画像ギャラリーへ送りました')));
+          }
+        } : null,
+      )));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('画像生成を開けません: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _startingLocalGeneration = false);
     }
-    if (!mounted) return false;
-    final item = MediaItem(id: document.path, displayName: document.title,
-        kind: MediaKind.pdf, folderRaw: p.dirname(document.path));
-    unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) =>
-        ImageDetailPage(repo: widget.repo, tagService: widget.tagService,
-            items: [item], initialIndex: 0))));
-    return true;
   }
   final ExternalShareService _externalShareService = ExternalShareService();
   final AppVersionService _appVersionService = AppVersionService();
@@ -388,12 +422,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   @override
   void initState() {
     super.initState();
-    _localAiBridge = LocalAiBridge(
-      dataDirectory: Platform.environment['LOCALAI_DATA_DIRECTORY'] ??
-          p.join(Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path, 'LocalAI'),
-      open: _openLocalAiDocument,
-      showHome: () { if (mounted) setState(() => _page = _MainPage.home); },
-    );
     _searchFocusNode.addListener(_handleGallerySearchFocusChange);
     _hitomiSearchCtrl.addListener(_handleHitomiSearchTextChanged);
     _loadPrefsAndAutoOpenFolder();
@@ -1732,7 +1760,6 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   @override
   void dispose() {
-    _localAiBridge.dispose();
     _thumbResumeDebounce?.cancel();
     _homeSearchDebounce?.cancel();
     _hitomiSuggestionDebounce?.cancel();

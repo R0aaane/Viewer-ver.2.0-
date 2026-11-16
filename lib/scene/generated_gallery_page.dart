@@ -15,8 +15,9 @@ const _pageSize = 48;
 class GeneratedGalleryPage extends StatefulWidget {
   final String baseUrl;
   final String? token;
+  final Future<void> Function(List<String>)? sendToHost;
 
-  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token});
+  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token, this.sendToHost});
 
   @override
   State<GeneratedGalleryPage> createState() => _GeneratedGalleryPageState();
@@ -35,6 +36,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
   bool deleted = false;
   bool _pendingSyncRefresh = false;
   bool _polling = false;
+  bool _sendingToHost = false;
   int offset = 0;
   late Future<_Json> page = fetch();
   late final Timer _connectionTimer;
@@ -125,6 +127,25 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
     }
   }
 
+  Future<void> deleteSelected() async {
+    final ids = selected.keys.toList();
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: Text(deleted ? '選択した画像を復元' : '選択した画像を削除'),
+      content: Text(deleted ? '${ids.length}枚をギャラリーに戻します。' : '${ids.length}枚を削除済みに移動します。後から復元できます。'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('キャンセル')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(deleted ? '復元' : '削除')),
+      ],
+    ));
+    if (confirmed != true || !mounted) return;
+    await change(() async {
+      for (final id in ids) {
+        final detail = await repo.detail(id);
+        await repo.editImage(id, detail['version'] as int, deleted: !deleted, epoch: detail['epoch'] as String?);
+      }
+    });
+  }
+
   Future<void> chooseTag({required bool filtering}) async {
     final versions = Map.of(selected);
     final epoch = _selectedEpoch;
@@ -188,6 +209,27 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
       appBar: AppBar(
         title: Text(active ? '${selected.length}件を選択' : '生成画像'),
         actions: [
+          if (active && widget.sendToHost != null)
+            TextButton.icon(
+              icon: const Icon(Icons.cloud_upload_outlined),
+              label: Text(_sendingToHost ? '送信中…' : 'ホストへ送る'),
+              onPressed: _sendingToHost ? null : () async {
+                final ids = selected.keys.toList();
+                setState(() => _sendingToHost = true);
+                try {
+                  await widget.sendToHost!(ids);
+                  if (mounted) setState(selected.clear);
+                } catch (_) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('ホストへ送信できませんでした。ローカル画像は保持されています。接続を確認して再試行してください。')),
+                    );
+                  }
+                } finally {
+                  if (mounted) setState(() => _sendingToHost = false);
+                }
+              },
+            ),
           _ConnectionLabel(repo),
           IconButton(
             tooltip: deleted ? 'ギャラリーに戻る' : '削除済み画像',
@@ -213,6 +255,11 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
             },
           ),
           if (active) ...[
+            TextButton.icon(
+              onPressed: _sendingToHost ? null : deleteSelected,
+              icon: Icon(deleted ? Icons.restore : Icons.delete_outline),
+              label: Text(deleted ? '復元' : '削除'),
+            ),
             IconButton(
               tooltip: '選択した画像のタグを編集',
               icon: const Icon(Icons.sell_outlined),
@@ -234,6 +281,11 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
       body: SafeArea(
         child: Column(
           children: [
+            if (widget.sendToHost != null)
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text('このPCで生成した画像です。「画像を生成」から作成し、画像のチェックを選んで「ホストへ送る」で転送できます。'),
+              ),
             Padding(
               padding: const EdgeInsets.all(SceneSpace.x2),
               child: SceneSearchField(
