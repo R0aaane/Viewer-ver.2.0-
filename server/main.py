@@ -26,6 +26,7 @@ from server.core.logging import configure_logging
 from server.repositories.sqlite_store import SqliteStore
 from server.services.media_index_service import MediaIndexService
 from server.services.generated_library import GeneratedLibrary
+from server.services.generated_relay import GeneratedRelay
 from server.services.generation_jobs import GenerationJobs
 from server.services.device_tokens import DeviceTokens
 from server.services.maintenance import host_lock
@@ -130,19 +131,33 @@ async def lifespan(app: FastAPI):
             )
 
         app.state.generated_library = None
-        if settings.comfy_output_dir or settings.generated_library_dir:
-            try:
-                from server.services.auth_service import authentication_configured
-                if not (settings.comfy_output_dir and settings.generated_library_dir and authentication_configured(app.state)):
-                    raise ValueError("Set both generated-library paths and a bearer token")
-                library = GeneratedLibrary(settings.comfy_output_dir, settings.generated_library_dir,
+        app.state.generated_relay = None
+        try:
+            from server.services.auth_service import authentication_configured
+            access_configured = authentication_configured(app.state) or getattr(settings, 'tailnet_without_token', False)
+            source = settings.comfy_output_dir
+            destination = settings.generated_library_dir
+            if not source and not destination and access_configured:
+                # Authenticated hosts can receive generated images without ComfyUI.
+                source = settings.data_dir / 'generated_inbox'
+                destination = settings.data_dir / 'generated_library'
+                source.mkdir(parents=True, exist_ok=True)
+            if source or destination:
+                if not (source and destination and access_configured):
+                    raise ValueError('Set both generated-library paths and authentication')
+                library = GeneratedLibrary(source, destination,
                                            [*settings.media_roots, web_build_dir, settings.thumbs_dir,
                                             settings.sqlite_path, settings.xviewer_saved_images_dir])
                 library.start()
                 resources.callback(library.close)
                 app.state.generated_library = library
-            except (ValueError, OSError, sqlite3.Error):
-                logger.exception("Generated library disabled; existing media services remain available")
+                if os.getenv('MEDIA_SERVER_ENABLE_GENERATED_RELAY') == 'true':
+                    relay = GeneratedRelay(library)
+                    relay.start()
+                    resources.callback(relay.close)
+                    app.state.generated_relay = relay
+        except (ValueError, OSError, sqlite3.Error):
+            logger.exception('Generated library disabled; existing media services remain available')
         app.state.generation_jobs = None
         if settings.comfy_url or settings.comfy_presets_path:
             try:
@@ -157,7 +172,7 @@ async def lifespan(app: FastAPI):
             except (ValueError, OSError, sqlite3.Error, KeyError, TypeError):
                 logger.exception("Remote generation disabled; check host preset configuration")
         try:
-            persist_host_settings(settings)
+            persist_host_settings(settings, generated_library=app.state.generated_library)
         except OSError:
             logger.exception("Could not persist maintenance settings")
         yield

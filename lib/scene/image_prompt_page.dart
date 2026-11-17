@@ -7,6 +7,8 @@ import '../services/image_prompt_host_service.dart';
 import '../services/local_generation_service.dart';
 import '../repository/generated_media_repository.dart';
 import 'generation_jobs_page.dart';
+import 'generated_gallery_page.dart';
+import '../services/app_settings_service.dart';
 
 const promptCategories = {
   'appearance': '容姿', 'clothing': '服装', 'expression': '表情', 'pose': 'ポーズ',
@@ -166,9 +168,16 @@ class _ImagePromptPageState extends State<ImagePromptPage> {
         final service = LocalGenerationService.instance;
         final token = await service.start();
         if (!mounted) return;
+        final settings = await AppSettingsService().loadMetadataSettings();
+        if (!mounted) return;
         generationRepo = GeneratedMediaRepository(LocalGenerationService.baseUrl, token);
         await Navigator.push(context, MaterialPageRoute(builder: (_) => GenerationJobsPage(
           repo: generationRepo!, initialPositivePrompt: value,
+          viewImages: settings.isClientMode ? () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
+              baseUrl: settings.remoteApiBaseUrl, token: settings.authToken, libraryLabel: 'ホスト',
+            )));
+          } : null,
           reconnect: () async { await service.start(); },
         )));
       }

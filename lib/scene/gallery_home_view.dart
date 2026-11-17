@@ -2400,12 +2400,12 @@ extension _GalleryHomeView on _GalleryGridPageState {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('AI画像を生成', style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 8),
-                const Text('このPCのComfyUIで生成します。完成した画像を選んでホストへ送れます。'),
+                const Text('このPCのComfyUIで生成し、完成画像をホストへ自動送信します。閲覧はメニューの「生成画像」から。'),
                 const SizedBox(height: 12),
                 FilledButton.icon(
                   onPressed: _startingLocalGeneration ? null : _openLocalGeneration,
                   icon: const Icon(Icons.auto_awesome),
-                  label: Text(_startingLocalGeneration ? '生成環境を準備中…' : '生成画像一覧を開く'),
+                  label: Text(_startingLocalGeneration ? '生成環境を準備中…' : 'このPCで画像を生成'),
                 ),
               ]),
             )),

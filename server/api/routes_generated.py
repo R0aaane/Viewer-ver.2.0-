@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from contextlib import closing
 from typing import Annotated, Literal
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, SecretStr
 from server.services import generated_catalog, change_log
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form
@@ -19,7 +19,8 @@ router = APIRouter(prefix="/generated", tags=["generated"])
 
 def library_for(request: Request, _=Depends(require_bearer_token)):
     library = request.app.state.generated_library
-    if not authentication_configured(request.app.state) or library is None:
+    configured = authentication_configured(request.app.state) or getattr(request.app.state.settings, 'tailnet_without_token', False)
+    if not configured or library is None:
         raise HTTPException(503, "Generated library is disabled")
     expected_epoch = request.headers.get("x-sync-epoch")
     if expected_epoch and request.method not in ("GET", "HEAD"):
@@ -53,6 +54,30 @@ class TagEdit(BaseModel):
     media_ids: list[Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(min_length=1, max_length=100)
     tag: ManualTag
     operation: Literal["add", "remove"]
+
+
+class RelayTarget(BaseModel):
+    base_url: str = Field(min_length=1, max_length=2048)
+    token: SecretStr
+
+
+def relay_for(request: Request, _=Depends(require_bearer_token)):
+    relay = getattr(request.app.state, 'generated_relay', None)
+    if relay is None or request.client.host not in ('127.0.0.1','::1'):
+        raise HTTPException(503, 'Local image relay is disabled')
+    return relay
+
+
+@router.post('/relay')
+def configure_relay(target: RelayTarget, relay=Depends(relay_for)):
+    try: relay.configure(target.base_url, target.token.get_secret_value())
+    except ValueError as exc: raise HTTPException(422, str(exc)) from exc
+    return relay.status()
+
+
+@router.get('/relay')
+def relay_status(relay=Depends(relay_for)):
+    return relay.status()
 
 
 @router.post("/upload")

@@ -9,11 +9,14 @@ PATHS = {"data_dir", "sqlite_path", "thumbs_dir", "generated_library_dir", "comf
          "comfy_presets_path", "xviewer_saved_images_dir"}
 
 
-def persist_host_settings(settings):
+def persist_host_settings(settings, generated_library=None):
     snapshot = {}
     for name in FIELDS:
         value = getattr(settings, name, None)
         snapshot[name] = str(value) if isinstance(value, Path) else value
+    if generated_library is not None:
+        snapshot['generated_library_dir'] = str(generated_library.root)
+        snapshot['comfy_output_dir'] = str(generated_library.source)
     path = settings.data_dir / ("host_settings." + uuid.uuid4().hex + ".part")
     try:
         path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")

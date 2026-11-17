@@ -181,6 +181,11 @@ class GeneratedMediaRepository {
         queryParameters: {'value': value, 'expected_version': ?version},
         options: Options(headers: {'X-Sync-Epoch': ?epoch}),
       );
+  Future<GalleryJson?> relayStatus() async {
+    try { return (await _client.get<GalleryJson>('/relay')).data; }
+    on DioException { return null; }
+  }
+
   Future<List<GalleryJson>> tags() async => List<GalleryJson>.from(
     (await _client.get<GalleryJson>('/tags')).data!['items']);
   Future<void> purgeImage(String id, int version, {String? epoch}) async {

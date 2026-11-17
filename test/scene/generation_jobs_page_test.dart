@@ -8,6 +8,8 @@ import 'package:pdf_viewer/scene/generation_jobs_page.dart';
 
 class _Repository extends GeneratedMediaRepository {
   _Repository() : super('http://fixture.invalid', 'test-token');
+  @override
+  Future<GalleryJson?> relayStatus() async => null;
   final keys = <String>[];
   final requests = <GalleryJson>[];
   bool loseResponse = true;

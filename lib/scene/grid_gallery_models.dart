@@ -17,6 +17,7 @@ enum _MainPage { home, gallery, search, hitomiSearch }
 enum _HomeMenuAction {
   localLibrary,
   generatedGallery,
+  localGeneratedGallery,
   addFolder,
   importToLibrary,
   importUrlToLibrary,

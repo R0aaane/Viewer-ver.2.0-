@@ -15,6 +15,7 @@ class LifespanTests(unittest.IsolatedAsyncioTestCase):
             data_dir=Path("unused-test-data"),
             thumbs_dir=Path("unused-test-thumbnails"),
             startup_rescan=True,
+            auth_token=None,
             comfy_output_dir=None,
             generated_library_dir=None,
             comfy_url=None,
@@ -25,6 +26,7 @@ class LifespanTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(main, "settings", settings), patch.multiple(
             main,
             SqliteStore=DEFAULT,
+            ImagePromptService=DEFAULT,
             TagAliasService=DEFAULT,
             MetadataStore=DEFAULT,
             MediaIndexService=DEFAULT,
@@ -43,6 +45,34 @@ class LifespanTests(unittest.IsolatedAsyncioTestCase):
                 "removedAliasCount": 0, "migratedLinkCount": 0,
             }
             yield services
+
+    async def test_authenticated_host_receives_images_without_comfy(self):
+        import tempfile
+        with self.services(), tempfile.TemporaryDirectory() as directory:
+            main.settings.auth_token = 'fixture-token'
+            main.settings.data_dir = Path(directory)
+            main.settings.xviewer_saved_images_dir = Path(directory) / 'xsaved'
+            app = SimpleNamespace(state=SimpleNamespace())
+            with patch.object(main, 'GeneratedLibrary') as library:
+                async with main.lifespan(app):
+                    self.assertIs(app.state.generated_library, library.return_value)
+                    self.assertIsNone(app.state.generation_jobs)
+                    args = library.call_args.args
+                    self.assertEqual(args[0], Path(directory) / 'generated_inbox')
+                    self.assertEqual(args[1], Path(directory) / 'generated_library')
+                    self.assertTrue(args[0].is_dir())
+
+    async def test_existing_tailnet_auth_can_enable_receive_only_library(self):
+        import tempfile
+        with self.services(), tempfile.TemporaryDirectory() as directory:
+            main.settings.tailnet_without_token = True
+            main.settings.data_dir = Path(directory)
+            main.settings.xviewer_saved_images_dir = Path(directory) / 'xsaved'
+            app = SimpleNamespace(state=SimpleNamespace())
+            with patch.object(main, 'GeneratedLibrary') as library:
+                async with main.lifespan(app):
+                    self.assertIs(app.state.generated_library, library.return_value)
+                    self.assertIsNone(app.state.generation_jobs)
 
     async def test_schema_failure_closes_database(self):
         with self.services() as services:

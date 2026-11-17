@@ -16,10 +16,14 @@ const _pageSize = 48;
 class GeneratedGalleryPage extends StatefulWidget {
   final String baseUrl;
   final String? token;
+  final String? libraryLabel;
+  final VoidCallback? viewHostImages;
+  final Future<void> Function()? createImages;
+  final Future<void> Function()? reconnectLibrary;
   final Future<void> Function(List<String>)? sendToHost;
   final Future<void> Function()? reconnect;
 
-  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token, this.sendToHost, this.reconnect});
+  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token, this.sendToHost, this.reconnect, this.libraryLabel, this.reconnectLibrary, this.viewHostImages, this.createImages});
 
   @override
   State<GeneratedGalleryPage> createState() => _GeneratedGalleryPageState();
@@ -39,6 +43,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
   bool _pendingSyncRefresh = false;
   bool _polling = false;
   bool _sendingToHost = false;
+  bool _openingGeneration = false;
   int offset = 0;
   late Future<_Json> page = fetch();
   late Future<List<_Json>> tagIndex = repo.tags();
@@ -211,7 +216,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
     final active = selected.isNotEmpty;
     return Scaffold(
       appBar: AppBar(
-        title: Text(active ? '${selected.length}件を選択' : '生成画像'),
+        title: Text(active ? '${selected.length}件を選択' : widget.libraryLabel == null ? '生成画像' : '生成画像（${widget.libraryLabel}）'),
         actions: [
           if (active && widget.sendToHost != null)
             TextButton.icon(
@@ -248,14 +253,23 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
           IconButton(
             tooltip: '画像を生成',
             icon: const Icon(Icons.auto_awesome),
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => GenerationJobsPage(repo: repo, reconnect: widget.reconnect),
-                ),
-              );
-              if (mounted) reload(start: offset);
+            onPressed: _openingGeneration ? null : () async {
+              setState(() => _openingGeneration = true);
+              try {
+                if (widget.createImages != null) {
+                  await widget.createImages!();
+                  if (mounted) reload(start: offset);
+                  return;
+                }
+                await widget.reconnect?.call();
+                if (!context.mounted) return;
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => GenerationJobsPage(repo: repo, reconnect: widget.reconnect, viewImages: widget.viewHostImages)));
+                if (mounted) reload(start: offset);
+              } catch (error) {
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('画像生成を開けません: $error')));
+              } finally {
+                if (mounted) setState(() => _openingGeneration = false);
+              }
             },
           ),
           if (active) ...[
@@ -288,7 +302,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
             if (widget.sendToHost != null)
               const Padding(
                 padding: EdgeInsets.all(12),
-                child: Text('このPCで生成した画像です。「画像を生成」から作成し、画像のチェックを選んで「ホストへ送る」で転送できます。'),
+                child: Text('このPCで生成した画像をホストへ自動送信します。閲覧はホームの「生成画像」から。送信できない場合は原本を保持して再試行します。'),
               ),
             Padding(
               padding: const EdgeInsets.all(SceneSpace.x2),
@@ -401,10 +415,18 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
                     return const Center(child: CircularProgressIndicator());
                   }
                   if (snapshot.hasError) {
-                    return SceneEmptyState(
-                      icon: Icons.cloud_off,
-                      title: _error(snapshot.error),
-                    );
+                    return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      SceneEmptyState(icon: Icons.cloud_off, title: _error(snapshot.error)),
+                      if (widget.reconnectLibrary != null)
+                        TextButton.icon(icon: const Icon(Icons.refresh), label: const Text('再接続して更新'), onPressed: () async {
+                          try {
+                            await widget.reconnectLibrary!();
+                            if (mounted) reload(start: offset);
+                          } catch (error) {
+                            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('ライブラリに接続できません: $error')));
+                          }
+                        }),
+                    ]));
                   }
                   final items = (snapshot.data!['items'] as List).cast<_Json>();
                   return Column(

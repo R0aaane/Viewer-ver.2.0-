@@ -25,7 +25,8 @@ class GenerationJobsPage extends StatefulWidget {
   final GeneratedMediaRepository repo;
   final Future<void> Function()? reconnect;
   final String? initialPositivePrompt;
-  const GenerationJobsPage({super.key, required this.repo, this.reconnect, this.initialPositivePrompt});
+  final VoidCallback? viewImages;
+  const GenerationJobsPage({super.key, required this.repo, this.reconnect, this.initialPositivePrompt, this.viewImages});
 
   @override
   State<GenerationJobsPage> createState() => _GenerationJobsPageState();
@@ -47,6 +48,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
   bool initialized = false;
   bool historyEnd = false;
   GalleryJson? pending;
+  GalleryJson? transferStatus;
   late final Timer timer;
   // Persist uncertain submissions across navigation, app exit and phone sleep.
   late final storageKey =
@@ -150,6 +152,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
             ? (jobs.last['created'] as num).toDouble()
             : null,
       );
+      final transfers = await widget.repo.relayStatus();
       var lastPage = loaded;
       while (!older && lastPage.length == 100 && loaded.length < jobs.length) {
         lastPage = await widget.repo.jobs(
@@ -165,6 +168,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
         } else {
           jobs = loaded;
         }
+        transferStatus = transfers;
         historyEnd = lastPage.length < 100;
         error = null;
       });
@@ -256,6 +260,8 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
         title: const Text('送信内容をクリア'),
         content: const Text('送信済みのジョブは継続します。履歴を確認してから新しく生成してください。'),
         actions: [
+          if (widget.viewImages != null)
+            TextButton.icon(onPressed: widget.viewImages, icon: const Icon(Icons.photo_library_outlined), label: const Text('ホストの生成画像')),
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('戻る'),
@@ -304,6 +310,19 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
     } catch (exception) {
       if (mounted) setState(() => error = message(exception));
     }
+  }
+
+  String? transferMessage(GalleryJson job) {
+    final ids = (job['mediaIds'] as List).cast<String>();
+    if (ids.isEmpty || transferStatus == null) return null;
+    if (transferStatus!['configured'] != true) return 'ホストへの自動送信が未設定です';
+    final transfers = (transferStatus!['items'] as List).cast<GalleryJson>();
+    final matched = transfers.where((t) => ids.contains(t['mediaId'])).toList();
+    if (matched.length == ids.length && matched.every((t) => t['state'] == 'sent')) {
+      return 'ホストへ送信済み · クライアントの「生成画像」で閲覧できます';
+    }
+    final errors = matched.where((t) => t['error'] != null);
+    return errors.isNotEmpty ? 'ホスト送信待ち: ${errors.first['error']}' : 'ホストへ自動送信中・送信待ち';
   }
 
   Future<void> reconnect() async {
@@ -526,7 +545,10 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                         ),
                   onTap: (job['mediaIds'] as List).isEmpty
                       ? null
-                      : () => Navigator.maybePop(context),
+                      : () {
+                          if (widget.viewImages != null) { widget.viewImages!(); }
+                          else { Navigator.maybePop(context); }
+                        },
                   title: Text(
                     '${_states[job['state']] ?? job['state']} · ${job['preset']}',
                   ),
@@ -538,6 +560,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                       if (job['progress'] is Map)
                         '${job['progress']['value']} / ${job['progress']['max']}',
                       if (job['error'] != null) job['error'],
+                      if (transferMessage(job) != null) transferMessage(job)!,
                       if ((job['mediaIds'] as List).isNotEmpty)
                         '${(job['mediaIds'] as List).length}枚をギャラリーに登録 · タップして画像を確認',
                     ].join('\n'),

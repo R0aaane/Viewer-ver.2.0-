@@ -82,9 +82,12 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     setState(() => _startingLocalGeneration = true);
     try {
       final service = LocalGenerationService.instance;
-      final token = await service.start();
+      final token = await service.start(requireComfy: false);
       if (!mounted) return;
       await Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
+        libraryLabel: 'このPC・送信状況',
+        viewHostImages: widget.repo.isRemoteMode ? () { unawaited(_onHomeMenuSelected(_HomeMenuAction.generatedGallery)); } : null,
+        reconnectLibrary: () async { await service.start(requireComfy: false); },
         reconnect: () async { await service.start(); },
         baseUrl: LocalGenerationService.baseUrl,
         token: token,
@@ -1874,9 +1877,17 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       case _HomeMenuAction.addFolder:
         await _addFolder();
         return;
+      case _HomeMenuAction.localGeneratedGallery:
+        await _openLocalGeneration();
+        return;
       case _HomeMenuAction.generatedGallery:
+        if (widget.tagService.settings.isStandaloneMode && Platform.isWindows) {
+          await _openLocalGeneration(); return;
+        }
         final settings = widget.tagService.settings;
         await Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
+          createImages: Platform.isWindows ? _openLocalGeneration : null,
+          libraryLabel: settings.isHostMode ? 'ホスト' : '接続先ホスト',
           baseUrl: settings.isHostMode ? settings.hostLoopbackApiBaseUrl : settings.remoteApiBaseUrl,
           token: settings.authToken,
         )));
@@ -1975,8 +1986,10 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       itemBuilder: (context) => <PopupMenuEntry<_HomeMenuAction>>[
         if (widget.repo.isRemoteMode)
           PopupMenuItem(enabled: !_initializing, value: _HomeMenuAction.localLibrary, child: const Text('ローカルの画像・PDFを開く')),
-        if (!widget.tagService.settings.isStandaloneMode)
+        if (Platform.isWindows || !widget.tagService.settings.isStandaloneMode)
           const PopupMenuItem(value: _HomeMenuAction.generatedGallery, child: Text('生成画像')),
+        if (Platform.isWindows)
+          const PopupMenuItem(value: _HomeMenuAction.localGeneratedGallery, child: Text('このPCの生成・送信状況')),
         PopupMenuItem(
           value: _HomeMenuAction.addFolder,
           child: ListTile(
