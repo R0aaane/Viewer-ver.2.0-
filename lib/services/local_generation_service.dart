@@ -187,6 +187,7 @@ class LocalGenerationService {
           'MEDIA_SERVER_THUMBS_DIR': p.join(data, 'thumbs'),
           'MEDIA_SERVER_MEDIA_ROOTS': '',
           'MEDIA_SERVER_STARTUP_RESCAN': 'false',
+          'MEDIA_SERVER_GPU_LOCK_PATH': p.join(root.path, 'data', 'gpu_coordination.sqlite'),
           'MEDIA_SERVER_XVIEWER_SAVED_IMAGES_DIR': p.join(data, 'xsaved'),
           'MEDIA_SERVER_COMFY_URL': comfyUrl.toString(),
           'MEDIA_SERVER_COMFY_OUTPUT_DIR': config['outputPath'] as String,

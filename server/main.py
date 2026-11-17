@@ -10,6 +10,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from server.api.routes_image_prompt import router as image_prompt_router
+from server.services.image_prompt_service import ImagePromptService
 from server.api.routes_actions import router as actions_router
 from server.api.routes_health import router as health_router
 from server.api.routes_generated import router as generated_router
@@ -89,6 +91,17 @@ async def lifespan(app: FastAPI):
         resources.callback(thumbnail_service.close)
         url_download_service = UrlDownloadService()
 
+        app.state.image_prompt = None
+        try:
+            app.state.image_prompt = ImagePromptService(
+                settings.data_dir / 'image_prompt',
+                ollama_url=os.getenv('MEDIA_SERVER_OLLAMA_URL', 'http://127.0.0.1:11434'),
+                wd_directory=os.getenv('MEDIA_SERVER_WD14_DIR') or None,
+                gpu_path=Path(os.getenv('MEDIA_SERVER_GPU_LOCK_PATH', settings.data_dir / 'gpu_coordination.sqlite')),
+            )
+            resources.callback(app.state.image_prompt.close)
+        except (ValueError, OSError, sqlite3.Error):
+            logger.exception('Image to Prompt disabled; existing media services remain available')
         app.state.settings = settings
         app.state.device_tokens = DeviceTokens(settings.data_dir / "device_tokens.sqlite")
         app.state.sqlite_store = sqlite_store
@@ -136,7 +149,8 @@ async def lifespan(app: FastAPI):
                 if not (app.state.generated_library and settings.comfy_url and settings.comfy_presets_path):
                     raise ValueError("Enable the generated library and configure ComfyUI URL and presets")
                 jobs = GenerationJobs(app.state.generated_library, settings.comfy_url, settings.comfy_presets_path,
-                                      getattr(settings, "generation_timeout_seconds", 21600))
+                                      getattr(settings, "generation_timeout_seconds", 21600),
+                                      gpu_path=Path(os.getenv("MEDIA_SERVER_GPU_LOCK_PATH", settings.data_dir / "gpu_coordination.sqlite")))
                 jobs.start()
                 resources.callback(jobs.close)
                 app.state.generation_jobs = jobs
@@ -187,6 +201,7 @@ async def record_client_app_version(request, call_next):
     return await call_next(request)
 
 
+app.include_router(image_prompt_router)
 app.include_router(health_router)
 app.include_router(host_update_router)
 app.include_router(tags_router)

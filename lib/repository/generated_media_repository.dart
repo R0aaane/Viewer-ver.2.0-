@@ -132,6 +132,8 @@ class GeneratedMediaRepository {
     );
   }
 
+  Future<Uint8List> originalBytes(String id) async => Uint8List.fromList(
+    (await _client.get<List<int>>('/media/$id', options: Options(responseType: ResponseType.bytes))).data!);
   String originalUrl(String id) => '${_client.options.baseUrl}/media/$id';
   Map<String, String> get headers =>
       Map<String, String>.from(_client.options.headers);

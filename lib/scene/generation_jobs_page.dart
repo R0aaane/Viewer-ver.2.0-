@@ -24,7 +24,8 @@ const _states = {
 class GenerationJobsPage extends StatefulWidget {
   final GeneratedMediaRepository repo;
   final Future<void> Function()? reconnect;
-  const GenerationJobsPage({super.key, required this.repo, this.reconnect});
+  final String? initialPositivePrompt;
+  const GenerationJobsPage({super.key, required this.repo, this.reconnect, this.initialPositivePrompt});
 
   @override
   State<GenerationJobsPage> createState() => _GenerationJobsPageState();
@@ -32,6 +33,8 @@ class GenerationJobsPage extends StatefulWidget {
 
 class _GenerationJobsPageState extends State<GenerationJobsPage> {
   bool reconnecting = false;
+  String? handoffPrompt;
+  bool handoffApplied = false;
   List<GalleryJson> presets = [];
   List<GalleryJson> jobs = [];
   GalleryJson? preset;
@@ -52,6 +55,8 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
   @override
   void initState() {
     super.initState();
+    final incoming = widget.initialPositivePrompt?.trim();
+    handoffPrompt = incoming == null || incoming.isEmpty ? null : incoming;
     initialize();
     timer = Timer.periodic(const Duration(seconds: 3), (_) => refresh());
   }
@@ -92,7 +97,9 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
           choose(
             presets.firstWhere(
               (p) => p['id'] == restored?['request']['preset'],
-              orElse: () => presets.first,
+              orElse: () => handoffPrompt != null && restored == null
+                  ? presets.firstWhere((p) => (p['parameters'] as Map).containsKey('positive'), orElse: () => presets.first)
+                  : presets.first,
             ),
           );
           if (restored != null &&
@@ -116,6 +123,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
   }
 
   void choose(GalleryJson selected) {
+    final previousPositive = handoffApplied ? controllers['positive']?.text : null;
     for (final controller in controllers.values) {
       controller.dispose();
     }
@@ -126,6 +134,10 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
       controllers[name] = TextEditingController(
         text: '${specs[name]['default']}',
       );
+    }
+    if (handoffPrompt != null && pending == null && controllers.containsKey('positive')) {
+      controllers['positive']!.text = previousPositive ?? handoffPrompt!;
+      handoffApplied = true;
     }
   }
 
@@ -376,6 +388,24 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                   icon: const Icon(Icons.sync),
                   label: Text(reconnecting ? 'ComfyUIの起動・接続を確認中…' : 'ComfyUIを起動・再接続'),
                 )),
+              if (handoffPrompt != null)
+                Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(handoffApplied
+                        ? '解析プロンプトを入力しました。モデル・LoRAなどを確認して「生成する」を押してください。'
+                        : pending != null
+                            ? '前回の送信内容を保持しています。送信結果の確認またはクリア後に、解析プロンプトを適用できます。'
+                            : controllers.containsKey('positive')
+                                ? '解析プロンプトを適用して、新しい画像を生成できます。'
+                                : 'このプリセットには入力先がありません。プロンプトを入力できるプリセットを選んでください。'),
+                    if (!handoffApplied)
+                      TextButton(onPressed: pending != null || busy || !controllers.containsKey('positive') ? null : () => setState(() {
+                        controllers['positive']!.text = handoffPrompt!;
+                        handoffApplied = true;
+                      }), child: const Text('解析プロンプトを適用')),
+                  ],
+                ))),
               if (error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -492,18 +522,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                       : SizedBox(
                           width: 64,
                           height: 64,
-                          child: FutureBuilder<Uint8List>(
-                            future: widget.repo.thumbnail(job['mediaIds'][0]),
-                            builder: (context, snapshot) => snapshot.hasData
-                                ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Image.memory(
-                                      snapshot.data!,
-                                      fit: BoxFit.cover,
-                                    ),
-                                  )
-                                : const Icon(Icons.image_outlined),
-                          ),
+                          child: _JobThumbnail(repo: widget.repo, id: job['mediaIds'][0]),
                         ),
                   onTap: (job['mediaIds'] as List).isEmpty
                       ? null
@@ -543,4 +562,20 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
       ),
     );
   }
+}
+
+// Defer network work until the history row is actually mounted by the ListView.
+class _JobThumbnail extends StatelessWidget {
+  final GeneratedMediaRepository repo;
+  final String id;
+  const _JobThumbnail({required this.repo, required this.id});
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List>(
+    future: repo.thumbnail(id),
+    builder: (context, snapshot) => snapshot.hasData
+        ? ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(
+            snapshot.data!, fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined)))
+        : Icon(snapshot.hasError ? Icons.image_not_supported_outlined : Icons.image_outlined),
+  );
 }

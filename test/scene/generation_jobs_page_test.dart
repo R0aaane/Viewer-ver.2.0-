@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -92,7 +93,92 @@ class _PagedRepository extends _Repository {
   }
 }
 
+class _PresetRepository extends _Repository {
+  @override
+  Future<List<GalleryJson>> presets() async {
+    final base = await super.presets();
+    return [...base, {...base.first, 'id': 'lora', 'name': 'LoRA preset'}];
+  }
+}
+
+class _DeletedThumbnailRepository extends _Repository {
+  int loads = 0;
+  @override
+  Future<List<GalleryJson>> jobs({double? before}) async => List.generate(40, (i) => {
+    ...row, 'id': 'history-$i', 'state': 'completed', 'mediaIds': ['deleted-$i'],
+  });
+  @override
+  Future<Uint8List> thumbnail(String id) async {
+    loads++;
+    throw StateError('Image was deleted');
+  }
+}
+
 void main() {
+  testWidgets('offscreen history does not start unobserved thumbnail requests', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final repo = _DeletedThumbnailRepository();
+    addTearDown(repo.close);
+    await tester.pumpWidget(MaterialApp(home: GenerationJobsPage(repo: repo)));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(repo.loads, lessThan(40));
+    await tester.scrollUntilVisible(find.text('生成履歴'), 400, scrollable: find.byType(Scrollable).first);
+    await tester.drag(find.byType(ListView).first, const Offset(0, -400));
+    await tester.pumpAndSettle();
+    expect(repo.loads, greaterThan(0));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('import prompt without submitting and preserve edited prompt across presets', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final repo = _PresetRepository()..loseResponse = false;
+    addTearDown(repo.close);
+    await tester.pumpWidget(MaterialApp(home: GenerationJobsPage(repo: repo, initialPositivePrompt: 'blue eyes, standing')));
+    await tester.pumpAndSettle();
+    expect(find.text('blue eyes, standing'), findsOneWidget);
+    expect(repo.keys, isEmpty);
+    await tester.enterText(find.byType(TextFormField).first, 'edited analysis prompt');
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('LoRA preset').last);
+    await tester.pumpAndSettle();
+    expect(find.text('edited analysis prompt'), findsOneWidget);
+    await tester.tap(find.text('生成する'));
+    await tester.pumpAndSettle();
+    expect(repo.requests.single['preset'], 'lora');
+    expect(repo.requests.single['parameters']['positive'], 'edited analysis prompt');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('handoff does not overwrite an uncertain submission', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final repo = _Repository();
+    addTearDown(repo.close);
+    await tester.pumpWidget(MaterialApp(home: GenerationJobsPage(repo: repo)));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField).first, 'uncertain original');
+    await tester.tap(find.text('生成する'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(MaterialApp(home: GenerationJobsPage(repo: repo, initialPositivePrompt: 'incoming analysis')));
+    await tester.pumpAndSettle();
+    expect(find.text('uncertain original'), findsOneWidget);
+    expect(find.text('incoming analysis'), findsNothing);
+    repo.loseResponse = false;
+    await tester.tap(find.text('前回の送信を確認・再試行'));
+    await tester.pumpAndSettle();
+    expect(repo.requests[0], repo.requests[1]);
+    expect(find.text('解析プロンプトを適用して、新しい画像を生成できます。'), findsOneWidget);
+    await tester.ensureVisible(find.text('解析プロンプトを適用'));
+    await tester.tap(find.text('解析プロンプトを適用'));
+    await tester.pumpAndSettle();
+    expect(find.text('incoming analysis'), findsOneWidget);
+    expect(repo.keys, hasLength(2));
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('reconnect starts the service without submitting another job', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final repo = _Repository();

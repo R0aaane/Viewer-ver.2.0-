@@ -23,6 +23,8 @@ from server.tests.test_routes_generated import serve
 
 class GenerationTests(unittest.TestCase):
     def setUp(self):
+        unload = patch('server.services.generation_jobs.unload_ollama')
+        unload.start(); self.addCleanup(unload.stop)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
@@ -96,6 +98,7 @@ class GenerationTests(unittest.TestCase):
     def manager(self, port=8188):
         jobs = GenerationJobs(self.library, f"http://127.0.0.1:{port}", self.path)
         self.addCleanup(jobs.http.close)
+        self.addCleanup(jobs.gpu.release)
         return jobs
 
     def finish(self, entry, error=False):
@@ -294,6 +297,39 @@ class GenerationTests(unittest.TestCase):
             with patch.object(jobs, "_get_json", side_effect=requests.HTTPError(response=response)):
                 jobs.tick()
             self.assertEqual(jobs.get(job["id"])["state"], "failed")
+            self.assertEqual(len(self.submissions), 1)
+
+    def test_generation_waits_for_analysis_gpu_and_releases_after_import(self):
+        from server.services.gpu_coordinator import GpuLease
+        with serve(self.comfy) as port:
+            jobs = self.manager(port)
+            analysis = GpuLease(jobs.gpu.path)
+            self.assertTrue(analysis.acquire('analysis'))
+            try:
+                job = jobs.create('gpu-wait', 'fixture', {})
+                jobs.tick()
+                self.assertEqual(jobs.get(job['id'])['state'], 'queued')
+                self.assertEqual(len(self.submissions), 0)
+            finally: analysis.release()
+            jobs.tick()
+            self.assertEqual(len(self.submissions), 1)
+            self.assertFalse(analysis.acquire('analysis'))
+            self.finish(self.pending[0])
+            jobs.tick()
+            self.assertEqual(jobs.get(job['id'])['state'], 'completed')
+            self.assertTrue(analysis.acquire('analysis'))
+            analysis.release()
+
+    def test_unconfirmed_qwen_unload_keeps_generation_gated(self):
+        with serve(self.comfy) as port:
+            jobs = self.manager(port)
+            job = jobs.create('gpu-unload-failed', 'fixture', {})
+            with patch('server.services.generation_jobs.unload_ollama', side_effect=requests.ConnectionError('unresponsive')):
+                jobs.tick()
+            self.assertEqual(jobs.get(job['id'])['state'], 'queued')
+            self.assertEqual(len(self.submissions), 0)
+            self.assertTrue(jobs.gpu.owner.exists())
+            jobs.tick()
             self.assertEqual(len(self.submissions), 1)
 
     def test_timeout_does_not_resubmit_or_interrupt_other_prompts(self):

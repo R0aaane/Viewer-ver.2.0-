@@ -15,6 +15,7 @@ import requests
 from websockets.legacy.client import connect
 
 from server.services.generation_presets import GenerationPresets
+from server.services.gpu_coordinator import GpuLease, unload_ollama
 
 logger = logging.getLogger(__name__)
 TERMINAL = ("completed", "failed", "cancelled")
@@ -25,12 +26,13 @@ class JobConflict(ValueError):
 
 
 class GenerationJobs:
-    def __init__(self, library, url, presets_path, timeout_seconds=21600):
+    def __init__(self, library, url, presets_path, timeout_seconds=21600, gpu_path=None):
         parsed = urlsplit(url)
         if (parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
                 or parsed.username or parsed.password or parsed.path not in ("", "/")
                 or parsed.query or parsed.fragment):
             raise ValueError("ComfyUI must use a localhost HTTP URL")
+        self.gpu = GpuLease(gpu_path or library.root / 'gpu.sqlite')
         self.url = url.rstrip("/")
         if not 60 <= timeout_seconds <= 604800:
             raise ValueError("Generation timeout must be between 60 seconds and 7 days")
@@ -61,6 +63,7 @@ class GenerationJobs:
         self.stop.set()
         self.wake.set()
         self.thread.join()
+        self.gpu.release()
         self.http.close()
 
     def create(self, key, preset, parameters):
@@ -197,13 +200,25 @@ class GenerationJobs:
             job = db.execute("""SELECT * FROM generation_jobs
                 WHERE state NOT IN ('completed','failed','cancelled') ORDER BY created LIMIT 1""").fetchone()
         if job is None:
+            self.gpu.release()
             return
         identifier = job["id"]
+        handoff_safe = job["state"] != "queued"
         try:
             if job["state"] == "queued" and time.time() - job["created"] > self.timeout_seconds:
                 self._update(identifier, state="failed", error="生成待機がタイムアウトしました。接続状態を確認してください")
                 return
             if job["state"] == "queued":
+                if not self.gpu.acquire('handoff'):
+                    self._update(identifier, error="画像解析がGPUを使用中です。完了後に生成を開始します")
+                    return
+                try:
+                    unload_ollama(self.http, os.getenv('MEDIA_SERVER_OLLAMA_URL', 'http://127.0.0.1:11434'))
+                except (requests.RequestException, OSError):
+                    self._update(identifier, error='QwenのVRAM解放を確認できません。Ollamaの応答・モデル状態を確認してください。生成は待機しています')
+                    return
+                handoff_safe = True
+                self.gpu.mode('generation')
                 # Check availability before crossing the durable submission boundary.
                 self._get_json("/queue")
                 with closing(self.library.connect()) as db, db:
@@ -238,6 +253,11 @@ class GenerationJobs:
                 self._update(identifier, error="ComfyUIに接続できません。ComfyUIを起動・再接続してください。送信済みジョブは履歴を照合します")
         except (ValueError, KeyError, TypeError) as exc:
             self._update(identifier, state="failed", error=str(exc)[:300])
+
+        finally:
+            current = self.get(identifier)
+            if current is None or current['state'] in (*TERMINAL, 'queued'):
+                self.gpu.release(clear=handoff_safe)
 
     @staticmethod
     def _owns(entry, identifier):

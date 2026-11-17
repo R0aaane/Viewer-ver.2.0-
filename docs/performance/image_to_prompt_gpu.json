@@ -1,0 +1,46 @@
+{
+  "phase": "completed",
+  "imageSize": [
+    1280,
+    960
+  ],
+  "comfyCachedBytesBeforeAnalysis": 67108864,
+  "comfyFreeBytesBeforeAnalysis": 8875514618,
+  "comfyLoadedModelsBeforeAnalysis": 3,
+  "gpu": {
+    "timings": {
+      "waitAndHandoffSeconds": 1.063,
+      "qwenSeconds": 16.578,
+      "wd14Seconds": 2.062,
+      "totalSeconds": 19.828
+    },
+    "imageSha256": "60c97215a8c430b5e129b8895d153a23df754db7318fbfbba08c2745e3b0b02d",
+    "tagCount": 25,
+    "qwenPeakBytes": 5846272572,
+    "handoff": {
+      "comfyLoadedModelCount": 0,
+      "comfyFreeBytes": 15823011840
+    },
+    "model": "qwen3-vl:8b-instruct"
+  },
+  "maxComfyLoadedModelsDuringQwen": 0,
+  "guardRejectedDirectPrompt": true,
+  "appGenerationWaited": true,
+  "maxComfyTensorBytesDuringQwen": 67108864,
+  "qwenUnloadedBeforeGeneration": true,
+  "generationResumedAndCompleted": true,
+  "cpu": {
+    "timings": {
+      "waitAndHandoffSeconds": 0.0,
+      "qwenSeconds": 53.781,
+      "wd14Seconds": 1.625,
+      "totalSeconds": 55.844
+    },
+    "imageSha256": "60c97215a8c430b5e129b8895d153a23df754db7318fbfbba08c2745e3b0b02d",
+    "tagCount": 25,
+    "qwenPeakBytes": 0,
+    "handoff": null,
+    "model": "qwen3-vl:8b-instruct"
+  },
+  "speedup": 2.82
+}

@@ -8,6 +8,7 @@
 | 手順 | [作業・検証・版更新](workflow.md) | 開発作業時に参照 |
 | architecture | [システム調査](../architecture/current_system.md) | Phase 0時点。版番号・キャッシュ値等を現行値と断定しない |
 | architecture / API・DB | [DB境界と移行案](../architecture/database_migration_plan.md)、[API概要](../../README.md) | DB資料の「承認後の案」は確定仕様ではない。実装を確認する |
+| features | [Image to Prompt](../architecture/image_to_prompt.md) | このPCの手動解析ホスト・Qwen3-VL・WD14・専用DB。2026-11-17実装 |
 | features | [生成ライブラリ](../architecture/generated_library.md)、[接続・認証](../architecture/private_access.md)、[同期・復旧](../architecture/sync_backup_recovery.md) | 既存仕様資料。変更時は該当実装と照合 |
 | features | [PDF編集](../pdf-page-edit.md)、[Web日本語フォント](../web-japanese-fonts.md) | 対象機能の作業時に参照 |
 | decisions | [段階別統合案](../architecture/integration_plan.md) | 承認前の計画を含む。完了状況・承認の根拠にしない |

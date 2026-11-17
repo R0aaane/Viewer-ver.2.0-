@@ -83,3 +83,12 @@ data/*.db-wal
 
 # Machine-specific generation configuration and images
 data/local_generation/
+
+# Image analysis host configuration and derived results
+data/image_prompt/
+data/local_analysis/
+
+# GPU coordination runtime
+data/gpu_coordination.sqlite*
+data/gpu_coordination.owner.json
+data/gpu_coordination.owner.tmp

@@ -6,6 +6,16 @@ extension _DetailActions on _ImageDetailPageState {
   String _mediaPref(String key) => widget.repo.isRemoteMode
       ? widget.tagService.settings.mediaPreferenceKey(key) : key;
 
+  void _openImagePrompt() {
+    final item = _item;
+    final page = _isPdf ? _page : 1;
+    final source = jsonEncode([widget.tagService.settings.isClientMode ? widget.tagService.settings.remoteApiBaseUrl : 'local', item.id]);
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ImagePromptPage(
+      source: source, title: item.displayName, page: page,
+      image: () => widget.repo.renderStaticPageBytes(item, page, maxWidth: 1600),
+    )));
+  }
+
   Future<void> _popWithResult() async {
     if (_leaving) return;
     debugPrint('[detail-back] back pressed item=${_item.id}');

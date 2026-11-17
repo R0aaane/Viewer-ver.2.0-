@@ -6,6 +6,7 @@ import 'dart:async';
 import '../repository/generated_media_repository.dart';
 import 'widgets/scene_ui.dart';
 import 'generation_jobs_page.dart';
+import 'image_prompt_page.dart';
 
 typedef _Json = Map<String, dynamic>;
 const _categories = {'artist': 'アーティスト', 'generation': '生成タグ', 'free': '手動タグ', 'character': 'キャラクター', 'series': 'シリーズ'};
@@ -773,6 +774,11 @@ class _GeneratedDetailState extends State<_GeneratedDetail> {
     appBar: AppBar(
       title: const Text('生成画像の詳細'),
       actions: [
+        IconButton(tooltip: 'Image to Prompt（この画像を解析）', icon: const Icon(Icons.image_search),
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ImagePromptPage(
+            source: widget.repo.originalUrl(widget.id), title: '生成画像', page: 1,
+            image: () => widget.repo.originalBytes(widget.id),
+          )))),
         _ConnectionLabel(widget.repo),
         FutureBuilder<_Json>(
           future: data,

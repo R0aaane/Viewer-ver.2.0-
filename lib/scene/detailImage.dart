@@ -21,6 +21,7 @@ import '../services/epub_text_extractor.dart';
 import '../widgets/controller_focusable.dart';
 import 'widgets/scene_ui.dart';
 import 'rename_item_dialog.dart';
+import 'image_prompt_page.dart';
 import 'TagResults.dart';
 
 part 'image_detail_page.dart';
@@ -347,6 +348,13 @@ class _ImageDetailPageState extends State<ImageDetailPage>
             ),
 
             actions: [
+              if (_isPdf || _item.kind == MediaKind.image)
+                if (wide)
+                  TextButton.icon(icon: const Icon(Icons.image_search),
+                    label: Text(_isPdf ? 'PDFを画像解析' : '画像解析'), onPressed: _openImagePrompt)
+                else
+                  IconButton(tooltip: 'Image to Prompt（表示中の画像を解析）',
+                    icon: const Icon(Icons.image_search), onPressed: _openImagePrompt),
               if (wide && !_fullscreen) _buildSidebarToggleButton(),
               IconButton(
                 tooltip: _isFavorite ? 'お気に入りを解除' : 'お気に入りに追加',
