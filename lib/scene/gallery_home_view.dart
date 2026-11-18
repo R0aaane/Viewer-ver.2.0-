@@ -2200,14 +2200,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
           MediaQuery.sizeOf(context).width < 600 ? 16 : 24,
         ),
         children: [
-          Text('あなたのライブラリ', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 4),
-          Text(
-            '読みかけの作品へ、すぐに。',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
+          Text('ホーム', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: SceneSpace.x3),
           SizedBox(
             height: 48,

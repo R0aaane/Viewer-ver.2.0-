@@ -1989,6 +1989,9 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     }
   }
 
+  bool get _canOpenGeneratedGallery =>
+      Platform.isWindows || !widget.tagService.settings.isStandaloneMode;
+
   PopupMenuButton<_HomeMenuAction> _buildHomeOverflowMenu() {
     return PopupMenuButton<_HomeMenuAction>(
       tooltip: 'メニュー',
@@ -1997,7 +2000,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       itemBuilder: (context) => <PopupMenuEntry<_HomeMenuAction>>[
         if (widget.repo.isRemoteMode)
           PopupMenuItem(enabled: !_initializing, value: _HomeMenuAction.localLibrary, child: const Text('ローカルの画像・PDFを開く')),
-        if (Platform.isWindows || !widget.tagService.settings.isStandaloneMode)
+        if (_canOpenGeneratedGallery)
           const PopupMenuItem(value: _HomeMenuAction.generatedGallery, child: Text('生成画像')),
         if (Platform.isWindows)
           const PopupMenuItem(value: _HomeMenuAction.localGeneratedGallery, child: Text('このPCの生成・送信状況')),
@@ -2317,6 +2320,15 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
               setState(() => _page = _MainPage.hitomiSearch);
             },
           ),
+          if (_canOpenGeneratedGallery)
+            ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('画像生成'),
+              onTap: () async {
+                _closeSidebar();
+                await _onHomeMenuSelected(_HomeMenuAction.generatedGallery);
+              },
+            ),
           ListTile(
             leading: const Icon(Icons.travel_explore_outlined),
             title: const Text('XViewer'),

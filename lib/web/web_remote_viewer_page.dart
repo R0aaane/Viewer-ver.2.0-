@@ -397,7 +397,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.254+264',
+  defaultValue: '1.0.255+265',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -2935,18 +2935,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   IconButton(
                     tooltip: '生成画像',
                     icon: const Icon(Icons.collections_outlined),
-                    onPressed: () {
-                      final client = _client!;
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => GeneratedGalleryPage(
-                            baseUrl: client.baseUrl,
-                            token: client.authToken,
-                          ),
-                        ),
-                      );
-                    },
+                    onPressed: _openGeneratedGallery,
                   ),
                 IconButton(
                   tooltip: 'タグ管理',
@@ -3019,6 +3008,20 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  void _openGeneratedGallery() {
+    final client = _client;
+    if (client == null) return;
+    _scaffoldKey.currentState?.closeDrawer();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => GeneratedGalleryPage(
+          baseUrl: client.baseUrl,
+          token: client.authToken,
+        ),
       ),
     );
   }
@@ -3098,7 +3101,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               children: <Widget>[
                 ListTile(
                   selected: _surface == _WebRemoteSurface.home,
-                  selectedTileColor: const Color(0xFF1B2D47),
                   leading: const Icon(Icons.home_outlined),
                   title: const Text('ホーム'),
                   subtitle: const Text('新着 / 未読 / よく見る作品'),
@@ -3106,7 +3108,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 ),
                 ListTile(
                   selected: _surface == _WebRemoteSurface.browse,
-                  selectedTileColor: const Color(0xFF1B2D47),
                   leading: const Icon(Icons.picture_as_pdf_outlined),
                   title: const Text('PDF一覧'),
                   subtitle: const Text('PDF を検索して詳細を確認'),
@@ -3114,11 +3115,16 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 ),
                 ListTile(
                   selected: _surface == _WebRemoteSurface.hitomiSearch,
-                  selectedTileColor: const Color(0xFF1B2D47),
                   leading: const Icon(Icons.travel_explore_outlined),
                   title: const Text('Hitomi検索'),
                   subtitle: const Text('Hitomi を検索して取り込み'),
                   onTap: () => _selectSurface(_WebRemoteSurface.hitomiSearch),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.auto_awesome_outlined),
+                  title: const Text('画像生成'),
+                  enabled: _client != null,
+                  onTap: _client == null ? null : _openGeneratedGallery,
                 ),
               ],
             ),
@@ -3141,7 +3147,6 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                 selected:
                     _selectedFolderRaw != null &&
                     _isPathWithin(_selectedFolderRaw!, folder.raw),
-                selectedTileColor: const Color(0xFF1B2D47),
                 leading: const Icon(Icons.folder_outlined),
                 title: Text(folder.displayName),
                 subtitle: folder.lastScannedAt == null
@@ -5670,7 +5675,7 @@ class _EntrySingleTileCard extends StatelessWidget {
         ? Color.lerp(accent, Colors.white, 0.24) ?? accent
         : Colors.white.withOpacity(0.10);
     final backgroundColor = selected
-        ? const Color(0xFF192231)
+        ? Theme.of(context).colorScheme.primaryContainer
         : const Color(0xFF131922);
     final folderLabel = folderName(entry.folderRaw);
     final updatedLabel = _formatBrowseDateTime(entry.modifiedAt);
@@ -8854,7 +8859,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
           value: selectedPage,
           isDense: true,
           menuMaxHeight: compact ? 320 : 420,
-          dropdownColor: const Color(0xFF182131),
+          dropdownColor: Theme.of(context).colorScheme.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(14),
           iconEnabledColor: Colors.white70,
           style: const TextStyle(

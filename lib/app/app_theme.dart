@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 ThemeData buildAppTheme({String? fontFamily}) {
   final scheme =
       ColorScheme.fromSeed(
-        seedColor: const Color(0xFF8B9DFF),
+        seedColor: const Color(0xFFF09AAF),
         brightness: Brightness.dark,
       ).copyWith(
-        primary: const Color(0xFF8B9DFF),
-        onPrimary: const Color(0xFF182044),
+        primary: const Color(0xFFC95072),
+        onPrimary: const Color(0xFF10060A),
         surface: const Color(0xFF191C23),
         surfaceContainerLow: const Color(0xFF191C23),
         surfaceContainer: const Color(0xFF232730),
@@ -120,8 +120,8 @@ ThemeData buildAppTheme({String? fontFamily}) {
       iconColor: const Color(0xFFA5ACBA),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       minLeadingWidth: 28,
-      selectedColor: const Color(0xFFB7C2FF),
-      selectedTileColor: const Color(0xFF2B3355),
+      selectedColor: const Color(0xFFF5B3C1),
+      selectedTileColor: const Color(0xFF332329),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ),
     inputDecorationTheme: InputDecorationTheme(

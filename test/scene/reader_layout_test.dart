@@ -177,7 +177,15 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-      expect(find.text('あなたのライブラリ'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(ListView),
+          matching: find.text('ホーム'),
+        ),
+        findsWidgets,
+      );
+      expect(find.text('あなたのライブラリ'), findsNothing);
+      expect(find.text('読みかけの作品へ、すぐに。'), findsNothing);
       expect(find.text('最近追加'), findsWidgets);
       await tester.runAsync(
         () => precacheImage(
