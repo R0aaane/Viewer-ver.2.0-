@@ -87,3 +87,18 @@ class GenerationPresets:
             graph[str(spec["node"])]["inputs"][spec["input"]] = self.validate(
                 name, spec, values.get(name, spec["default"]))
         return graph
+
+    def restore(self, identifier, graph):
+        """Recover editable values only if the current preset can reproduce the graph."""
+        self.refresh()
+        preset = self.entries.get(identifier)
+        if preset is None:
+            return None
+        try:
+            values = {
+                name: graph[str(spec["node"])]["inputs"][spec["input"]]
+                for name, spec in preset["parameters"].items()
+            }
+            return values if self.build(identifier, values) == graph else None
+        except (KeyError, TypeError, ValueError):
+            return None

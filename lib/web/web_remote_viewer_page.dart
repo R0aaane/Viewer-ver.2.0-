@@ -397,7 +397,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.255+265',
+  defaultValue: '1.0.256+266',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {

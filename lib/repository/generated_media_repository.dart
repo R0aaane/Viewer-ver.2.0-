@@ -164,6 +164,8 @@ class GeneratedMediaRepository {
           queryParameters: {'before': ?before},
         )).data!['items'],
       );
+  Future<GalleryJson> job(String id) async =>
+      (await _client.get<GalleryJson>('/jobs/$id')).data!;
   Future<GalleryJson> submitJob(String key, GalleryJson request) async =>
       (await _client.post<GalleryJson>(
         '/jobs',

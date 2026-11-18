@@ -125,6 +125,18 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(cancelled["state"], "cancelled")
         self.assertNotIn("workflow", jobs.presets.public()[0])
 
+    def test_restore_historical_settings_and_reject_changed_workflow(self):
+        jobs = self.manager()
+        job = jobs.create("restore-key", "fixture", {"positive": "original", "steps": 27})
+        self.assertNotIn("parameters", jobs.list()[0])
+        self.assertEqual(jobs.get(job["id"], include_parameters=True)["parameters"], {
+            "positive": "original", "steps": 27, "checkpoint": "allowed.safetensors",
+        })
+        presets = json.loads(self.path.read_text(encoding="utf-8"))
+        presets[0]["workflow"]["3"]["inputs"]["cfg"] = 5
+        self.path.write_text(json.dumps(presets), encoding="utf-8")
+        self.assertIsNone(jobs.get(job["id"], include_parameters=True)["parameters"])
+
     def test_lost_submit_response_recovered_without_resubmit_then_import(self):
         with serve(self.comfy) as port:
             jobs = self.manager(port)
@@ -200,6 +212,10 @@ class GenerationTests(unittest.TestCase):
                     self.assertEqual(first.status_code, 200)
                     second = requests.post(url + "/jobs", headers=auth, json=body, timeout=3)
                     self.assertEqual(first.json()["id"], second.json()["id"])
+                    detail = url + "/jobs/" + first.json()["id"]
+                    self.assertEqual(requests.get(detail, timeout=3).status_code, 401)
+                    self.assertEqual(requests.get(detail, headers=auth, timeout=3)
+                                     .json()["parameters"]["steps"], 20)
                     conflict = requests.post(url + "/jobs", headers=auth,
                         json={"preset": "fixture", "parameters": {"steps": 21}}, timeout=3)
                     self.assertEqual(conflict.status_code, 409)

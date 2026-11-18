@@ -116,7 +116,86 @@ class _DeletedThumbnailRepository extends _Repository {
   }
 }
 
+class _SeedRepository extends _Repository {
+  @override
+  Future<List<GalleryJson>> presets() async {
+    final preset = (await super.presets()).single;
+    preset['parameters']['seed'] = {
+      'label': 'Seed',
+      'type': 'integer',
+      'default': 7,
+      'min': 0,
+      'max': 9007199254740991,
+    };
+    return [preset];
+  }
+
+  @override
+  Future<GalleryJson> job(String id) async => {
+    ...row,
+    'parameters': {'positive': 'historical prompt', 'steps': 24, 'seed': 123},
+  };
+
+  @override
+  Future<Uint8List> thumbnail(String id) async => throw StateError('Missing fixture image');
+}
+
 void main() {
+  testWidgets('draft, random retry, history restore and comparison', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final repo = _SeedRepository();
+    addTearDown(repo.close);
+    Future<void> open() async {
+      await tester.pumpWidget(MaterialApp(home: GenerationJobsPage(repo: repo)));
+      await tester.pumpAndSettle();
+    }
+
+    await open();
+    await tester.enterText(find.byType(TextFormField).first, 'unsent draft');
+    await tester.pumpWidget(const SizedBox());
+    await open();
+    expect(find.text('unsent draft'), findsOneWidget);
+    await tester.tap(find.text('生成する'));
+    await tester.pumpAndSettle();
+    expect(repo.requests.single['parameters']['seed'], inInclusiveRange(0, 9007199254740991));
+    repo.loseResponse = false;
+    await tester.tap(find.text('前回の送信を確認・再試行'));
+    await tester.pumpAndSettle();
+    expect(repo.keys[1], repo.keys[0]);
+    expect(repo.requests[1], repo.requests[0]);
+
+    repo.row['state'] = 'completed';
+    repo.row['mediaIds'] = ['a', 'b', 'c'];
+    await tester.tap(find.byTooltip('更新'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('生成結果を比較'));
+    await tester.pumpAndSettle();
+    expect(find.byType(InteractiveViewer), findsNWidgets(2));
+    final chips = find.byType(FilterChip);
+    expect(chips, findsNWidgets(3));
+    await tester.tap(chips.at(2));
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilterChip>(chips.first).selected, isFalse);
+    expect(tester.widget<FilterChip>(chips.at(2)).selected, isTrue);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    final restore = find.byTooltip('生成条件を復元');
+    await tester.scrollUntilVisible(restore, 250,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(restore);
+    await tester.pumpAndSettle();
+    expect(find.text('historical prompt'), findsOneWidget);
+    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value, isFalse);
+    expect(repo.requests, hasLength(2));
+    await tester.tap(find.text('生成する'));
+    await tester.pumpAndSettle();
+    expect(repo.requests.last['parameters'], {
+      'positive': 'historical prompt', 'steps': 24, 'seed': 123,
+    });
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('offscreen history does not start unobserved thumbnail requests', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final repo = _DeletedThumbnailRepository();

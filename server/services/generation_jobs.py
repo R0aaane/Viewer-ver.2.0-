@@ -92,10 +92,15 @@ class GenerationJobs:
             "progress": json.loads(row["progress"]) if row["progress"] else None,
             "mediaIds": json.loads(row["results"])}
 
-    def get(self, identifier):
+    def get(self, identifier, *, include_parameters=False):
         with closing(self.library.connect()) as db:
             row = db.execute("SELECT * FROM generation_jobs WHERE id=?", (identifier,)).fetchone()
-        return self._public(row) if row else None
+        if row is None:
+            return None
+        job = self._public(row)
+        if include_parameters:
+            job["parameters"] = self.presets.restore(row["preset"], json.loads(row["workflow"]))
+        return job
 
     def list(self, before=None):
         with closing(self.library.connect()) as db:

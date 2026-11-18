@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:crypto/crypto.dart';
 
 import '../repository/generated_media_repository.dart';
+import 'generation_comparison_page.dart';
 
 const _states = {
   'queued': '待機中',
@@ -41,6 +41,10 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
   GalleryJson? preset;
   final controllers = <String, TextEditingController>{};
   final form = GlobalKey<FormState>();
+  final scroll = ScrollController();
+  late SharedPreferences preferences;
+  bool randomSeed = true;
+  bool restoring = false;
   String? error;
   String? actionError;
   bool busy = false;
@@ -53,6 +57,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
   // Persist uncertain submissions across navigation, app exit and phone sleep.
   late final storageKey =
       'generation.pending.${sha256.convert(utf8.encode('${widget.repo.originalUrl('')}|${widget.repo.headers['Authorization'] ?? ''}'))}';
+  late final draftKey = '$storageKey.draft';
 
   @override
   void initState() {
@@ -66,6 +71,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
   @override
   void dispose() {
     timer.cancel();
+    scroll.dispose();
     for (final controller in controllers.values) {
       controller.dispose();
     }
@@ -85,38 +91,39 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
 
   Future<void> initialize() async {
     try {
-      final preferences = await SharedPreferences.getInstance();
+      preferences = await SharedPreferences.getInstance();
       final saved = preferences.getString(storageKey);
       final restored = saved == null ? null : jsonDecode(saved) as GalleryJson;
+      final savedDraft = preferences.getString(draftKey);
+      final draft = savedDraft == null ? null : jsonDecode(savedDraft) as GalleryJson;
       final available = await widget.repo.presets();
       if (!mounted) return;
       setState(() {
         pending = restored;
         presets = available;
-        initialized = true;
         error = null;
         if (presets.isNotEmpty) {
           choose(
             presets.firstWhere(
-              (p) => p['id'] == restored?['request']['preset'],
+              (p) => p['id'] == (restored?['request']['preset'] ?? draft?['preset']) &&
+                  (restored != null || handoffPrompt == null ||
+                      (p['parameters'] as Map).containsKey('positive')),
               orElse: () => handoffPrompt != null && restored == null
                   ? presets.firstWhere((p) => (p['parameters'] as Map).containsKey('positive'), orElse: () => presets.first)
                   : presets.first,
             ),
           );
-          if (restored != null &&
-              preset!['id'] == restored['request']['preset']) {
-            final values = restored['request']['parameters'] as Map;
-            for (final name in controllers.keys) {
-              final spec = preset!['parameters'][name];
-              if (values.containsKey(name) &&
-                  (spec['type'] != 'choice' ||
-                      (spec['choices'] as List).contains(values[name]))) {
-                controllers[name]!.text = '${values[name]}';
-              }
-            }
+          if (preset!['id'] == draft?['preset']) {
+            randomSeed = draft?['randomSeed'] != false;
+            if (restored == null) applyValues(draft!['parameters']);
+          }
+          if (restored != null && preset!['id'] == restored['request']['preset']) {
+            applyValues(restored['request']['parameters']);
+          } else if (handoffApplied) {
+            controllers['positive']!.text = handoffPrompt!;
           }
         }
+        initialized = true;
       });
       await refresh();
     } catch (exception) {
@@ -124,8 +131,11 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
     }
   }
 
-  void choose(GalleryJson selected) {
-    final previousPositive = handoffApplied ? controllers['positive']?.text : null;
+  void choose(GalleryJson selected, {bool applyHandoff = true}) {
+    final prompts = {
+      for (final name in ['positive', 'negative'])
+        if (controllers.containsKey(name)) name: controllers[name]!.text,
+    };
     for (final controller in controllers.values) {
       controller.dispose();
     }
@@ -134,12 +144,88 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
     final specs = selected['parameters'] as Map;
     for (final name in specs.keys.cast<String>()) {
       controllers[name] = TextEditingController(
-        text: '${specs[name]['default']}',
+        text: prompts[name] ?? '${specs[name]['default']}',
       );
     }
-    if (handoffPrompt != null && pending == null && controllers.containsKey('positive')) {
-      controllers['positive']!.text = previousPositive ?? handoffPrompt!;
+    if (applyHandoff && handoffPrompt != null && pending == null &&
+        controllers.containsKey('positive') &&
+        (!handoffApplied || !prompts.containsKey('positive'))) {
+      controllers['positive']!.text = handoffPrompt!;
       handoffApplied = true;
+    }
+  }
+
+  void applyValues(Map values) {
+    for (final entry in controllers.entries) {
+      final spec = preset!['parameters'][entry.key];
+      final value = values[entry.key];
+      if (value != null &&
+          (spec['type'] != 'choice' || (spec['choices'] as List).contains(value))) {
+        entry.value.text = '$value';
+      }
+    }
+  }
+
+  Future<void> saveDraft() async {
+    if (preset == null || pending != null) return;
+    final content = jsonEncode({
+      'preset': preset!['id'],
+      'randomSeed': randomSeed,
+      'parameters': controllers.map((name, controller) => MapEntry(name, controller.text)),
+    });
+    try {
+      if (!await preferences.setString(draftKey, content)) {
+        throw StateError('Cannot save draft');
+      }
+    } catch (_) {
+      if (mounted) setState(() => actionError = '下書きを保存できませんでした');
+    }
+  }
+
+  Future<void> restoreJob(GalleryJson row) async {
+    if (busy || pending != null) return;
+    setState(() {
+      busy = restoring = true;
+      actionError = null;
+    });
+    try {
+      final job = await widget.repo.job(row['id']);
+      if (!mounted) return;
+      final matching = presets.where((item) => item['id'] == job['preset']);
+      final parameters = job['parameters'];
+      if (matching.isEmpty || parameters is! Map) {
+        throw StateError('Unavailable generation settings');
+      }
+      final selected = matching.first;
+      final specs = selected['parameters'] as Map;
+      if (specs.keys.any((name) => !parameters.containsKey(name) ||
+          (specs[name]['type'] == 'choice' &&
+              !(specs[name]['choices'] as List).contains(parameters[name])))) {
+        throw StateError('Incompatible generation settings');
+      }
+      setState(() {
+        choose(selected, applyHandoff: false);
+        applyValues(parameters);
+        randomSeed = false;
+        handoffApplied = false;
+      });
+      await saveDraft();
+      if (!mounted) return;
+      if (scroll.hasClients) {
+        unawaited(scroll.animateTo(0, duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut));
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('生成条件を入力欄に復元しました')),
+      );
+    } catch (exception) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(exception is StateError
+            ? '生成条件を復元できません。プリセットやモデルが変更されたか、ホストの更新が必要です。'
+            : message(exception)),
+      ));
+    } finally {
+      if (mounted) setState(() => busy = restoring = false);
     }
   }
 
@@ -188,6 +274,15 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
     };
   }
 
+  bool get hasSeed => preset?['parameters']['seed']?['type'] == 'integer';
+
+  int newSeed(GalleryJson spec) {
+    final min = spec['min'] as int;
+    final step = (spec['step'] as num?)?.toInt() ?? 1;
+    final count = ((spec['max'] as int) - min) ~/ step + 1;
+    return min + (Random.secure().nextDouble() * count).floor() * step;
+  }
+
   String? validate(String name, GalleryJson spec) {
     try {
       final parsed = value(name, spec);
@@ -221,6 +316,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
     try {
       if (pending == null) {
         final specs = preset!['parameters'] as Map;
+        unawaited(saveDraft());
         pending = {
           'key': List.generate(
             16,
@@ -231,7 +327,9 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
             'preset': preset!['id'],
             'parameters': {
               for (final name in controllers.keys)
-                name: value(name, specs[name]),
+                name: name == 'seed' && hasSeed && randomSeed
+                    ? newSeed(specs[name])
+                    : value(name, specs[name]),
             },
           },
         };
@@ -340,6 +438,32 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
     }
   }
 
+  void compare({GalleryJson? job}) {
+    final candidates = job == null ? jobs : [job];
+    final images = <String, String>{};
+    for (final candidate in candidates) {
+      final ids = (candidate['mediaIds'] as List).cast<String>();
+      final created = DateTime.fromMillisecondsSinceEpoch(
+        ((candidate['created'] as num) * 1000).round(),
+      ).toLocal();
+      final date = MaterialLocalizations.of(context).formatShortDate(created);
+      final time = MaterialLocalizations.of(context).formatTimeOfDay(
+        TimeOfDay.fromDateTime(created),
+        alwaysUse24HourFormat: true,
+      );
+      for (final (index, id) in ids.indexed) {
+        images.putIfAbsent(id, () => '$date $time · ${index + 1}枚目');
+      }
+    }
+    Navigator.push<void>(context, MaterialPageRoute(
+      builder: (_) => GenerationComparisonPage(
+        repo: widget.repo,
+        images: images,
+        viewImages: widget.viewImages,
+      ),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final specs = preset?['parameters'] as Map? ?? {};
@@ -347,6 +471,13 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
       appBar: AppBar(
         title: const Text('画像生成'),
         actions: [
+          IconButton(
+            tooltip: '生成結果を比較',
+            icon: const Icon(Icons.compare_outlined),
+            onPressed: jobs.any((job) => (job['mediaIds'] as List).isNotEmpty)
+                ? () => compare()
+                : null,
+          ),
           IconButton(
             tooltip: '更新',
             icon: const Icon(Icons.refresh),
@@ -366,7 +497,9 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                   icon: const Icon(Icons.auto_awesome),
                   onPressed: busy ? null : submit,
                   label: Text(
-                    busy
+                    restoring
+                        ? '生成条件を読み込み中…'
+                        : busy
                         ? '送信中…'
                         : pending == null
                         ? '生成する'
@@ -380,6 +513,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 960),
           child: ListView(
+            controller: scroll,
             padding: const EdgeInsets.all(16),
             children: [
               Card(
@@ -422,6 +556,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                       TextButton(onPressed: pending != null || busy || !controllers.containsKey('positive') ? null : () => setState(() {
                         controllers['positive']!.text = handoffPrompt!;
                         handoffApplied = true;
+                        unawaited(saveDraft());
                       }), child: const Text('解析プロンプトを適用')),
                   ],
                 ))),
@@ -445,6 +580,7 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                   child: Column(
                     children: [
                       DropdownButtonFormField<String>(
+                        key: ValueKey(preset!['id']),
                         isExpanded: true,
                         initialValue: preset?['id'],
                         decoration: const InputDecoration(
@@ -460,16 +596,31 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                         ],
                         onChanged: busy || pending != null
                             ? null
-                            : (id) => setState(
-                                () => choose(
+                            : (id) {
+                                setState(() => choose(
                                   presets.firstWhere((p) => p['id'] == id),
-                                ),
-                              ),
+                                ));
+                                unawaited(saveDraft());
+                              },
                       ),
                       if (specs.containsKey('lora_name'))
                         const Padding(padding: EdgeInsets.only(top: 12), child: Text(
                           'LoRAはチェックポイントと同じ系列（Illustrious / SDXLなど）を選んでください。必要なトリガーワードは描きたい内容に入力します。LoRAを使わない場合は通常プリセットを選択してください。')),
+                      if (hasSeed)
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Seedを毎回ランダムにする'),
+                          subtitle: Text(pending == null
+                              ? 'オフにすると値を固定できます'
+                              : '前回送信したSeed: ${pending!['request']['parameters']['seed'] ?? '不明'}'),
+                          value: randomSeed,
+                          onChanged: busy || pending != null ? null : (enabled) {
+                            setState(() => randomSeed = enabled);
+                            unawaited(saveDraft());
+                          },
+                        ),
                       for (final name in controllers.keys)
+                        if (!(name == 'seed' && hasSeed && randomSeed))
                         Padding(
                           padding: const EdgeInsets.only(top: 12),
                           child: specs[name]['type'] == 'choice'
@@ -490,11 +641,14 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                                   ],
                                   onChanged: busy || pending != null
                                       ? null
-                                      : (choice) =>
-                                            controllers[name]!.text = choice!,
+                                      : (choice) {
+                                          controllers[name]!.text = choice!;
+                                          unawaited(saveDraft());
+                                        },
                                 )
                               : TextFormField(
                                   controller: controllers[name],
+                                  onChanged: (_) => unawaited(saveDraft()),
                                   enabled: !busy && pending == null,
                                   decoration: InputDecoration(
                                     labelText: specs[name]['label'] ?? name,
@@ -541,14 +695,11 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                       : SizedBox(
                           width: 64,
                           height: 64,
-                          child: _JobThumbnail(repo: widget.repo, id: job['mediaIds'][0]),
+                          child: GenerationThumbnail(repo: widget.repo, id: job['mediaIds'][0]),
                         ),
                   onTap: (job['mediaIds'] as List).isEmpty
                       ? null
-                      : () {
-                          if (widget.viewImages != null) { widget.viewImages!(); }
-                          else { Navigator.maybePop(context); }
-                        },
+                      : () => compare(job: job),
                   title: Text(
                     '${_states[job['state']] ?? job['state']} · ${job['preset']}',
                   ),
@@ -562,17 +713,26 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
                       if (job['error'] != null) job['error'],
                       if (transferMessage(job) != null) transferMessage(job)!,
                       if ((job['mediaIds'] as List).isNotEmpty)
-                        '${(job['mediaIds'] as List).length}枚をギャラリーに登録 · タップして画像を確認',
+                        '${(job['mediaIds'] as List).length}枚 · タップして生成結果を表示',
                     ].join('\n'),
                   ),
-                  trailing:
-                      ['queued', 'submitting', 'running'].contains(job['state'])
-                      ? IconButton(
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '生成条件を復元',
+                        icon: const Icon(Icons.restore),
+                        onPressed: busy || pending != null || presets.isEmpty
+                            ? null : () => restoreJob(job),
+                      ),
+                      if (['queued', 'submitting', 'running'].contains(job['state']))
+                        IconButton(
                           tooltip: '生成をキャンセル',
                           icon: const Icon(Icons.cancel_outlined),
                           onPressed: () => cancel(job),
-                        )
-                      : null,
+                        ),
+                    ],
+                  ),
                 ),
               if (!historyEnd && jobs.isNotEmpty)
                 TextButton(
@@ -585,20 +745,4 @@ class _GenerationJobsPageState extends State<GenerationJobsPage> {
       ),
     );
   }
-}
-
-// Defer network work until the history row is actually mounted by the ListView.
-class _JobThumbnail extends StatelessWidget {
-  final GeneratedMediaRepository repo;
-  final String id;
-  const _JobThumbnail({required this.repo, required this.id});
-  @override
-  Widget build(BuildContext context) => FutureBuilder<Uint8List>(
-    future: repo.thumbnail(id),
-    builder: (context, snapshot) => snapshot.hasData
-        ? ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(
-            snapshot.data!, fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined)))
-        : Icon(snapshot.hasError ? Icons.image_not_supported_outlined : Icons.image_outlined),
-  );
 }

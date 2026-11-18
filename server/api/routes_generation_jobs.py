@@ -46,7 +46,7 @@ def list_jobs(before: float | None = Query(None, gt=0), jobs=Depends(jobs_for)):
 
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str, jobs=Depends(jobs_for)):
-    job = jobs.get(job_id)
+    job = jobs.get(job_id, include_parameters=True)
     if job is None:
         raise HTTPException(404, "Job not found")
     return job
