@@ -13,17 +13,20 @@ const _categories = {'artist': 'アーティスト', 'generation': '生成タグ
 const _modes = {'all_tags': 'AND', 'any_tags': 'OR', 'no_tags': 'NOT'};
 const _pageSize = 48;
 
+enum _ComfyStatus { checking, available, unavailable, unknown }
+
 class GeneratedGalleryPage extends StatefulWidget {
   final String baseUrl;
   final String? token;
   final String? libraryLabel;
   final VoidCallback? viewHostImages;
   final Future<void> Function()? createImages;
+  final Future<bool> Function()? checkComfy;
   final Future<void> Function()? reconnectLibrary;
   final Future<void> Function(List<String>)? sendToHost;
   final Future<void> Function()? reconnect;
 
-  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token, this.sendToHost, this.reconnect, this.libraryLabel, this.reconnectLibrary, this.viewHostImages, this.createImages});
+  const GeneratedGalleryPage({super.key, required this.baseUrl, this.token, this.sendToHost, this.reconnect, this.libraryLabel, this.reconnectLibrary, this.viewHostImages, this.createImages, this.checkComfy});
 
   @override
   State<GeneratedGalleryPage> createState() => _GeneratedGalleryPageState();
@@ -44,6 +47,9 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
   bool _polling = false;
   bool _sendingToHost = false;
   bool _openingGeneration = false;
+  bool _checkingComfy = false;
+  _ComfyStatus _comfyStatus = _ComfyStatus.checking;
+  String? _generationError;
   int offset = 0;
   late Future<_Json> page = fetch();
   late Future<List<_Json>> tagIndex = repo.tags();
@@ -54,9 +60,94 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
     super.initState();
     _connectionTimer = Timer.periodic(
       const Duration(seconds: 5),
-      (_) => pollChanges(),
+      (_) {
+        unawaited(pollChanges());
+        unawaited(_refreshComfyStatus());
+      },
     );
     pollChanges();
+    _refreshComfyStatus();
+  }
+
+  Future<void> _refreshComfyStatus() async {
+    final check = widget.checkComfy;
+    if (check == null || _checkingComfy) return;
+    _checkingComfy = true;
+    _ComfyStatus status;
+    try {
+      status = await check() ? _ComfyStatus.available : _ComfyStatus.unavailable;
+    } catch (_) {
+      status = _ComfyStatus.unknown;
+    } finally {
+      _checkingComfy = false;
+    }
+    if (mounted && _comfyStatus != status) setState(() => _comfyStatus = status);
+  }
+
+  Future<void> _openGeneration() async {
+    if (_openingGeneration) return;
+    setState(() {
+      _openingGeneration = true;
+      _generationError = null;
+    });
+    try {
+      final create = widget.createImages;
+      if (create != null) {
+        await create();
+      } else {
+        await widget.reconnect?.call();
+        if (!mounted) return;
+        await Navigator.push<void>(
+          context,
+          MaterialPageRoute(builder: (_) => GenerationJobsPage(
+            repo: repo,
+            reconnect: widget.reconnect,
+            viewImages: widget.viewHostImages,
+          )),
+        );
+      }
+      if (mounted) reload(start: offset);
+    } catch (error) {
+      if (mounted) setState(() => _generationError = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _openingGeneration = false);
+        unawaited(_refreshComfyStatus());
+      }
+    }
+  }
+
+  Widget _generationStatusBar() {
+    final (icon, label) = _openingGeneration
+        ? (Icons.sync, widget.createImages != null
+            ? 'このPCの生成ライブラリを準備中…'
+            : widget.reconnect != null
+                ? 'ComfyUIを起動・接続中…'
+                : '画像生成を開いています…')
+        : switch (_comfyStatus) {
+            _ComfyStatus.checking => (Icons.sync, 'ComfyUIの接続を確認中…'),
+            _ComfyStatus.available => (Icons.check_circle_outline, 'ComfyUI 接続済み'),
+            _ComfyStatus.unavailable => (Icons.link_off, 'ComfyUI 未接続'),
+            _ComfyStatus.unknown => (Icons.help_outline, 'ComfyUIの状態を確認できません'),
+          };
+    final colors = Theme.of(context).colorScheme;
+    final error = _generationError;
+    return Material(
+      color: error == null ? colors.surfaceContainerHighest : colors.errorContainer,
+      child: Semantics(
+        liveRegion: true,
+        child: ListTile(
+          dense: true,
+          leading: _openingGeneration
+              ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              : Icon(error == null ? icon : Icons.error_outline),
+          title: Text(error == null || widget.checkComfy != null ? label : '画像生成を開けません'),
+          subtitle: error == null ? null : Text(
+            widget.checkComfy == null ? error : '画像生成を開けません。$error',
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> pollChanges() async {
@@ -253,24 +344,7 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
           IconButton(
             tooltip: '画像を生成',
             icon: const Icon(Icons.auto_awesome),
-            onPressed: _openingGeneration ? null : () async {
-              setState(() => _openingGeneration = true);
-              try {
-                if (widget.createImages != null) {
-                  await widget.createImages!();
-                  if (mounted) reload(start: offset);
-                  return;
-                }
-                await widget.reconnect?.call();
-                if (!context.mounted) return;
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => GenerationJobsPage(repo: repo, reconnect: widget.reconnect, viewImages: widget.viewHostImages)));
-                if (mounted) reload(start: offset);
-              } catch (error) {
-                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('画像生成を開けません: $error')));
-              } finally {
-                if (mounted) setState(() => _openingGeneration = false);
-              }
-            },
+            onPressed: _openingGeneration ? null : _openGeneration,
           ),
           if (active) ...[
             TextButton.icon(
@@ -299,6 +373,8 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
       body: SafeArea(
         child: Column(
           children: [
+            if (widget.checkComfy != null || _openingGeneration || _generationError != null)
+              _generationStatusBar(),
             if (widget.sendToHost != null)
               const Padding(
                 padding: EdgeInsets.all(12),
@@ -368,25 +444,28 @@ class _GeneratedGalleryPageState extends State<GeneratedGalleryPage> {
                 ],
               ),
             ),
-            ExpansionTile(
-              title: const Text('アーティスト・生成タグから探す'),
-              children: [FutureBuilder<List<_Json>>(
-                future: tagIndex,
-                builder: (context, snapshot) => Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Wrap(spacing: 8, children: [
-                    if (!snapshot.hasData) const Text('タグを取得中'),
-                    if (snapshot.data?.isEmpty == true) const Text('画像を選択して「タグ編集」で分類できます'),
-                    for (final tag in snapshot.data ?? <_Json>[])
-                      ActionChip(label: Text('${_categories[tag['category']] ?? tag['category']}: ${tag['name']} (${tag['count']})'),
-                        onPressed: () {
-                          final entry = (mode: 'all_tags', category: tag['category'] as String, name: tag['name'] as String);
-                          if (!filters.contains(entry)) filters.add(entry);
-                          reload();
-                        }),
-                  ]),
-                ),
-              )],
+            FutureBuilder<List<_Json>>(
+              future: tagIndex,
+              builder: (context, snapshot) => ExpansionTile(
+                title: const Text('アーティスト・生成タグから探す'),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Wrap(spacing: 8, children: [
+                      if (snapshot.hasError) Text(_error(snapshot.error)),
+                      if (!snapshot.hasError && !snapshot.hasData) const Text('タグを取得中'),
+                      if (snapshot.data?.isEmpty == true) const Text('画像を選択して「タグ編集」で分類できます'),
+                      for (final tag in snapshot.data ?? <_Json>[])
+                        ActionChip(label: Text('${_categories[tag['category']] ?? tag['category']}: ${tag['name']} (${tag['count']})'),
+                          onPressed: () {
+                            final entry = (mode: 'all_tags', category: tag['category'] as String, name: tag['name'] as String);
+                            if (!filters.contains(entry)) filters.add(entry);
+                            reload();
+                          }),
+                    ]),
+                  ),
+                ],
+              ),
             ),
             if (filters.isNotEmpty)
               SizedBox(

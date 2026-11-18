@@ -27,6 +27,32 @@ class LocalGenerationService {
     return token;
   }
 
+  Future<bool> isComfyAvailable() async {
+    final configFile = _connectionFile(_findServerRoot());
+    final config = jsonDecode(await configFile.readAsString()) as Map;
+    final comfyUrl = _comfyUrl(config);
+    final client = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 2),
+      receiveTimeout: const Duration(seconds: 3),
+    ));
+    try {
+      final response = await client.get<Map<String, dynamic>>('$comfyUrl/system_stats');
+      return response.data?['system'] is Map && response.data?['devices'] is List;
+    } on DioException {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Uri _comfyUrl(Map config) {
+    final url = Uri.parse(config['comfyUrl'] as String);
+    if (url.host != '127.0.0.1' || url.scheme != 'http') {
+      throw StateError('ComfyUIはこのPCの127.0.0.1を指定してください。');
+    }
+    return url;
+  }
+
   Future<void> _configureRelay(String token) async {
     final settings = await AppSettingsService().loadMetadataSettings();
     if (!settings.isClientMode) return;
@@ -45,7 +71,7 @@ class LocalGenerationService {
 
   Future<void> _prepareComfy() async {
     final config = jsonDecode(await File(_configPath!).readAsString()) as Map;
-    final comfyUrl = Uri.parse(config['comfyUrl'] as String);
+    final comfyUrl = _comfyUrl(config);
     final client = Dio(BaseOptions(connectTimeout: const Duration(seconds: 2), receiveTimeout: const Duration(seconds: 3)));
     try {
       try {
@@ -125,8 +151,7 @@ class LocalGenerationService {
     }
   }
 
-  Future<String> _start() async {
-    Directory? root;
+  Directory _findServerRoot() {
     for (final start in [
       Directory.current,
       File(Platform.resolvedExecutable).parent,
@@ -135,17 +160,21 @@ class LocalGenerationService {
       for (var i = 0; i < 10; i++) {
         if (File(p.join(candidate.path, 'server', 'main.py')).existsSync() &&
             File(p.join(candidate.path, 'pubspec.yaml')).existsSync()) {
-          root = candidate;
-          break;
+          return candidate;
         }
         candidate = candidate.parent;
       }
-      if (root != null) break;
     }
-    if (root == null) throw StateError('アプリのサーバーファイルが見つかりません。');
-    final configFile = File(
+    throw StateError('アプリのサーバーファイルが見つかりません。');
+  }
+
+  File _connectionFile(Directory root) => File(
       p.join(root.path, 'data', 'local_generation', 'connection.json'),
-    );
+  );
+
+  Future<String> _start() async {
+    final root = _findServerRoot();
+    final configFile = _connectionFile(root);
     if (!await configFile.exists()) {
       throw StateError('このPCのComfyUI接続設定がありません。');
     }
@@ -177,10 +206,7 @@ class LocalGenerationService {
     }
 
     try {
-      final comfyUrl = Uri.parse(config['comfyUrl'] as String);
-      if (comfyUrl.host != '127.0.0.1' || comfyUrl.scheme != 'http') {
-        throw StateError('ComfyUIはこのPCの127.0.0.1を指定してください。');
-      }
+      final comfyUrl = _comfyUrl(config);
       if (await ready()) return token;
       // Refuse to replace an unrelated listener.
       try {

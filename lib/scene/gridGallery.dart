@@ -83,8 +83,11 @@ class GalleryGridPage extends StatefulWidget {
 class _GalleryGridPageState extends State<GalleryGridPage> {
   bool _startingLocalGeneration = false;
 
-  Future<void> _openLocalGeneration() async {
-    if (_startingLocalGeneration) return;
+  Future<void> _openLocalGeneration({bool showError = true}) async {
+    if (_startingLocalGeneration) {
+      if (!showError) throw StateError('このPCの生成ライブラリはすでに開いています。');
+      return;
+    }
     setState(() => _startingLocalGeneration = true);
     try {
       final service = LocalGenerationService.instance;
@@ -92,6 +95,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       if (!mounted) return;
       await Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
         libraryLabel: 'このPC・送信状況',
+        checkComfy: service.isComfyAvailable,
         viewHostImages: widget.repo.isRemoteMode ? () { unawaited(_onHomeMenuSelected(_HomeMenuAction.generatedGallery)); } : null,
         reconnectLibrary: () async { await service.start(requireComfy: false); },
         reconnect: () async { await service.start(); },
@@ -130,6 +134,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         } : null,
       )));
     } catch (error) {
+      if (!showError) rethrow;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('画像生成を開けません: $error')));
@@ -1897,7 +1902,8 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         }
         final settings = widget.tagService.settings;
         await Navigator.push(context, MaterialPageRoute(builder: (_) => GeneratedGalleryPage(
-          createImages: Platform.isWindows ? _openLocalGeneration : null,
+          createImages: Platform.isWindows ? () => _openLocalGeneration(showError: false) : null,
+          checkComfy: Platform.isWindows ? LocalGenerationService.instance.isComfyAvailable : null,
           libraryLabel: settings.isHostMode ? 'ホスト' : '接続先ホスト',
           baseUrl: settings.isHostMode ? settings.hostLoopbackApiBaseUrl : settings.remoteApiBaseUrl,
           token: settings.authToken,
