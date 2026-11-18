@@ -6,7 +6,7 @@ enum ReaderFitMode { vertical, horizontal, contain }
 
 enum _ReadingDirection { rightToLeft, leftToRight }
 
-enum _DetailMenuAction { delete, deletePdfPage }
+enum _DetailMenuAction { delete, deletePdfPage, analyzeImage, favorite, bookmark, fullscreen }
 
 enum _TagSuggestionTab { recommended, recent, all }
 
@@ -29,7 +29,6 @@ class _PrefsKeys {
   static const String fitMode = 'prefs.readerFitMode';
   static const String twoPage = 'prefs.readerTwoPage';
   static const String readingDirection = 'prefs.readerReadingDirection';
-  static const String sidebarCollapsed = 'prefs.sidebarCollapsed';
 
   static const String favorites = 'prefs.favorites';
   static const String ratingsJson = 'prefs.ratingsJson.v1';

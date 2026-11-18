@@ -51,7 +51,6 @@ extension _DetailActions on _ImageDetailPageState {
         readingDirectionIndex < _ReadingDirection.values.length) {
       _readingDirection = _ReadingDirection.values[readingDirectionIndex];
     }
-    _sidebarCollapsed = prefs.getBool(_PrefsKeys.sidebarCollapsed) ?? false;
     if (widget.repo.isRemoteMode) {
       _folder = FolderHandle(_item.folderRaw);
     } else {

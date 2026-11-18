@@ -221,7 +221,7 @@ extension _ReaderView on _ImageDetailPageState {
       );
       unawaited(_loadPageCountForCurrent(item, loadVersion));
     }
-    if (!_inReader) {
+    if (!_inReader || _showInspector) {
       _ensureDeferredDetailData();
     }
   }
@@ -313,6 +313,9 @@ extension _ReaderView on _ImageDetailPageState {
 
   Future<void> _setFullscreen(bool value) async {
     if (_fullscreen == value) return;
+    if (value && _tab.index != 0) {
+      _tab.index = 0;
+    }
     setState(() => _fullscreen = value);
     if (value) {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);

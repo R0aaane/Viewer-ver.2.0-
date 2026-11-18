@@ -651,34 +651,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
     return '${local.year}/$month/$day $hour:$minute';
   }
 
-  Color _detailedBrowseAccentColor(BuildContext context, MediaItem item) {
-    final scheme = Theme.of(context).colorScheme;
-    switch (item.kind) {
-      case MediaKind.pdf:
-        return scheme.primaryContainer;
-      case MediaKind.epub:
-        return scheme.primaryContainer;
-      case MediaKind.image:
-        return scheme.tertiaryContainer;
-      case MediaKind.folder:
-        return scheme.secondaryContainer;
-    }
-  }
-
-  Color _detailedBrowseAccentTextColor(BuildContext context, MediaItem item) {
-    final scheme = Theme.of(context).colorScheme;
-    switch (item.kind) {
-      case MediaKind.pdf:
-        return scheme.onPrimaryContainer;
-      case MediaKind.epub:
-        return scheme.onPrimaryContainer;
-      case MediaKind.image:
-        return scheme.onTertiaryContainer;
-      case MediaKind.folder:
-        return scheme.onSecondaryContainer;
-    }
-  }
-
   Widget _buildDetailedBrowseThumb(MediaItem item) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
@@ -979,7 +951,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'INSPECTOR',
+                'アイテムの詳細',
                 style: theme.textTheme.labelMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                   letterSpacing: 0.8,
@@ -1756,7 +1728,7 @@ extension _GalleryHomeView on _GalleryGridPageState {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant, height: 1.6),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -1826,8 +1798,6 @@ extension _GalleryHomeView on _GalleryGridPageState {
     Color? badgeBackgroundColor,
     Color? badgeForegroundColor,
   }) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     final artist = _homeSearchPrimaryValueForCategory(
       item,
       TagCategory.artist,
@@ -1840,122 +1810,34 @@ extension _GalleryHomeView on _GalleryGridPageState {
       maxValues: 1,
       emptyLabel: '未設定',
     );
-    final thumbnailWidth =
-        MediaQuery.of(context).size.width < 560 ? 168.0 : 198.0;
-    final thumbnailHeight = thumbnailWidth * 4 / 3;
-    final width = thumbnailWidth + 20;
-    final tileHeight = thumbnailHeight + 156;
-
     return SizedBox(
-      width: width,
-      height: tileHeight,
-      child: Card(
-        clipBehavior: Clip.antiAlias,
-        margin: EdgeInsets.zero,
-        child: ControllerFocusable(
-          debugLabel: 'home-shelf-${item.id}',
-          borderRadius: BorderRadius.circular(14),
-          onPressed: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: thumbnailWidth,
-                  height: thumbnailHeight,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _homeFavThumb(item, fill: true),
-                      Positioned(
-                        left: 8,
-                        top: 8,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: _detailedBrowseAccentColor(context, item),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            child: Text(
-                              item.kind == MediaKind.pdf ? 'PDF' : '画像',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: _detailedBrowseAccentTextColor(
-                                  context,
-                                  item,
-                                ),
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      if (badgeText != null && badgeText.trim().isNotEmpty)
-                        Positioned(
-                          right: 8,
-                          top: 8,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color:
-                                  badgeBackgroundColor ??
-                                  scheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (badgeIcon != null) ...[
-                                    Icon(
-                                      badgeIcon,
-                                      size: 12,
-                                      color:
-                                          badgeForegroundColor ??
-                                          scheme.onPrimaryContainer,
-                                    ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  Text(
-                                    badgeText,
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color:
-                                          badgeForegroundColor ??
-                                          scheme.onPrimaryContainer,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+      width: 210,
+      child: ControllerFocusable(
+        debugLabel: 'home-shelf-${item.id}',
+        borderRadius: BorderRadius.circular(12),
+        onPressed: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: LibraryMediaCard(
+                title: _displayTitleForItem(item),
+                subtitle: badgeText ?? ItemNameService.kindLabel(item),
+                preview: _homeFavThumb(item),
+                isFavorite: _isFavoriteItem(item),
+                onToggleFavorite: () => _toggleFavorite(item),
+                menu: IconButton(
+                  tooltip: '詳細を見る',
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => _inspectLibraryItem(item),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  _displayTitleForItem(item),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _buildHomeShelfMetaLine('作者', artist),
-                const SizedBox(height: 4),
-                _buildHomeShelfMetaLine('シリーズ', series),
-              ],
+              ),
             ),
-          ),
+            const SizedBox(height: 8),
+            _buildHomeShelfMetaLine('作者', artist),
+            const SizedBox(height: 4),
+            _buildHomeShelfMetaLine('シリーズ', series),
+          ],
         ),
       ),
     );
@@ -2002,95 +1884,14 @@ extension _GalleryHomeView on _GalleryGridPageState {
       emptyLabel: '未設定',
     );
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildHomeSectionHeading('続きから読む', '最後に見ていた PDF をワンタップで再開できます。'),
-            const SizedBox(height: 10),
-            ControllerFocusable(
-              debugLabel: 'continue-reading-${item.id}',
-              borderRadius: BorderRadius.circular(14),
-              onPressed: () => _openDetailFromHome(item, initialPdfPage: page),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final narrow = constraints.maxWidth < 760;
-                    final thumbWidth = narrow ? 224.0 : 264.0;
-                    final thumbHeight = thumbWidth * 4 / 3;
-                    final thumb = SizedBox(
-                      width: thumbWidth,
-                      height: thumbHeight,
-                      child: _homeFavThumb(item, fill: true),
-                    );
-                    final bodyContent = Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${_displayTitleForItem(item)} p.$page から再開',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 8),
-                        _buildHomeShelfMetaLine('作者', artist),
-                        const SizedBox(height: 4),
-                        _buildHomeShelfMetaLine('シリーズ', series),
-                        const SizedBox(height: 4),
-                        _buildHomeShelfMetaLine(
-                          '前回閲覧',
-                          _formatHomeDateTime(progress.lastReadAt),
-                        ),
-                        const SizedBox(height: 4),
-                        _buildHomeShelfMetaLine(
-                          '進捗',
-                          '$pageText / $progressText',
-                        ),
-                        const SizedBox(height: 12),
-                        FilledButton.icon(
-                          onPressed: () =>
-                              _openDetailFromHome(item, initialPdfPage: page),
-                          icon: const Icon(Icons.play_arrow_rounded),
-                          label: Text('$pageText から開く'),
-                        ),
-                      ],
-                    );
-                    final body = narrow
-                        ? bodyContent
-                        : SizedBox(
-                            height: thumbHeight,
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: bodyContent,
-                            ),
-                          );
-
-                    if (narrow) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [thumb, const SizedBox(height: 12), body],
-                      );
-                    }
-
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        thumb,
-                        const SizedBox(width: 14),
-                        Expanded(child: body),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+    return ReadingResumeCard(
+      title: _displayTitleForItem(item),
+      preview: _homeFavThumb(item),
+      progress: progress.progress,
+      pageLabel: pageText,
+      description:
+          '$artist · $series\n前回閲覧 ${_formatHomeDateTime(progress.lastReadAt)} · $progressText',
+      onResume: () => _openDetailFromHome(item, initialPdfPage: page),
     );
   }
 
@@ -2374,11 +2175,16 @@ extension _GalleryHomeView on _GalleryGridPageState {
     if (_initializationErrorMessage != null) {
       return _buildRefreshableStatusBody(
         onRefresh: _handlePullToRefresh,
-        child: _buildErrorBody(title: 'ホームの初期化に失敗しました', message: _initializationErrorMessage!, onAction: _retryInitialization),
+        child: _buildErrorBody(
+          title: 'ホームの初期化に失敗しました',
+          message: _initializationErrorMessage!,
+          onAction: _retryInitialization,
+        ),
       );
     }
 
-    final documentCount = _homeAllItemsByShelfKind[_HomeShelfKind.recentAdded]?.length ?? 0;
+    final documentCount =
+        _homeAllItemsByShelfKind[_HomeShelfKind.recentAdded]?.length ?? 0;
     final searchResultCount = _homeSearchResults.length;
     final searchResultPage = searchResultCount == 0
         ? 0
@@ -2390,45 +2196,61 @@ extension _GalleryHomeView on _GalleryGridPageState {
       onRefresh: _handlePullToRefresh,
       child: ListView(
         physics: _refreshScrollPhysics,
-        padding: const EdgeInsets.all(SceneSpace.x6),
+        padding: EdgeInsets.all(
+          MediaQuery.sizeOf(context).width < 600 ? 16 : 24,
+        ),
         children: [
-          Text('ホーム', style: Theme.of(context).textTheme.titleLarge),
-          if (Platform.isWindows) ...[
-            const SizedBox(height: 16),
-            Card(child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('AI画像を生成', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                const Text('このPCのComfyUIで生成し、完成画像をホストへ自動送信します。閲覧はメニューの「生成画像」から。'),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: _startingLocalGeneration ? null : _openLocalGeneration,
-                  icon: const Icon(Icons.auto_awesome),
-                  label: Text(_startingLocalGeneration ? '生成環境を準備中…' : 'このPCで画像を生成'),
-                ),
-              ]),
-            )),
-          ],
+          Text('あなたのライブラリ', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(
+            '読みかけの作品へ、すぐに。',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
           const SizedBox(height: SceneSpace.x3),
           SizedBox(
-            height: 44,
-            child: _buildSharedHomeSearchField(includeAllWhenEmpty: false, hintText: 'ライブラリを検索'),
+            height: 48,
+            child: _buildSharedHomeSearchField(
+              includeAllWhenEmpty: false,
+              hintText: 'ライブラリを検索',
+            ),
           ),
           if (_homeSearching)
-            const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator())
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: LinearProgressIndicator(),
+            )
+          else if (_homeSearchErrorMessage != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Text(
+                _homeSearchErrorMessage!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            )
           else if (_homeQuery.trim().isNotEmpty) ...[
             const SizedBox(height: SceneSpace.x4),
             Row(
               children: [
-                Text('検索結果 ${_homeSearchResults.length}件', style: Theme.of(context).textTheme.titleMedium),
-                const Spacer(),
-                TextButton(onPressed: _openDetailedBrowsePage, child: const Text('一覧で開く')),
+                Expanded(
+                  child: Text(
+                    '検索結果 ${_homeSearchResults.length}件',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                TextButton(
+                  onPressed: _openDetailedBrowsePage,
+                  child: const Text('一覧で開く'),
+                ),
               ],
             ),
             const Divider(),
             if (searchResult == null)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Text('一致する作品はありません。'))
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text('一致する作品はありません。'),
+              )
             else ...[
               _buildHomeSearchResultPager(
                 currentPage: searchResultPage,
@@ -2438,23 +2260,108 @@ extension _GalleryHomeView on _GalleryGridPageState {
             ],
           ],
           const SizedBox(height: SceneSpace.x6),
-          _buildContinueReadingCard(),
-          const SizedBox(height: SceneSpace.x8),
-          _buildHomeShelfSection(title: '最近追加', kind: _HomeShelfKind.recentAdded),
-          const SizedBox(height: SceneSpace.x8),
-          _buildHomeShelfSection(title: 'お気に入り', kind: _HomeShelfKind.favorites),
-          const SizedBox(height: SceneSpace.x8),
+          if (_homeResumeCard != null) ...[
+            _buildContinueReadingCard(),
+            const SizedBox(height: SceneSpace.x8),
+          ],
+          if (_foldersRaw.isEmpty && !_homeShowcaseLoading)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '最初の作品を追加しましょう',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('フォルダを登録すると、最近追加した作品や読書の続きがここに並びます。'),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _addFolder,
+                      icon: const Icon(Icons.create_new_folder_outlined),
+                      label: Text(_primaryAddActionLabel),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (_homeRecentViewedItems.isNotEmpty) ...[
+            _buildHomeShelfSection(
+              title: '最近閲覧',
+              kind: _HomeShelfKind.recentlyViewed,
+            ),
+            const SizedBox(height: SceneSpace.x8),
+          ],
+          if (_homeRecentAddedItems.isNotEmpty || _homeShowcaseLoading) ...[
+            _buildHomeShelfSection(
+              title: '最近追加',
+              kind: _HomeShelfKind.recentAdded,
+            ),
+            const SizedBox(height: SceneSpace.x8),
+          ],
+          if (_homeFavoriteShowcaseItems.isNotEmpty) ...[
+            _buildHomeShelfSection(
+              title: 'お気に入り',
+              kind: _HomeShelfKind.favorites,
+            ),
+            const SizedBox(height: SceneSpace.x8),
+          ],
           SceneSectionHeader(title: 'ライブラリ'),
           Wrap(
             spacing: SceneSpace.x6,
             runSpacing: SceneSpace.x3,
             children: [
-              _buildHomeOverviewMetric(icon: Icons.description_outlined, label: 'ドキュメント', value: '$documentCount'),
-              _buildHomeOverviewMetric(icon: Icons.folder_outlined, label: '登録フォルダ', value: '${_foldersRaw.length}'),
-              _buildHomeOverviewMetric(icon: Icons.star_outline, label: 'お気に入り', value: '${_homeFavoriteShowcaseItems.length}'),
-              _buildHomeOverviewMetric(icon: Icons.schedule_outlined, label: '最近追加', value: '${_homeRecentAddedItems.length}'),
+              _buildHomeOverviewMetric(
+                icon: Icons.description_outlined,
+                label: 'ドキュメント',
+                value: '$documentCount',
+              ),
+              _buildHomeOverviewMetric(
+                icon: Icons.folder_outlined,
+                label: '登録フォルダ',
+                value: '${_foldersRaw.length}',
+              ),
+              _buildHomeOverviewMetric(
+                icon: Icons.star_outline,
+                label: 'お気に入り',
+                value: '${_homeFavoriteShowcaseItems.length}',
+              ),
+              _buildHomeOverviewMetric(
+                icon: Icons.schedule_outlined,
+                label: '最近追加',
+                value: '${_homeRecentAddedItems.length}',
+              ),
             ],
           ),
+          if (Platform.isWindows) ...[
+            const SizedBox(height: 24),
+            Card(
+              child: ExpansionTile(
+                leading: const Icon(Icons.auto_awesome_outlined),
+                title: const Text('AI画像を生成'),
+                subtitle: const Text('このPCの生成環境を使う'),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'このPCのComfyUIで生成し、完成画像をホストへ自動送信します。閲覧はメニューの「生成画像」から。',
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: _startingLocalGeneration
+                        ? null
+                        : _openLocalGeneration,
+                    icon: const Icon(Icons.auto_awesome),
+                    label: Text(
+                      _startingLocalGeneration ? '生成環境を準備中…' : 'このPCで画像を生成',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

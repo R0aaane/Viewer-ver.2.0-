@@ -6,6 +6,7 @@ class WebReaderKeyboardShortcuts extends StatelessWidget {
   final Widget child;
   final VoidCallback onPreviousPage;
   final VoidCallback onNextPage;
+  final VoidCallback? onEscape;
   final bool enabled;
 
   const WebReaderKeyboardShortcuts({
@@ -13,6 +14,7 @@ class WebReaderKeyboardShortcuts extends StatelessWidget {
     required this.child,
     required this.onPreviousPage,
     required this.onNextPage,
+    this.onEscape,
     this.enabled = true,
   });
 
@@ -22,6 +24,12 @@ class WebReaderKeyboardShortcuts extends StatelessWidget {
       autofocus: true,
       skipTraversal: true,
       onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.escape &&
+            onEscape != null) {
+          onEscape!();
+          return KeyEventResult.handled;
+        }
         if (!enabled || (event is! KeyDownEvent && event is! KeyRepeatEvent)) {
           return KeyEventResult.ignored;
         }

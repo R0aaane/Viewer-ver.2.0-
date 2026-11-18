@@ -44,38 +44,185 @@ extension _DetailWidgets on _ImageDetailPageState {
 
   void _closeSidebar() {
     // Drawer陦ｨ遉ｺ譎ゅ・縺ｿ髢峨§繧具ｼ医ョ繧ｹ繧ｯ繝医ャ繝励・蟶ｸ險ｭ繧ｵ繧､繝峨ヰ繝ｼ縺ｧ縺ｯ pop 縺励↑縺・ｼ・
-    if (!_isWideLayout(context)) {
-      Navigator.pop(context);
-    }
+    Navigator.pop(context);
   }
 
   Widget _withSidebar(BuildContext context, Widget body) {
-    if (_fullscreen || !_isWideLayout(context) || _sidebarCollapsed)
-      return body;
     return Row(
       children: [
-        SizedBox(
-          width: _ImageDetailPageState._kSidebarWidth,
-          child: _buildSidebarPanel(),
-        ),
-        const VerticalDivider(width: 1),
         Expanded(child: body),
+        if (!_fullscreen &&
+            _isWideLayout(context) &&
+            _showInspector &&
+            _inReader) ...[
+          const VerticalDivider(width: 1),
+          SizedBox(
+            width: _ImageDetailPageState._kSidebarWidth,
+            child: InspectorPane(
+              title: '詳細・タグ',
+              onClose: () => setState(() => _showInspector = false),
+              child: _buildDetail(),
+            ),
+          ),
+        ],
       ],
     );
   }
 
-  Future<void> _toggleSidebarCollapsed() async {
-    final next = !_sidebarCollapsed;
-    setState(() => _sidebarCollapsed = next);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_PrefsKeys.sidebarCollapsed, next);
+  void _toggleInspector() {
+    if (_isWideLayout(context)) {
+      setState(() => _showInspector = !_showInspector);
+      if (_showInspector) _ensureDeferredDetailData();
+    } else {
+      _tab.animateTo(_tab.index == 0 ? 1 : 0);
+    }
   }
 
-  Widget _buildSidebarToggleButton() {
-    return IconButton(
-      tooltip: _sidebarCollapsed ? 'サイドパネルを表示' : 'サイドパネルを格納',
-      onPressed: _toggleSidebarCollapsed,
-      icon: Icon(_sidebarCollapsed ? Icons.menu_open : Icons.menu),
+  PreferredSizeWidget _buildReaderAppBar() {
+    final wide = _isWideLayout(context);
+    return AppBar(
+      title: Text(_displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+      leading: IconButton(
+        tooltip: '戻る',
+        icon: const Icon(Icons.arrow_back),
+        onPressed: _popWithResult,
+      ),
+      actions: [
+        Builder(
+          builder: (scaffoldContext) => IconButton(
+            tooltip: '閲覧設定・フォルダ',
+            icon: const Icon(Icons.tune_outlined),
+            onPressed: () => Scaffold.of(scaffoldContext).openDrawer(),
+          ),
+        ),
+        IconButton(
+          tooltip: '詳細・タグ',
+          onPressed: _toggleInspector,
+          isSelected: wide && _showInspector,
+          icon: const Icon(Icons.info_outline),
+        ),
+        if (wide) ...[
+          IconButton(
+            tooltip: _isFavorite ? 'お気に入りを解除' : 'お気に入りに追加',
+            onPressed: _toggleFavorite,
+            icon: Icon(_isFavorite ? Icons.star : Icons.star_outline),
+          ),
+          if (_isPdf)
+            IconButton(
+              tooltip: _isBookmarked ? 'しおりを外す' : 'しおりを挟む',
+              onPressed: _toggleBookmark,
+              icon: Icon(
+                _isBookmarked ? Icons.bookmark : Icons.bookmark_border,
+              ),
+            ),
+          IconButton(
+            tooltip: 'フルスクリーン',
+            onPressed: _toggleFullscreen,
+            icon: const Icon(Icons.fullscreen),
+          ),
+        ],
+        PopupMenuButton<_DetailMenuAction>(
+          tooltip: 'その他の操作',
+          onSelected: (action) {
+            switch (action) {
+              case _DetailMenuAction.analyzeImage:
+                _openImagePrompt();
+              case _DetailMenuAction.favorite:
+                _toggleFavorite();
+              case _DetailMenuAction.bookmark:
+                _toggleBookmark();
+              case _DetailMenuAction.fullscreen:
+                _toggleFullscreen();
+              case _DetailMenuAction.delete:
+                _deleteCurrentItemWithWarning();
+              case _DetailMenuAction.deletePdfPage:
+                _deleteCurrentPdfPageWithWarning();
+            }
+          },
+          itemBuilder: (_) => [
+            if (_isPdf || _item.kind == MediaKind.image)
+              PopupMenuItem(
+                value: _DetailMenuAction.analyzeImage,
+                child: Text(_isPdf ? 'PDFを画像解析' : '画像解析'),
+              ),
+            if (!wide) ...[
+              PopupMenuItem(
+                value: _DetailMenuAction.favorite,
+                child: Text(_isFavorite ? 'お気に入りを解除' : 'お気に入りに追加'),
+              ),
+              if (_isPdf)
+                PopupMenuItem(
+                  value: _DetailMenuAction.bookmark,
+                  child: Text(_isBookmarked ? 'しおりを外す' : 'しおりを挟む'),
+                ),
+              const PopupMenuItem(
+                value: _DetailMenuAction.fullscreen,
+                child: Text('フルスクリーン'),
+              ),
+            ],
+            if (_canDeleteFromLibrary) ...[
+              if (_isPdf && widget.repo.capabilities.canEditPdfPages)
+                const PopupMenuItem(
+                  value: _DetailMenuAction.deletePdfPage,
+                  child: Text('現在のページを削除'),
+                ),
+              const PopupMenuItem(
+                value: _DetailMenuAction.delete,
+                child: Text('ファイルを削除'),
+              ),
+            ],
+          ],
+        ),
+      ],
+      bottom: PreferredSize(
+        preferredSize: Size.fromHeight(_inReader ? (wide ? 56 : 104) : 48),
+        child: wide && _inReader
+            ? SizedBox(
+                height: 56,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: _topReaderControls(),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 260,
+                      child: TabBar(
+                        controller: _tab,
+                        tabs: const [
+                          Tab(text: '閲覧'),
+                          Tab(text: '詳細'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_inReader)
+                    SizedBox(
+                      height: 56,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: _topReaderControls(),
+                      ),
+                    ),
+                  TabBar(
+                    controller: _tab,
+                    tabs: const [
+                      Tab(text: '閲覧'),
+                      Tab(text: '詳細'),
+                    ],
+                  ),
+                ],
+              ),
+      ),
     );
   }
 
@@ -175,14 +322,6 @@ extension _DetailWidgets on _ImageDetailPageState {
 
   Drawer _buildSidebar() =>
       Drawer(child: SafeArea(child: _buildSidebarListView()));
-
-  Widget _buildSidebarPanel() {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surface,
-      child: SafeArea(child: _buildSidebarListView()),
-    );
-  }
 
   Widget _buildDetail() {
     final item = _item;
@@ -454,9 +593,9 @@ extension _DetailWidgets on _ImageDetailPageState {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -517,38 +656,50 @@ extension _DetailWidgets on _ImageDetailPageState {
   }
 
   Widget _buildRatingSection() {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.star_rate_rounded, color: Colors.amber),
-          const SizedBox(width: 8),
-          const Text('評価', style: TextStyle(color: Colors.white)),
-          const SizedBox(width: 12),
-          for (final value in const [3, 4, 5])
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: ChoiceChip(
-                label: Text('$value'),
-                selected: _rating == value,
-                avatar: Icon(
-                  _rating == value ? Icons.star : Icons.star_border,
-                  size: 16,
-                  color: _rating == value ? Colors.black87 : Colors.amber,
+          Row(
+            children: [
+              Icon(Icons.star_rate_rounded, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '評価',
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
-                onSelected: (_) => _setRating(value),
               ),
-            ),
-          const Spacer(),
-          IconButton(
-            tooltip: '評価をクリア',
-            onPressed: _rating == null ? null : () => _setRating(null),
-            icon: const Icon(Icons.clear, color: Colors.white70),
+              IconButton(
+                tooltip: '評価をクリア',
+                onPressed: _rating == null ? null : () => _setRating(null),
+                icon: const Icon(Icons.clear),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final value in const [3, 4, 5])
+                ChoiceChip(
+                  label: Text('$value'),
+                  selected: _rating == value,
+                  avatar: Icon(
+                    _rating == value ? Icons.star : Icons.star_border,
+                    size: 16,
+                  ),
+                  onSelected: (_) => _setRating(value),
+                ),
+            ],
           ),
         ],
       ),
@@ -567,9 +718,9 @@ extension _DetailWidgets on _ImageDetailPageState {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -706,7 +857,7 @@ class _DetailMetaPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: _ImageDetailPageState._uiChip,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

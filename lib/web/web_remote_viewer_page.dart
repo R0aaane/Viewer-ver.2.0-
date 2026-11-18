@@ -18,6 +18,8 @@ import '../models/reading_progress.dart';
 import '../models/tag.dart';
 import '../widgets/gallery_tag_picker.dart';
 import '../scene/generated_gallery_page.dart';
+import '../scene/widgets/inspector_pane.dart';
+import '../scene/widgets/reading_resume_card.dart';
 import '../repository/mediaRepository.dart';
 import '../services/app_settings_service.dart';
 import '../services/item_name_service.dart';
@@ -395,7 +397,7 @@ class _WebGamepadNavigationShellState
 
 const String _fallbackWebViewerVersion = String.fromEnvironment(
   'PDF_VIEWER_APP_VERSION',
-  defaultValue: '1.0.251+261',
+  defaultValue: '1.0.254+264',
 );
 
 class WebRemoteViewerPage extends StatefulWidget {
@@ -438,6 +440,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
       const <String, ReadingProgressEntry>{};
   ReadingProgressService? _readingProgressService;
   WebRemoteEntry? _selectedEntry;
+  bool _showBrowserInspector = false;
   WebRemoteFolder? _libraryRoot;
   String? _selectedFolderRaw;
   String _webViewerVersion = _fallbackWebViewerVersion;
@@ -919,6 +922,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         )).toList();
       }
       final filtered = _sortBrowserEntries(_applyFilter(fetched));
+      final previousSelectedId = _selectedEntry?.stableId;
       WebRemoteEntry? nextSelected = _selectedEntry;
       if (nextSelected != null) {
         final stableId = nextSelected.stableId;
@@ -935,6 +939,11 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           (mediaId) => !filtered.any((entry) => entry.mediaId == mediaId),
         );
         _selectedEntry = nextSelected;
+        if (nextSelected?.stableId != previousSelectedId ||
+            nextSelected == null ||
+            nextSelected.isFolder) {
+          _showBrowserInspector = false;
+        }
         if (resetPage) {
           _browserPage = 1;
         }
@@ -1874,6 +1883,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     }
     setState(() {
       _selectedEntry = entry;
+      _showBrowserInspector = splitView;
     });
     if (splitView) {
       return;
@@ -2847,127 +2857,187 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
     return _WebGamepadNavigationShell(
       child: LayoutBuilder(
         builder: (context, constraints) {
-        final showSidebar = constraints.maxWidth >= 980;
-        final splitView = constraints.maxWidth >= 1180;
-        final compactScreen = constraints.maxWidth < 720;
-        final canImportUrl =
-            _canAccessUrlImport &&
-            !_isConnecting &&
-            !_isLoading &&
-            !_actionBusy;
-        final keyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
-        final contentPadding = EdgeInsets.fromLTRB(
-          compactScreen ? 10 : 16,
-          compactScreen ? 10 : 16,
-          compactScreen ? 10 : 16,
-          keyboardVisible ? 10 : 16,
-        );
-        final mainContent = switch (_surface) {
-          _WebRemoteSurface.home => _buildHomePane(),
-          _WebRemoteSurface.hitomiSearch => _buildHitomiSearchPane(),
-          _WebRemoteSurface.browse =>
-            splitView
-                ? Row(
-                    children: <Widget>[
-                      Expanded(flex: 6, child: _buildBrowserPane(splitView)),
-                      const SizedBox(width: 16),
-                      SizedBox(width: 420, child: _buildDetailPane()),
-                    ],
-                  )
-                : _buildBrowserPane(splitView),
-        };
-
-        return Scaffold(
-          key: _scaffoldKey,
-          resizeToAvoidBottomInset: true,
-          appBar: AppBar(
-            title: const Text('Web メディアビューア'),
-            leading: showSidebar
-                ? null
-                : Builder(
-                    builder: (context) => IconButton(
-                      icon: const Icon(Icons.menu),
-                      onPressed: () => Scaffold.of(context).openDrawer(),
-                    ),
-                  ),
-            actions: <Widget>[
-              if (_surface == _WebRemoteSurface.browse && _bulkSelectionMode)
-                IconButton(
-                  tooltip: '${_selectedMediaIds.length}件を削除',
-                  onPressed: _selectedMediaIds.isEmpty || _actionBusy
-                      ? null
-                      : _deleteSelectedEntries,
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              if (_surface == _WebRemoteSurface.browse)
-                IconButton(
-                  tooltip: _bulkSelectionMode ? '選択を終了' : '複数選択',
-                  onPressed: _actionBusy ? null : _toggleBulkSelectionMode,
-                  icon: Icon(
-                    _bulkSelectionMode
-                        ? Icons.check_box
-                        : Icons.check_box_outline_blank,
-                  ),
-                ),
-              if (_client != null && _surface == _WebRemoteSurface.home)
-                IconButton(
-                  tooltip: '生成画像',
-                  icon: const Icon(Icons.collections_outlined),
-                  onPressed: () {
-                    final client = _client!;
-                    Navigator.push(context, MaterialPageRoute(builder: (_) =>
-                      GeneratedGalleryPage(baseUrl: client.baseUrl, token: client.authToken)));
-                  },
-                ),
-              IconButton(
-                tooltip: 'タグ管理',
-                onPressed: _client == null || _actionBusy
-                    ? null
-                    : _openTagManagement,
-                icon: const Icon(Icons.sell_outlined),
-              ),
-              IconButton(
-                tooltip: 'URL取り込み',
-                onPressed: canImportUrl ? _importUrlToCurrentFolder : null,
-                icon: const Icon(Icons.download_outlined),
-              ),
-              if (_isConnecting || _isLoading || _actionBusy)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Center(
-                    child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          drawer: showSidebar
-              ? null
-              : Drawer(child: RepaintBoundary(child: _buildSidebar())),
-          body: SafeArea(
-            child: Row(
-              children: <Widget>[
-                if (showSidebar)
+          final showSidebar = constraints.maxWidth >= 980;
+          final splitView = constraints.maxWidth >= 1180;
+          final compactScreen = constraints.maxWidth < 720;
+          final canImportUrl =
+              _canAccessUrlImport &&
+              !_isConnecting &&
+              !_isLoading &&
+              !_actionBusy;
+          final keyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+          final contentPadding = EdgeInsets.fromLTRB(
+            compactScreen ? 10 : 16,
+            compactScreen ? 10 : 16,
+            compactScreen ? 10 : 16,
+            keyboardVisible ? 10 : 16,
+          );
+          final mainContent = switch (_surface) {
+            _WebRemoteSurface.home => _buildHomePane(),
+            _WebRemoteSurface.hitomiSearch => _buildHitomiSearchPane(),
+            _WebRemoteSurface.browse => Row(
+              children: [
+                Expanded(child: _buildBrowserPane(splitView)),
+                if (splitView &&
+                    _showBrowserInspector &&
+                    _selectedEntry != null &&
+                    !_selectedEntry!.isFolder &&
+                    _client != null) ...[
+                  const SizedBox(width: 12),
+                  const VerticalDivider(width: 1),
                   SizedBox(
-                    width: 320,
-                    child: RepaintBoundary(child: _buildSidebar()),
+                    width: 340,
+                    child: InspectorPane(
+                      title: '作品詳細',
+                      onClose: () =>
+                          setState(() => _showBrowserInspector = false),
+                      child: _buildDetailPane(),
+                    ),
                   ),
-                if (showSidebar) const VerticalDivider(width: 1),
-                Expanded(
-                  child: RepaintBoundary(
-                    child: Padding(padding: contentPadding, child: mainContent),
-                  ),
-                ),
+                ],
               ],
             ),
-          ),
-        );
+          };
+
+          return Scaffold(
+            key: _scaffoldKey,
+            resizeToAvoidBottomInset: true,
+            appBar: AppBar(
+              title: const Text('Web メディアビューア'),
+              leading: showSidebar
+                  ? null
+                  : Builder(
+                      builder: (context) => IconButton(
+                        icon: const Icon(Icons.menu),
+                        onPressed: () => Scaffold.of(context).openDrawer(),
+                      ),
+                    ),
+              actions: <Widget>[
+                if (_surface == _WebRemoteSurface.browse && _bulkSelectionMode)
+                  IconButton(
+                    tooltip: '${_selectedMediaIds.length}件を削除',
+                    onPressed: _selectedMediaIds.isEmpty || _actionBusy
+                        ? null
+                        : _deleteSelectedEntries,
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                if (_surface == _WebRemoteSurface.browse)
+                  IconButton(
+                    tooltip: _bulkSelectionMode ? '選択を終了' : '複数選択',
+                    onPressed: _actionBusy ? null : _toggleBulkSelectionMode,
+                    icon: Icon(
+                      _bulkSelectionMode
+                          ? Icons.check_box
+                          : Icons.check_box_outline_blank,
+                    ),
+                  ),
+                if (_client != null && _surface == _WebRemoteSurface.home)
+                  IconButton(
+                    tooltip: '生成画像',
+                    icon: const Icon(Icons.collections_outlined),
+                    onPressed: () {
+                      final client = _client!;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => GeneratedGalleryPage(
+                            baseUrl: client.baseUrl,
+                            token: client.authToken,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                IconButton(
+                  tooltip: 'タグ管理',
+                  onPressed: _client == null || _actionBusy
+                      ? null
+                      : _openTagManagement,
+                  icon: const Icon(Icons.sell_outlined),
+                ),
+                IconButton(
+                  tooltip: 'URL取り込み',
+                  onPressed: canImportUrl ? _importUrlToCurrentFolder : null,
+                  icon: const Icon(Icons.download_outlined),
+                ),
+                if (_isConnecting || _isLoading || _actionBusy)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            bottomNavigationBar: compactScreen && !keyboardVisible
+                ? NavigationBar(
+                    selectedIndex: _surface.index,
+                    onDestinationSelected: (index) =>
+                        _selectSurface(_WebRemoteSurface.values[index]),
+                    destinations: const [
+                      NavigationDestination(
+                        icon: Icon(Icons.home_outlined),
+                        label: 'ホーム',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.picture_as_pdf_outlined),
+                        label: 'PDF一覧',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.travel_explore_outlined),
+                        label: '外部検索',
+                      ),
+                    ],
+                  )
+                : null,
+            drawer: showSidebar
+                ? null
+                : Drawer(child: RepaintBoundary(child: _buildSidebar())),
+            body: SafeArea(
+              child: Row(
+                children: <Widget>[
+                  if (showSidebar)
+                    SizedBox(
+                      width: 320,
+                      child: RepaintBoundary(child: _buildSidebar()),
+                    ),
+                  if (showSidebar) const VerticalDivider(width: 1),
+                  Expanded(
+                    child: RepaintBoundary(
+                      child: Padding(
+                        padding: contentPadding,
+                        child: mainContent,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
         },
       ),
     );
+  }
+
+  void _selectSurface(_WebRemoteSurface surface) {
+    _scaffoldKey.currentState?.closeDrawer();
+    if (_surface == surface && _browseMyListKind == null) return;
+    final reload =
+        surface == _WebRemoteSurface.browse && _browseMyListKind != null;
+    setState(() {
+      _surface = surface;
+      if (surface == _WebRemoteSurface.home) {
+        _homeMyListShuffleSeed = Random().nextInt(1 << 30);
+      }
+      if (surface != _WebRemoteSurface.hitomiSearch) {
+        _browseMyListKind = null;
+      }
+    });
+    if (reload) unawaited(_loadEntries());
   }
 
   Widget _buildSidebar() {
@@ -3032,14 +3102,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   leading: const Icon(Icons.home_outlined),
                   title: const Text('ホーム'),
                   subtitle: const Text('新着 / 未読 / よく見る作品'),
-                  onTap: () {
-                    _scaffoldKey.currentState?.closeDrawer();
-                    setState(() {
-                      _surface = _WebRemoteSurface.home;
-                      _homeMyListShuffleSeed = Random().nextInt(1 << 30);
-                      _browseMyListKind = null;
-                    });
-                  },
+                  onTap: () => _selectSurface(_WebRemoteSurface.home),
                 ),
                 ListTile(
                   selected: _surface == _WebRemoteSurface.browse,
@@ -3047,17 +3110,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   leading: const Icon(Icons.picture_as_pdf_outlined),
                   title: const Text('PDF一覧'),
                   subtitle: const Text('PDF を検索して詳細を確認'),
-                  onTap: () {
-                    final wasBrowsingMyList = _browseMyListKind != null;
-                    _scaffoldKey.currentState?.closeDrawer();
-                    setState(() {
-                      _surface = _WebRemoteSurface.browse;
-                      _browseMyListKind = null;
-                    });
-                    if (wasBrowsingMyList) {
-                      unawaited(_loadEntries());
-                    }
-                  },
+                  onTap: () => _selectSurface(_WebRemoteSurface.browse),
                 ),
                 ListTile(
                   selected: _surface == _WebRemoteSurface.hitomiSearch,
@@ -3065,12 +3118,7 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                   leading: const Icon(Icons.travel_explore_outlined),
                   title: const Text('Hitomi検索'),
                   subtitle: const Text('Hitomi を検索して取り込み'),
-                  onTap: () {
-                    _scaffoldKey.currentState?.closeDrawer();
-                    setState(() {
-                      _surface = _WebRemoteSurface.hitomiSearch;
-                    });
-                  },
+                  onTap: () => _selectSurface(_WebRemoteSurface.hitomiSearch),
                 ),
               ],
             ),
@@ -3485,7 +3533,9 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
         )
         .length;
     final resume = _buildHomeResumeData(entries);
-    final sections = _buildHomeSections(entries);
+    final sections = _buildHomeSections(
+      entries,
+    ).where((section) => section.entries.isNotEmpty).toList();
 
     return RefreshIndicator(
       onRefresh: () async {
@@ -3499,6 +3549,19 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
           MediaQuery.of(context).size.width < 720 ? 10 : 16,
         ),
         children: <Widget>[
+          _PinnedBrowserSearchBar(
+            searchController: _searchController,
+            seriesSuggestions: _webSeriesSuggestions,
+            isLoading: _isLoading || _isConnecting,
+            onSearch: () async {
+              setState(() {
+                _surface = _WebRemoteSurface.browse;
+                _browseMyListKind = null;
+              });
+              await _loadEntries();
+            },
+          ),
+          const SizedBox(height: 16),
           _WebHomeHeroCard(
             totalCount: entries.length,
             unreadCount: unreadCount,
@@ -3534,47 +3597,60 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
               Colors.white70,
             )
           else ...<Widget>[
-            Padding(
-              padding: const EdgeInsets.only(bottom: 18),
-              child: _buildWebHomeMyListSection(entries),
-            ),
-            if (sections.isNotEmpty)
+            if (resume != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 18),
+                child: ReadingResumeCard(
+                  title: _entryDisplayTitle(resume.entry),
+                  preview: _RemoteThumbnail(
+                    client: _client,
+                    entry: resume.entry,
+                    width: 120,
+                    height: 156,
+                    borderRadius: 10,
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerLow,
+                  ),
+                  progress: resume.activity.progress,
+                  pageLabel: resume.activity.totalPages == null
+                      ? 'p.${resume.activity.currentPage}'
+                      : 'p.${resume.activity.currentPage} / ${resume.activity.totalPages}',
+                  description:
+                      '最終閲覧 ${_formatBrowseDateTime(resume.activity.lastReadAt)}',
+                  onResume: () => _openPdfFromHome(
+                    resume.entry,
+                    activity: resume.activity,
+                    resumeFromActivity: true,
+                  ),
+                ),
+              ),
+            for (final section in sections.take(2))
               Padding(
                 padding: const EdgeInsets.only(bottom: 18),
                 child: _WebHomeSection(
-                  section: sections.first,
+                  section: section,
                   client: _client,
                   onOpen: _openPdfFromHome,
                 ),
               ),
             Padding(
               padding: const EdgeInsets.only(bottom: 18),
-              child: _buildHomeRatingSection(entries),
+              child: _buildWebHomeMyListSection(entries),
             ),
             Padding(
               padding: const EdgeInsets.only(bottom: 18),
-              child: _WebHomeContinueReadingCard(
-                client: _client,
-                resume: resume,
-                onOpen: (entry, activity) => _openPdfFromHome(
-                  entry,
-                  activity: activity,
-                  resumeFromActivity: true,
+              child: _buildHomeRatingSection(entries),
+            ),
+            for (final section in sections.skip(2))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 18),
+                child: _WebHomeSection(
+                  section: section,
+                  client: _client,
+                  onOpen: _openPdfFromHome,
                 ),
               ),
-            ),
-            ...sections
-                .skip(1)
-                .map(
-                  (section) => Padding(
-                    padding: const EdgeInsets.only(bottom: 18),
-                    child: _WebHomeSection(
-                      section: section,
-                      client: _client,
-                      onOpen: _openPdfFromHome,
-                    ),
-                  ),
-                ),
           ],
         ],
       ),
@@ -3621,6 +3697,25 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.manage_search_outlined),
               label: Text(_browserTagsLoading ? 'タグを読み込み中…' : 'タグから探す'),
+            ),
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _searchController,
+              builder: (context, value, child) {
+                if (value.text.trim().isEmpty && _browserTagFilters.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return TextButton.icon(
+                  onPressed: _isLoading || _browserTagsLoading
+                      ? null
+                      : () {
+                          _searchController.clear();
+                          setState(_browserTagFilters.clear);
+                          unawaited(_loadEntries());
+                        },
+                  icon: const Icon(Icons.clear_all),
+                  label: const Text('検索条件を全解除'),
+                );
+              },
             ),
             for (final tag in _browserTagFilters.values)
               InputChip(
@@ -4008,42 +4103,20 @@ class _WebRemoteViewerPageState extends State<WebRemoteViewerPage> {
   }
 
   Widget _buildDetailPane() {
-    if (_client == null) {
-      return _buildInfoCard(
-        'Web 閲覧',
-        '左側で API URL とトークンを設定すると、ブラウザからリモートの PDF / 画像を開けます。',
-        Colors.white70,
-      );
-    }
-    if (_selectedEntry == null) {
-      return Column(
-        children: <Widget>[
-          _buildInfoCard(
-            '詳細表示',
-            '一覧から画像を選ぶとここに詳細を表示し、PDF は専用の表示ページへ開けます。',
-            Colors.white70,
-          ),
-          const SizedBox(height: 16),
-          _buildUnsupportedFeaturesCard(),
-          const SizedBox(height: 10),
-          _buildWebViewerVersionCard(),
-        ],
-      );
-    }
+    final entry = _selectedEntry!;
     return WebMediaDetailView(
+      key: ValueKey(entry.stableId),
       client: _client!,
-      entry: _selectedEntry!,
-      isFavorite: _isFavoriteEntry(_selectedEntry!),
+      entry: entry,
+      isFavorite: _isFavoriteEntry(entry),
       onFavoriteChanged: (isFavorite) =>
-          _setFavoriteForEntry(_selectedEntry!, isFavorite),
-      rating: _ratingForEntry(_selectedEntry!),
-      onRatingChanged: (rating) => _setRatingForEntry(_selectedEntry!, rating),
+          _setFavoriteForEntry(entry, isFavorite),
+      rating: _ratingForEntry(entry),
+      onRatingChanged: (rating) => _setRatingForEntry(entry, rating),
       onApplyTagQuery: _applyTagQuery,
-      onRenameRequested: (name) => _renameEntry(_selectedEntry!, name),
-      onDeleteRequested: () => _deleteEntry(_selectedEntry!),
-      onOpenPdfViewerPage: _selectedEntry!.isPdf
-          ? () => _openPdfViewerPage(_selectedEntry!)
-          : null,
+      onRenameRequested: (name) => _renameEntry(entry, name),
+      onDeleteRequested: () => _deleteEntry(entry),
+      onOpenPdfViewerPage: entry.isPdf ? () => _openPdfViewerPage(entry) : null,
     );
   }
 
@@ -4314,154 +4387,6 @@ class _WebHomeMetricChip extends StatelessWidget {
           const SizedBox(height: 4),
           Text(label, style: const TextStyle(color: Colors.white60)),
         ],
-      ),
-    );
-  }
-}
-
-class _WebHomeContinueReadingCard extends StatelessWidget {
-  final WebRemoteApiClient? client;
-  final _WebHomeResumeData? resume;
-  final Future<void> Function(
-    WebRemoteEntry entry,
-    ReadingProgressEntry activity,
-  )
-  onOpen;
-
-  const _WebHomeContinueReadingCard({
-    required this.client,
-    required this.resume,
-    required this.onOpen,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final resumeData = resume;
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Text(
-              '続きから読む',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              '最後に見ていた PDF をワンタップで再開できます。',
-              style: TextStyle(color: Colors.white60),
-            ),
-            const SizedBox(height: 14),
-            if (resumeData == null)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF141922),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Icon(
-                      Icons.auto_stories_outlined,
-                      size: 28,
-                      color: Colors.white70,
-                    ),
-                    SizedBox(height: 10),
-                    Text(
-                      '続きから読める PDF はありません',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      'PDF を開いてページを進めると、ここから再開できます。',
-                      style: TextStyle(color: Colors.white60),
-                    ),
-                  ],
-                ),
-              )
-            else
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final entry = resumeData.entry;
-                  final activity = resumeData.activity;
-                  final page = activity.currentPage;
-                  final totalPages = activity.totalPages;
-                  final pageText = totalPages != null
-                      ? 'p.$page / $totalPages'
-                      : 'p.$page';
-                  final progressText = '${(activity.progress * 100).round()}%';
-                  final narrow = constraints.maxWidth < 640;
-                  final thumb = SizedBox(
-                    width: narrow ? 120 : 144,
-                    child: _RemoteThumbnail(
-                      client: client,
-                      entry: entry,
-                      width: narrow ? 120 : 144,
-                      height: narrow ? 164 : 196,
-                      borderRadius: 14,
-                      backgroundColor: const Color(0xFF151721),
-                    ),
-                  );
-                  final body = Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        '${_entryDisplayTitle(entry)} $pageText から再開',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      _WebHomeStatLine(label: 'ページ', value: pageText),
-                      _WebHomeStatLine(label: '進捗', value: progressText),
-                      _WebHomeStatLine(
-                        label: '最終閲覧',
-                        value: _formatBrowseDateTime(activity.lastReadAt),
-                      ),
-                      _WebHomeStatLine(label: 'フォルダ', value: entry.folderRaw),
-                      const SizedBox(height: 10),
-                      FilledButton.icon(
-                        onPressed: () => onOpen(entry, activity),
-                        icon: const Icon(Icons.play_arrow_rounded),
-                        label: Text('$pageText から開く'),
-                      ),
-                    ],
-                  );
-
-                  if (narrow) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        thumb,
-                        const SizedBox(height: 14),
-                        body,
-                      ],
-                    );
-                  }
-
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      thumb,
-                      const SizedBox(width: 16),
-                      Expanded(child: body),
-                    ],
-                  );
-                },
-              ),
-          ],
-        ),
       ),
     );
   }
@@ -7813,6 +7738,7 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
   int _totalPages = 1;
   bool _pageCountReliable = false;
   bool _twoPage = false;
+  bool _focusReading = false;
   final _WebPdfRenderQueue _renderQueue = _WebPdfRenderQueue(maxConcurrent: 2);
   final _deferredPrefetch = WebDeferredPrefetch();
   final Map<int, Future<Uint8List>> _pageFutureCache =
@@ -9058,16 +8984,42 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                   tooltip: '次のページ',
                   icon: const Icon(Icons.chevron_right_rounded),
                 ),
-                IconButton(
-                  onPressed: _toggleTwoPage,
-                  tooltip: _twoPage ? '見開きをオフ' : '見開きをオン',
-                  icon: Icon(
-                    _twoPage
-                        ? Icons.chrome_reader_mode_rounded
-                        : Icons.menu_book_rounded,
+                if (constraints.maxWidth < 400)
+                  PopupMenuButton<bool>(
+                    tooltip: '表示オプション',
+                    icon: const Icon(Icons.tune_outlined),
+                    onSelected: (focus) {
+                      if (focus) {
+                        setState(() => _focusReading = true);
+                      } else {
+                        _toggleTwoPage();
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: false,
+                        child: Text(_twoPage ? '見開きをオフ' : '見開きをオン'),
+                      ),
+                      const PopupMenuItem(value: true, child: Text('集中表示')),
+                    ],
+                  )
+                else ...[
+                  IconButton(
+                    onPressed: _toggleTwoPage,
+                    tooltip: _twoPage ? '見開きをオフ' : '見開きをオン',
+                    icon: Icon(
+                      _twoPage
+                          ? Icons.chrome_reader_mode_rounded
+                          : Icons.menu_book_rounded,
+                    ),
                   ),
-                ),
-                if (_gamepadConnected)
+                  IconButton(
+                    onPressed: () => setState(() => _focusReading = true),
+                    tooltip: '集中表示',
+                    icon: const Icon(Icons.fullscreen),
+                  ),
+                ],
+                if (_gamepadConnected && constraints.maxWidth >= 520)
                   Padding(
                     padding: const EdgeInsets.only(left: 4),
                     child: Tooltip(
@@ -9079,10 +9031,17 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
                       ),
                     ),
                   ),
-                const Spacer(),
-                Container(
-                  margin: const EdgeInsets.only(right: 12),
-                  child: _buildPageSelector(compact: true),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: _buildPageSelector(compact: true),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -9097,6 +9056,9 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
     return WebReaderKeyboardShortcuts(
       enabled: !_loading,
       onPreviousPage: _prev,
+      onEscape: _focusReading
+          ? () => setState(() => _focusReading = false)
+          : null,
       onNextPage: _next,
       child: _buildViewerScaffold(context),
     );
@@ -9108,11 +9070,31 @@ class _WebPdfViewerPageState extends State<WebPdfViewerPage> {
         backgroundColor: Colors.black,
         body: Column(
           children: <Widget>[
-            _buildCompactViewerHeader(context),
+            if (!_focusReading) _buildCompactViewerHeader(context),
             Expanded(
               child: ColoredBox(
                 color: const Color(0xFF0E1117),
-                child: SafeArea(top: false, child: _buildViewerBody()),
+                child: SafeArea(
+                  top: _focusReading,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _buildViewerBody(),
+                      if (_focusReading)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: IconButton.filledTonal(
+                            tooltip: '集中表示を解除',
+                            autofocus: true,
+                            onPressed: () =>
+                                setState(() => _focusReading = false),
+                            icon: const Icon(Icons.fullscreen_exit),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],

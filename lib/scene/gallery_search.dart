@@ -646,6 +646,7 @@ extension _GallerySearch on _GalleryGridPageState {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       scrollDirection: Axis.horizontal,
       children: [
+        TextButton(onPressed: _clearLibraryFilters, child: const Text('全解除')),
         for (final tag in _galleryTagFilters.values)
           Padding(
             padding: const EdgeInsets.only(right: 8),

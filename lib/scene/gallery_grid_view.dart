@@ -9,7 +9,10 @@ class _ThumbTile extends StatelessWidget {
   final bool isFavorite;
   final VoidCallback onToggleFavorite;
   final bool selected;
+  final bool listView;
+  final bool cropCovers;
   final FolderTileMode folderTileMode;
+  final VoidCallback? onInspect;
   final bool canRenameItem;
   final VoidCallback? onRenameItem;
   final bool canDeleteItem;
@@ -22,7 +25,10 @@ class _ThumbTile extends StatelessWidget {
     required this.isFavorite,
     required this.onToggleFavorite,
     this.selected = false,
+    this.listView = false,
+    this.cropCovers = false,
     required this.folderTileMode,
+    this.onInspect,
     this.canRenameItem = false,
     this.onRenameItem,
     this.canDeleteItem = false,
@@ -35,165 +41,54 @@ class _ThumbTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (item.kind == MediaKind.folder) {
-      if (folderTileMode == FolderTileMode.labelOnly) {
-        return _buildFolderLabelTile(context);
-      }
-      return _buildFolderPreviewTile(context);
-    }
-    return _buildMediaTile(context);
-  }
-
-  Widget _buildFolderLabelTile(BuildContext context) {
-    return Material(
-      elevation: 2,
-      borderRadius: BorderRadius.circular(10),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
-        children: [
-          Positioned.fill(child: _buildFolderPlaceholder(context)),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if ((canRenameItem && onRenameItem != null) ||
-                    (canDeleteItem && onDeleteItem != null)) ...[
-                  _buildDeleteMenuButton(),
-                  const SizedBox(width: 4),
-                ],
-                const _FolderBadge(),
-              ],
-            ),
-          ),
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 8,
-            child: _TitleChip(title: _displayTitle, subtitle: subtitle),
-          ),
-          if (selected) _buildSelectionOverlay(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFolderPreviewTile(BuildContext context) {
-    final galleryState = context
-        .findAncestorStateOfType<_GalleryGridPageState>();
-    final thumbsEnabled = galleryState?._thumbsEnabled ?? true;
-
-    return Material(
-      elevation: 2,
-      borderRadius: BorderRadius.circular(10),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: !thumbsEnabled
-                ? _buildFolderPlaceholder(context)
-                : FutureBuilder<Uint8List?>(
-                    future: galleryState?._getFolderPreviewBytes(item),
-                    builder: (context, snapshot) {
-                      final bytes = snapshot.data;
-                      if (bytes != null && bytes.isNotEmpty) {
-                        return Image.memory(
-                          bytes,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                          filterQuality: FilterQuality.low,
-                        );
-                      }
-                      return _buildFolderPlaceholder(context);
-                    },
-                  ),
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if ((canRenameItem && onRenameItem != null) ||
-                    (canDeleteItem && onDeleteItem != null)) ...[
-                  _buildDeleteMenuButton(),
-                  const SizedBox(width: 4),
-                ],
-                const _FolderBadge(),
-              ],
-            ),
-          ),
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 8,
-            child: _TitleChip(title: _displayTitle, subtitle: subtitle),
-          ),
-          if (selected) _buildSelectionOverlay(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMediaTile(BuildContext context) {
-    final galleryState = context
-        .findAncestorStateOfType<_GalleryGridPageState>();
-    final thumbsEnabled = galleryState?._thumbsEnabled ?? true;
-
-    return Material(
-      elevation: 2,
-      borderRadius: BorderRadius.circular(10),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: item.kind == MediaKind.epub
-                ? const _TileShell(icon: Icons.menu_book_outlined)
-                : !thumbsEnabled
+    final state = context.findAncestorStateOfType<_GalleryGridPageState>();
+    final preview = !(state?._thumbsEnabled ?? true)
+        ? const _TileShell()
+        : item.kind == MediaKind.folder
+        ? (folderTileMode == FolderTileMode.labelOnly
+              ? _buildFolderPlaceholder(context)
+              : FutureBuilder<Uint8List?>(
+                  future: state?._getFolderPreviewBytes(item),
+                  builder: (_, snapshot) =>
+                      snapshot.hasData && snapshot.data!.isNotEmpty
+                      ? _ThumbImage(
+                          bytes: snapshot.data!,
+                          fit: cropCovers ? BoxFit.cover : BoxFit.contain,
+                        )
+                      : _buildFolderPlaceholder(context),
+                ))
+        : item.kind == MediaKind.epub
+        ? const _TileShell(icon: Icons.menu_book_outlined)
+        : FutureBuilder<ThumbPair>(
+            future:
+                state?._getMediaThumbPair(item) ??
+                repo.readThumbPair(item, maxWidth: 160),
+            builder: (_, snapshot) => snapshot.hasError
+                ? const _TileShell(icon: Icons.broken_image_outlined)
+                : !snapshot.hasData
                 ? const _TileShell(loading: true)
-                : FutureBuilder<ThumbPair>(
-                    future:
-                        galleryState?._getMediaThumbPair(item) ??
-                        repo.readThumbPair(item, maxWidth: 160),
-                    builder: (context, snapshot) {
-                      if (snapshot.hasError) {
-                        return const _TileShell();
-                      }
-                      if (!snapshot.hasData) {
-                        return const _TileShell(loading: true);
-                      }
-                      return _ThumbImage(bytes: snapshot.data!.front);
-                    },
+                : _ThumbImage(
+                    bytes: snapshot.data!.front,
+                    fit: cropCovers ? BoxFit.cover : BoxFit.contain,
                   ),
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (item.kind == MediaKind.pdf || item.kind == MediaKind.epub)
-                  _PdfBadge(label: ItemNameService.kindLabel(item)),
-                const SizedBox(width: 6),
-                GalleryFavoriteButton(isFavorite: isFavorite, onPressed: onToggleFavorite),
-                if ((canRenameItem && onRenameItem != null) ||
-                    (canDeleteItem && onDeleteItem != null)) ...[
-                  const SizedBox(width: 4),
-                  _buildDeleteMenuButton(),
-                ],
-              ],
-            ),
-          ),
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 8,
-            child: _TitleChip(title: _displayTitle, subtitle: subtitle),
-          ),
-          if (selected) _buildSelectionOverlay(),
-        ],
-      ),
+          );
+    return LibraryMediaCard(
+      title: _displayTitle,
+      subtitle: [
+        ItemNameService.kindLabel(item),
+        if (subtitle != null) subtitle!,
+      ].join(' · '),
+      preview: preview,
+      listView: listView,
+      selected: selected,
+      isFavorite: isFavorite,
+      onToggleFavorite: item.kind == MediaKind.folder ? null : onToggleFavorite,
+      menu:
+          onInspect != null ||
+              (canRenameItem && onRenameItem != null) ||
+              (canDeleteItem && onDeleteItem != null)
+          ? _buildDeleteMenuButton()
+          : null,
     );
   }
 
@@ -211,6 +106,7 @@ class _ThumbTile extends StatelessWidget {
       padding: EdgeInsets.zero,
       icon: const Icon(Icons.more_vert, size: 18),
       onSelected: (action) {
+        if (action == _ThumbTileMenuAction.inspect) onInspect?.call();
         if (action == _ThumbTileMenuAction.renameItem) {
           onRenameItem!.call();
         }
@@ -219,6 +115,14 @@ class _ThumbTile extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
+        if (onInspect != null)
+          const PopupMenuItem(
+            value: _ThumbTileMenuAction.inspect,
+            child: ListTile(
+              leading: Icon(Icons.info_outline),
+              title: Text('詳細を見る'),
+            ),
+          ),
         if (canRenameItem && onRenameItem != null)
           const PopupMenuItem(
             value: _ThumbTileMenuAction.renameItem,
@@ -238,162 +142,25 @@ class _ThumbTile extends StatelessWidget {
       ],
     );
   }
-
-  Widget _buildSelectionOverlay() {
-    return Positioned.fill(
-      child: Container(
-        color: Colors.black.withValues(alpha: 0.35),
-        alignment: Alignment.topRight,
-        padding: const EdgeInsets.all(8),
-        child: const Icon(Icons.check_circle, size: 26),
-      ),
-    );
-  }
-}
-
-class _PdfBadge extends StatelessWidget {
-  final String label;
-
-  const _PdfBadge({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.65),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.picture_as_pdf, size: 16, color: Colors.white),
-            const SizedBox(width: 4),
-            Text(label, style: const TextStyle(color: Colors.white)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _FolderBadge extends StatelessWidget {
-  const _FolderBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.65),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Text(
-          'FOLDER',
-          style: TextStyle(color: Colors.white, fontSize: 12),
-        ),
-      ),
-    );
-  }
-}
-
-class _TitleChip extends StatelessWidget {
-  final String title;
-  final String? subtitle;
-
-  const _TitleChip({required this.title, this.subtitle});
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.65),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              maxLines: subtitle == null ? 2 : 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
-            ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 2),
-              Text(
-                subtitle!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white70, fontSize: 11),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _ThumbImage extends StatelessWidget {
   final Uint8List bytes;
-  const _ThumbImage({required this.bytes});
+  final BoxFit fit;
+  const _ThumbImage({required this.bytes, this.fit = BoxFit.contain});
 
   @override
   Widget build(BuildContext context) {
-    return ColorFiltered(
-      colorFilter: Theme.of(context).brightness == Brightness.dark
-          ? const ColorFilter.matrix(<double>[
-              0.85,
-              0,
-              0,
-              0,
-              0,
-              0,
-              0.85,
-              0,
-              0,
-              0,
-              0,
-              0,
-              0.85,
-              0,
-              0,
-              0,
-              0,
-              0,
-              1,
-              0,
-            ])
-          : const ColorFilter.mode(Colors.transparent, BlendMode.dst),
-      child: Image.memory(
-        bytes,
-        fit: BoxFit.contain,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.low,
-        errorBuilder: (context, error, stack) {
-          return Container(
-            alignment: Alignment.center,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.broken_image_outlined),
-                const SizedBox(height: 6),
-                Text(
-                  'decode failed\nlen=${bytes.length}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 11),
-                ),
-              ],
-            ),
-          );
-        },
+    return Image.memory(
+      bytes,
+      fit: fit,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.low,
+      errorBuilder: (_, _, _) => const Center(
+        child: Tooltip(
+          message: 'プレビューを表示できません',
+          child: Icon(Icons.broken_image_outlined),
+        ),
       ),
     );
   }
@@ -640,10 +407,14 @@ extension _GalleryGridView on _GalleryGridPageState {
   }) {
     Iterable<MediaItem> out = input;
     if (_galleryTagFilters.isNotEmpty) {
-      out = out.where((item) => item.kind == MediaKind.pdf && matchesGalleryTags(
-        _searchableTagDetailsFor(item).map((detail) => detail.tag),
-        _galleryTagFilters.values,
-      ));
+      out = out.where(
+        (item) =>
+            item.kind == MediaKind.pdf &&
+            matchesGalleryTags(
+              _searchableTagDetailsFor(item).map((detail) => detail.tag),
+              _galleryTagFilters.values,
+            ),
+      );
     }
 
     if (pdfOnly != null) {
@@ -831,6 +602,40 @@ extension _GalleryGridView on _GalleryGridPageState {
   List<Widget> _buildGalleryAppBarActions(TabController controller) {
     if (!_selectMode) {
       return _appendTopBarRescanAction(<Widget>[_buildGalleryOverflowMenu()]);
+    }
+
+    if (MediaQuery.sizeOf(context).width < 600) {
+      return [
+        IconButton(
+          tooltip: '選択解除',
+          onPressed: _exitSelectMode,
+          icon: const Icon(Icons.close),
+        ),
+        PopupMenuButton<String>(
+          tooltip: '選択したアイテムの操作',
+          icon: const Icon(Icons.more_horiz),
+          onSelected: (action) {
+            final view = _gallerySelectionView(controller.index);
+            final targets = _selectedFrom(view);
+            switch (action) {
+              case 'all':
+                _selectAll(view);
+              case 'tag':
+                _bulkAddTagToItems(targets);
+              case 'delete':
+                _deleteItemsFromList(targets);
+              case 'import':
+                _importSelectedToLibrary(targets);
+            }
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'all', child: Text('全選択（現在タブ）')),
+            PopupMenuItem(value: 'tag', child: Text('選択中に一括タグ付け')),
+            PopupMenuItem(value: 'import', child: Text('ライブラリに取り込む')),
+            PopupMenuItem(value: 'delete', child: Text('選択中を削除')),
+          ],
+        ),
+      ];
     }
 
     return _appendTopBarRescanAction([
@@ -1066,7 +871,11 @@ extension _GalleryGridView on _GalleryGridPageState {
         onRefresh: onRefresh,
         child: _buildEmptyBody(
           title: '該当するアイテムがありません',
-          message: '引っ張って更新するか、別の条件を試してください。',
+          message: _isGallerySearchActive
+              ? '検索条件を解除すると、すべてのアイテムを表示できます。'
+              : '引っ張って更新するか、別の条件を試してください。',
+          actionLabel: _isGallerySearchActive ? '検索条件を全解除' : null,
+          onAction: _isGallerySearchActive ? _clearLibraryFilters : null,
         ),
       );
     }
@@ -1082,6 +891,15 @@ extension _GalleryGridView on _GalleryGridPageState {
         physics: _refreshScrollPhysics,
         cacheExtent: 200,
         slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Text(
+                '${items.length} 件${_isGallerySearchActive ? ' · 絞り込み中' : ''}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ),
           if (useSearchPager &&
               items.length > _GalleryGridPageState._gallerySearchPageSize)
             SliverToBoxAdapter(child: _buildGallerySearchPager(items.length))
@@ -1089,22 +907,41 @@ extension _GalleryGridView on _GalleryGridPageState {
             SliverToBoxAdapter(child: _buildPager()),
           SliverPadding(
             padding: const EdgeInsets.all(12),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 220,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 0.65,
-              ),
-              delegate: SliverChildBuilderDelegate((context, index) {
-                final item = visibleItems[index];
-                return _buildGridTile(
-                  item,
-                  showFolderLabel: showFolderLabel,
-                  detailItemsSource: items,
-                );
-              }, childCount: visibleItems.length),
-            ),
+            sliver: _libraryListView
+                ? SliverList.builder(
+                    itemCount: visibleItems.length,
+                    itemBuilder: (context, index) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: SizedBox(
+                        height:
+                            104 *
+                            MediaQuery.textScalerOf(
+                              context,
+                            ).scale(1).clamp(1, 1.5),
+                        child: _buildGridTile(
+                          visibleItems[index],
+                          showFolderLabel: showFolderLabel,
+                          detailItemsSource: items,
+                        ),
+                      ),
+                    ),
+                  )
+                : SliverGrid(
+                    gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: _libraryLargeCovers ? 300 : 220,
+                      mainAxisSpacing: 12,
+                      crossAxisSpacing: 12,
+                      childAspectRatio: 0.65,
+                    ),
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final item = visibleItems[index];
+                      return _buildGridTile(
+                        item,
+                        showFolderLabel: showFolderLabel,
+                        detailItemsSource: items,
+                      );
+                    }, childCount: visibleItems.length),
+                  ),
           ),
         ],
       ),
@@ -1208,6 +1045,33 @@ extension _GalleryGridView on _GalleryGridPageState {
         }
       },
       onPressed: () async {
+        final keyboard = HardwareKeyboard.instance;
+        if (keyboard.isShiftPressed && _librarySelectionAnchor != null) {
+          final anchor = detailItemsSource.indexWhere(
+            (entry) => entry.id == _librarySelectionAnchor,
+          );
+          final target = detailItemsSource.indexWhere(
+            (entry) => entry.id == item.id,
+          );
+          if (anchor >= 0 && target >= 0) {
+            setState(() {
+              _selectMode = true;
+              final start = anchor < target ? anchor : target;
+              final end = anchor > target ? anchor : target;
+              _selectedIds.addAll(
+                detailItemsSource
+                    .sublist(start, end + 1)
+                    .map((entry) => entry.id),
+              );
+            });
+            return;
+          }
+        }
+        _librarySelectionAnchor = item.id;
+        if (keyboard.isControlPressed || keyboard.isMetaPressed) {
+          _toggleSelect(item);
+          return;
+        }
         if (_selectMode) {
           _toggleSelect(item);
           return;
@@ -1244,12 +1108,17 @@ extension _GalleryGridView on _GalleryGridPageState {
         _refreshHomeShowcasesAfterFrame('detail-gallery-pop');
       },
       child: _ThumbTile(
+        onInspect: item.kind == MediaKind.folder
+            ? null
+            : () => _inspectLibraryItem(item),
         repo: widget.repo,
         item: item,
         subtitle: showFolderLabel ? _folderLabelForItem(item) : null,
         isFavorite: isFavorite,
         onToggleFavorite: () => _toggleFavorite(item),
         selected: isSelected,
+        listView: _libraryListView,
+        cropCovers: _libraryCropCovers,
         folderTileMode: _folderTileMode,
         canRenameItem: !_selectMode && _canRenameItem(item),
         onRenameItem: () => _renameItemFromList(item),

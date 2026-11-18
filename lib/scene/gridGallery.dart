@@ -6,6 +6,7 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -48,9 +49,14 @@ import 'tag_management_page.dart';
 import 'url_import_dialog.dart';
 import 'xviewer_page.dart';
 import 'widgets/scene_ui.dart';
+import 'widgets/library_view_controls.dart';
+import 'widgets/library_media_card.dart';
+import 'widgets/library_inspector.dart';
+import 'widgets/reading_resume_card.dart';
 
 part 'grid_gallery_models.dart';
 part 'gallery_grid_view.dart';
+part 'gallery_inspector.dart';
 part 'gallery_home_view.dart';
 part 'gallery_import_actions.dart';
 part 'gallery_thumbnail_cache.dart';
@@ -311,6 +317,11 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
   final Map<String, List<MediaItem>> _folderItemsCacheRecursive = {};
 
+  MediaItem? _libraryInspectedItem;
+  String? _librarySelectionAnchor;
+  bool _libraryListView = false;
+  bool _libraryLargeCovers = false;
+  bool _libraryCropCovers = false;
   bool _selectMode = false;
   final Set<String> _selectedIds = <String>{};
 
@@ -2151,6 +2162,53 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
     );
   }
 
+  void _clearLibraryFilters() {
+    setState(() => _galleryTagFilters.clear());
+    _setGallerySearchQuery('', enableSuggestions: false, syncController: true);
+  }
+
+  Widget? _buildCompactNavigation() {
+    if (_isWideLayout(context)) return null;
+    return NavigationBar(
+      selectedIndex: switch (_page) {
+        _MainPage.home => 0,
+        _MainPage.gallery => 1,
+        _MainPage.search => 2,
+        _MainPage.hitomiSearch => 3,
+      },
+      onDestinationSelected: (index) {
+        _exitSelectMode();
+        if (index == 2) {
+          unawaited(_openDetailedBrowsePage());
+        } else {
+          setState(
+            () => _page = [
+              _MainPage.home,
+              _MainPage.gallery,
+              _MainPage.search,
+              _MainPage.hitomiSearch,
+            ][index],
+          );
+        }
+      },
+      destinations: const [
+        NavigationDestination(icon: Icon(Icons.home_outlined), label: 'ホーム'),
+        NavigationDestination(
+          icon: Icon(Icons.grid_view_outlined),
+          label: 'ライブラリ',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.auto_stories_outlined),
+          label: 'PDF一覧',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.manage_search_outlined),
+          label: '外部検索',
+        ),
+      ],
+    );
+  }
+
   // --- UI: responsive sidebar (Windows/desktop friendly) ---
   static const double _kSidebarWidth = SceneSpace.sidebarWidth;
 
@@ -2164,6 +2222,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
   }
 
   Widget _withSidebar(BuildContext context, Widget body) {
+    if (_page == _MainPage.gallery) body = _withLibraryInspector(body);
     if (!_isWideLayout(context) || _sidebarCollapsed) return body;
     return Row(
       children: [
@@ -2210,7 +2269,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
       onRefresh: _handlePullToRefresh,
       child: ListView(
         physics: _refreshScrollPhysics,
-        padding: EdgeInsets.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         children: [
           _sidebarHeader(),
           ListTile(
@@ -2629,6 +2688,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         autofocusFirstFocusable: true,
         child: Scaffold(
           drawer: _isWideLayout(context) ? null : _buildSidebar(),
+          bottomNavigationBar: _buildCompactNavigation(),
           appBar: AppBar(
             title: const Text('ホーム'),
             actions: _appendTopBarRescanAction([_buildHomeOverflowMenu()]),
@@ -2650,6 +2710,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         autofocusFirstFocusable: true,
         child: Scaffold(
           drawer: _isWideLayout(context) ? null : _buildSidebar(),
+          bottomNavigationBar: _buildCompactNavigation(),
           appBar: AppBar(
             title: const Text('PDF一覧'),
             actions: _buildSearchAppBarActions(),
@@ -2671,6 +2732,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
         autofocusFirstFocusable: true,
         child: Scaffold(
           drawer: _isWideLayout(context) ? null : _buildSidebar(),
+          bottomNavigationBar: _buildCompactNavigation(),
           appBar: AppBar(
             title: const Text('検索ページ'),
             actions: [if (_isWideLayout(context)) _buildSidebarToggleButton()],
@@ -2712,6 +2774,7 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
 
             return Scaffold(
               drawer: _isWideLayout(context) ? null : _buildSidebar(),
+              bottomNavigationBar: _buildCompactNavigation(),
               appBar: AppBar(
                 leading: _canGoUp
                     ? IconButton(
@@ -2724,115 +2787,183 @@ class _GalleryGridPageState extends State<GalleryGridPage> {
                       )
                     : null,
                 title: Text(
-                  _folder == null
-                      ? '一覧表示'
-                      : '一覧表示: ${_folderLabel(_folder!.raw)}',
+                  _selectMode
+                      ? '${_selectedIds.length} 件選択中'
+                      : _folder == null
+                      ? 'ライブラリ'
+                      : _folderLabel(_folder!.raw),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 actions: _buildGalleryAppBarActions(tabController),
-                bottom: PreferredSize(
-                  preferredSize: Size.fromHeight(
-                    (showSeriesFilterRow ? 206 : 160) +
-                        (_galleryTagFilters.isEmpty ? 0 : 44),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                        child: SizedBox(
-                          height: 44,
-                          child: _buildGallerySearchField(),
-                        ),
-                      ),
-                      if (_galleryTagFilters.isNotEmpty)
-                        _buildGalleryTagFilterChips(),
-                      if (showSeriesFilterRow)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                          child: _buildGallerySeriesFilterRow(
-                            seriesFilterChips,
-                          ),
-                        ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: SizedBox(
-                          height: 36,
-                          child: Row(
-                            children: [
-                              const Text('ソート'),
-                              const SizedBox(width: 8),
-                              DropdownButton<_SortMode>(
-                                value: _sortMode,
-                                items: const [
-                                  DropdownMenuItem(
-                                    value: _SortMode.name,
-                                    child: Text('名前'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: _SortMode.updatedAt,
-                                    child: Text('更新日'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: _SortMode.addedAt,
-                                    child: Text('追加日'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: _SortMode.unreadFirst,
-                                    child: Text('未読'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: _SortMode.readFirst,
-                                    child: Text('既読'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: _SortMode.bookmarkedFirst,
-                                    child: Text('しおり'),
-                                  ),
-                                ],
-                                onChanged: (value) {
-                                  if (value == null) return;
-                                  setState(() => _sortMode = value);
-                                },
-                              ),
-                              const Spacer(),
-                              if (_loading) ...[
-                                if (_loadTotal > 0)
-                                  Text(
-                                    '${((_loadProcessed / _loadTotal) * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                                  )
-                                else
-                                  const Text('...'),
-                                const SizedBox(width: 8),
-                                const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                      const TabBar(
-                        isScrollable: true,
-                        tabs: [
-                          Tab(text: 'すべて'),
-                          Tab(text: 'タグなし'),
-                          Tab(text: 'お気に入り'),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
               ),
               body: _wrapBodyWithUrlImportQueue(
                 _withSidebar(
                   context,
-                  _buildGuardedBody('gallery-body', _buildGalleryMainBody),
+                  Column(
+                    children: [
+                      Flexible(
+                        flex: 0,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: MediaQuery.sizeOf(context).height * 0.42,
+                          ),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    12,
+                                    8,
+                                    12,
+                                    8,
+                                  ),
+                                  child: SizedBox(
+                                    height: 48,
+                                    child: _buildGallerySearchField(),
+                                  ),
+                                ),
+                                if (_query.trim().isNotEmpty)
+                                  SizedBox(
+                                    height: 48,
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                      ),
+                                      child: LibraryQueryChips(
+                                        query: _query,
+                                        onChanged: (value) =>
+                                            _setGallerySearchQuery(
+                                              value,
+                                              enableSuggestions: false,
+                                              syncController: true,
+                                            ),
+                                        onClearAll: _clearLibraryFilters,
+                                      ),
+                                    ),
+                                  ),
+                                if (_galleryTagFilters.isNotEmpty)
+                                  _buildGalleryTagFilterChips(),
+                                if (showSeriesFilterRow)
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      12,
+                                      0,
+                                      12,
+                                      8,
+                                    ),
+                                    child: _buildGallerySeriesFilterRow(
+                                      seriesFilterChips,
+                                    ),
+                                  ),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                  ),
+                                  child: SizedBox(
+                                    height: 48,
+                                    child: Row(
+                                      children: [
+                                        if (MediaQuery.sizeOf(context).width >=
+                                            600) ...[
+                                          const Text('並び順'),
+                                          const SizedBox(width: 8),
+                                        ],
+                                        DropdownButton<_SortMode>(
+                                          value: _sortMode,
+                                          items: const [
+                                            DropdownMenuItem(
+                                              value: _SortMode.name,
+                                              child: Text('名前'),
+                                            ),
+                                            DropdownMenuItem(
+                                              value: _SortMode.updatedAt,
+                                              child: Text('更新日'),
+                                            ),
+                                            DropdownMenuItem(
+                                              value: _SortMode.addedAt,
+                                              child: Text('追加日'),
+                                            ),
+                                            DropdownMenuItem(
+                                              value: _SortMode.unreadFirst,
+                                              child: Text('未読'),
+                                            ),
+                                            DropdownMenuItem(
+                                              value: _SortMode.readFirst,
+                                              child: Text('既読'),
+                                            ),
+                                            DropdownMenuItem(
+                                              value: _SortMode.bookmarkedFirst,
+                                              child: Text('しおり'),
+                                            ),
+                                          ],
+                                          onChanged: (value) {
+                                            if (value == null) return;
+                                            setState(() => _sortMode = value);
+                                          },
+                                        ),
+                                        const Spacer(),
+                                        LibraryViewControls(
+                                          listView: _libraryListView,
+                                          largeCovers: _libraryLargeCovers,
+                                          cropCovers: _libraryCropCovers,
+                                          onListViewChanged: (value) =>
+                                              setState(
+                                                () => _libraryListView = value,
+                                              ),
+                                          onLargeCoversChanged: (value) =>
+                                              setState(
+                                                () =>
+                                                    _libraryLargeCovers = value,
+                                              ),
+                                          onCropCoversChanged: (value) =>
+                                              setState(
+                                                () =>
+                                                    _libraryCropCovers = value,
+                                              ),
+                                        ),
+                                        if (_loading) ...[
+                                          if (_loadTotal > 0)
+                                            Text(
+                                              '${((_loadProcessed / _loadTotal) * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                                            )
+                                          else
+                                            const Text('...'),
+                                          const SizedBox(width: 8),
+                                          const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const TabBar(
+                                  isScrollable: true,
+                                  tabs: [
+                                    Tab(text: 'すべて'),
+                                    Tab(text: 'タグなし'),
+                                    Tab(text: 'お気に入り'),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: _buildGuardedBody(
+                          'gallery-body',
+                          _buildGalleryMainBody,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );

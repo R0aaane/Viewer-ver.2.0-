@@ -66,7 +66,9 @@ class _ControllerFocusableState extends State<ControllerFocusable> {
       }
       Scrollable.ensureVisible(
         context,
-        duration: const Duration(milliseconds: 120),
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 120),
         curve: Curves.easeOut,
       );
     });
@@ -80,7 +82,9 @@ class _ControllerFocusableState extends State<ControllerFocusable> {
     final decoratedChild =
         widget.builder?.call(context, _focused, widget.child) ??
         AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 120),
           decoration: BoxDecoration(
             borderRadius: borderRadius,
             border: Border.all(

@@ -4,6 +4,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pdf_viewer/web/web_reader_keyboard_shortcuts.dart';
 
 void main() {
+  testWidgets('Escape exits focus mode while the PDF is loading', (
+    tester,
+  ) async {
+    var exits = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: WebReaderKeyboardShortcuts(
+          enabled: false,
+          onPreviousPage: () {},
+          onNextPage: () {},
+          onEscape: () => exits++,
+          child: const Scaffold(body: Text('reader')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+    expect(exits, 1);
+  });
+
   testWidgets(
     'viewer arrows turn pages, including held keys, without key-up duplication',
     (tester) async {

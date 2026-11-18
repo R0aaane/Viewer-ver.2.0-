@@ -195,7 +195,7 @@ extension _DetailTagPanel on _ImageDetailPageState {
         _tags = list;
         _loadedTagItemId = item.id;
       });
-      if (!_inReader || _atPdfCompletionPage || force) {
+      if (!_inReader || _showInspector || _atPdfCompletionPage || force) {
         unawaited(_loadRelatedItemsForCurrent(list, version, force: force));
       }
       if (_isKemonoTaggedImage(item, list)) {
@@ -1131,39 +1131,46 @@ extension _DetailTagPanel on _ImageDetailPageState {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final heading = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              );
+              if (constraints.maxWidth < 420 &&
+                  MediaQuery.textScalerOf(context).scale(1) > 1.3) {
+                return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: Colors.white70),
-                    ),
+                  children: [heading, ?trailing],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: heading),
+                  if (trailing != null) ...[
+                    const SizedBox(width: 12),
+                    trailing,
                   ],
-                ),
-              ),
-              if (trailing != null) ...[const SizedBox(width: 12), trailing],
-            ],
+                ],
+              );
+            },
           ),
           const SizedBox(height: 14),
           child,

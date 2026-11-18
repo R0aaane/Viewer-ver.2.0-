@@ -129,7 +129,7 @@ enum _SharedUrlImportTargetKind { currentFolder, library }
 
 enum _RegisteredFolderRemovalAction { unregisterOnly, deleteFiles }
 
-enum _ThumbTileMenuAction { renameItem, deleteItem }
+enum _ThumbTileMenuAction { inspect, renameItem, deleteItem }
 
 enum _AndroidImportConversionChoice { keepImages, mergeToPdf }
 

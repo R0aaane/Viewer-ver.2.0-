@@ -20,6 +20,7 @@ import '../services/item_name_service.dart';
 import '../services/epub_text_extractor.dart';
 import '../widgets/controller_focusable.dart';
 import 'widgets/scene_ui.dart';
+import 'widgets/inspector_pane.dart';
 import 'rename_item_dialog.dart';
 import 'image_prompt_page.dart';
 import 'TagResults.dart';
@@ -64,7 +65,7 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   bool _ratingChanged = false;
   int _ratingRevision = 0;
   bool _itemChanged = false;
-  bool _sidebarCollapsed = false;
+  bool _showInspector = false;
 
   // tag・医ち繧ｰ・・
   List<TagWithId> _tags = const [];
@@ -116,9 +117,9 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   String get _displayTitle =>
       ItemNameService.formatMediaTitle(_item.displayName, kind: _item.kind);
 
-  static const _uiBg = Color(0xFF0F0F10);
-  static const _uiBar = Color(0xFF1F1F1F);
-  static const _uiChip = Color(0xFF2B2B2B);
+  static const _uiBg = Color(0xFF111318);
+  static const _uiBar = Color(0xFF191C23);
+  static const _uiChip = Color(0xFF232730);
 
   @override
   void initState() {
@@ -275,12 +276,10 @@ class _ImageDetailPageState extends State<ImageDetailPage>
   }
 
   // --- UI: responsive sidebar (Windows/desktop friendly) ---
-  static const double _kSidebarWidth = 340;
+  static const double _kSidebarWidth = 380;
 
   @override
   Widget build(BuildContext context) {
-    final wide = _isWideLayout(context);
-
     return ControllerNavigationRegion(
       debugLabel: 'detail-page',
       autofocusFirstFocusable: true,
@@ -295,176 +294,80 @@ class _ImageDetailPageState extends State<ImageDetailPage>
           return false;
         },
         child: Scaffold(
-          drawer: wide || _fullscreen ? null : _buildSidebar(),
+          drawer: _fullscreen ? null : _buildSidebar(),
           backgroundColor: _uiBg,
-          appBar: AppBar(
-            backgroundColor: _uiBar,
-            foregroundColor: Colors.white,
+          appBar: _fullscreen ? null : _buildReaderAppBar(),
 
-            title: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _displayTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                if (_inReader || _fullscreen) ...[
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        reverse: true, // 蜿ｳ遶ｯ・域桃菴懷・・峨ｒ隕九○繧・☆縺上☆繧・
-                        child: _topReaderControls(),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-
-            leadingWidth: wide ? 56 : 96,
-            leading: Row(
-              children: [
-                IconButton(
-                  tooltip: '戻る',
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => _fullscreen
-                      ? unawaited(_setFullscreen(false))
-                      : unawaited(_popWithResult()),
-                ),
-                if (!wide && !_fullscreen)
-                  Builder(
-                    builder: (ctx) => IconButton(
-                      tooltip: 'メニュー',
-                      icon: const Icon(Icons.menu),
-                      onPressed: () => Scaffold.of(ctx).openDrawer(),
-                    ),
-                  ),
-              ],
-            ),
-
-            actions: [
-              if (_isPdf || _item.kind == MediaKind.image)
-                if (wide)
-                  TextButton.icon(icon: const Icon(Icons.image_search),
-                    label: Text(_isPdf ? 'PDFを画像解析' : '画像解析'), onPressed: _openImagePrompt)
-                else
-                  IconButton(tooltip: 'Image to Prompt（表示中の画像を解析）',
-                    icon: const Icon(Icons.image_search), onPressed: _openImagePrompt),
-              if (wide && !_fullscreen) _buildSidebarToggleButton(),
-              IconButton(
-                tooltip: _isFavorite ? 'お気に入りを解除' : 'お気に入りに追加',
-                onPressed: _toggleFavorite,
-                icon: Icon(_isFavorite ? Icons.star : Icons.star_border),
-              ),
-              if (_isPdf)
-                IconButton(
-                  tooltip: _isBookmarked ? 'しおりを外す' : 'しおりを挟む',
-                  onPressed: _toggleBookmark,
-                  icon: Icon(
-                    _isBookmarked ? Icons.bookmark : Icons.bookmark_border,
-                  ),
-                ),
-              IconButton(
-                tooltip: _fullscreen ? 'フルスクリーン解除' : 'フルスクリーン',
-                onPressed: _toggleFullscreen,
-                icon: Icon(
-                  _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                ),
-              ),
-              if (!_fullscreen && _canDeleteFromLibrary)
-                PopupMenuButton<_DetailMenuAction>(
-                  tooltip: 'メニュー',
-                  onSelected: (a) {
-                    if (a == _DetailMenuAction.delete) {
-                      _deleteCurrentItemWithWarning();
-                    } else if (a == _DetailMenuAction.deletePdfPage) {
-                      _deleteCurrentPdfPageWithWarning();
-                    }
-                  },
-                  itemBuilder: (context) => [
-                    if (_isPdf && widget.repo.capabilities.canEditPdfPages)
-                      const PopupMenuItem(
-                        value: _DetailMenuAction.deletePdfPage,
-                        child: ListTile(
-                          leading: Icon(Icons.delete_sweep_outlined),
-                          title: Text('現在のページを削除'),
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: _withSidebar(
+                  context,
+                  Shortcuts(
+                    shortcuts: const <ShortcutActivator, Intent>{
+                      SingleActivator(LogicalKeyboardKey.pageUp): _PrevIntent(),
+                      SingleActivator(LogicalKeyboardKey.pageDown):
+                          _NextIntent(),
+                      SingleActivator(LogicalKeyboardKey.gameButtonLeft1):
+                          _PrevIntent(),
+                      SingleActivator(LogicalKeyboardKey.gameButtonRight1):
+                          _NextIntent(),
+                      SingleActivator(LogicalKeyboardKey.escape):
+                          _ExitFullscreenIntent(),
+                    },
+                    child: Actions(
+                      actions: <Type, Action<Intent>>{
+                        _PrevIntent: CallbackAction<_PrevIntent>(
+                          onInvoke: (intent) {
+                            // 髢ｲ隕ｧ逕ｨ繧ｿ繝悶・縺ｨ縺阪□縺代・繝ｼ繧ｸ繧堤ｧｻ蜍・
+                            if (_tab.index == 0) _prev();
+                            return null;
+                          },
+                        ),
+                        _NextIntent: CallbackAction<_NextIntent>(
+                          onInvoke: (intent) {
+                            if (_tab.index == 0) _next();
+                            return null;
+                          },
+                        ),
+                        _ExitFullscreenIntent:
+                            CallbackAction<_ExitFullscreenIntent>(
+                              onInvoke: (intent) {
+                                if (_fullscreen) {
+                                  unawaited(_setFullscreen(false));
+                                }
+                                return null;
+                              },
+                            ),
+                      },
+                      child: Focus(
+                        autofocus: true,
+                        child: AnimatedBuilder(
+                          animation: _tab,
+                          builder: (context, _) {
+                            if (_fullscreen || _tab.index == 0)
+                              return _buildReader();
+                            return _buildDetail();
+                          },
                         ),
                       ),
-                    const PopupMenuItem(
-                      value: _DetailMenuAction.delete,
-                      child: ListTile(
-                        leading: Icon(Icons.delete_outline),
-                        title: Text('PDF を削除'),
-                      ),
                     ),
-                  ],
-                ),
-            ],
-            bottom: _fullscreen
-                ? null
-                : TabBar(
-                    controller: _tab,
-                    tabs: const [
-                      Tab(text: '閲覧'),
-                      Tab(text: '詳細'),
-                    ],
-                  ),
-          ),
-
-          body: _withSidebar(
-            context,
-            Shortcuts(
-              shortcuts: const <ShortcutActivator, Intent>{
-                SingleActivator(LogicalKeyboardKey.pageUp): _PrevIntent(),
-                SingleActivator(LogicalKeyboardKey.pageDown): _NextIntent(),
-                SingleActivator(LogicalKeyboardKey.gameButtonLeft1):
-                    _PrevIntent(),
-                SingleActivator(LogicalKeyboardKey.gameButtonRight1):
-                    _NextIntent(),
-                SingleActivator(LogicalKeyboardKey.escape):
-                    _ExitFullscreenIntent(),
-              },
-              child: Actions(
-                actions: <Type, Action<Intent>>{
-                  _PrevIntent: CallbackAction<_PrevIntent>(
-                    onInvoke: (intent) {
-                      // 髢ｲ隕ｧ逕ｨ繧ｿ繝悶・縺ｨ縺阪□縺代・繝ｼ繧ｸ繧堤ｧｻ蜍・
-                      if (_tab.index == 0) _prev();
-                      return null;
-                    },
-                  ),
-                  _NextIntent: CallbackAction<_NextIntent>(
-                    onInvoke: (intent) {
-                      if (_tab.index == 0) _next();
-                      return null;
-                    },
-                  ),
-                  _ExitFullscreenIntent: CallbackAction<_ExitFullscreenIntent>(
-                    onInvoke: (intent) {
-                      if (_fullscreen) {
-                        unawaited(_setFullscreen(false));
-                      }
-                      return null;
-                    },
-                  ),
-                },
-                child: Focus(
-                  autofocus: true,
-                  child: AnimatedBuilder(
-                    animation: _tab,
-                    builder: (context, _) {
-                      if (_fullscreen || _tab.index == 0) return _buildReader();
-                      return _buildDetail();
-                    },
                   ),
                 ),
               ),
-            ),
+              if (_fullscreen)
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  child: SafeArea(
+                    child: IconButton.filledTonal(
+                      tooltip: 'フルスクリーン解除',
+                      onPressed: () => _setFullscreen(false),
+                      icon: const Icon(Icons.fullscreen_exit),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
       ),
